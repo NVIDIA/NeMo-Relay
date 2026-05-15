@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Anthropic cache plugin for the ACG system.
+//! Anthropic cache plugin for the Adaptive Cache Governor (ACG) system.
 //!
 //! Translates ACG stability classifications into Anthropic-specific
 //! `cache_control` breakpoints on content blocks. Implements the

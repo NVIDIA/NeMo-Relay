@@ -263,5 +263,5 @@ application-mode caveats.
 - [Hermes Agent](hermes.md)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,
-ATIF export verification on session end, and troubleshooting missing LLM
-lifecycle data.
+Agent Trajectory Interchange Format (ATIF) export verification on session end,
+and troubleshooting missing LLM lifecycle data.

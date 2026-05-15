@@ -31,7 +31,7 @@ The top-level adaptive object contains:
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
-The requested area pages cover [ACG](acg.md) and
+The requested area pages cover [Adaptive Cache Governor (ACG)](acg.md) and
 [Adaptive Hints](adaptive-hints.md). State, telemetry, tool parallelism, and
 policy remain whole-plugin settings:
 

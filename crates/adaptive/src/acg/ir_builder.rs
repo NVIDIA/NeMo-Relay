@@ -21,7 +21,7 @@ use crate::acg::prompt_ir::{
 ///
 /// The builder preserves prompt order, inserts tool-schema blocks before the
 /// first non-system message when tools are present, and computes the request
-/// hashes needed by downstream ACG analysis.
+/// hashes needed by downstream Adaptive Cache Governor (ACG) analysis.
 ///
 /// # Parameters
 /// - `request`: Annotated LLM request to normalize.

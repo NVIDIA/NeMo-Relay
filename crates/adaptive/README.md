@@ -47,9 +47,9 @@ framework.
   the `redis-backend` feature.
 - ✅ **Learning primitives**: Runtime helpers and learners built on NeMo Flow
   events.
-- ✅ **ACG module surface**: The canonical `nemo_flow_adaptive::acg` module for
-  PromptIR, provider plugins, stability analysis, and cache telemetry
-  normalization.
+- ✅ **Adaptive Cache Governor (ACG) module surface**: The canonical
+  `nemo_flow_adaptive::acg` module for PromptIR, provider plugins, stability
+  analysis, and cache telemetry normalization.
 
 ## Installation
 

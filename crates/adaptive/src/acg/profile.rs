@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Behavioral profile types for the ACG system.
+//! Behavioral profile types for the Adaptive Cache Governor (ACG) system.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

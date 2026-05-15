@@ -9,10 +9,11 @@
 //! register subscribers or construct exporters.
 //!
 //! The plugin intentionally infers subscriber names from the component namespace
-//! so configuration remains portable across bindings. ATOF, OpenTelemetry, and
-//! OpenInference each register one global subscriber when enabled. ATIF uses a
-//! global dispatcher that detects direct child agent scopes and creates one
-//! scope-local exporter for each top-level agent run.
+//! so configuration remains portable across bindings. Agent Trajectory
+//! Observability Format (ATOF), OpenTelemetry, and OpenInference each register
+//! one global subscriber when enabled. Agent Trajectory Interchange Format
+//! (ATIF) uses a global dispatcher that detects direct child agent scopes and
+//! creates one scope-local exporter for each top-level agent run.
 
 use std::collections::HashMap;
 use std::future::Future;

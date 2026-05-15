@@ -122,7 +122,7 @@ is an allow/continue response.
 ## Verify Export
 
 End the Claude Code session and confirm that session-end closed the NeMo Flow
-agent scope and wrote ATIF:
+agent scope and wrote Agent Trajectory Interchange Format (ATIF):
 
 ```bash
 ls .nemo-flow/atif

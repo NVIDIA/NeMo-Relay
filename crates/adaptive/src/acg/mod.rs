@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Canonical ACG module surface exposed from the adaptive crate.
+//! Canonical Adaptive Cache Governor (ACG) module surface exposed from the
+//! adaptive crate.
 
-/// Minimum observations required before ACG emits optimization intents.
+/// Minimum observations required before Adaptive Cache Governor (ACG) emits
+/// optimization intents.
 pub const MIN_ACG_OBSERVATIONS: u32 = 2;
 
 pub mod anthropic_plugin;

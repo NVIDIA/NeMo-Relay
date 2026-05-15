@@ -138,7 +138,8 @@ provider routing is available.
 
 ## Verify Export
 
-End the Cursor session and confirm ATIF exists:
+End the Cursor session and confirm Agent Trajectory Interchange Format (ATIF)
+exists:
 
 ```bash
 ls .nemo-flow/atif

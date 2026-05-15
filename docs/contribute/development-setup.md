@@ -11,11 +11,9 @@ changes.
 ## Package Installation
 
 If you are consuming NeMo Flow rather than developing this repository, install
-the published package for your language:
-
-- Rust: `cargo add nemo-flow`
-- Python: `uv add nemo-flow` or `pip install nemo-flow`
-- Node.js: `npm install nemo-flow-node`
+the published package for your language. Use
+[Installation](../getting-started/installation.md) for package-manager commands
+covering the CLI, Python, Node.js, Rust, and supported integrations.
 
 Go, WebAssembly, and the raw FFI surface are currently experimental and remain
 source-first.

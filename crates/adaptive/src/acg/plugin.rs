@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Provider plugin trait and input/output types for the ACG system.
+//! Provider plugin trait and input/output types for the Adaptive Cache Governor
+//! (ACG) system.
 //!
 //! The [`ProviderPlugin`] trait defines the contract between ACG's
 //! provider-agnostic optimization pipeline and backend-specific
@@ -13,7 +14,7 @@
 //! # Design
 //!
 //! - **Synchronous**: `translate` is a pure data transform (JSON
-//!   restructuring), not an I/O operation. This matches the [`LlmCodec`]
+//!   restructuring), not an I/O operation. This matches the `LlmCodec`
 //!   pattern in `crates/core/src/codec/traits.rs`.
 //! - **Compatibility facade**: provider plugins keep their existing
 //!   synchronous trait surface, but can internally split translation into
@@ -21,8 +22,6 @@
 //! - **`Send + Sync`**: Required for storage as `Arc<dyn ProviderPlugin>`
 //!   in concurrent contexts.
 //! - **Object-safe**: The trait is designed to be used as a trait object.
-//!
-//! [`LlmCodec`]: nemo_flow::codec::LlmCodec
 
 use nemo_flow::api::llm::LlmRequest;
 

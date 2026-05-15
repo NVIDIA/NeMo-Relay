@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Core data types for the ACG (Adaptive Cache Governor) crate.
+//! Core data types for the Adaptive Cache Governor (ACG) crate.
 //!
-//! This module defines the vocabulary types used by the ACG system:
+//! This module defines the vocabulary types used by the Adaptive Cache
+//! Governor (ACG) system:
 //! [`OptimizationIntent`] enum with 9 variants, per-variant payload structs,
 //! [`OptimizationIntentBundle`], [`AgentIdentity`], and supporting enums
 //! ([`SharingScope`], [`RetentionTier`], [`PlacementTarget`], [`ModelClass`],

@@ -13,6 +13,6 @@ The initial NeMo Flow release introduces:
 
 - A Rust core runtime for scopes, middleware registries, lifecycle events, subscribers, plugins, tool calls, and LLM calls
 - Primary Rust, Python, and Node.js documentation tracks
-- ATIF, OpenTelemetry, and OpenInference subscriber/exporter surfaces
+- Agent Trajectory Interchange Format (ATIF), OpenTelemetry, and OpenInference subscriber/exporter surfaces
 - An adaptive component for plugin-driven optimization behavior
 - Sample third-party integration patches for selected agent frameworks and tools

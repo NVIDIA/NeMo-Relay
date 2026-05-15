@@ -9,7 +9,8 @@ Use the OpenClaw plugin when OpenClaw owns the agent, tool, and LLM lifecycle
 that needs NeMo Flow observability. The plugin observes supported OpenClaw
 plugin hooks and converts them into NeMo Flow sessions, LLM spans, tool spans,
 and marks that the generic NeMo Flow observability component can export as
-ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
+Agent Trajectory Interchange Format (ATIF) JSON, OpenTelemetry spans, and
+OpenInference/Phoenix spans.
 
 This public OpenClaw plugin provides observability support only. It does not
 add NeMo Flow security middleware or adaptive optimization behavior to OpenClaw
@@ -37,7 +38,7 @@ Optional:
 Install the plugin with OpenClaw so OpenClaw can register and manage it:
 
 ```bash
-openclaw plugins install npm:nemo-flow-openclaw
+openclaw plugins install npm:nemo-flow-openclaw@0.2.0
 openclaw gateway restart
 ```
 
@@ -50,7 +51,7 @@ If you manage OpenClaw plugin dependencies directly in a Node.js project,
 install the package with npm:
 
 ```bash
-npm install nemo-flow-openclaw
+npm install nemo-flow-openclaw@0.2.0
 ```
 
 Installing with npm makes the package available to that project. Use

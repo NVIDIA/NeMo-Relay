@@ -51,10 +51,12 @@ pub struct CallRecord {
     /// Number of tool calls issued by the provider, when available.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tool_call_count: Option<u32>,
-    /// Annotated request captured for ACG analysis, when available.
+    /// Annotated request captured for Adaptive Cache Governor (ACG) analysis,
+    /// when available.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub annotated_request: Option<Arc<nemo_flow::codec::request::AnnotatedLlmRequest>>,
-    /// Annotated response captured for ACG analysis, when available.
+    /// Annotated response captured for Adaptive Cache Governor (ACG) analysis,
+    /// when available.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub annotated_response: Option<Arc<nemo_flow::codec::response::AnnotatedLlmResponse>>,
 }

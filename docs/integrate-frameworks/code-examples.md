@@ -289,7 +289,8 @@ event(
 
 NeMo Flow keeps sample third-party integrations as patch sets under `patches/`
 and pinned upstream checkouts under `third_party/`. For the current OpenClaw
-end-user integration, use the [OpenClaw Plugin Guide](openclaw-plugin.md).
+end-user integration, use the
+[OpenClaw Plugin Guide](../integrations/openclaw-plugin.md).
 
 The following table lists maintained patch checkouts:
 

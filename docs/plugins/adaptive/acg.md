@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# ACG
+# Adaptive Cache Governor (ACG)
 
 Use the Adaptive Cache Governor (ACG) when repeated LLM requests contain stable
 prompt sections that can benefit from provider prompt caching.

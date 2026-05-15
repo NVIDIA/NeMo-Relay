@@ -122,11 +122,16 @@ Managed tool and LLM helpers populate semantic fields such as inputs, outputs, m
 
 Use [Events](../about/concepts/events.md) and [Instrument Applications Code Examples](../instrument-applications/code-examples.md) to verify the emitted payload shape.
 
-## ATIF Export Is Empty Or Mixed Across Agents
+## Agent Trajectory Interchange Format (ATIF) Export Is Empty Or Mixed Across Agents
 
-An empty ATIF export usually means the exporter subscribed after the relevant events were emitted, or the export filter does not match the active `root_uuid`. Mixed trajectories usually mean multiple agents share a root scope or the export did not filter by root scope.
+An empty Agent Trajectory Interchange Format (ATIF) export usually means the
+exporter subscribed after the relevant events were emitted, or the export
+filter does not match the active `root_uuid`. Mixed trajectories usually mean
+multiple agents share a root scope or the export did not filter by root scope.
 
-Use [ATIF](../plugins/observability/atif.md) and [Observability](../plugins/observability/about.md) to confirm exporter setup, event collection timing, and root-scope filtering.
+Use [Agent Trajectory Interchange Format (ATIF)](../plugins/observability/atif.md)
+and [Observability](../plugins/observability/about.md) to confirm exporter
+setup, event collection timing, and root-scope filtering.
 
 ## LLM Stream Output Is Missing The Final Chunk
 
@@ -150,7 +155,10 @@ Use [Validate Configuration](../build-plugins/validate-configuration.md), [Advan
 
 Confirm that adaptive optimization is configured for the component you expect and that the runtime path actually reaches that component. If behavior does not change, check whether the configured policy is disabled, scoped too narrowly, or not connected to the call path under test.
 
-Use [Adaptive Configuration](../plugins/adaptive/configuration.md), [ACG](../plugins/adaptive/acg.md), and [Adaptive Hints](../plugins/adaptive/adaptive-hints.md) to verify component names and configuration scope.
+Use [Adaptive Configuration](../plugins/adaptive/configuration.md),
+[Adaptive Cache Governor (ACG)](../plugins/adaptive/acg.md), and
+[Adaptive Hints](../plugins/adaptive/adaptive-hints.md) to verify component
+names and configuration scope.
 
 ## Third-Party Patch Does Not Apply
 

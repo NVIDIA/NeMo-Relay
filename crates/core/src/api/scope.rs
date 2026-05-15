@@ -254,7 +254,8 @@ pub fn get_handle() -> Result<ScopeHandle> {
 /// - `attributes`: Bitflags that modify scope behavior and observability.
 /// - `data`: Optional application payload stored on the returned handle.
 /// - `metadata`: Optional JSON metadata recorded on the emitted start event.
-/// - `input`: Optional JSON payload exported as the ATOF data payload.
+/// - `input`: Optional JSON payload exported as the Agent Trajectory
+///   Observability Format (ATOF) data payload.
 /// - `timestamp`: Optional timestamp recorded as the handle start time and on
 ///   the emitted start event. When `None`, the current UTC time is used.
 ///

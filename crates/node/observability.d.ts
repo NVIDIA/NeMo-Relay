@@ -56,9 +56,9 @@ export interface ComponentSpec {
 export declare const OBSERVABILITY_PLUGIN_KIND: 'observability';
 /** Create a default observability component config. */
 export declare function defaultConfig(): Config;
-/** Create filesystem-backed ATOF JSONL settings with defaults applied. */
+/** Create filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL settings with defaults applied. */
 export declare function atofConfig(config?: AtofConfig): AtofConfig;
-/** Create per-agent ATIF trajectory settings with defaults applied. */
+/** Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied. */
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
 /** Create OTLP exporter settings for OpenTelemetry or OpenInference. */
 export declare function otlpConfig(config?: OtlpConfig): OtlpConfig;

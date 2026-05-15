@@ -77,7 +77,8 @@ impl LlmStreamWrapper {
     ///   forward chunks elsewhere. Returning `Err` terminates the stream.
     /// - `finalizer`: One-shot callback invoked when the stream finishes to
     ///   synthesize the aggregated response payload.
-    /// - `data`: Retained compatibility payload; ATOF end data is the finalized response.
+    /// - `data`: Retained compatibility payload; Agent Trajectory
+    ///   Observability Format (ATOF) end data is the finalized response.
     /// - `metadata`: Optional event metadata merged into the emitted LLM-end event.
     /// - `response_codec`: Optional codec used to derive annotated response
     ///   metadata from the aggregated final payload.

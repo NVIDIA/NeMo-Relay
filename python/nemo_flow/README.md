@@ -32,7 +32,8 @@ runtime semantics as the Rust and Node.js surfaces.
 - 🛡️ **Package policy around callbacks**: Use guardrails and intercepts to block
   work, sanitize observability payloads, rewrite requests, or wrap execution.
 - 📡 **Emit one lifecycle stream**: Send runtime events to in-process
-  subscribers, ATIF, OpenTelemetry, or OpenInference workflows.
+  subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
+  OpenInference workflows.
 - 🧩 **Integrate without a framework migration**: Wrap framework or provider
   callbacks while preserving the application’s orchestration model.
 

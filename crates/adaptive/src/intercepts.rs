@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Intercept factories for the `nemo-flow-adaptive` crate.
+//! Intercept factories for the `nemo-flow-adaptive` crate, including Adaptive
+//! Cache Governor (ACG) intercepts.
 
 use std::collections::HashMap;
 use std::future::Future;

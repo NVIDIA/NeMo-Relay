@@ -125,9 +125,7 @@ NeMo Flow events.
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. Persistent install writes
 `.codex/config.toml` with `features.hooks = true` and merges generated hook
-entries into `.codex/hooks.json`. (`features.codex_hooks` is the legacy alias
-of `features.hooks`; new docs and configurations should prefer the canonical
-name.)
+entries into `.codex/hooks.json`.
 
 ## Smoke Test
 
@@ -145,7 +143,8 @@ an empty JSON object.
 
 ## Verify Export
 
-End the Codex session and confirm ATIF exists:
+End the Codex session and confirm Agent Trajectory Interchange Format (ATIF)
+exists:
 
 ```bash
 ls .nemo-flow/atif

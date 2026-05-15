@@ -146,13 +146,14 @@ through the same component lifecycle as other plugins:
 
 Detailed adaptive configuration belongs in
 [Adaptive Configuration](../../plugins/adaptive/configuration.md),
-[ACG](../../plugins/adaptive/acg.md), and
+[Adaptive Cache Governor (ACG)](../../plugins/adaptive/acg.md), and
 [Adaptive Hints](../../plugins/adaptive/adaptive-hints.md).
 
 ### Observability
 
-The core crate ships a built-in `observability` plugin component for ATOF,
-ATIF, OpenTelemetry, and OpenInference exporters. Each exporter section is
+The core crate ships a built-in `observability` plugin component for Agent
+Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format
+(ATIF), OpenTelemetry, and OpenInference exporters. Each exporter section is
 disabled unless its section sets `enabled: true`, and subscriber names are
 inferred from the plugin namespace instead of exposed in public config.
 

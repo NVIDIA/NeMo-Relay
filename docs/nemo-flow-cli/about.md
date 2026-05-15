@@ -22,7 +22,9 @@ Use these guides when you need to:
 - Observe Claude Code, Codex, Cursor, or Hermes Agent sessions locally.
 - Configure coding-agent hooks for NeMo Flow lifecycle events.
 - Route model-provider traffic through the local NeMo Flow gateway.
-- Export local sessions to ATIF, ATOF JSONL, OpenTelemetry, or OpenInference.
+- Export local sessions to Agent Trajectory Interchange Format (ATIF), Agent
+  Trajectory Observability Format (ATOF) JSONL, OpenTelemetry, or
+  OpenInference.
 - Diagnose hook loading, gateway routing, and exporter output.
 
 If you are instrumenting an application or framework directly, use

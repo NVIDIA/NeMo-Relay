@@ -32,7 +32,8 @@ Node.js bindings mirror the semantics exposed by this crate.
 - 🛡️ **Put policy around real calls**: Guardrails and intercepts can block work,
   sanitize observability payloads, rewrite requests, or wrap execution.
 - 📡 **Emit one lifecycle stream**: Subscribers can consume canonical runtime
-  events in-process or export them to ATIF, OpenTelemetry, and OpenInference.
+  events in-process or export them to Agent Trajectory Interchange Format
+  (ATIF), OpenTelemetry, and OpenInference.
 - 🧩 **Integrate without changing orchestration**: Wrap framework and provider
   callbacks while leaving scheduling, retries, memory, and result handling in
   the owning application.
@@ -46,8 +47,8 @@ Node.js bindings mirror the semantics exposed by this crate.
 - ✅ **Plugin primitives**: Register reusable runtime behavior configured from
   one shared plugin system.
 - ✅ **Built-in observability plugin**: Configure first-party Agent Trajectory
-  Observability Format (ATOF), ATIF, OpenTelemetry, and OpenInference exporters
-  from the core crate.
+  Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
+  OpenTelemetry, and OpenInference exporters from the core crate.
 - ✅ **Codec and typed helpers**: Normalize provider requests and responses for
   framework integrations.
 - ✅ **Binding source of truth**: Use the runtime semantics mirrored by the

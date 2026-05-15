@@ -372,7 +372,7 @@ impl PreparedRun {
     // Injects Codex hook and provider configuration through repeated `--config` flags. Codex
     // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
-    // 0.129; the older `features.codex_hooks` is deprecated. Requires codex-cli >= 0.129.0.
+    // 0.129. Requires codex-cli >= 0.129.0.
     fn prepare_codex(&mut self, gateway_url: &str) {
         // Codex resolves auth via `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/
         // manager.rs`): `auth_mode=ApiKey` uses `OPENAI_API_KEY`, `auth_mode=Chatgpt` uses the

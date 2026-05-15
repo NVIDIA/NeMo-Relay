@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Prompt Intermediate Representation (IR) types for the ACG system.
+//! Prompt Intermediate Representation (IR) types for the Adaptive Cache
+//! Governor (ACG) system.
 //!
 //! The Prompt IR decomposes LLM conversations into addressable blocks
 //! with structural metadata for cache analysis and prompt rewriting.

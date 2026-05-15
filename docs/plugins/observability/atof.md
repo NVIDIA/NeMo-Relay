@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# ATOF
+# Agent Trajectory Observability Format (ATOF)
 
 Use the `atof` section when you want the raw Agent Trajectory Observability
 Format (ATOF) `0.1` event stream written as JSONL.

@@ -39,9 +39,9 @@ targets.
   execution. Plugins package that behavior so applications and framework
   integrations can install it from configuration.
 - **Export one event stream to many backends**: Subscribers consume the canonical
-  lifecycle stream in-process or translate it to ATIF trajectories,
-  OpenTelemetry traces, and OpenInference-compatible traces for debugging,
-  evaluation, and production observability.
+  lifecycle stream in-process or translate it to Agent Trajectory Interchange
+  Format (ATIF) trajectories, OpenTelemetry traces, and OpenInference-compatible
+  traces for debugging, evaluation, and production observability.
 - **Adopt without replacing the stack**: NeMo Flow can sit below NeMo ecosystem
   components, third-party agent frameworks, provider adapters, or direct
   application code, so teams can add shared runtime semantics without a
@@ -51,15 +51,24 @@ targets.
   authors, plugin authors, and application teams reason about behavior
   consistently.
 
-## Use Cases
+## What Should I Read First?
 
-These paths map common reader goals to the most relevant documentation entry points.
+Use the reading path that matches your task:
 
-- **End Users**: Start with [Prerequisites](getting-started/prerequisites.md) and [Quick Start](getting-started/quick-start.md).
-- **NeMo Flow CLI Users**: Start with [Basic Usage](nemo-flow-cli/basic-usage.md), then use the per-agent guide for Claude Code, Codex, Cursor, or Hermes Agent.
-- **Agent Framework Developers**: Start with [Integrate into Frameworks](integrate-frameworks/about.md).
-- **Plugin Writers**: Start with [Build Plugins](build-plugins/about.md), then continue to [Define a Plugin](build-plugins/basic-guide.md).
-- **Contributors**: Start with [Contribute](contribute/about.md) and the repository root `CONTRIBUTING.md` guide.
+| Task | Start With |
+|---|---|
+| Run a minimal example | [Quick Start](getting-started/quick-start.md) |
+| Install packages | [Installation](getting-started/installation.md) |
+| Develop from source | [Development Setup](contribute/development-setup.md) |
+| Understand the runtime model | [Concepts](about/concepts/index.md) |
+| Instrument an application | [Instrument Applications](instrument-applications/about.md) |
+| Use a maintained integration | [Supported Integrations](integrations/about.md) |
+| Integrate a framework | [Integrate into Frameworks](integrate-frameworks/about.md) |
+| Observe a local coding-agent CLI | [NeMo Flow CLI](nemo-flow-cli/about.md) |
+| Package reusable behavior | [Build Plugins](build-plugins/about.md) |
+| Export traces or trajectories | [Observability](plugins/observability/about.md) |
+| Configure adaptive behavior | [Adaptive](plugins/adaptive/about.md) |
+| Look up symbols | [APIs](reference/api/index.md) |
 
 ## Conceptual Diagram
 
@@ -142,6 +151,31 @@ Quick Start <getting-started/quick-start>
 
 ```{toctree}
 :hidden:
+:caption: NeMo Flow CLI
+:maxdepth: 2
+
+About <nemo-flow-cli/about>
+Basic Usage <nemo-flow-cli/basic-usage>
+Claude Code <nemo-flow-cli/claude-code>
+Codex <nemo-flow-cli/codex>
+Cursor <nemo-flow-cli/cursor>
+Hermes Agent <nemo-flow-cli/hermes>
+```
+
+```{toctree}
+:hidden:
+:caption: Supported Integrations
+:maxdepth: 2
+
+About <integrations/about>
+OpenClaw Plugin Guide <integrations/openclaw-plugin>
+LangChain Integration Guide <integrations/langchain>
+LangGraph Integration Guide <integrations/langgraph>
+Deep Agents Integration Guide <integrations/deepagents>
+```
+
+```{toctree}
+:hidden:
 :caption: Instrument Applications
 :maxdepth: 2
 
@@ -155,6 +189,30 @@ Code Examples <instrument-applications/code-examples>
 
 ```{toctree}
 :hidden:
+:caption: Observability Plugin
+:maxdepth: 2
+
+About <plugins/observability/about>
+Configuration <plugins/observability/configuration>
+Agent Trajectory Interchange Format (ATIF) <plugins/observability/atif>
+Agent Trajectory Observability Format (ATOF) <plugins/observability/atof>
+OpenTelemetry <plugins/observability/opentelemetry>
+OpenInference <plugins/observability/openinference>
+```
+
+```{toctree}
+:hidden:
+:caption: Adaptive Plugin
+:maxdepth: 2
+
+About <plugins/adaptive/about>
+Configuration <plugins/adaptive/configuration>
+Adaptive Cache Governor (ACG) <plugins/adaptive/acg>
+Adaptive Hints <plugins/adaptive/adaptive-hints>
+```
+
+```{toctree}
+:hidden:
 :caption: Integrate into Frameworks
 :maxdepth: 2
 
@@ -162,25 +220,11 @@ About <integrate-frameworks/about>
 Adding Scopes <integrate-frameworks/adding-scopes>
 Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
 Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
-OpenClaw Plugin Guide <integrate-frameworks/openclaw-plugin>
 Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
 Using Codecs <integrate-frameworks/using-codecs>
 Provider Codecs <integrate-frameworks/provider-codecs>
 Provider Response Codecs <integrate-frameworks/provider-response-codecs>
 Code Examples <integrate-frameworks/code-examples>
-```
-
-```{toctree}
-:hidden:
-:caption: NeMo Flow CLI
-:maxdepth: 2
-
-About <nemo-flow-cli/about>
-Basic Usage <nemo-flow-cli/basic-usage>
-Claude Code <nemo-flow-cli/claude-code>
-Codex <nemo-flow-cli/codex>
-Cursor <nemo-flow-cli/cursor>
-Hermes Agent <nemo-flow-cli/hermes>
 ```
 
 ```{toctree}
@@ -200,30 +244,6 @@ Code Examples <build-plugins/code-examples>
 
 ```{toctree}
 :hidden:
-:caption: Adaptive Plugin
-:maxdepth: 2
-
-About <plugins/adaptive/about>
-Configuration <plugins/adaptive/configuration>
-ACG <plugins/adaptive/acg>
-Adaptive Hints <plugins/adaptive/adaptive-hints>
-```
-
-```{toctree}
-:hidden:
-:caption: Observability Plugin
-:maxdepth: 2
-
-About <plugins/observability/about>
-Configuration <plugins/observability/configuration>
-ATOF <plugins/observability/atof>
-ATIF <plugins/observability/atif>
-OpenTelemetry <plugins/observability/opentelemetry>
-OpenInference <plugins/observability/openinference>
-```
-
-```{toctree}
-:hidden:
 :caption: Contribute
 :maxdepth: 2
 
@@ -238,7 +258,7 @@ Testing and Documentation <contribute/testing-and-docs>
 :caption: Reference
 :maxdepth: 2
 
-API <reference/api/index>
+APIs <reference/api/index>
 reference/performance
 ```
 

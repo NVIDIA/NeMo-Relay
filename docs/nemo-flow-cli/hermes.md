@@ -120,7 +120,8 @@ relying on unattended capture.
 
 ## Verify Export
 
-End a Hermes turn or finalize the session and confirm ATIF exists:
+End a Hermes turn or finalize the session and confirm Agent Trajectory
+Interchange Format (ATIF) exists:
 
 ```bash
 ls .nemo-flow/atif

@@ -31,16 +31,16 @@ only when it includes `enabled: true`.
 
 | Section | Runtime behavior |
 |---|---|
-| `atof` | Registers a global ATOF JSONL exporter for raw lifecycle events. |
-| `atif` | Registers one ATIF dispatcher that writes one trajectory file for each top-level agent scope. |
+| `atof` | Registers a global Agent Trajectory Observability Format (ATOF) JSONL exporter for raw lifecycle events. |
+| `atif` | Registers one Agent Trajectory Interchange Format (ATIF) dispatcher that writes one trajectory file for each top-level agent scope. |
 | `opentelemetry` | Registers a global OpenTelemetry OTLP subscriber. |
 | `openinference` | Registers a global OpenInference OTLP subscriber. |
 
 `subscriber_name` is not part of this config. The runtime infers subscriber
 names from the plugin namespace:
 
-- ATOF: `atof`
-- ATIF dispatcher: `atif`
+- Agent Trajectory Observability Format (ATOF): `atof`
+- Agent Trajectory Interchange Format (ATIF) dispatcher: `atif`
 - Per-agent ATIF scope subscriber: `atif-{agent_scope_uuid}`
 - OpenTelemetry: `opentelemetry`
 - OpenInference: `openinference`

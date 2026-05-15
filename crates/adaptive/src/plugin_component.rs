@@ -7,10 +7,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nemo_flow::plugin::Result as CorePluginResult;
 use nemo_flow::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationContext, UnsupportedBehavior, deregister_plugin,
+    PluginRegistration, PluginRegistrationContext, Result, UnsupportedBehavior, deregister_plugin,
     lookup_plugin, register_plugin,
 };
 use serde_json::{Map, Value as Json};
@@ -76,7 +75,7 @@ impl Plugin for AdaptivePlugin {
         &'a self,
         plugin_config: &Map<String, Json>,
         ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = CorePluginResult<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
             let config = parse_adaptive_config(&plugin_config)?;
@@ -112,8 +111,8 @@ impl Plugin for AdaptivePlugin {
 /// that contain adaptive components.
 ///
 /// # Returns
-/// A core plugin [`Result`](CorePluginResult) that is `Ok(())` when the
-/// adaptive component kind is available in the registry.
+/// A core plugin [`Result`] that is `Ok(())` when the adaptive component kind
+/// is available in the registry.
 ///
 /// # Errors
 /// Returns an error when registration fails for a reason other than an already
@@ -122,7 +121,7 @@ impl Plugin for AdaptivePlugin {
 /// # Notes
 /// Re-registering the adaptive component is treated as success when the
 /// existing registration already resolves to the adaptive plugin kind.
-pub fn register_adaptive_component() -> CorePluginResult<()> {
+pub fn register_adaptive_component() -> Result<()> {
     match register_plugin(Arc::new(AdaptivePlugin)) {
         Ok(()) => Ok(()),
         Err(PluginError::RegistrationFailed(message))
@@ -150,7 +149,7 @@ pub fn deregister_adaptive_component() -> bool {
     deregister_plugin(ADAPTIVE_PLUGIN_KIND)
 }
 
-fn parse_adaptive_config(plugin_config: &Map<String, Json>) -> CorePluginResult<AdaptiveConfig> {
+fn parse_adaptive_config(plugin_config: &Map<String, Json>) -> Result<AdaptiveConfig> {
     serde_json::from_value(Json::Object(plugin_config.clone()))
         .map_err(|err| PluginError::InvalidConfig(format!("invalid adaptive plugin config: {err}")))
 }

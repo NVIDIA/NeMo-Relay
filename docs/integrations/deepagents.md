@@ -116,5 +116,5 @@ It captures:
 Remote graphs or processes still need NeMo Flow instrumentation in that graph
 or process to capture their internal model and tool calls.
 
-Refer to [Observability](../../plugins/observability/about.md)
+Refer to [Observability](../plugins/observability/about.md)
 for details on exporting NeMo Flow observability data to third-party systems.

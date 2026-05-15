@@ -31,7 +31,8 @@ should install it from npm rather than depend on the Rust crate directly.
 - 🛡️ **Put policy around callbacks**: Register guardrails and intercepts for
   request rewriting, blocking, sanitization, and execution wrapping.
 - 📡 **Emit one lifecycle stream**: Send runtime events to in-process
-  subscribers, ATIF, OpenTelemetry, or OpenInference workflows.
+  subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
+  OpenInference workflows.
 - 🧩 **Use package entry points by need**: Import the main runtime surface plus
   typed, plugin, adaptive, and observability helpers from npm.
 

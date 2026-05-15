@@ -81,15 +81,17 @@ exporters.
 A plain custom subscriber is the right choice when you want in-process handling
 of the canonical event stream.
 
-### ATIF Exporter
+### Agent Trajectory Interchange Format (ATIF) Exporter
 
-The ATIF exporter collects lifecycle events and emits trajectory artifacts for
-offline analysis, replay, or debugging.
+The Agent Trajectory Interchange Format (ATIF) exporter collects lifecycle
+events and emits trajectory artifacts for offline analysis, replay, or
+debugging.
 
-### ATOF JSONL Exporter
+### Agent Trajectory Observability Format (ATOF) JSONL Exporter
 
-The ATOF JSONL exporter writes the canonical event stream to a native
-filesystem path as one raw ATOF event per line.
+The Agent Trajectory Observability Format (ATOF) JSONL exporter writes the
+canonical event stream to a native filesystem path as one raw ATOF event per
+line.
 
 ### OpenTelemetry Subscriber
 

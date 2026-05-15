@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# ATIF
+# Agent Trajectory Interchange Format (ATIF)
 
 Use the `atif` section when you want one Agent Trajectory Interchange Format
 (ATIF) trajectory artifact per top-level agent run.

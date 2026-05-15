@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! ACG learner for the adaptive telemetry pipeline.
+//! Adaptive Cache Governor (ACG) learner for the adaptive telemetry pipeline.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;

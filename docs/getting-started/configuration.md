@@ -35,10 +35,11 @@ rules.
 
 ## Observability Setup
 
-ATOF exporters, ATIF exporters, OpenTelemetry subscribers, and OpenInference
-subscribers can be configured directly through binding-native config objects.
-Use the built-in `observability` plugin when you want one plugin component to
-own standard exporter setup and teardown. See
+Agent Trajectory Observability Format (ATOF) exporters, Agent Trajectory
+Interchange Format (ATIF) exporters, OpenTelemetry subscribers, and
+OpenInference subscribers can be configured directly through binding-native
+config objects. Use the built-in `observability` plugin when you want one
+plugin component to own standard exporter setup and teardown. See
 [Observability Configuration](../plugins/observability/configuration.md)
 and [Observability](../plugins/observability/about.md)
 for the supported export paths.
