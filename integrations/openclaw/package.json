@@ -58,7 +58,7 @@
     "openclaw": ">=2026.5.12"
   },
   "dependencies": {
-    "nemo-flow-node": "0.2.0"
+    "nemo-flow-node": "0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
