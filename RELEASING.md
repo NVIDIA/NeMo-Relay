@@ -38,6 +38,10 @@ The release pipeline publishes these package surfaces from a tag push:
 Go remains source-first. There is no separate Go package-manager publication
 step in the repository release workflow.
 
+The mirrored GitLab pipeline also publishes the same tag's collected package
+artifacts to NVIDIA Artifactory. It is driven by the tag push, not by a GitLab
+pipeline schedule.
+
 ## Version Model
 
 NeMo Flow versions are anchored on the workspace SemVer in the repository root
@@ -259,6 +263,17 @@ The workflow boundary is split intentionally:
   `actions/deploy-pages` step for documentation publication.
 - This layout also satisfies the official `pypa/gh-action-pypi-publish`
   guidance that trusted publishing should not run inside reusable workflows.
+
+The mirrored GitLab pipeline in [`.gitlab-ci.yml`](.gitlab-ci.yml) handles
+NVIDIA Artifactory publication for the same tag:
+
+- GitLab starts the pipeline from a tag push through `CI_COMMIT_TAG`; no GitLab
+  cron or pipeline schedule is required.
+- The collector waits for the mirrored GitHub tag and matching GitHub Actions
+  run, then downloads the wheel, Cargo, Node.js, and WebAssembly package
+  artifacts produced by GitHub Actions.
+- The Artifactory jobs publish those collected artifacts to the configured
+  Python, Cargo, and npm Artifactory registries.
 
 npm trusted publishing has its own registry-side constraints:
 
