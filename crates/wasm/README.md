@@ -12,9 +12,10 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
-# nemo-flow-wasm
+# NeMo Flow
 
 `nemo-flow-wasm` is the NeMo Flow WebAssembly package for JavaScript
 environments that load the runtime through WebAssembly. It exposes the same execution
@@ -28,6 +29,10 @@ the Rust crate directly.
 This surface is experimental and source-first. Use the repository source tree
 and WebAssembly tests when validating behavior, and prefer Rust, Python, or
 Node.js for primary documented application integrations.
+
+Observability support is also experimental. The WebAssembly target does not
+support `grpc` OTLP transport, and file-backed observability plugin sinks
+require a host runtime with filesystem access.
 
 ## Why Use It?
 
@@ -49,7 +54,8 @@ Node.js for primary documented application integrations.
 - ✅ **Middleware registration**: Guardrail and intercept APIs for JavaScript
   callbacks.
 - ✅ **Additional entry points**: `nemo-flow-wasm/typed`,
-  `nemo-flow-wasm/plugin`, and `nemo-flow-wasm/adaptive`.
+  `nemo-flow-wasm/plugin`, `nemo-flow-wasm/adaptive`, and
+  `nemo-flow-wasm/observability`.
 - ✅ **Generated npm package**: A `wasm-pack` build prepared for JavaScript
   package consumption.
 
@@ -61,7 +67,7 @@ Install the npm package in a JavaScript project:
 npm install nemo-flow-wasm
 ```
 
-For local source development from the repository root:
+For local source validation from the repository root:
 
 ```bash
 npm run build:pkg --workspace=nemo-flow-wasm
@@ -100,8 +106,8 @@ main().catch((error) => {
 ```
 
 The main runtime API is exported from `nemo-flow-wasm`. Additional entry points
-are available at `nemo-flow-wasm/typed`, `nemo-flow-wasm/plugin`, and
-`nemo-flow-wasm/adaptive`.
+are available at `nemo-flow-wasm/typed`, `nemo-flow-wasm/plugin`,
+`nemo-flow-wasm/adaptive`, and `nemo-flow-wasm/observability`.
 
 ## Documentation
 

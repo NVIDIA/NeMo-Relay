@@ -15,7 +15,7 @@ SPDX-License-Identifier: Apache-2.0
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
-# nemo-flow-cli
+# NeMo Flow
 
 `nemo-flow-cli` installs the NeMo Flow CLI, the `nemo-flow` binary for local
 coding-agent observability. It can configure supported coding-agent hooks, run
@@ -64,13 +64,6 @@ That command installs the binary as:
 nemo-flow --version
 ```
 
-For local development, build and test the package directly:
-
-```bash
-cargo build -p nemo-flow-cli
-cargo test -p nemo-flow-cli
-```
-
 ## Getting Started
 
 Run the first-time setup wizard:
@@ -105,6 +98,12 @@ Project config lives at `./.nemo-flow/config.toml`; user config lives at
 The project layer overrides system config, and the user layer overrides the
 project layer.
 
+General options are configured through the top-level config. Edit the config with:
+
+```bash
+nemo-flow config
+```
+
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
 
@@ -133,4 +132,4 @@ output_directory = "./atif"
 
 ## Documentation
 
-NeMo Flow CLI Documentation: https://nvidia.github.io/NeMo-Flow/nemo-flow-cli/about.html
+NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow/
