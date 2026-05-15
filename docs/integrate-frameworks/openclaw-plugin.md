@@ -175,7 +175,7 @@ Missing observability sections are disabled. Plugin-host validation or
 initialization errors degrade the NeMo Flow runtime as a whole, and the status
 method reports configured output health from the generic observability
 component. See
-[Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
+[Observability Configuration](../plugins/observability/configuration.md)
 for the complete `observability` component schema and exporter-specific fields.
 
 ## Verify the Integration

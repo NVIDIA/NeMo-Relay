@@ -429,4 +429,4 @@ Every family also has a scope-local surface:
   `nemo_flow::api::registry`; subscriber scope registration under
   `nemo_flow::api::subscriber`
 
-Use [Advanced Guide: Add Middleware](advanced-guide.md) for an end-to-end policy example and [API Reference](../reference/api/index.md) for symbol-level details.
+Use [Add Middleware](advanced-guide.md) for an end-to-end policy example and [API Reference](../reference/api/index.md) for symbol-level details.

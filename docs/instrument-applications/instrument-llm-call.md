@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Instrument an LLM Call
+# Instrument an LLM Call
 
 Use this guide when you own the model-provider callback and want NeMo Flow to emit lifecycle events, apply LLM middleware, and preserve the active agent scope around the call.
 
@@ -26,7 +26,7 @@ Complete one binding Quick Start guide first:
 - [Node.js Quick Start](../getting-started/nodejs.md)
 - [Rust Quick Start](../getting-started/rust.md)
 
-Create a scope for the active request or agent run before adding LLM instrumentation. If you have not done that yet, start with [Basic Guide: Adding Scopes and Marks](adding-scopes-and-marks.md).
+Create a scope for the active request or agent run before adding LLM instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](adding-scopes-and-marks.md).
 
 The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Flow.
 
@@ -248,7 +248,7 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Instrument tools with [Basic Guide: Instrument a Tool Call](instrument-tool-call.md).
-- Add policy or transformation with [Advanced Guide: Add Middleware](advanced-guide.md).
-- Use [Advanced Guide: Provider Codecs](../integrate-frameworks/provider-codecs.md) when middleware needs normalized LLM request and response data.
-- Export events with [Basic Guide: Register a Subscriber](../export-observability-data/basic-guide.md).
+- Instrument tools with [Instrument a Tool Call](instrument-tool-call.md).
+- Add policy or transformation with [Add Middleware](advanced-guide.md).
+- Use [Provider Codecs](../integrate-frameworks/provider-codecs.md) when middleware needs normalized LLM request and response data.
+- Export events with [Observability](../plugins/observability/about.md).

@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Validate Plugin Configuration
+# Validate Plugin Configuration
 
 Use this guide when you have a plugin kind and need predictable diagnostics before the plugin installs runtime behavior.
 
@@ -201,6 +201,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Register runtime behavior with [Basic Guide: Register Plugin Behavior](register-behavior.md).
-- Add rollout controls with [Advanced Guide: Design Plugin Configuration](advanced-configuration.md).
+- Register runtime behavior with [Register Plugin Behavior](register-behavior.md).
+- Add rollout controls with [Design Plugin Configuration](advanced-configuration.md).
 - Review concrete validation patterns in [Code Examples](code-examples.md).

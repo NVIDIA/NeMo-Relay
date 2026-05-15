@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Provider Codecs
+# Provider Codecs
 
 Use this guide when a framework integration needs NeMo Flow middleware, intercepts, or subscribers to reason about provider-specific LLM payloads through a stable annotated shape.
 
@@ -31,7 +31,7 @@ A provider codec is a pure data translator at the NeMo Flow LLM boundary.
 - An LLM request codec converts a raw provider request into a normalized annotated request, then encodes any annotated edits back into the original provider request.
 - An LLM response codec converts a raw provider response into a normalized response annotation for lifecycle events.
 
-Provider codecs let framework code keep using provider-native payloads while NeMo Flow middleware works against a shared annotated model. For application-facing type conversion, use [Advanced Guide: Using Codecs](using-codecs.md).
+Provider codecs let framework code keep using provider-native payloads while NeMo Flow middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](using-codecs.md).
 
 ## How Provider Codecs Work
 
@@ -43,7 +43,7 @@ When a managed LLM call has a request codec:
 4. NeMo Flow calls `encode` to merge the annotated request back into the original raw request.
 5. Execution intercepts and the provider callback receive the encoded provider request.
 
-When a managed LLM call has a response codec, NeMo Flow decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Advanced Guide: Provider Response Codecs](provider-response-codecs.md) for response-only behavior and custom response codec examples.
+When a managed LLM call has a response codec, NeMo Flow decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](provider-response-codecs.md) for response-only behavior and custom response codec examples.
 
 Codec implementations should preserve fields they do not understand. Treat `encode` as a merge operation over the original provider payload, not as a full replacement.
 
@@ -385,7 +385,7 @@ contract.
 
 Use these links to continue from this workflow into the next related task.
 
-- Use [Advanced Guide: Using Codecs](using-codecs.md) for typed value codecs.
-- Use [Advanced Guide: Provider Response Codecs](provider-response-codecs.md) for response-only annotations and subscriber examples.
-- Use [Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md) before adding request transforms.
-- Use [Advanced Guide: Handle Non-Serializable Data](non-serializable-data.md) when the framework boundary includes SDK objects or streams that cannot pass through JSON payloads.
+- Use [Using Codecs](using-codecs.md) for typed value codecs.
+- Use [Provider Response Codecs](provider-response-codecs.md) for response-only annotations and subscriber examples.
+- Use [Add Middleware](../instrument-applications/advanced-guide.md) before adding request transforms.
+- Use [Handle Non-Serializable Data](non-serializable-data.md) when the framework boundary includes SDK objects or streams that cannot pass through JSON payloads.

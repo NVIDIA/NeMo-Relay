@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Define a Plugin
+# Define a Plugin
 
 Use this guide when you want to package reusable NeMo Flow behavior as a plugin that can be activated from configuration.
 
@@ -142,7 +142,7 @@ Before you write the plugin implementation, answer these questions:
 
 Use these links to continue from this workflow into the next related task.
 
-- Define validation behavior with [Basic Guide: Validate Plugin Configuration](validate-configuration.md).
-- Register runtime behavior with [Basic Guide: Register Plugin Behavior](register-behavior.md).
-- Add rollout controls with [Advanced Guide: Design Plugin Configuration](advanced-configuration.md).
+- Define validation behavior with [Validate Plugin Configuration](validate-configuration.md).
+- Register runtime behavior with [Register Plugin Behavior](register-behavior.md).
+- Add rollout controls with [Design Plugin Configuration](advanced-configuration.md).
 - Review complete examples in [Code Examples](code-examples.md).

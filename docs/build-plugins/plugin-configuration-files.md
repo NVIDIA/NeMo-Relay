@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Plugin Configuration Files
+# Plugin Configuration Files
 
 Use `plugins.toml` when the `nemo-flow` CLI gateway should activate plugins at
 startup. The file contains the same generic plugin configuration document used
@@ -260,6 +260,7 @@ Observability exporters through `plugins.toml`.
 
 Use the component guides for field-level configuration:
 
-- [Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
-- [Configure Adaptive Optimization](../use-adaptive-optimization/configure.md)
-- [Advanced Guide: Configure Adaptive Components](../use-adaptive-optimization/adaptive-components.md)
+- [Observability Configuration](../plugins/observability/configuration.md)
+- [Adaptive Configuration](../plugins/adaptive/configuration.md)
+- [ACG](../plugins/adaptive/acg.md)
+- [Adaptive Hints](../plugins/adaptive/adaptive-hints.md)

@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Provider Response Codecs
+# Provider Response Codecs
 
 Use this guide when subscribers, exporters, or diagnostics need a provider-neutral view of raw LLM responses.
 
@@ -22,7 +22,7 @@ Response codecs are observability-only:
 
 You need:
 
-- A managed LLM boundary from [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md).
+- A managed LLM boundary from [Wrap LLM Calls](wrap-llm-calls.md).
 - A raw provider response that is JSON-compatible.
 - A built-in response codec or a custom response codec for the provider response shape.
 - A subscriber or exporter that consumes `annotated_response` from LLM end events.
@@ -362,6 +362,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Use [Advanced Guide: Provider Codecs](provider-codecs.md) for request-side provider codecs and full request/response examples.
-- Use [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md) to add the managed LLM boundary first.
-- Use [Export Observability Data](../export-observability-data/about.md) after annotations are visible in local subscribers.
+- Use [Provider Codecs](provider-codecs.md) for request-side provider codecs and full request/response examples.
+- Use [Wrap LLM Calls](wrap-llm-calls.md) to add the managed LLM boundary first.
+- Use [Observability](../plugins/observability/about.md) after annotations are visible in local subscribers.

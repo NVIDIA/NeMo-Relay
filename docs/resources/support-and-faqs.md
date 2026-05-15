@@ -162,8 +162,8 @@ Use the reading path that matches your task:
 | Integrate a framework | [Integrate into Frameworks](../integrate-frameworks/about.md) |
 | Observe a local coding-agent CLI | [NeMo Flow CLI](../nemo-flow-cli/about.md) |
 | Package reusable behavior | [Build Plugins](../build-plugins/about.md) |
-| Export traces or trajectories | [Export Observability Data](../export-observability-data/about.md) |
-| Configure adaptive behavior | [Use Adaptive Optimization](../use-adaptive-optimization/about.md) |
+| Export traces or trajectories | [Observability](../plugins/observability/about.md) |
+| Configure adaptive behavior | [Adaptive](../plugins/adaptive/about.md) |
 | Look up symbols | [API](../reference/api/index.md) |
 
 ## Runtime Model And Execution
@@ -251,7 +251,7 @@ Choose the surface based on what must change:
 | Wrap streaming chunk delivery and finalization | Stream execution intercept |
 
 Refer to [Middleware](../about/concepts/middleware.md) and
-[Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md).
+[Add Middleware](../instrument-applications/advanced-guide.md).
 
 ### What Is The Middleware Pipeline?
 
@@ -318,7 +318,7 @@ configuration and source code, and emit summarized metadata when full request or
 response bodies are not needed.
 
 Refer to [Middleware](../about/concepts/middleware.md#guardrails) and
-[Export Observability Data](../export-observability-data/about.md).
+[Observability](../plugins/observability/about.md).
 
 ## Observability And Export
 
@@ -332,7 +332,7 @@ operational tracing, trajectory export, or analytics.
 
 Refer to [Subscribers](../about/concepts/subscribers.md),
 [Events](../about/concepts/events.md), and
-[Register a Subscriber](../export-observability-data/basic-guide.md).
+[Subscribers](../about/concepts/subscribers.md).
 
 ### Which Exporter Should I Use?
 
@@ -342,10 +342,10 @@ OpenInference when your tracing stack expects OpenInference-style agent and LLM
 semantics. Use ATIF when you need trajectory artifacts for analysis, replay, or
 evaluation workflows.
 
-Refer to [Exporter Selection](../export-observability-data/code-examples.md#exporter-selection),
-[Export OpenTelemetry Data](../export-observability-data/opentelemetry.md),
-[Export OpenInference Data](../export-observability-data/advanced-guide.md), and
-[Export ATIF](../export-observability-data/atif.md).
+Refer to [Exporter Selection](../plugins/observability/about.md#exporter-selection),
+[OpenTelemetry](../plugins/observability/opentelemetry.md),
+[OpenInference](../plugins/observability/openinference.md), and
+[ATIF](../plugins/observability/atif.md).
 
 ### Can I Use NeMo Flow Just For Observability Without Adaptive Optimization Or Middleware?
 
@@ -391,9 +391,10 @@ telemetry and in-memory state so the runtime can observe representative
 workflows before changing behavior. Enable active behavior one area at a time,
 such as adaptive hints, tool parallelism, or cache-governor behavior.
 
-Refer to [Use Adaptive Optimization](../use-adaptive-optimization/about.md),
-[Configure Adaptive Optimization](../use-adaptive-optimization/configure.md),
-and [Adaptive Components](../use-adaptive-optimization/adaptive-components.md).
+Refer to [Adaptive](../plugins/adaptive/about.md),
+[Adaptive Configuration](../plugins/adaptive/configuration.md),
+[ACG](../plugins/adaptive/acg.md), and
+[Adaptive Hints](../plugins/adaptive/adaptive-hints.md).
 
 ## Framework Integration And APIs
 

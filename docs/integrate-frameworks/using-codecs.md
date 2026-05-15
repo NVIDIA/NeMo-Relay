@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Using Codecs
+# Using Codecs
 
 Use this guide when a framework integration needs typed application values at its public boundary while NeMo Flow still records JSON-compatible payloads.
 
@@ -16,7 +16,7 @@ You will choose typed value codecs for framework-facing wrappers so that:
 - Middleware and subscribers receive predictable serialized values
 - The framework callback still receives the application type it expects
 
-For provider-native LLM payload normalization, use [Advanced Guide: Provider Codecs](provider-codecs.md).
+For provider-native LLM payload normalization, use [Provider Codecs](provider-codecs.md).
 
 ## Before You Start
 
@@ -189,6 +189,6 @@ contract.
 
 Use these links to continue from this workflow into the next related task.
 
-- Use [Advanced Guide: Provider Codecs](provider-codecs.md) when provider payloads need normalized request or response annotations.
-- Use [Advanced Guide: Handle Non-Serializable Data](non-serializable-data.md) when framework objects cannot pass through JSON payloads.
+- Use [Provider Codecs](provider-codecs.md) when provider payloads need normalized request or response annotations.
+- Use [Handle Non-Serializable Data](non-serializable-data.md) when framework objects cannot pass through JSON payloads.
 - Use [Integrate into Frameworks Code Examples](code-examples.md) for explicit fallback APIs.

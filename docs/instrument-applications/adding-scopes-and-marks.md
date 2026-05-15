@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Adding Scopes and Marks
+# Adding Scopes and Marks
 
 Use this guide when you want NeMo Flow to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
 
@@ -206,6 +206,6 @@ Use this checklist before running the pattern in production traffic.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add tool instrumentation with [Basic Guide: Instrument a Tool Call](instrument-tool-call.md).
-- Add model-provider instrumentation with [Basic Guide: Instrument an LLM Call](instrument-llm-call.md).
+- Add tool instrumentation with [Instrument a Tool Call](instrument-tool-call.md).
+- Add model-provider instrumentation with [Instrument an LLM Call](instrument-llm-call.md).
 - Use [Code Examples](code-examples.md#scope-and-context-helpers) for explicit scope-stack propagation helpers.

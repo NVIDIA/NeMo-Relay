@@ -36,14 +36,14 @@ If your application uses [LangChain](https://www.langchain.com/langchain),
 
 Use these guide links to move from the overview into task-specific instructions.
 
-- [Basic Guide: Adding Scopes](adding-scopes.md) shows how framework request and run hooks become NeMo Flow ownership boundaries.
-- [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md) explains where to place managed tool wrappers and tool lifecycle fallbacks.
-- [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
+- [Adding Scopes](adding-scopes.md) shows how framework request and run hooks become NeMo Flow ownership boundaries.
+- [Wrap Tool Calls](wrap-tool-calls.md) explains where to place managed tool wrappers and tool lifecycle fallbacks.
+- [Wrap LLM Calls](wrap-llm-calls.md) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
 - [OpenClaw Plugin Guide](openclaw-plugin.md) covers configuring the OpenClaw plugin, mapping OpenClaw hooks to NeMo Flow telemetry, and understanding current LLM replay fidelity boundaries.
-- [Advanced Guide: Handle Non-Serializable Data](non-serializable-data.md) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
-- [Advanced Guide: Using Codecs](using-codecs.md) explains typed value codecs for framework-facing wrappers.
-- [Advanced Guide: Provider Codecs](provider-codecs.md) explains provider request and response codecs for normalized middleware and event annotations.
-- [Advanced Guide: Provider Response Codecs](provider-response-codecs.md) focuses on response-only annotations for subscribers and exporters.
+- [Handle Non-Serializable Data](non-serializable-data.md) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
+- [Using Codecs](using-codecs.md) explains typed value codecs for framework-facing wrappers.
+- [Provider Codecs](provider-codecs.md) explains provider request and response codecs for normalized middleware and event annotations.
+- [Provider Response Codecs](provider-response-codecs.md) focuses on response-only annotations for subscribers and exporters.
 - [Code Examples](code-examples.md) collects fallback APIs, mark events, and repository patch workflow examples.
 
 For coding-agent hook and LLM gateway observability, use

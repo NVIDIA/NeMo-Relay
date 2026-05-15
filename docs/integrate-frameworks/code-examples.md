@@ -7,13 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 Use these examples for implementation surfaces:
 
-- [Basic Guide: Adding Scopes](adding-scopes.md)
-- [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md)
-- [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md)
+- [Adding Scopes](adding-scopes.md)
+- [Wrap Tool Calls](wrap-tool-calls.md)
+- [Wrap LLM Calls](wrap-llm-calls.md)
 - [Non-Serializable Data](non-serializable-data.md)
-- [Advanced Guide: Using Codecs](using-codecs.md)
-- [Advanced Guide: Provider Codecs](provider-codecs.md)
-- [Advanced Guide: Provider Response Codecs](provider-response-codecs.md)
+- [Using Codecs](using-codecs.md)
+- [Provider Codecs](provider-codecs.md)
+- [Provider Response Codecs](provider-response-codecs.md)
 
 ## Preferred Integration Order
 

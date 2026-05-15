@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Add Middleware
+# Add Middleware
 
 Use this guide when instrumentation is working and you want NeMo Flow to enforce policy, transform requests, wrap execution, or sanitize observability payloads around tool and LLM calls.
 
@@ -18,7 +18,7 @@ You will add middleware to an instrumented application and verify that it runs i
 
 ## Before You Start
 
-Complete [Basic Guide: Instrument a Tool Call](instrument-tool-call.md) or [Basic Guide: Instrument an LLM Call](instrument-llm-call.md). Middleware only runs when the call goes through a NeMo Flow managed lifecycle API.
+Complete [Instrument a Tool Call](instrument-tool-call.md) or [Instrument an LLM Call](instrument-llm-call.md). Middleware only runs when the call goes through a NeMo Flow managed lifecycle API.
 
 ## Choose the Middleware Type
 
@@ -232,4 +232,4 @@ Use these links to continue from this workflow into the next related task.
 
 - Use [Middleware](../about/concepts/middleware.md) to review execution order.
 - Use [Code Examples](code-examples.md) for direct registration and partial-execution examples.
-- Use [Advanced Guide: Handle Non-Serializable Data](../integrate-frameworks/non-serializable-data.md) if middleware needs to work with framework objects.
+- Use [Handle Non-Serializable Data](../integrate-frameworks/non-serializable-data.md) if middleware needs to work with framework objects.

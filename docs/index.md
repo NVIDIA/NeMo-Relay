@@ -58,7 +58,7 @@ These paths map common reader goals to the most relevant documentation entry poi
 - **End Users**: Start with [Prerequisites](getting-started/prerequisites.md) and [Quick Start](getting-started/quick-start.md).
 - **NeMo Flow CLI Users**: Start with [Basic Usage](nemo-flow-cli/basic-usage.md), then use the per-agent guide for Claude Code, Codex, Cursor, or Hermes Agent.
 - **Agent Framework Developers**: Start with [Integrate into Frameworks](integrate-frameworks/about.md).
-- **Plugin Writers**: Start with [Build Plugins](build-plugins/about.md), then continue to [Basic Guide: Define a Plugin](build-plugins/basic-guide.md).
+- **Plugin Writers**: Start with [Build Plugins](build-plugins/about.md), then continue to [Define a Plugin](build-plugins/basic-guide.md).
 - **Contributors**: Start with [Contribute](contribute/about.md) and the repository root `CONTRIBUTING.md` guide.
 
 ## Conceptual Diagram
@@ -146,10 +146,10 @@ Quick Start <getting-started/quick-start>
 :maxdepth: 2
 
 About <instrument-applications/about>
-Basic Guide: Adding Scopes and Marks <instrument-applications/adding-scopes-and-marks>
-Basic Guide: Instrument a Tool Call <instrument-applications/instrument-tool-call>
-Basic Guide: Instrument an LLM Call <instrument-applications/instrument-llm-call>
-Advanced Guide: Add Middleware <instrument-applications/advanced-guide>
+Adding Scopes and Marks <instrument-applications/adding-scopes-and-marks>
+Instrument a Tool Call <instrument-applications/instrument-tool-call>
+Instrument an LLM Call <instrument-applications/instrument-llm-call>
+Add Middleware <instrument-applications/advanced-guide>
 Code Examples <instrument-applications/code-examples>
 ```
 
@@ -159,14 +159,14 @@ Code Examples <instrument-applications/code-examples>
 :maxdepth: 2
 
 About <integrate-frameworks/about>
-Basic Guide: Adding Scopes <integrate-frameworks/adding-scopes>
-Basic Guide: Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
-Basic Guide: Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
+Adding Scopes <integrate-frameworks/adding-scopes>
+Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
+Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
 OpenClaw Plugin Guide <integrate-frameworks/openclaw-plugin>
-Advanced Guide: Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
-Advanced Guide: Using Codecs <integrate-frameworks/using-codecs>
-Advanced Guide: Provider Codecs <integrate-frameworks/provider-codecs>
-Advanced Guide: Provider Response Codecs <integrate-frameworks/provider-response-codecs>
+Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
+Using Codecs <integrate-frameworks/using-codecs>
+Provider Codecs <integrate-frameworks/provider-codecs>
+Provider Response Codecs <integrate-frameworks/provider-response-codecs>
 Code Examples <integrate-frameworks/code-examples>
 ```
 
@@ -189,39 +189,37 @@ Hermes Agent <nemo-flow-cli/hermes>
 :maxdepth: 2
 
 About <build-plugins/about>
-Basic Guide: Define a Plugin <build-plugins/basic-guide>
-Basic Guide: Validate Plugin Configuration <build-plugins/validate-configuration>
-Basic Guide: Plugin Configuration Files <build-plugins/plugin-configuration-files>
-Basic Guide: Register Plugin Behavior <build-plugins/register-behavior>
-Advanced Guide: Design Plugin Configuration <build-plugins/advanced-configuration>
+Define a Plugin <build-plugins/basic-guide>
+Validate Plugin Configuration <build-plugins/validate-configuration>
+Plugin Configuration Files <build-plugins/plugin-configuration-files>
+Register Plugin Behavior <build-plugins/register-behavior>
+Design Plugin Configuration <build-plugins/advanced-configuration>
 NeMo Guardrails Example Plugin <build-plugins/nemoguardrails>
 Code Examples <build-plugins/code-examples>
 ```
 
 ```{toctree}
 :hidden:
-:caption: Export Observability Data
+:caption: Adaptive Plugin
 :maxdepth: 2
 
-About <export-observability-data/about>
-Basic Guide: Register a Subscriber <export-observability-data/basic-guide>
-Basic Guide: Configure the Observability Plugin <export-observability-data/observability-plugin>
-Advanced Guide: Export OpenTelemetry Data <export-observability-data/opentelemetry>
-Advanced Guide: Export OpenInference Data <export-observability-data/advanced-guide>
-Advanced Guide: Export ATIF <export-observability-data/atif>
-Code Examples <export-observability-data/code-examples>
+About <plugins/adaptive/about>
+Configuration <plugins/adaptive/configuration>
+ACG <plugins/adaptive/acg>
+Adaptive Hints <plugins/adaptive/adaptive-hints>
 ```
 
 ```{toctree}
 :hidden:
-:caption: Use Adaptive Optimization
+:caption: Observability Plugin
 :maxdepth: 2
 
-About <use-adaptive-optimization/about>
-Basic Guide: Configure Adaptive Optimization <use-adaptive-optimization/configure>
-Advanced Guide: Configure Adaptive Components <use-adaptive-optimization/adaptive-components>
-Advanced Guide: Tune Adaptive Behavior <use-adaptive-optimization/advanced-guide>
-Code Examples <use-adaptive-optimization/code-examples>
+About <plugins/observability/about>
+Configuration <plugins/observability/configuration>
+ATOF <plugins/observability/atof>
+ATIF <plugins/observability/atif>
+OpenTelemetry <plugins/observability/opentelemetry>
+OpenInference <plugins/observability/openinference>
 ```
 
 ```{toctree}

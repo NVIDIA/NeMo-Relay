@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Adding Scopes
+# Adding Scopes
 
 Use this guide when a framework needs a durable NeMo Flow ownership boundary for one request, agent run, workflow, or framework task.
 
@@ -188,6 +188,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Wrap tools with [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md).
-- Wrap model providers with [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md).
+- Wrap tools with [Wrap Tool Calls](wrap-tool-calls.md).
+- Wrap model providers with [Wrap LLM Calls](wrap-llm-calls.md).
 - Use [Code Examples](../instrument-applications/code-examples.md#scope-and-context-helpers) for explicit scope-stack propagation helpers.

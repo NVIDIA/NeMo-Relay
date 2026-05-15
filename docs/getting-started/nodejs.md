@@ -118,4 +118,4 @@ Use these links to continue from the quick start into the core runtime concepts.
 
 - [Instrument Applications Code Examples](../instrument-applications/code-examples.md)
 - [Subscribers](../about/concepts/subscribers.md)
-- [Advanced Guide: Using Codecs](../integrate-frameworks/using-codecs.md)
+- [Using Codecs](../integrate-frameworks/using-codecs.md)
