@@ -80,12 +80,12 @@ jobs:
           save-if: false
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: cargo-deny@${{ steps.ci-config.outputs.cargo_deny_version }}
 
       - name: Install cargo-about
-        uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
 

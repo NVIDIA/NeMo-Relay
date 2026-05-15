@@ -78,7 +78,7 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},just@${{ steps.ci-config.outputs.just_version }}
 
@@ -86,19 +86,13 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
-      # Work-around issue where the GitHub Repo for wasm-pack was moved breaking taiki-e/install-action from
-      # Installing wasm-pack. Once a new version of the action is released with the fix, re-enable this and remove the
-      # cargo install command for wasm-pack.
-      # - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
-      #   with:
-      #     tool: wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
 
       - name: Run WebAssembly tests with coverage
         working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
-        run: |
-          set -e
-          cargo install wasm-pack --version "${{ steps.ci-config.outputs.wasm_pack_version }}" --locked
-          just --set ci true --set output_dir "${{ github.workspace }}" test-wasm
+        run: just --set ci true --set output_dir "${{ github.workspace }}" test-wasm
 
       - name: Upload WebAssembly coverage to Codecov
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
@@ -143,14 +137,9 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
-      - uses: taiki-e/install-action@5939f3337e40968c39aa70f5ecb1417a92fb25a0 # v2.75.15
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
-          tool: just@${{ steps.ci-config.outputs.just_version }}
-
-      - name: Install wasm-pack
-        run: |
-          set -e
-          cargo install wasm-pack --version "${{ steps.ci-config.outputs.wasm_pack_version }}" --locked
+          tool: just@${{ steps.ci-config.outputs.just_version }},wasm-pack@${{ steps.ci-config.outputs.wasm_pack_version }}
 
       - name: Create packaging output directory
         run: |
