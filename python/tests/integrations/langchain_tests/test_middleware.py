@@ -52,7 +52,7 @@ def tool_request_handler_fixture() -> tuple[Callable[[ToolCallRequest], ToolMess
     seen_request: dict[str, ToolCallRequest] = {}
 
     def handler(request: ToolCallRequest) -> ToolMessage:
-        seen_request["request"] = ToolCallRequest
+        seen_request["request"] = request
         return ToolMessage(content="done", tool_call_id=request.tool_call["id"])
 
     return handler, seen_request
@@ -226,30 +226,27 @@ def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyP
 
 def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch):
     from nemo_flow.integrations.langchain import _serialization
-    class FakeChatAnthropic:
-        pass
 
-    class FakeChatOpenAI:
-        def __init__(self, *, use_responses_api: bool = False):
-            self.use_responses_api = use_responses_api
+    MockChatAnthropic = MagicMock(spec=type("MockChatAnthropic", (), {}))
+    MockChatOpenAI = MagicMock(spec=type("MockChatOpenAI", (), {}))
+    MockChatOpenAIResponses = MagicMock(spec=MockChatOpenAI.__class__)
+    MockChatOpenAIResponses.use_responses_api = True
+    MockChatNVIDIA = MagicMock(spec=type("MockChatNVIDIA", (), {}))
 
-    class FakeChatNVIDIA:
-        pass
-
-    monkeypatch.setattr(_serialization, "ChatAnthropic", FakeChatAnthropic, raising=False)
-    monkeypatch.setattr(_serialization, "ChatOpenAI", FakeChatOpenAI, raising=False)
-    monkeypatch.setattr(_serialization, "ChatNVIDIA", FakeChatNVIDIA, raising=False)
+    monkeypatch.setattr(_serialization, "ChatAnthropic", MockChatAnthropic.__class__, raising=False)
+    monkeypatch.setattr(_serialization, "ChatOpenAI", MockChatOpenAI.__class__, raising=False)
+    monkeypatch.setattr(_serialization, "ChatNVIDIA", MockChatNVIDIA.__class__, raising=False)
     monkeypatch.setattr(_serialization, "_HAS_ANTHROPIC", True)
     monkeypatch.setattr(_serialization, "_HAS_OPENAI", True)
     monkeypatch.setattr(_serialization, "_HAS_NVIDIA", True)
 
-    assert isinstance(_serialization.infer_codec_from_model(FakeChatAnthropic()), AnthropicMessagesCodec)
-    assert isinstance(_serialization.infer_codec_from_model(FakeChatOpenAI()), OpenAIChatCodec)
+    assert isinstance(_serialization.infer_codec_from_model(MockChatAnthropic), AnthropicMessagesCodec)
+    assert isinstance(_serialization.infer_codec_from_model(MockChatOpenAI), OpenAIChatCodec)
     assert isinstance(
-        _serialization.infer_codec_from_model(FakeChatOpenAI(use_responses_api=True)),
+        _serialization.infer_codec_from_model(MockChatOpenAIResponses),
         OpenAIResponsesCodec,
     )
-    assert isinstance(_serialization.infer_codec_from_model(FakeChatNVIDIA()), OpenAIChatCodec)
+    assert isinstance(_serialization.infer_codec_from_model(MockChatNVIDIA), OpenAIChatCodec)
     assert _serialization.infer_codec_from_model(object()) is None
 
 
