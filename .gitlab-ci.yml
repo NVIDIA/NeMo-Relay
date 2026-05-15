@@ -256,6 +256,8 @@ publish:artifactory:cargo:
       mkdir -p "$cargo_home"
 
       cat > "${cargo_home}/config.toml" <<EOF
+      [registry]
+      global-credential-providers = ["cargo:token"]
       [registries]
       artifactory = { index = "sparse+${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
