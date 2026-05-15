@@ -10,7 +10,7 @@ const DEFAULT_PLUGIN_HOST_CONFIG = Object.freeze({
   components: Object.freeze([]),
 })
 const RECENT_FLUSH_TTL_MS = 2000
-const RELEVANT_EVENTS = new Set([
+const OBSERVED_EVENTS = new Set([
   "session.created",
   "session.updated",
   "session.deleted",
@@ -23,6 +23,7 @@ const RELEVANT_EVENTS = new Set([
   "message.part.delta",
   "message.part.removed",
 ])
+const INTERNAL_LLM_AGENTS = new Set(["title"])
 
 /**
  * Create the plugin logger.
@@ -260,11 +261,58 @@ function agentName(input, fallback = "opencode") {
 }
 
 /**
+ * Keep provider config out of telemetry while preserving useful identity.
+ */
+function compactProvider(provider) {
+  if (!provider || typeof provider !== "object") return undefined
+  return toJsonSafe({
+    id: provider.id,
+    source: provider.source,
+    env: provider.env,
+  })
+}
+
+/**
+ * Keep model config out of telemetry while preserving useful identity.
+ */
+function compactModel(model) {
+  if (!model || typeof model !== "object") return undefined
+  return toJsonSafe({
+    id: model.id ?? model.modelID,
+    modelID: model.modelID,
+    providerID: model.providerID ?? model.provider?.id,
+    name: model.name,
+    family: model.family,
+  })
+}
+
+/**
+ * Keep only LLM parameter fields that describe the current call.
+ */
+function compactParams(params) {
+  if (!params || typeof params !== "object") return {}
+  return toJsonSafe({
+    temperature: params.temperature,
+    topP: params.topP,
+    topK: params.topK,
+    maxOutputTokens: params.maxOutputTokens,
+    options: params.options,
+  })
+}
+
+/**
  * Read the OpenCode session ID from a bus event payload.
  */
 function eventSessionID(event) {
   const props = event?.properties
   return props?.sessionID ?? props?.info?.id
+}
+
+/**
+ * Return true for OpenCode helper calls that should not appear in the agent trajectory.
+ */
+function shouldSkipLlm(input) {
+  return INTERNAL_LLM_AGENTS.has(input?.agent)
 }
 
 /**
@@ -332,10 +380,30 @@ async function initializePluginHost(pluginHost, config, logger) {
     throw new Error("NeMo Flow plugin host config validation failed")
   }
 
+  await ensureObservabilityOutputDirectories(config)
   const activationReport = await pluginHost.initialize(config)
   await logDiagnostics(logger, activationReport.diagnostics)
   if (hasErrorDiagnostics(activationReport)) {
     await logger.warn("NeMo Flow plugin host initialized with error diagnostics")
+  }
+}
+
+/**
+ * Create filesystem output directories before exporter registration opens files.
+ */
+async function ensureObservabilityOutputDirectories(config) {
+  const components = Array.isArray(config?.components) ? config.components : []
+  for (const component of components) {
+    if (component?.kind !== "observability" || component.enabled === false) continue
+    const observabilityConfig = component.config
+    for (const sectionName of ["atof", "atif"]) {
+      const section = observabilityConfig?.[sectionName]
+      if (section?.enabled !== true) continue
+      const outputDirectory = section.output_directory
+      if (typeof outputDirectory === "string" && outputDirectory.trim() !== "") {
+        await fs.mkdir(outputDirectory, { recursive: true })
+      }
+    }
   }
 }
 
@@ -420,6 +488,11 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
       stack: typeof lib.createScopeStack === "function" ? lib.createScopeStack() : undefined,
       scope: undefined,
       pendingTools: new Map(),
+      toolCalls: new Map(),
+      pendingLlm: undefined,
+      messages: new Map(),
+      lastUserMessage: undefined,
+      sequence: 0,
     }
 
     session.scope = withStack(session, () =>
@@ -434,11 +507,6 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
       ),
     )
     sessions.set(sessionID, session)
-    emitMark(session, "opencode.session.observed", {
-      sessionID,
-      agent: session.agent,
-      model: session.model,
-    })
     return session
   }
 
@@ -447,17 +515,237 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
    */
   function emitMark(session, name, data, metadata = {}) {
     if (!session?.scope) return
-    lib.event(
-      name,
-      session.scope,
-      toJsonSafe(data),
-      {
-        source: "opencode",
-        sessionID: session.id,
-        ...toJsonSafe(metadata),
-      },
-      null,
+    withStack(session, () =>
+      lib.event(
+        name,
+        session.scope,
+        toJsonSafe(data),
+        {
+          source: "opencode",
+          sessionID: session.id,
+          ...toJsonSafe(metadata),
+        },
+        null,
+      ),
     )
+  }
+
+  /**
+   * Record message and part bus events for later LLM response reconstruction.
+   */
+  function recordMessageEvent(session, event) {
+    const props = event?.properties ?? {}
+    session.sequence += 1
+
+    if (event.type === "message.updated" && props.info) {
+      const info = toJsonSafe(props.info)
+      const messageID = info?.id
+      if (!messageID) return
+      const message = session.messages.get(messageID) ?? { id: messageID, parts: new Map(), firstSequence: session.sequence }
+      message.info = info
+      message.role = info.role
+      message.agent = info.agent
+      message.model = info.model
+      message.tokens = info.tokens
+      message.cost = info.cost
+      session.messages.set(messageID, message)
+      return
+    }
+
+    if (event.type === "message.part.updated" && props.part) {
+      const part = toJsonSafe(props.part)
+      const messageID = part?.messageID
+      const partID = part?.id
+      if (!messageID || !partID) return
+      const message = session.messages.get(messageID) ?? { id: messageID, parts: new Map(), firstSequence: session.sequence }
+      const existing = message.parts.get(partID) ?? { id: partID, firstSequence: session.sequence }
+      message.parts.set(partID, {
+        ...existing,
+        ...part,
+        firstSequence: existing.firstSequence,
+        updatedSequence: session.sequence,
+      })
+      session.messages.set(messageID, message)
+      return
+    }
+
+    if (event.type === "message.part.delta") {
+      const partID = props.partID
+      const messageID = props.messageID
+      if (!partID || !messageID || props.field !== "text") return
+      const message = session.messages.get(messageID) ?? { id: messageID, parts: new Map(), firstSequence: session.sequence }
+      const existing = message.parts.get(partID) ?? {
+        id: partID,
+        messageID,
+        sessionID: session.id,
+        type: "text",
+        firstSequence: session.sequence,
+      }
+      message.parts.set(partID, {
+        ...existing,
+        text: `${existing.text ?? ""}${props.delta ?? ""}`,
+        updatedSequence: session.sequence,
+      })
+      session.messages.set(messageID, message)
+      return
+    }
+
+    if (event.type === "message.part.removed") {
+      const partID = props.partID ?? props.part?.id
+      const messageID = props.messageID ?? props.part?.messageID
+      if (partID && messageID) session.messages.get(messageID)?.parts.delete(partID)
+    }
+  }
+
+  /**
+   * Build a compact NeMo Flow LLM request from OpenCode chat params.
+   */
+  function buildLlmRequest(session, input, output) {
+    const userMessage = session.lastUserMessage
+    const promptText = textFromParts(userMessage?.parts)
+    return toJsonSafe({
+      headers: {},
+      content: {
+        source: "opencode.chat.params",
+        agent: input.agent,
+        messageID: input.message?.id ?? userMessage?.message?.id ?? userMessage?.input?.messageID,
+        provider: compactProvider(input.provider),
+        model: compactModel(input.model),
+        params: compactParams(output),
+        messages: promptText
+          ? [
+              {
+                role: userMessage?.message?.role ?? input.message?.role ?? "user",
+                content: promptText,
+              },
+            ]
+          : [],
+      },
+    })
+  }
+
+  /**
+   * Build a compact NeMo Flow LLM response from OpenCode message bus state.
+   */
+  function buildLlmResponse(session, pending, reason) {
+    const messages = assistantMessagesSince(session, pending.sequenceStart)
+    const content = messages.flatMap((message) => messageParts(message, "text")).map((part) => part.text).join("\n")
+    const toolCalls = messages.flatMap((message) => toolCallsFromMessage(session, message, pending.sequenceStart))
+    const usage = usageFromMessages(messages)
+
+    return toJsonSafe({
+      role: "assistant",
+      content: content || undefined,
+      tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      usage,
+      opencode: {
+        close_reason: reason,
+        agent: pending.agent,
+        messageID: pending.messageID,
+      },
+    })
+  }
+
+  /**
+   * Start a semantic LLM span for a user-visible OpenCode model call.
+   */
+  function startLlm(session, input, output) {
+    if (typeof lib.llmCall !== "function" || shouldSkipLlm(input)) return
+    closeActiveLlm(session, "next_llm_request")
+
+    const model = modelName(input.model) ?? session.model
+    const metadata = toJsonSafe({
+      source: "opencode.chat.params",
+      sessionID: session.id,
+      agent: input.agent,
+      messageID: input.message?.id,
+      model,
+    })
+    const handle = withStack(session, () =>
+      lib.llmCall(
+        input.provider?.id ?? input.model?.providerID ?? "opencode",
+        buildLlmRequest(session, input, output),
+        session.scope,
+        null,
+        null,
+        metadata,
+        model ?? null,
+        null,
+      ),
+    )
+    session.pendingLlm = {
+      handle,
+      agent: input.agent,
+      messageID: input.message?.id,
+      model,
+      sequenceStart: session.sequence + 1,
+      metadata,
+    }
+  }
+
+  /**
+   * Finish the active LLM span before a tool starts, another LLM starts, or the session closes.
+   */
+  function closeActiveLlm(session, reason) {
+    const pending = session?.pendingLlm
+    if (!pending || typeof lib.llmCallEnd !== "function") return
+    const response = buildLlmResponse(session, pending, reason)
+    withStack(session, () => lib.llmCallEnd(pending.handle, response, null, pending.metadata, null))
+    session.pendingLlm = undefined
+  }
+
+  /**
+   * Extract text from OpenCode message parts.
+   */
+  function textFromParts(parts) {
+    if (!Array.isArray(parts)) return ""
+    return parts
+      .filter((part) => part?.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+  }
+
+  function assistantMessagesSince(session, sequenceStart) {
+    return [...session.messages.values()]
+      .filter((message) => message.role === "assistant")
+      .filter((message) => [...message.parts.values()].some((part) => part.firstSequence >= sequenceStart))
+  }
+
+  function messageParts(message, type) {
+    return [...message.parts.values()].filter((part) => part.type === type && typeof part.text === "string")
+  }
+
+  function toolCallsFromMessage(session, message, sequenceStart) {
+    return [...message.parts.values()]
+      .filter((part) => part.type === "tool" && part.firstSequence >= sequenceStart)
+      .filter((part) => part.callID || part.tool)
+      .map((part) => {
+        const observed = part.callID ? session.toolCalls.get(part.callID) : undefined
+        return {
+          id: part.callID ?? "",
+          type: "function",
+          function: {
+            name: observed?.tool ?? part.tool ?? "",
+            arguments: JSON.stringify(observed?.args ?? part.state?.input ?? {}),
+          },
+        }
+      })
+  }
+
+  function usageFromMessages(messages) {
+    const message = [...messages].reverse().find((item) => item.tokens || item.cost !== undefined)
+    if (!message) return undefined
+    const input = Number.isFinite(message.tokens?.input) ? message.tokens.input : undefined
+    const output = Number.isFinite(message.tokens?.output) ? message.tokens.output : undefined
+    const cacheRead = Number.isFinite(message.tokens?.cache?.read) ? message.tokens.cache.read : 0
+    const cacheWrite = Number.isFinite(message.tokens?.cache?.write) ? message.tokens.cache.write : 0
+    return toJsonSafe({
+      input_tokens: input,
+      output_tokens: output,
+      cached_tokens: cacheRead + cacheWrite,
+      reasoning_tokens: message.tokens?.reasoning,
+      cost_usd: message.cost,
+    })
   }
 
   /**
@@ -468,14 +756,16 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
     if (!session) return
     recentFlushes.set(sessionID, Date.now())
     pruneRecentFlushes()
-    emitMark(session, "opencode.session.flush", { sessionID, reason })
+    closeActiveLlm(session, reason)
     for (const [key, tool] of session.pendingTools) {
       try {
-        lib.toolCallEnd(
-          tool.handle,
-          { status: "unknown", reason: "session flushed before tool.execute.after" },
-          null,
-          { source: "opencode", sessionID, callID: tool.callID },
+        withStack(session, () =>
+          lib.toolCallEnd(
+            tool.handle,
+            { status: "unknown", reason: "session flushed before tool.execute.after" },
+            null,
+            { source: "opencode", sessionID, callID: tool.callID },
+          ),
         )
       } catch (error) {
         void logger.warnOnce(`tool-close:${key}`, "failed to close pending OpenCode tool span", error)
@@ -507,28 +797,33 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
     },
 
     /**
-     * Record relevant OpenCode bus events as NeMo Flow marks.
+     * Observe OpenCode bus events for response reconstruction and session closure.
      */
     async recordEvent(event) {
-      if (closed || !RELEVANT_EVENTS.has(event?.type)) return
+      if (closed || !OBSERVED_EVENTS.has(event?.type)) return
       const sessionID = eventSessionID(event)
       if (!sessionID) return
       if (shouldFlushEvent(event) && wasRecentlyFlushed(sessionID)) return
       const props = event.properties ?? {}
       const session = ensureSession(sessionID, {
-        agent: agentName(props.info, undefined),
+        agent: typeof props.info?.agent === "string" ? props.info.agent : undefined,
         model: modelName(props.info?.model),
       })
-      emitMark(
-        session,
-        `opencode.${event.type}`,
-        {
-          id: event.id,
-          type: event.type,
-          properties: props,
-        },
-        eventMetadata(session, { eventType: event.type }),
-      )
+
+      if (event.type.startsWith("message.")) {
+        recordMessageEvent(session, event)
+      } else if (event.type === "session.error") {
+        emitMark(
+          session,
+          "opencode.session.error",
+          {
+            id: event.id,
+            error: props.error,
+          },
+          eventMetadata(session, { eventType: event.type }),
+        )
+      }
+
       if (shouldFlushEvent(event)) {
         flushSession(sessionID, event.type)
       }
@@ -540,20 +835,15 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
     async recordChatMessage(input, output) {
       if (closed) return
       const session = ensureSession(input.sessionID, {
-        agent: agentName(input),
+        agent: agentName(input, agentName(output)),
         model: modelName(input.model ?? output?.message?.model),
       })
       if (!session) return
-      emitMark(
-        session,
-        "opencode.chat.message",
-        {
-          input,
-          message: output?.message,
-          parts: output?.parts,
-        },
-        eventMetadata(session, { messageID: input.messageID ?? output?.message?.id }),
-      )
+      session.lastUserMessage = toJsonSafe({
+        input,
+        message: output?.message,
+        parts: output?.parts,
+      })
     },
 
     /**
@@ -566,20 +856,7 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
         model: modelName(input.model),
       })
       if (!session) return
-      emitMark(
-        session,
-        "opencode.llm.request",
-        {
-          sessionID: input.sessionID,
-          agent: input.agent,
-          provider: input.provider,
-          model: input.model,
-          message: input.message,
-          params: output,
-          limitation: "OpenCode Phase 1 hooks expose request metadata but not exact stream completion.",
-        },
-        eventMetadata(session, { messageID: input.message?.id }),
-      )
+      startLlm(session, input, output)
     },
 
     /**
@@ -590,15 +867,21 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
       const session = ensureSession(input.sessionID)
       if (!session) return
       const args = toJsonSafe(output?.args)
-      const handle = lib.toolCall(
-        input.tool,
-        args,
-        session.scope,
-        null,
-        { sessionID: input.sessionID, callID: input.callID },
-        { source: "opencode", sessionID: input.sessionID, callID: input.callID },
-        input.callID,
-        null,
+      if (input.callID) {
+        session.toolCalls.set(input.callID, { tool: input.tool, args })
+      }
+      closeActiveLlm(session, "tool_start")
+      const handle = withStack(session, () =>
+        lib.toolCall(
+          input.tool,
+          args,
+          session.scope,
+          null,
+          { sessionID: input.sessionID, callID: input.callID },
+          { source: "opencode", sessionID: input.sessionID, callID: input.callID },
+          input.callID,
+          null,
+        ),
       )
       session.pendingTools.set(input.callID, { handle, callID: input.callID, tool: input.tool, args })
     },
@@ -613,28 +896,35 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
       let pending = session.pendingTools.get(input.callID)
       if (!pending) {
         const args = toJsonSafe(input.args)
-        const handle = lib.toolCall(
-          input.tool,
-          args,
-          session.scope,
-          null,
-          { sessionID: input.sessionID, callID: input.callID },
-          { source: "opencode", sessionID: input.sessionID, callID: input.callID, recovered: true },
-          input.callID,
-          null,
+        if (input.callID) {
+          session.toolCalls.set(input.callID, { tool: input.tool, args })
+        }
+        const handle = withStack(session, () =>
+          lib.toolCall(
+            input.tool,
+            args,
+            session.scope,
+            null,
+            { sessionID: input.sessionID, callID: input.callID },
+            { source: "opencode", sessionID: input.sessionID, callID: input.callID, recovered: true },
+            input.callID,
+            null,
+          ),
         )
         pending = { handle, callID: input.callID, tool: input.tool, args }
       }
-      lib.toolCallEnd(
-        pending.handle,
-        toJsonSafe({
-          title: output?.title,
-          output: output?.output,
-          metadata: output?.metadata,
-        }),
-        null,
-        { source: "opencode", sessionID: input.sessionID, callID: input.callID },
-        null,
+      withStack(session, () =>
+        lib.toolCallEnd(
+          pending.handle,
+          toJsonSafe({
+            title: output?.title,
+            output: output?.output,
+            metadata: output?.metadata,
+          }),
+          null,
+          { source: "opencode", sessionID: input.sessionID, callID: input.callID },
+          null,
+        ),
       )
       session.pendingTools.delete(input.callID)
     },
@@ -643,6 +933,7 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
      * Flush open sessions and unregister exporters during plugin shutdown.
      */
     async close() {
+      if (closed) return
       closed = true
       for (const sessionID of [...sessions.keys()]) {
         flushSession(sessionID, "plugin-close")
@@ -677,13 +968,20 @@ async function loadDefaultModules() {
  * Register process cleanup for OpenCode runs without an explicit close hook.
  */
 function registerBeforeExitCleanup(close, logger) {
+  let started = false
   const listener = () => {
+    if (started) return
+    started = true
     void close().catch((error) => {
       void logger.warnOnce("before-exit-cleanup", "failed to clean up NeMo Flow OpenCode plugin", error)
     })
   }
   process.on("beforeExit", listener)
-  return () => process.removeListener("beforeExit", listener)
+  process.on("exit", listener)
+  return () => {
+    process.removeListener("beforeExit", listener)
+    process.removeListener("exit", listener)
+  }
 }
 
 /**

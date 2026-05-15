@@ -37,6 +37,7 @@ function createFakeRuntime() {
         kind: "scope",
         category: "agent",
         scope_category: "start",
+        stack: activeStack.id,
         uuid: handle.uuid,
         name,
         data,
@@ -50,6 +51,7 @@ function createFakeRuntime() {
         kind: "scope",
         category: "agent",
         scope_category: "end",
+        stack: activeStack.id,
         uuid: handle.uuid,
         name: handle.name,
         data: output,
@@ -58,6 +60,7 @@ function createFakeRuntime() {
     event(name, handle, data, metadata) {
       events.push({
         kind: "mark",
+        stack: activeStack.id,
         uuid: `mark-${++counter}`,
         parent_uuid: handle?.uuid,
         name,
@@ -76,6 +79,7 @@ function createFakeRuntime() {
         kind: "scope",
         category: "tool",
         scope_category: "start",
+        stack: activeStack.id,
         uuid: tool.uuid,
         name,
         parent_uuid: handle?.uuid,
@@ -89,16 +93,51 @@ function createFakeRuntime() {
         kind: "scope",
         category: "tool",
         scope_category: "end",
+        stack: activeStack.id,
         uuid: handle.uuid,
         name: handle.name,
         data: result ?? data,
         metadata,
       })
     },
+    llmCall(name, request, handle, _attributes, _data, metadata, modelName) {
+      const llm = {
+        uuid: `llm-${++counter}`,
+        name,
+        parentUuid: handle?.uuid,
+        modelName,
+      }
+      events.push({
+        kind: "scope",
+        category: "llm",
+        scope_category: "start",
+        stack: activeStack.id,
+        uuid: llm.uuid,
+        name,
+        parent_uuid: handle?.uuid,
+        data: request,
+        metadata,
+        modelName,
+      })
+      return llm
+    },
+    llmCallEnd(handle, response, data, metadata) {
+      events.push({
+        kind: "scope",
+        category: "llm",
+        scope_category: "end",
+        stack: activeStack.id,
+        uuid: handle.uuid,
+        name: handle.name,
+        data: response ?? data,
+        metadata,
+        modelName: handle.modelName,
+      })
+    },
   }
 }
 
-function createFakePluginHost({ validateDiagnostics = [], initializeDiagnostics = [] } = {}) {
+function createFakePluginHost({ validateDiagnostics = [], initializeDiagnostics = [], onInitialize } = {}) {
   return {
     validateCalls: [],
     initializeCalls: [],
@@ -108,6 +147,7 @@ function createFakePluginHost({ validateDiagnostics = [], initializeDiagnostics 
       return { diagnostics: validateDiagnostics }
     },
     async initialize(config) {
+      await onInitialize?.(config)
       this.initializeCalls.push(config)
       return { diagnostics: initializeDiagnostics }
     },
@@ -172,8 +212,27 @@ async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), "nemo-flow-opencode-"))
 }
 
+async function statIsDirectory(targetPath) {
+  try {
+    return (await fs.stat(targetPath)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 function eventNames(events) {
   return events.map((event) => event.name).filter(Boolean)
+}
+
+function assertSessionStackUsed(runtime) {
+  const sessionStart = runtime.events.find(
+    (event) => event.category === "agent" && event.scope_category === "start",
+  )
+  assert.ok(sessionStart?.stack?.startsWith("stack-"))
+  for (const event of runtime.events) {
+    assert.equal(event.stack, sessionStart.stack, `${event.name ?? event.category} should use session scope stack`)
+  }
+  assert.equal(runtime.currentScopeStack().id, "current")
 }
 
 describe("NeMo Flow OpenCode plugin", () => {
@@ -192,6 +251,7 @@ describe("NeMo Flow OpenCode plugin", () => {
     const expectedOutputDirectory = path.join(dir, ".nemoflow")
     assert.equal(pluginHost.validateCalls.length, 1)
     assert.equal(pluginHost.initializeCalls.length, 1)
+    assert.ok(await statIsDirectory(expectedOutputDirectory))
     assert.equal(pluginHost.validateCalls[0].components[0].config.atof.output_directory, expectedOutputDirectory)
     assert.equal(pluginHost.validateCalls[0].components[0].config.atif.output_directory, expectedOutputDirectory)
     assert.deepEqual(pluginHost.initializeCalls[0], pluginHost.validateCalls[0])
@@ -219,6 +279,34 @@ describe("NeMo Flow OpenCode plugin", () => {
       },
       { temperature: 0, topP: 1, topK: 0, options: {} },
     )
+    await hooks.event?.({
+      event: {
+        id: "evt_assistant",
+        type: "message.updated",
+        properties: {
+          sessionID: "ses_1",
+          info: { id: "msg_assistant_1", role: "assistant", agent: "build", sessionID: "ses_1" },
+        },
+      },
+    })
+    await hooks.event?.({
+      event: {
+        id: "evt_tool_part",
+        type: "message.part.updated",
+        properties: {
+          sessionID: "ses_1",
+          part: {
+            id: "part_tool_1",
+            messageID: "msg_assistant_1",
+            sessionID: "ses_1",
+            type: "tool",
+            tool: "write",
+            callID: "call_1",
+            state: { input: {}, status: "pending" },
+          },
+        },
+      },
+    })
     await hooks["tool.execute.before"]?.(
       { tool: "write", sessionID: "ses_1", callID: "call_1" },
       { args: { path: "phase1-demo.txt" } },
@@ -243,15 +331,32 @@ describe("NeMo Flow OpenCode plugin", () => {
     })
 
     const names = eventNames(runtime.events)
-    assert.ok(names.includes("opencode.chat.message"))
-    assert.ok(names.includes("opencode.llm.request"))
-    assert.equal(names.filter((name) => name === "opencode.session.flush").length, 1)
+    assert.equal(names.includes("opencode.chat.message"), false)
+    assert.equal(names.includes("opencode.llm.request"), false)
+    assert.equal(names.filter((name) => name === "opencode.session.flush").length, 0)
+    assert.equal(runtime.events.filter((event) => event.category === "llm" && event.scope_category === "start").length, 1)
+    assert.equal(runtime.events.filter((event) => event.category === "llm" && event.scope_category === "end").length, 1)
+    const llmEnd = runtime.events.find((event) => event.category === "llm" && event.scope_category === "end")
+    assert.deepEqual(JSON.parse(llmEnd.data.tool_calls[0].function.arguments), { path: "phase1-demo.txt" })
     assert.equal(runtime.events.filter((event) => event.category === "tool" && event.scope_category === "start").length, 1)
     assert.equal(runtime.events.filter((event) => event.category === "tool" && event.scope_category === "end").length, 1)
     assert.equal(runtime.events.filter((event) => event.category === "agent" && event.scope_category === "end").length, 1)
+    assertSessionStackUsed(runtime)
   })
 
-  it("records session lifecycle events, message metadata, errors, and deleted flushes", async () => {
+  it("creates observability output directories before plugin host initialization", async () => {
+    const dir = await makeTempDir()
+    const expectedOutputDirectory = path.join(dir, ".nemoflow")
+    const { server } = createHarness({
+      async onInitialize() {
+        assert.ok(await statIsDirectory(expectedOutputDirectory))
+      },
+    })
+
+    await server({ directory: dir }, { enabled: true, plugins: pluginConfig() })
+  })
+
+  it("keeps normal bus events internal while recording session errors", async () => {
     const dir = await makeTempDir()
     const { runtime, server } = createHarness()
     const hooks = await server(
@@ -323,19 +428,18 @@ describe("NeMo Flow OpenCode plugin", () => {
     })
 
     const names = eventNames(runtime.events)
-    const message = runtime.events.find((event) => event.name === "opencode.chat.message")
+    const error = runtime.events.find((event) => event.name === "opencode.session.error")
     const serialized = JSON.stringify(runtime.events)
 
-    assert.ok(names.includes("opencode.session.created"))
-    assert.ok(names.includes("opencode.session.updated"))
+    assert.equal(names.includes("opencode.session.created"), false)
+    assert.equal(names.includes("opencode.session.updated"), false)
     assert.ok(names.includes("opencode.session.error"))
-    assert.ok(names.includes("opencode.session.deleted"))
-    assert.equal(message.metadata.sessionID, "ses_2")
-    assert.equal(message.metadata.agent, "review")
-    assert.equal(message.metadata.model, "anthropic/claude-test")
+    assert.equal(names.includes("opencode.session.deleted"), false)
+    assert.equal(error.metadata.sessionID, "ses_2")
+    assert.equal(error.metadata.agent, "review")
+    assert.equal(error.metadata.model, "anthropic/claude-test")
     assert.match(serialized, /"apiKey":"\[Redacted\]"/)
-    assert.match(serialized, /"outputTokens":3/)
-    assert.ok(names.includes("opencode.session.flush"))
+    assert.equal(names.includes("opencode.session.flush"), false)
   })
 
   it("ignores hooks without an OpenCode session identifier", async () => {
@@ -441,8 +545,9 @@ describe("NeMo Flow OpenCode plugin", () => {
       (event) => event.category === "tool" && event.scope_category === "end" && event.metadata.callID === "call_3",
     )
     assert.equal(pluginHost.clearCalls, 1)
-    assert.ok(names.includes("opencode.session.flush"))
+    assert.equal(names.includes("opencode.session.flush"), false)
     assert.equal(pendingToolEnd.data.status, "unknown")
     assert.equal(runtime.events.filter((event) => event.category === "agent" && event.scope_category === "end").length, 1)
+    assertSessionStackUsed(runtime)
   })
 })

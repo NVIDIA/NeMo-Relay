@@ -5,23 +5,38 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Flow OpenCode Plugin
 
-This package is a standalone OpenCode server plugin for NeMo Flow
+`nemo-flow-opencode` is a standalone OpenCode server plugin for NeMo Flow
 observability. It uses OpenCode's public plugin API and does not require
-patching OpenCode.
+patching OpenCode. It maps OpenCode activity into NeMo Flow session, LLM, and
+tool spans for the generic observability plugin.
 
-For the illustrated setup guide, see `docs/integrate-frameworks/opencode.md`
-in the NeMo Flow source checkout.
+For the full guide, see `docs/integrate-frameworks/opencode.md` in the NeMo
+Flow documentation.
 
-## Configuration
+## Install
 
-Use the plugin from an OpenCode config file. From a NeMo Flow source checkout,
-use a file URL:
+Install the plugin with the OpenCode CLI:
+
+```bash
+opencode plugin nemo-flow-opencode
+```
+
+You can also install the package in the Node.js environment where OpenCode
+loads plugins:
+
+```bash
+npm install nemo-flow-opencode
+```
+
+## Configure
+
+Use the package name in `opencode.json`:
 
 ```json
 {
   "plugin": [
     [
-      "file:///absolute/path/to/NeMo-Flow/integrations/opencode",
+      "nemo-flow-opencode",
       {
         "enabled": true,
         "logPath": "./.nemoflow/opencode-plugin.log",
@@ -54,29 +69,22 @@ use a file URL:
 }
 ```
 
-When this package is published, replace the file URL with the package name
-`nemo-flow-opencode`.
-
-The package loads `nemo-flow-node` and `nemo-flow-node/plugin` dynamically. If
-the native Node binding is missing or cannot initialize, the plugin logs one
-pass-through warning and does not change OpenCode behavior.
-
-## Compatibility
-
-The plugin declares support for OpenCode plugin APIs through the
-`@opencode-ai/plugin` peer dependency. It uses public OpenCode server plugin
-hooks available in `@opencode-ai/plugin` `1.14.40` and newer.
+Fields inside `plugins` are NeMo Flow generic plugin configuration, so they use
+`snake_case`. The OpenCode wrapper fields use JavaScript-style names, such as
+`logPath`.
 
 ## Output
 
-Output is controlled by the generic NeMo Flow `plugins` config. Configure the
-built-in `observability` component to write:
+Configure the built-in `observability` component to write:
 
 - ATOF JSONL events with `plugins.components[].config.atof`.
 - ATIF trajectory files with `plugins.components[].config.atif`.
 - Optional OpenTelemetry or OpenInference traces with
   `plugins.components[].config.opentelemetry` or `openinference`.
 - JSONL plugin diagnostics with the OpenCode wrapper `logPath` field.
+
+OpenCode streaming message events are used internally to reconstruct concise
+LLM responses. They are not exported as individual ATIF steps.
 
 ## Current Limitations
 
