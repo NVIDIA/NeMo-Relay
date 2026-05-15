@@ -122,9 +122,9 @@ try {
 
 ```rust
 use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_flow_adaptive::plugin_component::ComponentSpec;
 use nemo_flow_adaptive::{
-    AcgComponentConfig, AdaptiveConfig, BackendSpec, ComponentSpec, StateConfig,
-    TelemetryComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
 };
 
 let mut adaptive = AdaptiveConfig::default();

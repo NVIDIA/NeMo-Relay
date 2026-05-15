@@ -7,12 +7,26 @@ SPDX-License-Identifier: Apache-2.0
 
 This page summarizes the notable capabilities in the current release documentation set.
 
-## Initial Release
+## NeMo Flow 0.2
 
-The initial NeMo Flow release introduces:
+This release of NeMo Flow release introduces several new components and capabilities.
 
-- A Rust core runtime for scopes, middleware registries, lifecycle events, subscribers, plugins, tool calls, and LLM calls
-- Primary Rust, Python, and Node.js documentation tracks
-- Agent Trajectory Interchange Format (ATIF), OpenTelemetry, and OpenInference subscriber/exporter surfaces
-- An adaptive component for plugin-driven optimization behavior
-- Sample third-party integration patches for selected agent frameworks and tools
+### NeMo Flow CLI
+- Added CLI support for coding-agent harnesses, including Claude Code, Codex, Cursor, and Hermes Agent.
+- Enhanced setup and configuration workflows with guided onboarding, environment diagnostics, plugin configuration loading, and plugin editing.
+
+### Integrations
+- Added OpenClaw observability support through a first-party `nemo-flow-openclaw` plugin.
+- Added middleware and runtime integrations for LangChain, LangGraph, and Deep Agents. These are accessed through the Python `nemo-flow` package through extras.
+
+### Observability
+- Introduced a core Observability plugin that globally configures all built-in observability exporters and subscribers.
+- Added an Agent Trajectory Observability Format (ATOF) JSONL exporter for structured event output.
+- Expanded Codec support for optional annotated LLM request and response fields.
+
+### Security
+- Added an example NeMo Guardrails plugin.
+
+### Agent Skill Improvements
+- Updated Python binding test guidance for agent skills.
+- Added PR template requirements to agent contribution guidance.

@@ -169,10 +169,10 @@ const active = await plugin.initialize(pluginConfig);
 
 ```rust
 use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_flow_adaptive::plugin_component::ComponentSpec;
 use nemo_flow_adaptive::{
     AdaptiveConfig,
     BackendSpec,
-    ComponentSpec,
     StateConfig,
     TelemetryComponentConfig,
     ToolParallelismComponentConfig,

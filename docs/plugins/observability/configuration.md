@@ -36,14 +36,15 @@ only when it includes `enabled: true`.
 | `opentelemetry` | Registers a global OpenTelemetry OTLP subscriber. |
 | `openinference` | Registers a global OpenInference OTLP subscriber. |
 
-`subscriber_name` is not part of this config. The runtime infers subscriber
-names from the plugin namespace:
+`subscriber_name` is not part of this config. The runtime infers
+component-local subscriber names and registers them under the observability
+plugin namespace:
 
-- Agent Trajectory Observability Format (ATOF): `atof`
-- Agent Trajectory Interchange Format (ATIF) dispatcher: `atif`
-- Per-agent ATIF scope subscriber: `atif-{agent_scope_uuid}`
-- OpenTelemetry: `opentelemetry`
-- OpenInference: `openinference`
+- Agent Trajectory Observability Format (ATOF): `__nemo_flow_plugin__observability__atof`
+- Agent Trajectory Interchange Format (ATIF) dispatcher: `__nemo_flow_plugin__observability__atif`
+- Per-agent ATIF scope subscriber: `__nemo_flow_plugin__observability__atif-{agent_scope_uuid}`
+- OpenTelemetry: `__nemo_flow_plugin__observability__opentelemetry`
+- OpenInference: `__nemo_flow_plugin__observability__openinference`
 
 ## `plugins.toml` Example
 

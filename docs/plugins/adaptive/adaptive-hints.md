@@ -121,9 +121,9 @@ try {
 
 ```rust
 use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_flow_adaptive::plugin_component::ComponentSpec;
 use nemo_flow_adaptive::{
-    AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, ComponentSpec, StateConfig,
-    TelemetryComponentConfig,
+    AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
 };
 
 let mut adaptive = AdaptiveConfig::default();
@@ -222,7 +222,7 @@ let mut runtime = AdaptiveRuntime::new(adaptive).await?;
 runtime.register().await?;
 
 // Run instrumented application work here.
-set_latency_sensitivity(8);
+set_latency_sensitivity(8).ok();
 
 runtime.shutdown().await?;
 ```
