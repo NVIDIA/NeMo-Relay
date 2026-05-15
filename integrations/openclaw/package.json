@@ -3,6 +3,11 @@
   "version": "0.2.0",
   "description": "NeMo Flow-authored observability plugin for OpenClaw.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NVIDIA/NeMo-Flow",
+    "directory": "integrations/openclaw"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

@@ -88,6 +88,15 @@ const packedFiles = new Set(packInfo.files.map((file) => normalizePackagePath(fi
 const packageJson = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
 const declaredFiles = new Set(packageJson.files ?? []);
 
+assert(
+  packageJson.repository?.url === "https://github.com/NVIDIA/NeMo-Flow",
+  'package repository.url must match the GitHub Actions provenance source repository',
+);
+assert(
+  packageJson.repository?.directory === "integrations/openclaw",
+  "package repository.directory must identify the OpenClaw workspace",
+);
+
 for (const entry of declaredFiles) {
   assert(
     !(entry.startsWith("src/") && entry.includes("*")),
