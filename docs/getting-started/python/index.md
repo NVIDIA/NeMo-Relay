@@ -19,7 +19,7 @@ local checkout.
 Use this path when you want the published package for application development.
 
 ```bash
-uv add nemo-flow@0.2.0
+uv add nemo-flow@0.3.0
 ```
 
 Run `uv add` from an application project that has a `pyproject.toml`; it records

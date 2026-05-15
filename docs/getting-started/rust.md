@@ -17,8 +17,8 @@ local checkout.
 Use the published crates when you are consuming a release:
 
 ```bash
-cargo add nemo-flow@0.2.0
-cargo add nemo-flow-adaptive@0.2.0
+cargo add nemo-flow@0.3.0
+cargo add nemo-flow-adaptive@0.3.0
 cargo add serde_json
 ```
 
@@ -26,7 +26,7 @@ Install the published NeMo Flow CLI separately when you need coding-agent hook
 and LLM gateway observability:
 
 ```bash
-cargo install nemo-flow-cli@0.2.0
+cargo install nemo-flow-cli@0.3.0
 ```
 
 ### Install from the Repository
@@ -42,7 +42,7 @@ serde_json = "1"
 
 - `nemo-flow` is the core Rust runtime surface.
 - `nemo-flow-adaptive` is the companion crate for adaptive runtime primitives and Redis-backed learning components.
-- `nemo-flow-cli` is a binary crate. Use `cargo install nemo-flow-cli@0.2.0` when
+- `nemo-flow-cli` is a binary crate. Use `cargo install nemo-flow-cli@0.3.0` when
   you need the NeMo Flow CLI.
 
 ## Push a Scope and Emit a Mark
