@@ -38,6 +38,13 @@ Use this skill when the change is primarily in `python/nemo_flow`,
 - The name of the mocked class should be prefixed with `mock`, not `fake`.
 - Prefer pytest fixtures over helper methods.
 - Do not repeat fixtures, if a fixture is needed in multiple test files, place it in a `conftest.py` file.
+- When creating a fixture follow this pattern:
+  ```python
+  @pytest.fixture(name="<fixture_name>"[, scope="<scope>"])
+  def <fixture_name>_fixture() -> <return_type>:
+      ...
+  ```
+  Only specify the scope argument when the value is something other than "function".
 - Prefer `pytest.mark.parametrize` over creating individual tests for
   different input types.
 
