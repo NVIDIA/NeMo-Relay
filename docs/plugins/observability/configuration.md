@@ -75,7 +75,7 @@ transport = "http_binary"
 endpoint = "http://localhost:4318/v1/traces"
 service_name = "nemo-flow"
 service_namespace = "agent"
-service_version = "0.2.0"
+service_version = "0.3.0"
 instrumentation_scope = "nemo-flow-observability"
 timeout_millis = 3000
 
@@ -92,7 +92,7 @@ transport = "http_binary"
 endpoint = "http://localhost:6006/v1/traces"
 service_name = "nemo-flow"
 service_namespace = "agent"
-service_version = "0.2.0"
+service_version = "0.3.0"
 instrumentation_scope = "nemo-flow-openinference"
 timeout_millis = 3000
 
@@ -151,7 +151,7 @@ config = plugin.PluginConfig(
                     endpoint="http://localhost:4318/v1/traces",
                     service_name="nemo-flow",
                     service_namespace="agent",
-                    service_version="0.2.0",
+                    service_version="0.3.0",
                     instrumentation_scope="nemo-flow-observability",
                     resource_attributes={"deployment.environment": "dev"},
                 ),
@@ -160,7 +160,7 @@ config = plugin.PluginConfig(
                     endpoint="http://localhost:6006/v1/traces",
                     service_name="nemo-flow",
                     service_namespace="agent",
-                    service_version="0.2.0",
+                    service_version="0.3.0",
                     instrumentation_scope="nemo-flow-openinference",
                     resource_attributes={"deployment.environment": "dev"},
                 ),
@@ -211,7 +211,7 @@ await plugin.initialize({
         endpoint: "http://localhost:4318/v1/traces",
         service_name: "nemo-flow",
         service_namespace: "agent",
-        service_version: "0.2.0",
+        service_version: "0.3.0",
         instrumentation_scope: "nemo-flow-observability",
         resource_attributes: {
           "deployment.environment": "dev",
@@ -222,7 +222,7 @@ await plugin.initialize({
         endpoint: "http://localhost:6006/v1/traces",
         service_name: "nemo-flow",
         service_namespace: "agent",
-        service_version: "0.2.0",
+        service_version: "0.3.0",
         instrumentation_scope: "nemo-flow-openinference",
         resource_attributes: {
           "deployment.environment": "dev",
@@ -269,7 +269,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
         endpoint: Some("http://localhost:4318/v1/traces".into()),
         service_name: "nemo-flow".into(),
         service_namespace: Some("agent".into()),
-        service_version: Some("0.2.0".into()),
+        service_version: Some("0.3.0".into()),
         instrumentation_scope: Some("nemo-flow-observability".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         ..OtlpSectionConfig::default()
@@ -279,7 +279,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
         endpoint: Some("http://localhost:6006/v1/traces".into()),
         service_name: "nemo-flow".into(),
         service_namespace: Some("agent".into()),
-        service_version: Some("0.2.0".into()),
+        service_version: Some("0.3.0".into()),
         instrumentation_scope: Some("nemo-flow-openinference".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         ..OtlpSectionConfig::default()

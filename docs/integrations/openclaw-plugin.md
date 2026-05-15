@@ -38,7 +38,7 @@ Optional:
 Install the plugin with OpenClaw so OpenClaw can register and manage it:
 
 ```bash
-openclaw plugins install npm:nemo-flow-openclaw@0.2.0
+openclaw plugins install npm:nemo-flow-openclaw@0.3.0
 openclaw gateway restart
 ```
 
@@ -51,7 +51,7 @@ If you manage OpenClaw plugin dependencies directly in a Node.js project,
 install the package with npm:
 
 ```bash
-npm install nemo-flow-openclaw@0.2.0
+npm install nemo-flow-openclaw@0.3.0
 ```
 
 Installing with npm makes the package available to that project. Use
