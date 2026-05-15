@@ -36,7 +36,7 @@ def _make_mock_nemo_flow() -> MagicMock:
     return mock_nemo_flow
 
 @pytest.fixture(name="callbacks_module", scope="session")
-def callbacks_module_fixture(integration_langchain: types.ModuleType) -> types.ModuleType:
+def callbacks_module_fixture() -> types.ModuleType:
     """Fixture to provide the callbacks module."""
     import nemo_flow.integrations.langchain.callbacks as callbacks_module
     return callbacks_module
