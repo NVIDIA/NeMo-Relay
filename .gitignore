@@ -73,6 +73,7 @@ $RECYCLE.BIN/
 /.cursor/
 .env
 benchmarks/
+**/.nemoflow/
 
 # Local third-party upstream checkouts. These are bootstrapped from
 # third_party/sources.lock and are intentionally excluded from the tracked
