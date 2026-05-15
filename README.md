@@ -108,6 +108,12 @@ uv add nemo-flow
 npm install nemo-flow-node
 ```
 
+The NeMo Flow CLI is offered as a separate crate:
+
+```bash
+cargo install nemo-flow-cli
+```
+
 For source builds, testing, and contribution workflow, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentation
@@ -128,57 +134,88 @@ The table below summarizes the support level for each binding surface.
 | Python | ✅ Fully Supported | Fully documented with Quick Start and Guides |
 | Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
-| Coding-Agent CLI | 🚧 Experimental | Install with `cargo install nemo-flow-cli`. |
+| NeMo Flow CLI | 🚧 Experimental | Install with `cargo install nemo-flow-cli`. |
 | Go | 🚧 Experimental | Source-first under `go/nemo_flow`. |
 | WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
+
+## Agent Harness Support
+
+NeMo Flow CLI offers experimental support for several agent harnesses.
+Refer to the NeMo Flow CLI documentation for additional information.
+
+Below is our support matrix for agent harnesses.
+
+| Agent | Observability | Security | Optimization | Notes |
+|:--|:--:|:--:|:--:|:--|
+| Claude Code | ✅ Yes | ❌ No |  ❌ No | Observability only; no known issues |
+| Codex | ✅ Yes | ❌ No |  ❌ No | Observability only; missing some necessary hooks for full features |
+| Hermes Agent | ✅ Yes | ❌ No |  ❌ No | Observability only; no known issues |
+| Cursor | ✅ Yes | ❌ No |  ❌ No | Observability only; not feature-rich, missing hooks under `cursor-agent` |
 
 ## Third-Party Integrations
 
 Some framework integrations are maintained as packages in this repository. Other
 sample integrations are maintained as patch sets against upstream projects.
 
-### Public API-based Integrations
+### Public API Integrations
 
 Some integrations can be implemented using public APIs without patching. Public
 API-based integrations live under language-specific integration packages such as
 `python/nemo_flow/integrations/` and `integrations/`.
 
-The OpenClaw observability plugin is available under `integrations/openclaw/`
-and uses OpenClaw public plugin hooks plus the generic NeMo Flow plugin
+Below is the support matrix for our public API integrations.
+
+| Agent / Library | Observability | Security | Optimization | Notes |
+|:--|:--:|:--:|:--:|:--|
+| LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
+| LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
+| Deep Agents | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
+| OpenClaw | ✅ Yes | ❌ No |  ❌ No | Observability support; missing middleware for wrapped execution |
+
+#### LangChain
+
+The Python `nemo-flow` package ships several extras that offer comprehensive
+middleware support for the following packages:
+
+- LangChain
+- LangGraph
+- Deep Agents
+
+See the [Python package README](python/nemo_flow/README.md) for more information.
+
+#### OpenClaw
+
+An OpenClaw plugin is available as a Node package `nemo-flow-openclaw`.
+It relies on OpenClaw public plugin hooks plus the generic NeMo Flow plugin
 configuration shape to export telemetry. See the
-[OpenClaw package README](integrations/openclaw/README.md).
+[OpenClaw package README](integrations/openclaw/README.md) for more information.
 
 ### Patch-based Integrations
+
+Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
 
 Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
 patch-application workflow for those integrations.
 
-### Support Matrix
+The following table summarizes maintained third-party integrations and whether each provides observability, security, and optimization support.
 
-The following table summarizes maintained third-party integrations and whether each provides observability, request intercepts, execution intercepts, and conditional execution.
-
-| Integration | Method | Observability | Request Intercepts | Execution Intercepts | Conditional Execution |
-|---|---|---|---|---|---|
-| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| [opencode](third_party/README-opencode.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| [OpenClaw](integrations/openclaw/README.md) | `nemo-flow-openclaw` package, `nemo-flow` plugin ID | ✅ Yes | ❌ No | ❌ No | ❌ No |
-| [Coding-Agent CLI](docs/integrate-frameworks/coding-agent-gateway.md) | `nemo-flow-cli` package for closed harnesses | ✅ Yes | ❌ No | ❌ No | ❌ No |
-| [Hermes Agent](third_party/README-hermes-agent.md) | 🚧 Patch | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-
-Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
+| Integration | Observability | Security | Optimization | Notes |
+|:---|:---:|:---:|:---:|:---|
+| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code requiring no middleware |
+| [opencode](third_party/README-opencode.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code |
+| [OpenClaw](third_party/README-openclaw.md) | ✅ Yes | ✅ Yes | ✅ Yes | Adds new middleware support to OpenClaw and a built-in plugin |
+| [Hermes Agent](third_party/README-hermes-agent.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code |
 
 ## Roadmap
 
 The following roadmap outlines planned features and integrations for upcoming releases.
 
-- NemoClaw support and integration for managed tool and LLM execution flows.
-- Deeper NVIDIA NeMo ecosystem integration across agent, guardrail, evaluation, and
-  observability workflows.
-- Expanded adaptive optimization capabilities for performance-aware scheduling,
-  hints, and cache behavior.
-- First-party plugins and/or packages for common agent runtimes and frameworks.
+- [ ] NemoClaw support and integration for managed tool and LLM execution flows.
+- [ ] Deeper NVIDIA NeMo ecosystem integration across agent, guardrail, evaluation, and observability workflows.
+- [ ] Expanded adaptive optimization capabilities for performance-aware scheduling, hints, and cache behavior.
+- [ ] First-party plugins and/or packages for common agent runtimes and frameworks.
 
 ## License
 
-NeMo Flow is licensed under the [Apache License 2.0](LICENSE). All source files must include SPDX license headers.
+NeMo Flow is licensed under the [Apache License 2.0](LICENSE).

@@ -11,6 +11,11 @@ plugin hooks and converts them into NeMo Flow sessions, LLM spans, tool spans,
 and marks that the generic NeMo Flow observability component can export as
 ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
 
+This public OpenClaw plugin provides observability support only. It does not
+add NeMo Flow security middleware or adaptive optimization behavior to OpenClaw
+execution. For middleware-backed behavior, use the patch-based OpenClaw
+integration from the NeMo Flow repository.
+
 Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
 outputs, verify exported traces, and understand current LLM replay fidelity.
 
@@ -219,6 +224,9 @@ reason when present.
 
 The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
 changing OpenClaw execution behavior.
+
+It does not change OpenClaw tool execution, provider routing, policy decisions,
+or adaptive behavior.
 
 | OpenClaw hook | NeMo Flow behavior |
 | --- | --- |

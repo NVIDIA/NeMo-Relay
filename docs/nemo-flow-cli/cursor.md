@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Cursor Gateway Guide
+# Cursor
 
 Use this guide to observe Cursor hook lifecycle events with NeMo Flow. The
 repository ships a Cursor hook bundle under `integrations/coding-agents/cursor/`

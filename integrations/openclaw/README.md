@@ -11,6 +11,11 @@ LLM spans, tool spans, and lifecycle marks that the generic NeMo Flow
 observability component can export as ATIF JSON, OpenTelemetry spans, and
 OpenInference/Phoenix spans.
 
+This public OpenClaw plugin package provides observability support only. It
+does not add NeMo Flow security middleware or adaptive optimization behavior to
+OpenClaw execution. For middleware-backed behavior, use the patch-based
+OpenClaw integration from the NeMo Flow repository.
+
 ## Why Use It?
 
 - Observe OpenClaw sessions without patching OpenClaw.
@@ -177,6 +182,9 @@ openclaw gateway call nemoFlow.status --json
 
 The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
 changing OpenClaw execution behavior.
+
+It does not change OpenClaw tool execution, provider routing, policy decisions,
+or adaptive behavior.
 
 Current OpenClaw public hooks expose request, response, message-write, and
 provider timing details through separate event streams. The plugin correlates

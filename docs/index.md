@@ -56,7 +56,7 @@ targets.
 These paths map common reader goals to the most relevant documentation entry points.
 
 - **End Users**: Start with [Prerequisites](getting-started/prerequisites.md) and [Quick Start](getting-started/quick-start.md).
-- **Coding-Agent CLI Users**: Start with [Advanced Guide: Coding-Agent Gateway](integrate-frameworks/coding-agent-gateway.md), then use the per-agent guide for Claude Code, Codex, Cursor, or Hermes.
+- **NeMo Flow CLI Users**: Start with [Basic Usage](nemo-flow-cli/basic-usage.md), then use the per-agent guide for Claude Code, Codex, Cursor, or Hermes Agent.
 - **Agent Framework Developers**: Start with [Integrate into Frameworks](integrate-frameworks/about.md).
 - **Plugin Writers**: Start with [Build Plugins](build-plugins/about.md), then continue to [Basic Guide: Define a Plugin](build-plugins/basic-guide.md).
 - **Contributors**: Start with [Contribute](contribute/about.md) and the repository root `CONTRIBUTING.md` guide.
@@ -162,17 +162,25 @@ About <integrate-frameworks/about>
 Basic Guide: Adding Scopes <integrate-frameworks/adding-scopes>
 Basic Guide: Wrap Tool Calls <integrate-frameworks/wrap-tool-calls>
 Basic Guide: Wrap LLM Calls <integrate-frameworks/wrap-llm-calls>
-Advanced Guide: Coding-Agent Gateway <integrate-frameworks/coding-agent-gateway>
 OpenClaw Plugin Guide <integrate-frameworks/openclaw-plugin>
-Claude Code Gateway Guide <integrate-frameworks/coding-agent-claude-code>
-Codex Gateway Guide <integrate-frameworks/coding-agent-codex>
-Cursor Gateway Guide <integrate-frameworks/coding-agent-cursor>
-Hermes Gateway Guide <integrate-frameworks/coding-agent-hermes>
 Advanced Guide: Handle Non-Serializable Data <integrate-frameworks/non-serializable-data>
 Advanced Guide: Using Codecs <integrate-frameworks/using-codecs>
 Advanced Guide: Provider Codecs <integrate-frameworks/provider-codecs>
 Advanced Guide: Provider Response Codecs <integrate-frameworks/provider-response-codecs>
 Code Examples <integrate-frameworks/code-examples>
+```
+
+```{toctree}
+:hidden:
+:caption: NeMo Flow CLI
+:maxdepth: 2
+
+About <nemo-flow-cli/about>
+Basic Usage <nemo-flow-cli/basic-usage>
+Claude Code <nemo-flow-cli/claude-code>
+Codex <nemo-flow-cli/codex>
+Cursor <nemo-flow-cli/cursor>
+Hermes Agent <nemo-flow-cli/hermes>
 ```
 
 ```{toctree}

@@ -25,6 +25,10 @@ The Rust crate in this directory is build machinery for the generated npm
 package. JavaScript users should install the npm package rather than depend on
 the Rust crate directly.
 
+This surface is experimental and source-first. Use the repository source tree
+and WebAssembly tests when validating behavior, and prefer Rust, Python, or
+Node.js for primary documented application integrations.
+
 ## Why Use It?
 
 - 🌐 **Bring NeMo Flow to WebAssembly**: Use the shared runtime model from

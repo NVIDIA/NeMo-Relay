@@ -47,9 +47,9 @@ nemo-flow-adaptive = "0.1.*"
 
 - `nemo-flow` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
 - `nemo-flow-adaptive` provides adaptive runtime primitives and Redis-backed learning components when you want adaptive optimization behavior in Rust.
-- `nemo-flow-cli` is a published binary crate for coding-agent hook and LLM
-  gateway observability. Install it with `cargo install nemo-flow-cli` when
-  you need the `nemo-flow` executable.
+- `nemo-flow-cli` is a published binary crate for the NeMo Flow CLI. Install it
+  with `cargo install nemo-flow-cli` when you need the `nemo-flow` executable
+  for coding-agent hook and LLM gateway observability.
 
 ## Install from Source
 
@@ -103,7 +103,7 @@ nemo-flow = { path = "../NeMo-Flow/crates/core" }
 nemo-flow-adaptive = { path = "../NeMo-Flow/crates/adaptive" }
 ```
 
-Install the published gateway binary when you need coding-agent hook and LLM
+Install the published NeMo Flow CLI when you need coding-agent hook and LLM
 gateway observability:
 
 ```bash

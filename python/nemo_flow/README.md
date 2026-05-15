@@ -88,6 +88,20 @@ uv add "nemo-flow[langgraph]"
 pip install "nemo-flow[langgraph]"
 ```
 
+#### Deep Agents Integration
+
+[Deep Agents](https://www.langchain.com/deep-agents) integration is available
+with the `deepagents` extra. This extra builds upon and includes the
+`langgraph` and `langchain` extras.
+
+```bash
+# With uv
+uv add "nemo-flow[deepagents]"
+
+# With pip
+pip install "nemo-flow[deepagents]"
+```
+
 #### LangChain NVIDIA Integration
 
 The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra builds upon the `langchain` extra adding a compatible version of the `langchain-nvidia-ai-endpoints` package.
@@ -104,9 +118,9 @@ To install this along with the `langgraph` extra, use:
 
 ```bash
 # With uv
-uv add nemo-flow[langgraph,langchain-nvidia]
+uv add "nemo-flow[langgraph,langchain-nvidia]"
 # With pip
-pip install nemo-flow[langgraph,langchain-nvidia]
+pip install "nemo-flow[langgraph,langchain-nvidia]"
 ```
 
 ## Getting Started
@@ -149,6 +163,7 @@ The public package modules are:
 
 - `nemo_flow.integrations.langchain`
 - `nemo_flow.integrations.langgraph`
+- `nemo_flow.integrations.deepagents`
 
 The compiled extension is exposed as `nemo_flow._native`.
 

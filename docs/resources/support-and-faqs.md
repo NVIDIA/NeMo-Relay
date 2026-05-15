@@ -160,6 +160,7 @@ Use the reading path that matches your task:
 | Understand the runtime model | [Concepts](../about/concepts/index.md) |
 | Instrument an application | [Instrument Applications](../instrument-applications/about.md) |
 | Integrate a framework | [Integrate into Frameworks](../integrate-frameworks/about.md) |
+| Observe a local coding-agent CLI | [NeMo Flow CLI](../nemo-flow-cli/about.md) |
 | Package reusable behavior | [Build Plugins](../build-plugins/about.md) |
 | Export traces or trajectories | [Export Observability Data](../export-observability-data/about.md) |
 | Configure adaptive behavior | [Use Adaptive Optimization](../use-adaptive-optimization/about.md) |

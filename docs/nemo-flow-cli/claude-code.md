@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Claude Code Gateway Guide
+# Claude Code
 
 Use this guide to observe Claude Code sessions with NeMo Flow. Claude Code is
 the supported integration target. The Claude application, Claude web, and Claude

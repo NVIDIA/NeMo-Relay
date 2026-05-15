@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Codex Gateway Guide
+# Codex
 
 Use this guide to observe local Codex CLI sessions and local Codex GUI or app
 sessions that honor the same local config and gateway routing. Cloud or remote
