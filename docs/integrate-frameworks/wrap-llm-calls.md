@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Wrap LLM Calls
+# Wrap LLM Calls
 
 Use this guide when a framework, SDK, or provider adapter owns model invocation and you need NeMo Flow to observe and control those provider calls.
 
@@ -15,7 +15,7 @@ You will place a managed NeMo Flow LLM execution wrapper at the provider boundar
 
 You need:
 
-- A framework request or run scope. If the framework does not create one yet, start with [Basic Guide: Adding Scopes](adding-scopes.md).
+- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](adding-scopes.md).
 - A stable model-provider boundary, such as a provider adapter or client dispatch method.
 - A JSON-compatible request projection inside `LLMRequest`.
 - A JSON-compatible response projection for subscribers and exporters.
@@ -30,7 +30,7 @@ Follow this sequence to keep framework work attached to the expected runtime con
 4. Pass a stable provider name and `model_name`.
 5. Keep provider clients, streams, callbacks, and retry state outside emitted JSON payloads.
 
-Use a request or response codec when provider payloads need normalization before middleware or events see them. Use [Advanced Guide: Provider Codecs](provider-codecs.md) for those cases.
+Use a request or response codec when provider payloads need normalization before middleware or events see them. Use [Provider Codecs](provider-codecs.md) for those cases.
 
 ## Concrete LLM Example
 
@@ -162,6 +162,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add tool integration with [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md).
-- Normalize provider payloads with [Advanced Guide: Provider Codecs](provider-codecs.md).
-- Use [Advanced Guide: Handle Non-Serializable Data](non-serializable-data.md) for provider clients, streams, and callback objects.
+- Add tool integration with [Wrap Tool Calls](wrap-tool-calls.md).
+- Normalize provider payloads with [Provider Codecs](provider-codecs.md).
+- Use [Handle Non-Serializable Data](non-serializable-data.md) for provider clients, streams, and callback objects.

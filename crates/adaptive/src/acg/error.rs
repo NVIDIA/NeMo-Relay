@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Error types for the ACG (Adaptive Cache Governor) crate.
+//! Error types for the Adaptive Cache Governor (ACG) crate.
 //!
-//! All fallible operations in the ACG system return [`Result<T>`], which uses
-//! [`AcgError`] as the error type.
+//! All fallible operations in the Adaptive Cache Governor (ACG) system return
+//! [`Result<T>`], which uses [`AcgError`] as the error type.
 
 use thiserror::Error;
 
-/// The error type for all ACG operations.
+/// The error type for all Adaptive Cache Governor (ACG) operations.
 #[derive(Debug, Error)]
 pub enum AcgError {
     /// An intent validation failed.

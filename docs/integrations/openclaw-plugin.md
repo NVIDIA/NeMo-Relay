@@ -9,7 +9,13 @@ Use the OpenClaw plugin when OpenClaw owns the agent, tool, and LLM lifecycle
 that needs NeMo Flow observability. The plugin observes supported OpenClaw
 plugin hooks and converts them into NeMo Flow sessions, LLM spans, tool spans,
 and marks that the generic NeMo Flow observability component can export as
-ATIF JSON, OpenTelemetry spans, and OpenInference/Phoenix spans.
+Agent Trajectory Interchange Format (ATIF) JSON, OpenTelemetry spans, and
+OpenInference/Phoenix spans.
+
+This public OpenClaw plugin provides observability support only. It does not
+add NeMo Flow security middleware or adaptive optimization behavior to OpenClaw
+execution. For middleware-backed behavior, use the patch-based OpenClaw
+integration from the NeMo Flow repository.
 
 Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
 outputs, verify exported traces, and understand current LLM replay fidelity.
@@ -32,7 +38,7 @@ Optional:
 Install the plugin with OpenClaw so OpenClaw can register and manage it:
 
 ```bash
-openclaw plugins install npm:nemo-flow-openclaw
+openclaw plugins install npm:nemo-flow-openclaw@0.2.0
 openclaw gateway restart
 ```
 
@@ -45,7 +51,7 @@ If you manage OpenClaw plugin dependencies directly in a Node.js project,
 install the package with npm:
 
 ```bash
-npm install nemo-flow-openclaw
+npm install nemo-flow-openclaw@0.2.0
 ```
 
 Installing with npm makes the package available to that project. Use
@@ -170,7 +176,7 @@ Missing observability sections are disabled. Plugin-host validation or
 initialization errors degrade the NeMo Flow runtime as a whole, and the status
 method reports configured output health from the generic observability
 component. See
-[Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
+[Observability Configuration](../plugins/observability/configuration.md)
 for the complete `observability` component schema and exporter-specific fields.
 
 ## Verify the Integration
@@ -219,6 +225,9 @@ reason when present.
 
 The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
 changing OpenClaw execution behavior.
+
+It does not change OpenClaw tool execution, provider routing, policy decisions,
+or adaptive behavior.
 
 | OpenClaw hook | NeMo Flow behavior |
 | --- | --- |

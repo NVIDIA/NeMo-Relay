@@ -145,10 +145,10 @@ export declare function toolParallelismConfig(config?: ToolParallelismConfig): T
 /**
  * Create adaptive cache-governor settings with defaults applied.
  *
- * Merges caller-supplied overrides onto the ACG config shape used by the
- * adaptive plugin's LLM execution intercept.
+ * Merges caller-supplied overrides onto the Adaptive Cache Governor (ACG)
+ * config shape used by the adaptive plugin's LLM execution intercept.
  *
- * @param config - Partial ACG settings to override.
+ * @param config - Partial Adaptive Cache Governor (ACG) settings to override.
  * @returns A normalized adaptive cache-governor config object.
  * @remarks Nested `stability_thresholds` values are defaulted individually so
  * callers can override only the thresholds they need.

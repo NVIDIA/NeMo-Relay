@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! ATOF JSONL exporter support for NeMo Flow.
+//! Agent Trajectory Observability Format (ATOF) JSONL exporter support for NeMo
+//! Flow.
 //!
 //! The [`AtofExporter`] registers as an event subscriber and writes each raw
-//! NeMo Flow ATOF event as one JSON object per JSONL line.
+//! NeMo Flow Agent Trajectory Observability Format (ATOF) event as one JSON
+//! object per JSONL line.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -144,7 +146,7 @@ struct AtofExporterState {
     last_error: Option<String>,
 }
 
-/// Filesystem-backed ATOF JSONL event exporter.
+/// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
 pub struct AtofExporter {
     path: PathBuf,
     state: Arc<Mutex<AtofExporterState>>,

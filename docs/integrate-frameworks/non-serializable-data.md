@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Handle Non-Serializable Data
+# Handle Non-Serializable Data
 
 Use this guide when a framework exposes SDK clients, streams, callbacks, file handles, or custom classes at the same boundary where you need NeMo Flow instrumentation.
 
@@ -196,7 +196,7 @@ contract.
 
 Use these links to continue from this workflow into the next related task.
 
-- Wrap the framework boundary with [Basic Guide: Wrap Tool Calls](wrap-tool-calls.md) or [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md).
-- Use [Advanced Guide: Provider Codecs](provider-codecs.md) when provider payloads need normalized request or response annotations.
-- Use the typed value codec examples in [Advanced Guide: Using Codecs](using-codecs.md#typed-value-codecs) for structured conversion helpers.
-- Use [Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md) before adding request transforms.
+- Wrap the framework boundary with [Wrap Tool Calls](wrap-tool-calls.md) or [Wrap LLM Calls](wrap-llm-calls.md).
+- Use [Provider Codecs](provider-codecs.md) when provider payloads need normalized request or response annotations.
+- Use the typed value codec examples in [Using Codecs](using-codecs.md#typed-value-codecs) for structured conversion helpers.
+- Use [Add Middleware](../instrument-applications/advanced-guide.md) before adding request transforms.

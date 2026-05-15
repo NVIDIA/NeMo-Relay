@@ -7,12 +7,25 @@ SPDX-License-Identifier: Apache-2.0
 
 This quick start shows the smallest Python workflow that emits scope, tool, and LLM events.
 
-[LangChain](https://www.langchain.com/langchain), [LangGraph](https://www.langchain.com/langgraph), and [Deep Agents](https://www.langchain.com/deep-agents) users should start with the [LangChain integration](langchain.md), [LangGraph integration](langgraph.md), and [Deep Agents integration](deepagents.md) guides for the best experience in those frameworks.
+[LangChain](https://www.langchain.com/langchain), [LangGraph](https://www.langchain.com/langgraph), and [Deep Agents](https://www.langchain.com/deep-agents) users should start with the [LangChain integration](../../integrations/langchain.md), [LangGraph integration](../../integrations/langgraph.md), and [Deep Agents integration](../../integrations/deepagents.md) guides for the best experience in those frameworks.
 
 ## Choose an Install Path
 
-Pick the installation path that matches whether you are using a local checkout or a
-published package.
+Pick the installation path that matches whether you are using a published package or a
+local checkout.
+
+### Install from a Package Manager
+
+Use this path when you want the published package for application development.
+
+```bash
+uv add nemo-flow@0.2.0
+```
+
+Run `uv add` from an application project that has a `pyproject.toml`; it records
+`nemo-flow` as a dependency. If you are only installing into an active virtual
+environment, use `uv pip install nemo-flow`. If you are not using `uv`, install
+the published package with `pip install nemo-flow`.
 
 ### Install from the Repository
 
@@ -34,19 +47,6 @@ uv add --editable ../NeMo-Flow
 
 This records the local source in the application's `pyproject.toml` through
 `[tool.uv.sources]`.
-
-### Install from a Package Manager
-
-Use this path when you want the published package for application development.
-
-```bash
-uv add nemo-flow
-```
-
-Run `uv add` from an application project that has a `pyproject.toml`; it records
-`nemo-flow` as a dependency. If you are only installing into an active virtual
-environment, use `uv pip install nemo-flow`. If you are not using `uv`, install
-the published package with `pip install nemo-flow`.
 
 ## Run One Scope, One Tool Call, and One LLM Call
 
@@ -127,23 +127,7 @@ These modules are the main Python APIs to use from applications and integrations
 
 Use these links to continue from the quick start into the core runtime concepts.
 
-- [LangChain integration](langchain.md)
-- [LangGraph integration](langgraph.md)
-- [Deep Agents integration](deepagents.md)
+- [Supported Integrations](../../integrations/about.md)
 - [Scopes](../../about/concepts/scopes.md)
 - [Middleware](../../about/concepts/middleware.md)
 - [Plugins](../../about/concepts/plugins.md)
-
-## Framework Integrations
-
-Use these guides when your Python application already uses LangChain,
-LangGraph, or Deep Agents and you want NeMo Flow observability through their
-public APIs.
-
-```{toctree}
-:maxdepth: 1
-
-LangChain Integration <langchain>
-LangGraph Integration <langgraph>
-Deep Agents Integration <deepagents>
-```

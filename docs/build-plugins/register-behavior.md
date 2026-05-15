@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Register Plugin Behavior
+# Register Plugin Behavior
 
 Use this guide when plugin config validation is in place and you need the plugin to install real NeMo Flow runtime behavior.
 
@@ -289,5 +289,5 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add advanced validation and rollout controls with [Advanced Guide: Design Plugin Configuration](advanced-configuration.md).
+- Add advanced validation and rollout controls with [Design Plugin Configuration](advanced-configuration.md).
 - Review concrete authoring patterns in [Code Examples](code-examples.md).

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! OpenAI cache plugin for the ACG system.
+//! OpenAI cache plugin for the Adaptive Cache Governor (ACG) system.
 //!
 //! Maximizes automatic prefix cache hits through deterministic JSON
 //! serialization. OpenAI uses automatic prefix caching at 1024+ tokens

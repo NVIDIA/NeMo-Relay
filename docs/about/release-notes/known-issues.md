@@ -7,11 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 
 This page lists current limitations and support notes for the release documentation set.
 
-## Initial Release
+## NeMo Flow 0.2
 
-These notes apply to the initial public NeMo Flow release.
+These notes apply to the NeMo Flow 0.2 Release.
 
 - Go, WebAssembly, and the raw C FFI surface are experimental and source-first.
 - Generated API pages cover Rust, Python, and Node.js. Experimental bindings do not yet have the same generated documentation depth.
+- The NeMo Flow CLI is experimental. Coding agent observability support varies due to capabilities of hooks. Any encountered problems should be filed as bugs.
 
-No fixed known issues are documented for the initial release.
+### Fixed issues from NeMo Flow 0.1:
+- Enabled TLS support for OTLP HTTP export.
+- Preserved Go scope stacks across OS threads.

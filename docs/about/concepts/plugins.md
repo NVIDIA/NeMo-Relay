@@ -144,16 +144,21 @@ through the same component lifecycle as other plugins:
 - Initialize the plugin system
 - Inspect the activation result if needed
 
-Detailed adaptive configuration belongs in [Configure Adaptive Optimization](../../use-adaptive-optimization/configure.md), [Adaptive Code Examples](../../use-adaptive-optimization/code-examples.md), and [Advanced Guide: Configure Adaptive Components](../../use-adaptive-optimization/adaptive-components.md).
+Detailed adaptive configuration belongs in
+[Adaptive Configuration](../../plugins/adaptive/configuration.md),
+[Adaptive Cache Governor (ACG)](../../plugins/adaptive/acg.md), and
+[Adaptive Hints](../../plugins/adaptive/adaptive-hints.md).
 
 ### Observability
 
-The core crate ships a built-in `observability` plugin component for ATOF,
-ATIF, OpenTelemetry, and OpenInference exporters. Each exporter section is
+The core crate ships a built-in `observability` plugin component for Agent
+Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format
+(ATIF), OpenTelemetry, and OpenInference exporters. Each exporter section is
 disabled unless its section sets `enabled: true`, and subscriber names are
 inferred from the plugin namespace instead of exposed in public config.
 
-Detailed observability plugin configuration belongs in [Configure the Observability Plugin](../../export-observability-data/observability-plugin.md).
+Detailed observability plugin configuration belongs in
+[Observability Configuration](../../plugins/observability/configuration.md).
 
 For the CLI gateway's `plugins.toml` discovery, precedence, merge, and editing
 rules, see [Plugin Configuration Files](../../build-plugins/plugin-configuration-files.md).

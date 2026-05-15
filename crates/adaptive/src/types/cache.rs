@@ -14,8 +14,8 @@ use crate::types::plan::ExecutionPlan;
 ///
 /// The adaptive runtime keeps this structure in an [`std::sync::RwLock`] so
 /// intercepts and event-processing tasks can exchange recently learned plans,
-/// trie state, and ACG summaries without hitting the configured backend on
-/// every request.
+/// trie state, and Adaptive Cache Governor (ACG) summaries without hitting the
+/// configured backend on every request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotCache {
     /// Current execution plan used for tool parallelism hints.

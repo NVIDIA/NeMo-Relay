@@ -7,8 +7,8 @@
 //! Adaptive behavior is enabled through the generic core plugin system.
 //!
 //! This crate provides the adaptive runtime, persistence abstractions, learner
-//! implementations, and ACG analysis types used to derive and apply runtime
-//! hints from observed NeMo Flow executions.
+//! implementations, and Adaptive Cache Governor (ACG) analysis types used to
+//! derive and apply runtime hints from observed NeMo Flow executions.
 pub mod acg;
 pub mod acg_component;
 pub mod acg_learner;

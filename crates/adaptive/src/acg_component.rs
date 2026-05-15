@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! ACG request and execution intercept helpers for the adaptive runtime.
+//! Adaptive Cache Governor (ACG) request and execution intercept helpers for
+//! the adaptive runtime.
 
 use std::fmt::Display;
 use std::future::Future;

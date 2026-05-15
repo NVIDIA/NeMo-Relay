@@ -78,7 +78,8 @@ pub trait StorageBackendDyn: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Persist prompt IR observations for an agent or derived ACG profile.
+    /// Persist prompt IR observations for an agent or derived Adaptive Cache
+    /// Governor (ACG) profile.
     ///
     /// # Notes
     /// The default implementation is a no-op.
@@ -90,7 +91,8 @@ pub trait StorageBackendDyn: Send + Sync + 'static {
         Box::pin(async move { Ok(()) })
     }
 
-    /// Load prompt IR observations for an agent or derived ACG profile.
+    /// Load prompt IR observations for an agent or derived Adaptive Cache
+    /// Governor (ACG) profile.
     ///
     /// # Notes
     /// The default implementation returns `Ok(None)`.

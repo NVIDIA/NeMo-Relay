@@ -143,7 +143,8 @@ pub struct LlmCallParams<'a> {
     /// LLM attribute bitflags applied to the span.
     #[builder(default = LlmAttributes::empty())]
     pub attributes: LlmAttributes,
-    /// Optional application payload stored on the handle but not emitted as ATOF data.
+    /// Optional application payload stored on the handle but not emitted as
+    /// Agent Trajectory Observability Format (ATOF) data.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on the start event.
@@ -178,7 +179,8 @@ pub struct LlmCallExecuteParams {
     /// LLM attribute bitflags applied to the managed span.
     #[builder(default = LlmAttributes::empty())]
     pub attributes: LlmAttributes,
-    /// Optional application payload stored on the handle but not emitted as ATOF data.
+    /// Optional application payload stored on the handle but not emitted as
+    /// Agent Trajectory Observability Format (ATOF) data.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on emitted events.
@@ -216,7 +218,8 @@ pub struct LlmStreamCallExecuteParams {
     /// LLM attribute bitflags applied to the managed span.
     #[builder(default = LlmAttributes::empty())]
     pub attributes: LlmAttributes,
-    /// Optional application payload stored on the handle but not emitted as ATOF data.
+    /// Optional application payload stored on the handle but not emitted as
+    /// Agent Trajectory Observability Format (ATOF) data.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on emitted events.
@@ -241,7 +244,8 @@ pub struct LlmCallEndParams<'a> {
     pub handle: &'a LlmHandle,
     /// Raw provider response associated with the end event.
     pub response: Json,
-    /// Optional application payload retained for compatibility; ATOF data is the response.
+    /// Optional application payload retained for compatibility; Agent
+    /// Trajectory Observability Format (ATOF) data is the response.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on the end event.

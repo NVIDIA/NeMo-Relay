@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Coding-Agent Gateway
+# Basic Usage
 
 The `nemo-flow` binary observes coding agents that do not expose every
 LLM call site directly. It combines agent-specific hook endpoints with a
@@ -257,11 +257,11 @@ Optional flags map to gateway headers:
 Use the per-agent guide for end-to-end setup, smoke tests, and GUI or
 application-mode caveats.
 
-- [Claude Code Gateway Guide](coding-agent-claude-code.md)
-- [Codex Gateway Guide](coding-agent-codex.md)
-- [Cursor Gateway Guide](coding-agent-cursor.md)
-- [Hermes Gateway Guide](coding-agent-hermes.md)
+- [Claude Code](claude-code.md)
+- [Codex](codex.md)
+- [Cursor](cursor.md)
+- [Hermes Agent](hermes.md)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,
-ATIF export verification on session end, and troubleshooting missing LLM
-lifecycle data.
+Agent Trajectory Interchange Format (ATIF) export verification on session end,
+and troubleshooting missing LLM lifecycle data.

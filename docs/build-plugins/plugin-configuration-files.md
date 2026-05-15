@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Plugin Configuration Files
+# Plugin Configuration Files
 
 Use `plugins.toml` when the `nemo-flow` CLI gateway should activate plugins at
 startup. The file contains the same generic plugin configuration document used
@@ -176,8 +176,9 @@ kind = "observability"
 mode = "overwrite"
 ```
 
-The effective ATOF config keeps `enabled` and `output_directory` from the system
-file and uses `mode = "overwrite"` from the user file.
+The effective Agent Trajectory Observability Format (ATOF) config keeps
+`enabled` and `output_directory` from the system file and uses
+`mode = "overwrite"` from the user file.
 
 The top-level `components` array is special. Components are matched by `kind`
 across files. A higher-precedence component with the same `kind` merges into the
@@ -233,8 +234,8 @@ Common validation failures include:
 - Unsupported field values, such as an invalid exporter mode or transport.
 - Duplicate singleton components.
 - Enabled components whose build-time features are unavailable.
-- Component-specific semantic failures, such as an ATIF filename template that
-  does not contain `{session_id}`.
+- Component-specific semantic failures, such as an Agent Trajectory Interchange
+  Format (ATIF) filename template that does not contain `{session_id}`.
 
 Use `nemo-flow doctor` to inspect the resolved gateway configuration and plugin
 diagnostics. For Observability, doctor also reports enabled exporter sections and
@@ -260,6 +261,7 @@ Observability exporters through `plugins.toml`.
 
 Use the component guides for field-level configuration:
 
-- [Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
-- [Configure Adaptive Optimization](../use-adaptive-optimization/configure.md)
-- [Advanced Guide: Configure Adaptive Components](../use-adaptive-optimization/adaptive-components.md)
+- [Observability Configuration](../plugins/observability/configuration.md)
+- [Adaptive Configuration](../plugins/adaptive/configuration.md)
+- [Adaptive Cache Governor (ACG)](../plugins/adaptive/acg.md)
+- [Adaptive Hints](../plugins/adaptive/adaptive-hints.md)

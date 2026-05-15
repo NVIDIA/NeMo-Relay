@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Derives stable ACG profile keys from structured LLM requests.
+//! Derives stable Adaptive Cache Governor (ACG) profile keys from structured
+//! LLM requests.
 
 use crate::acg::canonicalize::{canonicalize_value, sha256_hex};
 use nemo_flow::codec::request::{

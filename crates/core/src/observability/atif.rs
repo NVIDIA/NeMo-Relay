@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! ATIF (Agent Trajectory Interchange Format) exporter.
+//! Agent Trajectory Interchange Format (ATIF) exporter.
 //!
 //! This module provides types and an exporter that collects lifecycle events
 //! from the NeMo Flow runtime and converts them into ATIF trajectories conforming

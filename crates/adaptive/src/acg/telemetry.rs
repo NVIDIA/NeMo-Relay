@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cache performance telemetry types for the ACG system.
+//! Cache performance telemetry types for the Adaptive Cache Governor (ACG)
+//! system.
 //!
 //! These types normalize provider-specific cache metrics (Anthropic
 //! `cache_read_input_tokens`/`cache_creation_input_tokens`, OpenAI

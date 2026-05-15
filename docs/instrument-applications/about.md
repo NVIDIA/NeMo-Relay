@@ -29,10 +29,10 @@ If the tool or LLM boundary is owned by a framework, use [Integrate into Framewo
 
 These guides show how to instrument applications with scopes, tool calls, LLM calls, middleware, and direct API examples.
 
-- [Basic Guide: Adding Scopes and Marks](adding-scopes-and-marks.md) shows how to create ownership boundaries and checkpoint events before adding call instrumentation.
-- [Basic Guide: Instrument a Tool Call](instrument-tool-call.md) shows the smallest managed tool wrapper with event validation.
-- [Basic Guide: Instrument an LLM Call](instrument-llm-call.md) shows the smallest managed model-provider wrapper with event validation.
-- [Advanced Guide: Add Middleware](advanced-guide.md) shows how to add guardrails, request intercepts, execution intercepts, and scope-local behavior.
+- [Adding Scopes and Marks](adding-scopes-and-marks.md) shows how to create ownership boundaries and checkpoint events before adding call instrumentation.
+- [Instrument a Tool Call](instrument-tool-call.md) shows the smallest managed tool wrapper with event validation.
+- [Instrument an LLM Call](instrument-llm-call.md) shows the smallest managed model-provider wrapper with event validation.
+- [Add Middleware](advanced-guide.md) shows how to add guardrails, request intercepts, execution intercepts, and scope-local behavior.
 - [Code Examples](code-examples.md) collects direct API examples for tools, LLMs, streaming calls, scopes, and partial middleware helpers.
 
 Start with scopes and marks, then instrument the call boundaries your

@@ -26,7 +26,7 @@ Plugins use a structured plugin configuration with:
 - One or more component definitions
 - Optional component policy
 
-Start with [Basic Guide: Define a Plugin](../build-plugins/basic-guide.md) when you need reusable middleware, subscribers, or adaptive behavior.
+Start with [Define a Plugin](../build-plugins/basic-guide.md) when you need reusable middleware, subscribers, or adaptive behavior.
 
 The `nemo-flow` CLI gateway reads plugin files named `plugins.toml`. See
 [Plugin Configuration Files](../build-plugins/plugin-configuration-files.md)
@@ -35,12 +35,13 @@ rules.
 
 ## Observability Setup
 
-ATOF exporters, ATIF exporters, OpenTelemetry subscribers, and OpenInference
-subscribers can be configured directly through binding-native config objects.
-Use the built-in `observability` plugin when you want one plugin component to
-own standard exporter setup and teardown. See
-[Configure the Observability Plugin](../export-observability-data/observability-plugin.md)
-and [Export Observability Data](../export-observability-data/code-examples.md)
+Agent Trajectory Observability Format (ATOF) exporters, Agent Trajectory
+Interchange Format (ATIF) exporters, OpenTelemetry subscribers, and
+OpenInference subscribers can be configured directly through binding-native
+config objects. Use the built-in `observability` plugin when you want one
+plugin component to own standard exporter setup and teardown. See
+[Observability Configuration](../plugins/observability/configuration.md)
+and [Observability](../plugins/observability/about.md)
 for the supported export paths.
 
 NeMo Flow does not require application-level environment variables for normal
@@ -54,4 +55,4 @@ deployment manifests.
 
 ## Adaptive Setup
 
-Adaptive optimization is enabled through the adaptive plugin component and binding helper APIs. See [Configure Adaptive Optimization](../use-adaptive-optimization/configure.md).
+Adaptive optimization is enabled through the adaptive plugin component and binding helper APIs. See [Adaptive Configuration](../plugins/adaptive/configuration.md).

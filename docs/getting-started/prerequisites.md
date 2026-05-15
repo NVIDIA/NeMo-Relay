@@ -12,8 +12,8 @@ Install the tooling for the binding you plan to use.
 | Rust | 1.86 or newer | Rust builds, local workspace builds, and the Rust core runtime |
 | Python | 3.11 or newer | Python bindings, Python tests, and docs tooling |
 | Node.js | 20 or newer | Node.js bindings and generated Node.js API docs |
-| `uv` | see [Installation](installation.md#development-tooling) | Python environments, docs builds, and repository setup |
-| `just` | see [Installation](installation.md) | Repository development, test, build, and docs task aliases |
+| `uv` | see [Development Setup](../contribute/development-setup.md) | Python environments, docs builds, and repository setup |
+| `just` | see [Development Setup](../contribute/development-setup.md) | Repository development, test, build, and docs task aliases |
 
 The primary documentation track covers Rust, Python, and Node.js. Go, WebAssembly, and the raw FFI surface are experimental and source-first.
 

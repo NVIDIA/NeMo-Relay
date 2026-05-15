@@ -12,9 +12,10 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
-# NeMo Flow Python Package
+# NeMo Flow
 
 `nemo-flow` is the NeMo Flow package for Python applications. It gives Python
 code access to a portable agent runtime for execution scopes, middleware,
@@ -31,7 +32,8 @@ runtime semantics as the Rust and Node.js surfaces.
 - 🛡️ **Package policy around callbacks**: Use guardrails and intercepts to block
   work, sanitize observability payloads, rewrite requests, or wrap execution.
 - 📡 **Emit one lifecycle stream**: Send runtime events to in-process
-  subscribers, ATIF, OpenTelemetry, or OpenInference workflows.
+  subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
+  OpenInference workflows.
 - 🧩 **Integrate without a framework migration**: Wrap framework or provider
   callbacks while preserving the application’s orchestration model.
 
@@ -88,6 +90,20 @@ uv add "nemo-flow[langgraph]"
 pip install "nemo-flow[langgraph]"
 ```
 
+#### Deep Agents Integration
+
+[Deep Agents](https://www.langchain.com/deep-agents) integration is available
+with the `deepagents` extra. This extra builds upon and includes the
+`langgraph` and `langchain` extras.
+
+```bash
+# With uv
+uv add "nemo-flow[deepagents]"
+
+# With pip
+pip install "nemo-flow[deepagents]"
+```
+
 #### LangChain NVIDIA Integration
 
 The [LangChain NVIDIA](https://github.com/langchain-ai/langchain-nvidia) extra builds upon the `langchain` extra adding a compatible version of the `langchain-nvidia-ai-endpoints` package.
@@ -104,9 +120,9 @@ To install this along with the `langgraph` extra, use:
 
 ```bash
 # With uv
-uv add nemo-flow[langgraph,langchain-nvidia]
+uv add "nemo-flow[langgraph,langchain-nvidia]"
 # With pip
-pip install nemo-flow[langgraph,langchain-nvidia]
+pip install "nemo-flow[langgraph,langchain-nvidia]"
 ```
 
 ## Getting Started
@@ -149,6 +165,7 @@ The public package modules are:
 
 - `nemo_flow.integrations.langchain`
 - `nemo_flow.integrations.langgraph`
+- `nemo_flow.integrations.deepagents`
 
 The compiled extension is exposed as `nemo_flow._native`.
 

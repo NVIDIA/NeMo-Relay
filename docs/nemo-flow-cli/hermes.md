@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Hermes Gateway Guide
+# Hermes Agent
 
 Use this guide to observe local Hermes Agent sessions with NeMo Flow through
 Hermes shell hooks and the `nemo-flow` gateway. This gateway path is
@@ -120,7 +120,8 @@ relying on unattended capture.
 
 ## Verify Export
 
-End a Hermes turn or finalize the session and confirm ATIF exists:
+End a Hermes turn or finalize the session and confirm Agent Trajectory
+Interchange Format (ATIF) exists:
 
 ```bash
 ls .nemo-flow/atif

@@ -40,7 +40,7 @@ Within `nemo-flow-adaptive`, the main surfaces include adaptive configuration,
 plugin components, storage abstractions, learners, trie-backed data
 structures, and optional Redis-backed helpers when the feature is enabled.
 `nemo-flow-cli` is a binary crate, so its end-user surface is documented in
-the coding-agent gateway guides rather than generated Rust API pages.
+the NeMo Flow CLI guides rather than generated Rust API pages.
 
 ## How To Read The Generated Pages
 
@@ -75,8 +75,8 @@ Use these links to continue from the API reference into task-focused guides.
 - [Middleware](../../../about/concepts/middleware.md)
 - [Subscribers](../../../about/concepts/subscribers.md)
 - [Plugins](../../../about/concepts/plugins.md)
-- [Adaptive Optimization](../../../use-adaptive-optimization/about.md)
-- [Configure the Observability Plugin](../../../export-observability-data/observability-plugin.md)
+- [Adaptive Optimization](../../../plugins/adaptive/about.md)
+- [Observability Configuration](../../../plugins/observability/configuration.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)
-- [Coding-Agent Gateway](../../../integrate-frameworks/coding-agent-gateway.md)
+- [NeMo Flow CLI Basic Usage](../../../nemo-flow-cli/basic-usage.md)

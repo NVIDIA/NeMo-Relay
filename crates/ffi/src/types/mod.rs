@@ -679,7 +679,8 @@ pub unsafe extern "C" fn nemo_flow_event_category_profile(ptr: *const FfiEvent) 
     }
 }
 
-/// Return the ATOF data schema as a JSON C string, or null if absent.
+/// Return the Agent Trajectory Observability Format (ATOF) data schema as a
+/// JSON C string, or null if absent.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.

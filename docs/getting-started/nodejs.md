@@ -10,8 +10,16 @@ events.
 
 ## Choose an Install Path
 
-Pick the installation path that matches whether you are using a local checkout or a
-published package.
+Pick the installation path that matches whether you are using a published package or a
+local checkout.
+
+### Install from a Package Manager
+
+Use this path when you want the published package for application development.
+
+```bash
+npm install nemo-flow-node
+```
 
 ### Install from the Repository
 
@@ -24,14 +32,6 @@ npm run build --workspace=nemo-flow-node
 ```
 
 This path is for local source development when you need to build the binding from the repository checkout.
-
-### Install from a Package Manager
-
-Use this path when you want the published package for application development.
-
-```bash
-npm install nemo-flow-node
-```
 
 ## Run One Scope, One Tool Call, and One LLM Call
 
@@ -118,4 +118,4 @@ Use these links to continue from the quick start into the core runtime concepts.
 
 - [Instrument Applications Code Examples](../instrument-applications/code-examples.md)
 - [Subscribers](../about/concepts/subscribers.md)
-- [Advanced Guide: Using Codecs](../integrate-frameworks/using-codecs.md)
+- [Using Codecs](../integrate-frameworks/using-codecs.md)

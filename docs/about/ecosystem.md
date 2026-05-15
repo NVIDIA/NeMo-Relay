@@ -31,7 +31,7 @@ systems can call when actual work crosses a scope, tool, or model boundary.
 | NeMo Agent Toolkit and agent application frameworks | Build, run, profile, and optimize agent workflows across tools, data sources, and framework choices. | NeMo Flow can sit below these systems as the shared runtime contract for scopes, middleware, lifecycle events, subscribers, and plugins. |
 | NeMo Guardrails and policy systems | Define safety, control, and compliance behavior for LLM applications. | NeMo Flow can host runtime guardrails and intercepts around managed tool and LLM calls, while higher-level guardrail systems can still own policy authoring and orchestration. |
 | Application harnesses and workflow code | Decide the agent pattern, planner, memory, retries, scheduling, and user-facing behavior. | NeMo Flow instruments the execution boundaries that the harness already owns. |
-| Observability and evaluation backends | Store traces, trajectories, metrics, and analysis data. | NeMo Flow emits lifecycle events and exports them to in-process subscribers, ATIF, OpenTelemetry, OpenInference-compatible traces, or other backends. |
+| Observability and evaluation backends | Store traces, trajectories, metrics, and analysis data. | NeMo Flow emits lifecycle events and exports them to in-process subscribers, Agent Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF), OpenTelemetry, OpenInference-compatible traces, or other backends. |
 
 In practical terms, NeMo Flow answers a different question than higher-level
 agent products. A framework asks, "What should the agent do next?" NeMo Flow

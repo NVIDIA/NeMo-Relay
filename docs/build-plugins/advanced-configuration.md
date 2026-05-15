@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Advanced Guide: Design Plugin Configuration
+# Design Plugin Configuration
 
 Use this guide when a plugin needs more than a single flag or string to configure it safely.
 
@@ -172,7 +172,7 @@ Before publishing a plugin config contract:
 
 Use these links to continue from this workflow into the next related task.
 
-- Build the first plugin with [Basic Guide: Define a Plugin](basic-guide.md).
-- Validate plugin config with [Basic Guide: Validate Plugin Configuration](validate-configuration.md).
-- Register runtime behavior with [Basic Guide: Register Plugin Behavior](register-behavior.md).
+- Build the first plugin with [Define a Plugin](basic-guide.md).
+- Validate plugin config with [Validate Plugin Configuration](validate-configuration.md).
+- Register runtime behavior with [Register Plugin Behavior](register-behavior.md).
 - Review reusable patterns in [Code Examples](code-examples.md).

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Event types for Agent Trajectory Observability Format (ATOF) runtime events.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -28,7 +30,7 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::json::Json;
 
-/// ATOF protocol version emitted by this runtime.
+/// Agent Trajectory Observability Format (ATOF) protocol version emitted by this runtime.
 pub const ATOF_VERSION: &str = "0.1";
 
 /// Identifier for the schema that describes an event's opaque `data` payload.
@@ -158,7 +160,7 @@ impl From<&EventCategory> for ScopeType {
     }
 }
 
-/// ATOF lifecycle phase for a scope event.
+/// Agent Trajectory Observability Format (ATOF) lifecycle phase for a scope event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScopeCategory {
@@ -171,7 +173,8 @@ pub enum ScopeCategory {
 /// Category-specific profile data.
 ///
 /// Unknown wire keys are preserved in `extra`. LLM annotations are runtime-only
-/// enrichment used by internal adaptive/ATIF logic and are never serialized.
+/// enrichment used by internal adaptive and Agent Trajectory Interchange Format
+/// (ATIF) logic and are never serialized.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(setter(into, strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CategoryProfile {

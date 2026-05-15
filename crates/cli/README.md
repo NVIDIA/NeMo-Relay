@@ -15,12 +15,12 @@ SPDX-License-Identifier: Apache-2.0
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
-# nemo-flow-cli
+# NeMo Flow
 
-`nemo-flow-cli` is the coding-agent gateway CLI for NeMo Flow observability.
-It installs the `nemo-flow` binary, which can configure supported coding-agent
-hooks, run agents through an ephemeral gateway, and diagnose local agent and
-exporter readiness.
+`nemo-flow-cli` installs the NeMo Flow CLI, the `nemo-flow` binary for local
+coding-agent observability. It can configure supported coding-agent hooks, run
+agents through an ephemeral gateway, and diagnose local agent and exporter
+readiness.
 
 The CLI is a Rust package in this repository, but most users should interact
 with the installed `nemo-flow` command rather than link against the crate.
@@ -28,7 +28,8 @@ with the installed `nemo-flow` command rather than link against the crate.
 ## Why Use It?
 
 - 🧭 **Observe existing coding agents**: Run Claude Code, Codex, Cursor, or
-  Hermes through a local NeMo Flow gateway without changing the agent itself.
+  Hermes Agent through a local NeMo Flow gateway without changing the agent
+  itself.
 - 🛠️ **Configure hooks interactively**: Use the setup wizard to write project or
   user config and install the hook files needed by supported agents.
 - 📡 **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
@@ -61,13 +62,6 @@ That command installs the binary as:
 
 ```bash
 nemo-flow --version
-```
-
-For local development, build and test the package directly:
-
-```bash
-cargo build -p nemo-flow-cli
-cargo test -p nemo-flow-cli
 ```
 
 ## Getting Started
@@ -104,6 +98,12 @@ Project config lives at `./.nemo-flow/config.toml`; user config lives at
 The project layer overrides system config, and the user layer overrides the
 project layer.
 
+General options are configured through the top-level config. Edit the config with:
+
+```bash
+nemo-flow config
+```
+
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
 
@@ -132,4 +132,4 @@ output_directory = "./atif"
 
 ## Documentation
 
-NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow
+NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow/

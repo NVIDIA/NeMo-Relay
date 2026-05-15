@@ -149,7 +149,7 @@ impl Default for ToolParallelismComponentConfig {
     }
 }
 
-/// Typed helper for the built-in ACG component.
+/// Typed helper for the built-in Adaptive Cache Governor (ACG) component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcgComponentConfig {
     /// Which provider plugin to activate (e.g. "anthropic", "openai", "passthrough").

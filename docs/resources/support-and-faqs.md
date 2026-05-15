@@ -100,9 +100,9 @@ shared runtime boundary. The primary documented bindings are Rust, Python, and
 Node.js. Python uses a native PyO3 extension, Node.js uses a NAPI binding, Go
 uses the raw C FFI, and WebAssembly uses a `wasm-bindgen` binding.
 
-The documentation and examples also cover integration with ATIF trajectory
-export, OpenTelemetry traces, OpenInference-compatible data, and third-party
-agent framework patch sets.
+The documentation and examples also cover integration with Agent Trajectory
+Interchange Format (ATIF) trajectory export, OpenTelemetry traces,
+OpenInference-compatible data, and third-party agent framework patch sets.
 
 ### Why Is NeMo Flow's Core Written In Rust?
 
@@ -151,19 +151,9 @@ Use these questions to find the right first guide for your task.
 
 ### What Should I Read First?
 
-Use the reading path that matches your task:
-
-| Task | Start With |
-|---|---|
-| Run a minimal example | [Quick Start](../getting-started/quick-start.md) |
-| Install packages or local source | [Installation](../getting-started/installation.md) |
-| Understand the runtime model | [Concepts](../about/concepts/index.md) |
-| Instrument an application | [Instrument Applications](../instrument-applications/about.md) |
-| Integrate a framework | [Integrate into Frameworks](../integrate-frameworks/about.md) |
-| Package reusable behavior | [Build Plugins](../build-plugins/about.md) |
-| Export traces or trajectories | [Export Observability Data](../export-observability-data/about.md) |
-| Configure adaptive behavior | [Use Adaptive Optimization](../use-adaptive-optimization/about.md) |
-| Look up symbols | [API](../reference/api/index.md) |
+Use the [What Should I Read First?](../index.md#what-should-i-read-first)
+table on the documentation overview page to pick the right starting point for
+your task.
 
 ## Runtime Model And Execution
 
@@ -250,7 +240,7 @@ Choose the surface based on what must change:
 | Wrap streaming chunk delivery and finalization | Stream execution intercept |
 
 Refer to [Middleware](../about/concepts/middleware.md) and
-[Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md).
+[Add Middleware](../instrument-applications/advanced-guide.md).
 
 ### What Is The Middleware Pipeline?
 
@@ -317,7 +307,7 @@ configuration and source code, and emit summarized metadata when full request or
 response bodies are not needed.
 
 Refer to [Middleware](../about/concepts/middleware.md#guardrails) and
-[Export Observability Data](../export-observability-data/about.md).
+[Observability](../plugins/observability/about.md).
 
 ## Observability And Export
 
@@ -331,20 +321,20 @@ operational tracing, trajectory export, or analytics.
 
 Refer to [Subscribers](../about/concepts/subscribers.md),
 [Events](../about/concepts/events.md), and
-[Register a Subscriber](../export-observability-data/basic-guide.md).
+[Observability](../plugins/observability/about.md).
 
 ### Which Exporter Should I Use?
 
 Use a local subscriber for debugging and development. Use OpenTelemetry when you
 want OTLP-compatible traces in existing observability infrastructure. Use
 OpenInference when your tracing stack expects OpenInference-style agent and LLM
-semantics. Use ATIF when you need trajectory artifacts for analysis, replay, or
-evaluation workflows.
+semantics. Use Agent Trajectory Interchange Format (ATIF) when you need
+trajectory artifacts for analysis, replay, or evaluation workflows.
 
-Refer to [Exporter Selection](../export-observability-data/code-examples.md#exporter-selection),
-[Export OpenTelemetry Data](../export-observability-data/opentelemetry.md),
-[Export OpenInference Data](../export-observability-data/advanced-guide.md), and
-[Export ATIF](../export-observability-data/atif.md).
+Refer to [Exporter Selection](../plugins/observability/about.md#exporter-selection),
+[OpenTelemetry](../plugins/observability/opentelemetry.md),
+[OpenInference](../plugins/observability/openinference.md), and
+[Agent Trajectory Interchange Format (ATIF)](../plugins/observability/atif.md).
 
 ### Can I Use NeMo Flow Just For Observability Without Adaptive Optimization Or Middleware?
 
@@ -390,9 +380,10 @@ telemetry and in-memory state so the runtime can observe representative
 workflows before changing behavior. Enable active behavior one area at a time,
 such as adaptive hints, tool parallelism, or cache-governor behavior.
 
-Refer to [Use Adaptive Optimization](../use-adaptive-optimization/about.md),
-[Configure Adaptive Optimization](../use-adaptive-optimization/configure.md),
-and [Adaptive Components](../use-adaptive-optimization/adaptive-components.md).
+Refer to [Adaptive](../plugins/adaptive/about.md),
+[Adaptive Configuration](../plugins/adaptive/configuration.md),
+[Adaptive Cache Governor (ACG)](../plugins/adaptive/acg.md), and
+[Adaptive Hints](../plugins/adaptive/adaptive-hints.md).
 
 ## Framework Integration And APIs
 

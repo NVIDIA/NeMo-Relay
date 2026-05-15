@@ -84,7 +84,7 @@ Use [Adding Scopes and Marks](../instrument-applications/adding-scopes-and-marks
 
 Check whether the middleware was registered globally or scope-locally. Scope-local middleware is visible only to the owning scope and descendant scopes, and it is cleaned up when the owning scope closes.
 
-Use [Middleware](../about/concepts/middleware.md), [Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md), and [Instrument Applications Code Examples](../instrument-applications/code-examples.md#middleware-registration-families) to verify the expected registration family.
+Use [Middleware](../about/concepts/middleware.md), [Add Middleware](../instrument-applications/advanced-guide.md), and [Instrument Applications Code Examples](../instrument-applications/code-examples.md#middleware-registration-families) to verify the expected registration family.
 
 ## Middleware Runs In The Wrong Order
 
@@ -96,7 +96,7 @@ Use [Middleware](../about/concepts/middleware.md) and [Instrument Applications C
 
 A guardrail rejection is expected to stop the protected tool or LLM call. Inspect the guardrail result and confirm whether the guardrail was intended to sanitize input, sanitize output, or reject the request completely.
 
-Use [Advanced Guide: Add Middleware](../instrument-applications/advanced-guide.md) to verify the guardrail family and expected behavior.
+Use [Add Middleware](../instrument-applications/advanced-guide.md) to verify the guardrail family and expected behavior.
 
 ## Request Intercept Changes Are Not Visible
 
@@ -114,19 +114,24 @@ Use [Middleware](../about/concepts/middleware.md) to confirm when an execution i
 
 Confirm that the subscriber is registered before the runtime emits the events you expect. For scope-local subscribers, confirm that the active scope is the owning scope or a descendant scope.
 
-Use [Subscribers](../about/concepts/subscribers.md), [Events](../about/concepts/events.md), and [Export Observability Data](../export-observability-data/about.md) to verify lifecycle timing and event names.
+Use [Subscribers](../about/concepts/subscribers.md), [Events](../about/concepts/events.md), and [Observability](../plugins/observability/about.md) to verify lifecycle timing and event names.
 
 ## Events Are Missing Expected Fields
 
 Managed tool and LLM helpers populate semantic fields such as inputs, outputs, model names, and tool call IDs. Manual lifecycle calls require you to provide the relevant params explicitly.
 
-Use [Export Observability Data Code Examples](../export-observability-data/code-examples.md#event-shape) and [Instrument Applications Code Examples](../instrument-applications/code-examples.md) to verify the emitted payload shape.
+Use [Events](../about/concepts/events.md) and [Instrument Applications Code Examples](../instrument-applications/code-examples.md) to verify the emitted payload shape.
 
-## ATIF Export Is Empty Or Mixed Across Agents
+## Agent Trajectory Interchange Format (ATIF) Export Is Empty Or Mixed Across Agents
 
-An empty ATIF export usually means the exporter subscribed after the relevant events were emitted, or the export filter does not match the active `root_uuid`. Mixed trajectories usually mean multiple agents share a root scope or the export did not filter by root scope.
+An empty Agent Trajectory Interchange Format (ATIF) export usually means the
+exporter subscribed after the relevant events were emitted, or the export
+filter does not match the active `root_uuid`. Mixed trajectories usually mean
+multiple agents share a root scope or the export did not filter by root scope.
 
-Use [ATIF Export](../export-observability-data/atif.md) and [Export Observability Data Code Examples](../export-observability-data/code-examples.md) to confirm exporter setup, event collection timing, and root-scope filtering.
+Use [Agent Trajectory Interchange Format (ATIF)](../plugins/observability/atif.md)
+and [Observability](../plugins/observability/about.md) to confirm exporter
+setup, event collection timing, and root-scope filtering.
 
 ## LLM Stream Output Is Missing The Final Chunk
 
@@ -150,7 +155,10 @@ Use [Validate Configuration](../build-plugins/validate-configuration.md), [Advan
 
 Confirm that adaptive optimization is configured for the component you expect and that the runtime path actually reaches that component. If behavior does not change, check whether the configured policy is disabled, scoped too narrowly, or not connected to the call path under test.
 
-Use [Configure Adaptive Optimization](../use-adaptive-optimization/configure.md) and [Adaptive Components](../use-adaptive-optimization/adaptive-components.md) to verify component names and configuration scope.
+Use [Adaptive Configuration](../plugins/adaptive/configuration.md),
+[Adaptive Cache Governor (ACG)](../plugins/adaptive/acg.md), and
+[Adaptive Hints](../plugins/adaptive/adaptive-hints.md) to verify component
+names and configuration scope.
 
 ## Third-Party Patch Does Not Apply
 

@@ -1,6 +1,6 @@
 {
   "name": "nemo-flow-openclaw",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "NeMo Flow-authored observability plugin for OpenClaw.",
   "type": "module",
   "repository": {
@@ -63,7 +63,7 @@
     "openclaw": ">=2026.5.12"
   },
   "dependencies": {
-    "nemo-flow-node": "0.2.0"
+    "nemo-flow-node": "0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

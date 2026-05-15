@@ -9,8 +9,25 @@ This quick start shows the smallest Rust workflow that emits scope and mark even
 
 ## Choose an Install Path
 
-Pick the installation path that matches whether you are using a local checkout or a
-published package.
+Pick the installation path that matches whether you are using a published package or a
+local checkout.
+
+### Install from a Package Manager
+
+Use the published crates when you are consuming a release:
+
+```bash
+cargo add nemo-flow@0.2.0
+cargo add nemo-flow-adaptive@0.2.0
+cargo add serde_json
+```
+
+Install the published NeMo Flow CLI separately when you need coding-agent hook
+and LLM gateway observability:
+
+```bash
+cargo install nemo-flow-cli@0.2.0
+```
 
 ### Install from the Repository
 
@@ -25,26 +42,8 @@ serde_json = "1"
 
 - `nemo-flow` is the core Rust runtime surface.
 - `nemo-flow-adaptive` is the companion crate for adaptive runtime primitives and Redis-backed learning components.
-- `nemo-flow-cli` is a binary crate. Use `cargo install nemo-flow-cli` when
-  you need the coding-agent gateway.
-
-### Install from a Package Manager
-
-Use the published crate when you are consuming a release:
-
-```toml
-[dependencies]
-nemo-flow = "0.1.*"
-nemo-flow-adaptive = "0.1.*"
-serde_json = "1"
-```
-
-Install the published gateway binary separately when you need coding-agent hook
-and LLM gateway observability:
-
-```bash
-cargo install nemo-flow-cli
-```
+- `nemo-flow-cli` is a binary crate. Use `cargo install nemo-flow-cli@0.2.0` when
+  you need the NeMo Flow CLI.
 
 ## Push a Scope and Emit a Mark
 

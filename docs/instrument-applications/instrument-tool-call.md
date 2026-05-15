@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Instrument a Tool Call
+# Instrument a Tool Call
 
 Use this guide when you have an application tool callback and want NeMo Flow to emit lifecycle events, apply middleware, and preserve the active agent scope around the call.
 
@@ -25,9 +25,9 @@ Complete one binding Quick Start guide first:
 - [Node.js Quick Start](../getting-started/nodejs.md)
 - [Rust Quick Start](../getting-started/rust.md)
 
-Create a scope for the active request or agent run before adding tool instrumentation. If you have not done that yet, start with [Basic Guide: Adding Scopes and Marks](adding-scopes-and-marks.md).
+Create a scope for the active request or agent run before adding tool instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](adding-scopes-and-marks.md).
 
-The tool arguments and result must be JSON-compatible. If your framework passes clients, sockets, streams, callbacks, or other opaque objects, use [Advanced Guide: Handle Non-Serializable Data](../integrate-frameworks/non-serializable-data.md) before you instrument the callback.
+The tool arguments and result must be JSON-compatible. If your framework passes clients, sockets, streams, callbacks, or other opaque objects, use [Handle Non-Serializable Data](../integrate-frameworks/non-serializable-data.md) before you instrument the callback.
 
 ## Integration Pattern
 
@@ -226,7 +226,7 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add model-provider instrumentation with [Basic Guide: Instrument an LLM Call](instrument-llm-call.md).
-- Add policy or transformation with [Advanced Guide: Add Middleware](advanced-guide.md).
-- Export events with [Basic Guide: Register a Subscriber](../export-observability-data/basic-guide.md).
+- Add model-provider instrumentation with [Instrument an LLM Call](instrument-llm-call.md).
+- Add policy or transformation with [Add Middleware](advanced-guide.md).
+- Export events with [Observability](../plugins/observability/about.md).
 - Use [Code Examples](code-examples.md) for manual lifecycle, streaming, scope, and partial middleware API examples.

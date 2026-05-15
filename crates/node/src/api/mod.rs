@@ -2887,11 +2887,11 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
 }
 
 // ---------------------------------------------------------------------------
-// ATIF Exporter
+// Agent Trajectory Interchange Format (ATIF) Exporter
 // ---------------------------------------------------------------------------
 
-/// An ATIF (Agent Trajectory Interchange Format) exporter that collects lifecycle events
-/// and exports them as a structured trajectory.
+/// An Agent Trajectory Interchange Format (ATIF) exporter that collects lifecycle
+/// events and exports them as a structured trajectory.
 ///
 /// Create an instance with session and agent metadata, then register it as an event subscriber.
 /// When ready, call `exportJson()` to serialize the collected trajectory.
@@ -2972,7 +2972,7 @@ pub struct AtofExporterConfig {
     pub filename: Option<String>,
 }
 
-/// Filesystem-backed ATOF JSONL event exporter.
+/// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
 #[napi]
 pub struct AtofExporter {
     inner: nemo_flow::observability::atof::AtofExporter,
@@ -2980,7 +2980,8 @@ pub struct AtofExporter {
 
 #[napi]
 impl AtofExporter {
-    /// Create a new ATOF JSONL exporter from a config object.
+    /// Create a new Agent Trajectory Observability Format (ATOF) JSONL exporter
+    /// from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
         let inner = nemo_flow::observability::atof::AtofExporter::new(build_atof_config(config)?)

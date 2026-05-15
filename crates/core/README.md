@@ -12,9 +12,10 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
-# nemo-flow
+# NeMo Flow
 
 `nemo-flow` is the core Rust SDK for NeMo Flow, a portable execution
 runtime for agent systems. Use it when a Rust application, framework adapter,
@@ -31,7 +32,8 @@ Node.js bindings mirror the semantics exposed by this crate.
 - 🛡️ **Put policy around real calls**: Guardrails and intercepts can block work,
   sanitize observability payloads, rewrite requests, or wrap execution.
 - 📡 **Emit one lifecycle stream**: Subscribers can consume canonical runtime
-  events in-process or export them to ATIF, OpenTelemetry, and OpenInference.
+  events in-process or export them to Agent Trajectory Interchange Format
+  (ATIF), OpenTelemetry, and OpenInference.
 - 🧩 **Integrate without changing orchestration**: Wrap framework and provider
   callbacks while leaving scheduling, retries, memory, and result handling in
   the owning application.
@@ -45,8 +47,8 @@ Node.js bindings mirror the semantics exposed by this crate.
 - ✅ **Plugin primitives**: Register reusable runtime behavior configured from
   one shared plugin system.
 - ✅ **Built-in observability plugin**: Configure first-party Agent Trajectory
-  Observability Format (ATOF), ATIF, OpenTelemetry, and OpenInference exporters
-  from the core crate.
+  Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
+  OpenTelemetry, and OpenInference exporters from the core crate.
 - ✅ **Codec and typed helpers**: Normalize provider requests and responses for
   framework integrations.
 - ✅ **Binding source of truth**: Use the runtime semantics mirrored by the

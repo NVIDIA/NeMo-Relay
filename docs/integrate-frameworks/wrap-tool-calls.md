@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Basic Guide: Wrap Tool Calls
+# Wrap Tool Calls
 
 Use this guide when a framework, SDK, or orchestration layer owns tool invocation and you need NeMo Flow to observe and control those calls without changing the framework's public behavior.
 
@@ -15,7 +15,7 @@ You will place a managed NeMo Flow tool execution wrapper at the framework's sta
 
 You need:
 
-- A framework request or run scope. If the framework does not create one yet, start with [Basic Guide: Adding Scopes](adding-scopes.md).
+- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](adding-scopes.md).
 - A stable tool invocation boundary, such as a callback dispatcher, tool registry, or tool adapter.
 - A JSON-compatible projection of tool arguments and results.
 - A subscriber or exporter that can verify emitted tool events.
@@ -158,6 +158,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add model-provider integration with [Basic Guide: Wrap LLM Calls](wrap-llm-calls.md).
-- Add request ownership with [Basic Guide: Adding Scopes](adding-scopes.md).
-- Use [Advanced Guide: Handle Non-Serializable Data](non-serializable-data.md) when framework objects need ID-based lookup.
+- Add model-provider integration with [Wrap LLM Calls](wrap-llm-calls.md).
+- Add request ownership with [Adding Scopes](adding-scopes.md).
+- Use [Handle Non-Serializable Data](non-serializable-data.md) when framework objects need ID-based lookup.

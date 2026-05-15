@@ -117,7 +117,8 @@ pub struct ToolCallParams<'a> {
     /// Tool attribute bitflags applied to the span.
     #[builder(default = ToolAttributes::empty())]
     pub attributes: ToolAttributes,
-    /// Optional application payload stored on the handle but not emitted as ATOF data.
+    /// Optional application payload stored on the handle but not emitted as
+    /// Agent Trajectory Observability Format (ATOF) data.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on the start event.
@@ -149,7 +150,8 @@ pub struct ToolCallExecuteParams {
     /// Tool attribute bitflags applied to the managed span.
     #[builder(default = ToolAttributes::empty())]
     pub attributes: ToolAttributes,
-    /// Optional application payload stored on the handle but not emitted as ATOF data.
+    /// Optional application payload stored on the handle but not emitted as
+    /// Agent Trajectory Observability Format (ATOF) data.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on emitted events.
@@ -165,7 +167,8 @@ pub struct ToolCallEndParams<'a> {
     pub handle: &'a ToolHandle,
     /// Raw tool result associated with the end event.
     pub result: Json,
-    /// Optional application payload retained for compatibility; ATOF data is the result.
+    /// Optional application payload retained for compatibility; Agent
+    /// Trajectory Observability Format (ATOF) data is the result.
     #[builder(default)]
     pub data: Option<Json>,
     /// Optional JSON metadata recorded on the end event.

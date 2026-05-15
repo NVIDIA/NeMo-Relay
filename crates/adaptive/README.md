@@ -12,9 +12,10 @@ SPDX-License-Identifier: Apache-2.0
 [![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
 [![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
 
-# nemo-flow-adaptive
+# NeMo Flow
 
 `nemo-flow-adaptive` is the Rust companion crate for adaptive NeMo Flow
 runtime behavior. Use it with `nemo-flow` when an agent runtime should learn
@@ -46,9 +47,9 @@ framework.
   the `redis-backend` feature.
 - ✅ **Learning primitives**: Runtime helpers and learners built on NeMo Flow
   events.
-- ✅ **ACG module surface**: The canonical `nemo_flow_adaptive::acg` module for
-  PromptIR, provider plugins, stability analysis, and cache telemetry
-  normalization.
+- ✅ **Adaptive Cache Governor (ACG) module surface**: The canonical
+  `nemo_flow_adaptive::acg` module for PromptIR, provider plugins, stability
+  analysis, and cache telemetry normalization.
 
 ## Installation
 
