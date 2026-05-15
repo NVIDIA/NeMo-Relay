@@ -321,7 +321,7 @@ operational tracing, trajectory export, or analytics.
 
 Refer to [Subscribers](../about/concepts/subscribers.md),
 [Events](../about/concepts/events.md), and
-[Subscribers](../about/concepts/subscribers.md).
+[Observability](../plugins/observability/about.md).
 
 ### Which Exporter Should I Use?
 
