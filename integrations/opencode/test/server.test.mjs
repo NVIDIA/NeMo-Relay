@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -28,7 +29,7 @@ function createFakeRuntime() {
     },
     pushScope(name, scopeType, _parent, attributes, data, metadata, input) {
       const handle = {
-        uuid: `scope-${++counter}`,
+        uuid: randomUUID(),
         name,
         scopeType,
         attributes,
@@ -61,7 +62,7 @@ function createFakeRuntime() {
       events.push({
         kind: "mark",
         stack: activeStack.id,
-        uuid: `mark-${++counter}`,
+        uuid: randomUUID(),
         parent_uuid: handle?.uuid,
         name,
         data,
@@ -70,7 +71,7 @@ function createFakeRuntime() {
     },
     toolCall(name, args, handle, _attributes, data, metadata, toolCallID) {
       const tool = {
-        uuid: `tool-${++counter}`,
+        uuid: randomUUID(),
         name,
         parentUuid: handle?.uuid,
         toolCallID,
@@ -102,7 +103,7 @@ function createFakeRuntime() {
     },
     llmCall(name, request, handle, _attributes, _data, metadata, modelName) {
       const llm = {
-        uuid: `llm-${++counter}`,
+        uuid: randomUUID(),
         name,
         parentUuid: handle?.uuid,
         modelName,
