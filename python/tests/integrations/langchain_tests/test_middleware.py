@@ -101,7 +101,7 @@ def nemo_flow_middleware_fixture() -> NemoFlowMiddleware:
 def recording_middleware_fixture() -> NemoFlowMiddleware:
     from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
     class RecordingMiddleware(NemoFlowMiddleware):
-        def __init__(self) -> None:
+        def __init__(self):
             super().__init__()
             self.calls: list[dict[str, Any]] = []
 
@@ -132,7 +132,8 @@ def recording_middleware_fixture() -> NemoFlowMiddleware:
 
     return RecordingMiddleware()
 
-def _model_request() -> ModelRequest[Any]:
+@pytest.fixture(name="model_request")
+def model_request_fixture() -> ModelRequest[Any]:
     from langchain.agents.middleware import ModelRequest
     from langchain_core.messages import HumanMessage
 
@@ -145,7 +146,8 @@ def _model_request() -> ModelRequest[Any]:
     )
 
 
-def _tool_call_request() -> ToolCallRequest:
+@pytest.fixture(name="tool_request")
+def tool_request_fixture() -> ToolCallRequest:
     from langchain.agents.middleware import ToolCallRequest
     return ToolCallRequest(
         tool_call={"name": "lookup", "args": {"query": "original"}, "id": "call-1"},
@@ -155,11 +157,11 @@ def _tool_call_request() -> ToolCallRequest:
     )
 
 
-def test_wrap_model_call_routes_through_llm_execute(model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]], recording_middleware: NemoFlowMiddleware):
+def test_wrap_model_call_routes_through_llm_execute(model_request: ModelRequest[Any], model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]], recording_middleware: NemoFlowMiddleware):
     
     (handler, seen_request) = model_request_handler
 
-    response = recording_middleware.wrap_model_call(_model_request(), handler)
+    response = recording_middleware.wrap_model_call(model_request, handler)
 
     assert response.result[0].content == "done"
     assert seen_request["request"].model_settings == {"temperature": 0.25}
@@ -169,10 +171,10 @@ def test_wrap_model_call_routes_through_llm_execute(model_request_handler: tuple
     assert recording_middleware.calls[0]["response_codec"] is None
 
 
-def test_awrap_model_call_routes_through_llm_execute(async_model_request_handler: tuple[Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]], recording_middleware: NemoFlowMiddleware):
+def test_awrap_model_call_routes_through_llm_execute(model_request: ModelRequest[Any], async_model_request_handler: tuple[Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]], recording_middleware: NemoFlowMiddleware):
     (handler, seen_request) = async_model_request_handler
 
-    response = asyncio.run(recording_middleware.awrap_model_call(_model_request(), handler))
+    response = asyncio.run(recording_middleware.awrap_model_call(model_request, handler))
 
     assert response.result[0].content == "done"
     assert seen_request["request"].model_settings == {"temperature": 0.25}
@@ -182,14 +184,14 @@ def test_awrap_model_call_routes_through_llm_execute(async_model_request_handler
     assert recording_middleware.calls[0]["response_codec"] is None
 
 
-def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]):
+def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_request: ToolCallRequest, tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]):
     (handler, seen_request) = tool_request_handler
     parent_handle = MagicMock()
 
     monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
     monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
 
-    response = nemo_flow_middleware.wrap_tool_call(_tool_call_request(), handler)
+    response = nemo_flow_middleware.wrap_tool_call(tool_request, handler)
 
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
@@ -202,14 +204,14 @@ def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPa
     assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
 
 
-def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]):
+def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_request: ToolCallRequest, async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]):
     parent_handle = MagicMock()
     (handler, seen_request) = async_tool_request_handler
 
     monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
     monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
 
-    response = asyncio.run(nemo_flow_middleware.awrap_tool_call(_tool_call_request(), handler))
+    response = asyncio.run(nemo_flow_middleware.awrap_tool_call(tool_request, handler))
 
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
@@ -222,13 +224,13 @@ def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyP
     assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
 
 
-def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch):
     from nemo_flow.integrations.langchain import _serialization
     class FakeChatAnthropic:
         pass
 
     class FakeChatOpenAI:
-        def __init__(self, *, use_responses_api: bool = False) -> None:
+        def __init__(self, *, use_responses_api: bool = False):
             self.use_responses_api = use_responses_api
 
     class FakeChatNVIDIA:
@@ -252,7 +254,7 @@ def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddleware) -> None:
+def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddleware):
     """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
     from langchain.agents import create_agent
     from langchain_core.messages import AIMessage
@@ -302,7 +304,7 @@ def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddle
         "scope.end.langchain-request",
     ]
 
-    def event_recorder(event) -> None:
+    def event_recorder(event):
         events.append(f"{event.kind}.{event.scope_category}.{event.name}")
 
     nemo_flow.subscribers.register("event_recorder", event_recorder)
