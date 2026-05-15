@@ -35,9 +35,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let response = match events.first() {
         Some(NormalizedEvent::ToolStarted(_)) => json!({
             "continue": true,
-            "permission": "allow",
-            "user_message": null,
-            "agent_message": null
+            "permission": "allow"
         }),
         Some(NormalizedEvent::AgentEnded(_)) => json!({ "continue": true }),
         _ => json!({ "continue": true }),

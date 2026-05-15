@@ -23,6 +23,7 @@ just ci=true test-rust
 just test-python
 just test-go
 just test-node
+just test-openclaw
 just test-wasm
 ```
 
@@ -62,11 +63,13 @@ uv run pytest
 ### Node.js
 
 Run the Node.js validation loop when a change touches the NAPI binding or
-JavaScript package surface.
+JavaScript package surface. Run the OpenClaw target when Node changes can affect
+the OpenClaw plugin or when touching `integrations/openclaw`.
 
 ```bash
 npm install --ignore-scripts
 npm test --workspace=nemo-flow-node
+just test-openclaw
 ```
 
 ## Documentation Checklist

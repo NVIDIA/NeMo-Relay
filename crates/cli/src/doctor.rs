@@ -406,6 +406,9 @@ fn hook_file_status(
         }
     };
     match std::fs::read_to_string(&path) {
+        Ok(raw) if matches!(agent, CodingAgent::Cursor) => {
+            cursor_hook_file_status(&raw, &path, readiness_required, label)
+        }
         Ok(raw) if raw.contains(&format!("hook-forward {}", agent.as_arg())) => (
             Status::Pass,
             format!("{label}: installed at {}", path.display()),
@@ -428,6 +431,106 @@ fn hook_file_status(
             Status::Fail,
             format!("{label}: could not read {}: {error}", path.display()),
         ),
+    }
+}
+
+fn cursor_hook_file_status(
+    raw: &str,
+    path: &Path,
+    readiness_required: bool,
+    label: &str,
+) -> (Status, String) {
+    let has_nemo_hook = raw.contains("hook-forward cursor");
+    if !has_nemo_hook {
+        if readiness_required {
+            return (
+                Status::Fail,
+                format!("{label}: missing NeMo Flow hook in {}", path.display()),
+            );
+        }
+        return (
+            Status::Info,
+            format!("{label}: no NeMo Flow hook in {}", path.display()),
+        );
+    }
+
+    let parsed: Value = match serde_json::from_str(raw) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return (
+                Status::Fail,
+                format!(
+                    "{label}: invalid Cursor hooks JSON in {}: {err}",
+                    path.display()
+                ),
+            );
+        }
+    };
+
+    if parsed.get("version").and_then(Value::as_u64) != Some(1) {
+        return (
+            Status::Fail,
+            format!(
+                "{label}: Cursor hook file {} must set top-level `version` to 1",
+                path.display()
+            ),
+        );
+    }
+
+    let Some(hooks) = parsed.get("hooks").and_then(Value::as_object) else {
+        return (
+            Status::Fail,
+            format!(
+                "{label}: Cursor hook file {} has no hooks object",
+                path.display()
+            ),
+        );
+    };
+    let has_direct_nemo_hook = hooks.values().any(cursor_event_has_direct_nemo_hook);
+    if has_nested_hook_group(&parsed) {
+        return (
+            Status::Fail,
+            format!(
+                "{label}: Cursor hook file {} uses nested hook groups; Cursor CLI requires direct command entries",
+                path.display()
+            ),
+        );
+    }
+    if !has_direct_nemo_hook {
+        return (
+            Status::Fail,
+            format!(
+                "{label}: Cursor hook file {} has no direct NeMo Flow command entries",
+                path.display()
+            ),
+        );
+    }
+
+    (
+        Status::Pass,
+        format!("{label}: installed at {}", path.display()),
+    )
+}
+
+fn cursor_event_has_direct_nemo_hook(event_hooks: &Value) -> bool {
+    event_hooks.as_array().is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains("hook-forward cursor"))
+        })
+    })
+}
+
+fn has_nested_hook_group(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            let nested_here = object.get("hooks").is_some_and(Value::is_array);
+            nested_here || object.values().any(has_nested_hook_group)
+        }
+        Value::Array(items) => items.iter().any(has_nested_hook_group),
+        _ => false,
     }
 }
 
@@ -525,39 +628,53 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
 
 async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {
     for section in ["atof", "atif"] {
-        if section_enabled(config, section) {
-            let label = if section == "atof" {
-                "ATOF dir"
-            } else {
-                "ATIF dir"
-            };
-            match section_output_directory(config, section) {
-                Some(path) => checks.push(check_directory(label, &path)),
-                None => checks.push(Check {
-                    name: label,
-                    status: Status::Info,
-                    details: "enabled; using runtime default output directory".into(),
-                }),
-            }
+        if let Some(check) = observability_file_exporter_check(config, section) {
+            checks.push(check);
         }
     }
     for section in ["opentelemetry", "openinference"] {
-        if section_enabled(config, section) {
-            let label = if section == "opentelemetry" {
-                "OpenTelemetry endpoint"
-            } else {
-                "OpenInference endpoint"
-            };
-            match section_endpoint(config, section) {
-                Some(endpoint) => checks.push(probe_http_named(label, &endpoint).await),
-                None => checks.push(Check {
-                    name: label,
-                    status: Status::Info,
-                    details: "enabled; using exporter default endpoint".into(),
-                }),
-            }
+        if let Some(check) = observability_http_exporter_check(config, section).await {
+            checks.push(check);
         }
     }
+}
+
+fn observability_file_exporter_check(config: &Value, section: &str) -> Option<Check> {
+    if !section_enabled(config, section) {
+        return None;
+    }
+    let label = if section == "atof" {
+        "ATOF dir"
+    } else {
+        "ATIF dir"
+    };
+    Some(match section_output_directory(config, section) {
+        Some(path) => check_directory(label, &path),
+        None => Check {
+            name: label,
+            status: Status::Info,
+            details: "enabled; using runtime default output directory".into(),
+        },
+    })
+}
+
+async fn observability_http_exporter_check(config: &Value, section: &str) -> Option<Check> {
+    if !section_enabled(config, section) {
+        return None;
+    }
+    let label = if section == "opentelemetry" {
+        "OpenTelemetry endpoint"
+    } else {
+        "OpenInference endpoint"
+    };
+    Some(match section_endpoint(config, section) {
+        Some(endpoint) => probe_http_named(label, &endpoint).await,
+        None => Check {
+            name: label,
+            status: Status::Info,
+            details: "enabled; using exporter default endpoint".into(),
+        },
+    })
 }
 
 fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
@@ -637,6 +754,7 @@ fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
 }
 
 async fn probe_http_named(name: &'static str, url: &str) -> Check {
+    crate::tls::install_rustls_crypto_provider();
     let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {

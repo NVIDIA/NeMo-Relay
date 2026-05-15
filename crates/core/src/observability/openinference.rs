@@ -377,6 +377,8 @@ fn http_error(message: impl Into<String>) -> HttpError {
 fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
+            #[cfg(not(target_arch = "wasm32"))]
+            install_rustls_crypto_provider();
             let mut builder = SpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -456,6 +458,11 @@ fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvid
     {
         Ok(builder.with_simple_exporter(exporter).build())
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 #[cfg(not(target_arch = "wasm32"))]

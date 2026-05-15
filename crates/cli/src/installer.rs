@@ -130,6 +130,7 @@ async fn send_hook_forward_request(
     url: String,
     input: String,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
+    crate::tls::install_rustls_crypto_provider();
     Ok(reqwest::Client::builder()
         .timeout(HOOK_FORWARD_TIMEOUT)
         .build()?
@@ -197,8 +198,8 @@ fn resolve_hook_gateway_url(
 
 /// Generates native hook configuration for the selected agent.
 ///
-/// The returned value always has a top-level `hooks` object, but Hermes uses its simpler command
-/// group shape while Claude/Codex/Cursor use command hook groups with optional tool matchers.
+/// The returned value always has a top-level `hooks` object. Claude/Codex use command hook
+/// groups with optional tool matchers, while Cursor and Hermes use direct command entries.
 pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
     match agent {
         CodingAgent::ClaudeCode => claude_hooks(command),
@@ -227,11 +228,11 @@ fn codex_hooks(command: &str) -> Value {
 }
 
 fn cursor_hooks(command: &str) -> Value {
-    hooks_for_events(CURSOR_HOOK_EVENTS, command, true)
+    direct_command_hooks_for_events(CURSOR_HOOK_EVENTS, command)
 }
 
 // Generates Hermes YAML-compatible hook groups. Hermes expects direct command entries rather than
-// the nested `type = command` group format used by Claude, Codex, and Cursor.
+// the nested `type = command` group format used by Claude and Codex.
 pub(crate) fn hermes_hooks(command: &str) -> Value {
     let hooks: serde_json::Map<String, Value> = HERMES_HOOK_EVENTS
         .iter()
@@ -248,7 +249,7 @@ pub(crate) fn hermes_hooks(command: &str) -> Value {
     json!({ "hooks": Value::Object(hooks) })
 }
 
-// Generates hook groups for all requested events and adds a wildcard matcher to tool events when
+// Generates hook groups for Claude/Codex events and adds a wildcard matcher to tool events when
 // the target agent requires matcher-scoped tool hooks. Non-tool events omit matchers so they fire
 // for the full lifecycle.
 fn hooks_for_events(events: &[&str], command: &str, matcher_for_tools: bool) -> Value {
@@ -276,21 +277,33 @@ fn hooks_for_events(events: &[&str], command: &str, matcher_for_tools: bool) -> 
     json!({ "hooks": Value::Object(hooks) })
 }
 
+// Cursor CLI 2026.05 accepts direct command entries in `.cursor/hooks.json`; it does not execute
+// the nested hook-group shape used by Claude Code and Codex.
+fn direct_command_hooks_for_events(events: &[&str], command: &str) -> Value {
+    let hooks: serde_json::Map<String, Value> = events
+        .iter()
+        .map(|event| {
+            (
+                (*event).to_string(),
+                json!([{
+                    "command": command,
+                    "timeout": 30
+                }]),
+            )
+        })
+        .collect();
+    json!({
+        "version": 1,
+        "hooks": Value::Object(hooks)
+    })
+}
+
 // Identifies hook events that should receive wildcard tool matchers. The list includes current
-// Claude/Codex spellings plus Cursor shell/MCP names so generated config stays agent-compatible.
+// Claude/Codex spellings. Cursor uses direct command hooks and does not call this helper.
 fn event_matches_tools(event: &str) -> bool {
     matches!(
         event,
-        "PreToolUse"
-            | "PostToolUse"
-            | "PostToolUseFailure"
-            | "PermissionRequest"
-            | "preToolUse"
-            | "postToolUse"
-            | "beforeShellExecution"
-            | "afterShellExecution"
-            | "beforeMCPExecution"
-            | "afterMCPExecution"
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PermissionRequest"
     )
 }
 

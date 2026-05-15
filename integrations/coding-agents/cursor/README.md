@@ -15,6 +15,18 @@ lifecycle observability additionally requires Cursor model traffic to route
 through the gateway if the active Cursor build exposes provider base URL
 configuration.
 
+Cursor CLI builds require `.cursor/hooks.json` to set top-level `"version": 1`
+and use direct command entries such as
+`{"command": "nemo-flow hook-forward cursor", "timeout": 30}`. The nested
+`{"matcher": "*", "hooks": [...]}` group shape used by Claude Code and Codex
+does not fire in Cursor CLI.
+
+> [!WARNING]
+> Cursor CLI hook coverage is narrower than Cursor IDE hook coverage. Current
+> headless CLI builds can emit fewer hook events than Cursor IDE sessions. Treat
+> missing CLI hook events as a Cursor CLI limitation after `nemo-flow doctor
+> cursor` confirms the hook file uses the direct versioned shape.
+
 ## Files
 
 - `.cursor/hooks.json` contains hook entries that run
@@ -44,7 +56,9 @@ nemo-flow run -- cursor-agent
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
 temporarily merges NeMo Flow hooks into project `.cursor/hooks.json`, launches
-Cursor, and restores or removes the temporary hook file when Cursor exits.
+Cursor, and restores or removes the temporary hook file when Cursor exits. The
+temporary Cursor hook file is written with top-level `"version": 1` and direct
+command entries.
 
 Inspect the launch without starting Cursor:
 
@@ -118,8 +132,9 @@ printf '{"session_id":"smoke-cursor","hook_event_name":"sessionStart"}' \
 ```
 
 If Cursor CLI hooks do not fire for the active `cursor-agent` version, treat
-that CLI mode as hook-limited and rely on gateway observability where provider
-routing is available.
+that CLI mode as hook-limited after confirming `.cursor/hooks.json` uses direct
+versioned entries. User-managed Cursor hook files can be checked with
+`nemo-flow doctor cursor`.
 
 If LLM spans are present but attached to the top-level agent instead of a
 subagent, include `x-nemo-flow-subagent-id` on gateway requests or share

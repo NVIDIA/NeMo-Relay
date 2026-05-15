@@ -696,6 +696,7 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
 // Polls the ephemeral gateway health endpoint for roughly one second before launching the agent.
 // Startup failures return a launcher error so the child command is never run against a dead proxy.
 async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
+    crate::tls::install_rustls_crypto_provider();
     let client = Client::new();
     let url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
     for _ in 0..50 {
@@ -822,14 +823,18 @@ fn write_merged_cursor_hooks(path: &Path) -> Result<(), CliError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let contents = serde_json::to_string_pretty(&merge_hooks(
+    let mut merged = merge_hooks(
         read_json_file(path)?,
         generated_hooks(
             CodingAgent::Cursor,
             &hook_forward_command(&transparent_hook_executable(), CodingAgent::Cursor),
         ),
-    )?)
-    .map_err(|error| CliError::Launch(error.to_string()))?;
+    )?;
+    if let Some(root) = merged.as_object_mut() {
+        root.insert("version".to_string(), json!(1));
+    }
+    let contents = serde_json::to_string_pretty(&merged)
+        .map_err(|error| CliError::Launch(error.to_string()))?;
     std::fs::write(path, contents)?;
     Ok(())
 }

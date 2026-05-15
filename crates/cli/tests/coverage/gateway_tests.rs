@@ -11,6 +11,11 @@ use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use reqwest::Client;
 
+fn test_http_client() -> Client {
+    crate::tls::install_rustls_crypto_provider();
+    Client::new()
+}
+
 #[test]
 fn removes_hop_by_hop_headers() {
     assert!(!should_forward_request_header(&HeaderName::from_static(
@@ -297,7 +302,7 @@ fn preserves_jwt_when_no_replacement_key_available() {
 fn injects_openai_bearer_when_inbound_has_no_auth() {
     // NMF-86 mitigation: codex now sends no credentials, so the gateway must inject
     // `Authorization: Bearer ${OPENAI_API_KEY}` on outbound forwards to api.openai.com.
-    let http = Client::new();
+    let http = test_http_client();
     let inbound = HeaderMap::new();
     let env = |k: &str| match k {
         "OPENAI_API_KEY" => Some("sk-test-123".into()),
@@ -316,7 +321,7 @@ fn injects_openai_bearer_when_inbound_has_no_auth() {
 
 #[test]
 fn injects_anthropic_x_api_key_for_anthropic_routes() {
-    let http = Client::new();
+    let http = test_http_client();
     let inbound = HeaderMap::new();
     let env = |k: &str| match k {
         "ANTHROPIC_API_KEY" => Some("sk-ant-test".into()),
@@ -338,7 +343,7 @@ fn injects_anthropic_x_api_key_for_anthropic_routes() {
 fn skips_injection_when_inbound_already_has_authorization() {
     // If the agent (e.g., a future codex version, or anyone using the gateway directly) sends
     // its own auth, we must not stomp on it.
-    let http = Client::new();
+    let http = test_http_client();
     let mut inbound = HeaderMap::new();
     inbound.insert(
         "authorization",
@@ -358,7 +363,7 @@ fn skips_injection_when_inbound_already_has_authorization() {
 
 #[test]
 fn skips_injection_when_env_var_unset() {
-    let http = Client::new();
+    let http = test_http_client();
     let inbound = HeaderMap::new();
     let env = |_: &str| None;
     let builder = http.post("http://upstream/v1/responses");
@@ -441,7 +446,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
     };
     let state = AppState {
         config: config.clone(),
-        http: Client::new(),
+        http: test_http_client(),
         sessions: SessionManager::new(config),
     };
     let request = Request::builder()
@@ -467,7 +472,7 @@ async fn models_rejects_non_get_requests_directly() {
     };
     let state = AppState {
         config: config.clone(),
-        http: Client::new(),
+        http: test_http_client(),
         sessions: SessionManager::new(config),
     };
     let request = Request::builder()

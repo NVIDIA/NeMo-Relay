@@ -4,7 +4,7 @@
 /**
  * Structural OpenClaw hook payload types consumed by this plugin.
  *
- * OpenClaw 2026.5.6 does not expose these hook contracts through a public package
+ * OpenClaw 2026.5.12 does not expose these hook contracts through a public package
  * subpath. Keep these aliases structural and remove them once OpenClaw exports
  * stable plugin hook types.
  */
@@ -109,7 +109,7 @@ export type PluginHookSessionEndEvent = {
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
-  reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
+  reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "shutdown" | "restart" | "unknown";
   sessionFile?: string;
   transcriptArchived?: boolean;
   nextSessionId?: string;

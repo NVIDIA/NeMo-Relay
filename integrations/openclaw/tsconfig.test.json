@@ -10,5 +10,11 @@
   "exclude": [
     ".test-dist/**",
     "dist/**"
+  ],
+  "include": [
+    "index.ts",
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "test/**/*.ts"
   ]
 }

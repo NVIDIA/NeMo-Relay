@@ -2,34 +2,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Interactive plugin configuration editing.
+//!
+//! Keep this module focused on TTY and `dialoguer` orchestration. New testable plugin config
+//! behavior should live in `plugins/config_io.rs` or `plugins/editor_model.rs`, with focused unit
+//! tests, so Codecov does not depend on exercising interactive prompt loops.
 
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use console::{Key, Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 use nemo_flow::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
-use nemo_flow::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
-use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig, validate_plugin_config};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::{Map, Value, json};
+use nemo_flow::observability::plugin_component::ObservabilityConfig;
+use serde_json::{Value, json};
 
-use crate::config::{
-    PluginsEditCommand, global_plugin_config_path, project_plugin_config_path,
-    user_plugin_config_path,
-};
+use crate::config::PluginsEditCommand;
 use crate::error::CliError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TargetScope {
-    User,
-    Project,
-    Global,
-}
+mod config_io;
+mod editor_model;
 
-const POLICY_SECTION: &str = "policy";
+use self::config_io::*;
+use self::editor_model::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShortcut {
@@ -343,115 +338,6 @@ fn ensure_tty() -> Result<(), CliError> {
     Ok(())
 }
 
-fn target_scope(command: &PluginsEditCommand) -> Result<TargetScope, CliError> {
-    let selected = [command.user, command.project, command.global]
-        .into_iter()
-        .filter(|selected| *selected)
-        .count();
-    if selected > 1 {
-        return Err(CliError::Config(
-            "choose only one of --user, --project, or --global".into(),
-        ));
-    }
-    if command.project {
-        Ok(TargetScope::Project)
-    } else if command.global {
-        Ok(TargetScope::Global)
-    } else {
-        Ok(TargetScope::User)
-    }
-}
-
-fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
-    match scope {
-        TargetScope::User => user_plugin_config_path().ok_or_else(|| {
-            CliError::Config(
-                "cannot determine user config directory; set HOME or XDG_CONFIG_HOME".into(),
-            )
-        }),
-        TargetScope::Project => {
-            let cwd = std::env::current_dir()?;
-            Ok(project_plugin_config_path(&cwd))
-        }
-        TargetScope::Global => Ok(global_plugin_config_path()),
-    }
-}
-
-fn read_plugin_config(path: &Path) -> Result<PluginConfig, CliError> {
-    if !path.exists() {
-        return Ok(PluginConfig::default());
-    }
-    let raw = std::fs::read_to_string(path)?;
-    let parsed = raw
-        .parse::<toml::Table>()
-        .map(toml::Value::Table)
-        .map_err(|error| {
-            CliError::Config(format!(
-                "invalid plugin TOML in {}: {error}",
-                path.display()
-            ))
-        })?;
-    serde_json::from_value(
-        serde_json::to_value(parsed)
-            .map_err(|error| CliError::Config(format!("invalid plugin TOML shape: {error}")))?,
-    )
-    .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))
-}
-
-fn write_plugin_config(path: &Path, config: &PluginConfig) -> Result<(), CliError> {
-    let mut value = serde_json::to_value(config)
-        .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
-    prune_plugin_defaults(&mut value);
-    let toml_value: toml::Value = serde_json::from_value(value).map_err(|error| {
-        CliError::Config(format!("could not convert plugin config to TOML: {error}"))
-    })?;
-    let rendered = toml::to_string_pretty(&toml_value)
-        .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, rendered)?;
-    Ok(())
-}
-
-fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
-    println!();
-    println!(
-        "{} {}",
-        style("❯").green(),
-        style("plugins.toml preview").bold()
-    );
-    println!("{}", style("─".repeat(58)).black().bright());
-    let mut value = serde_json::to_value(config)
-        .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
-    prune_plugin_defaults(&mut value);
-    let toml_value: toml::Value = serde_json::from_value(value).map_err(|error| {
-        CliError::Config(format!("could not convert plugin config to TOML: {error}"))
-    })?;
-    let rendered = toml::to_string_pretty(&toml_value)
-        .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
-    print!("{rendered}");
-    println!("{}", style("─".repeat(58)).black().bright());
-    Ok(())
-}
-
-fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
-    let report = validate_plugin_config(config);
-    if report.has_errors() {
-        let messages = report
-            .diagnostics
-            .into_iter()
-            .filter(|diagnostic| diagnostic.level == nemo_flow::plugin::DiagnosticLevel::Error)
-            .map(|diagnostic| diagnostic.message)
-            .collect::<Vec<_>>()
-            .join("; ");
-        return Err(CliError::Config(format!(
-            "plugin validation failed: {messages}"
-        )));
-    }
-    Ok(())
-}
-
 fn edit_section(
     theme: &ColorfulTheme,
     config: &mut ObservabilityConfig,
@@ -463,28 +349,7 @@ fn edit_section(
         .ok_or_else(|| CliError::Config(format!("{} is not an editable section", section.name)))?
         .fields;
     loop {
-        let mut items = Vec::new();
-        if section_has_enabled_toggle(section) {
-            let enabled = section_enabled(config, section).unwrap_or(false);
-            items.push(MenuItem::new(format!(
-                "Toggle section [{}]",
-                status_label(enabled)
-            )));
-        }
-        for field in fields {
-            let configured = section_field_configured(config, section, *field)?;
-            items.push(MenuItem::new(format!(
-                "{} = {}",
-                configured_label(configured, field.name),
-                section_field_value(config, section, field.name)?
-                    .map(|value| display_field_value(section, *field, &value))
-                    .or_else(|| default_field_value(section, *field)
-                        .map(|value| format!("{} (default)", display_value(&value))))
-                    .unwrap_or_else(|| "(default)".to_string())
-            )));
-        }
-        items.push(MenuItem::new(shortcut_label("Reset section", "r")));
-        items.push(MenuItem::new(shortcut_label("Back", "q")));
+        let items = section_menu_items(config, section, fields)?;
         let selection = prompt_menu(theme, section.name, &items, 0)?;
         let selection = match selection {
             MenuResponse::Selected(selection) => selection,
@@ -493,14 +358,7 @@ fn edit_section(
                 continue;
             }
             MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
-                if reset_selected_field(config, section, fields, selected)? {
-                    continue;
-                }
-                let reset_section_index =
-                    usize::from(section_has_enabled_toggle(section)) + fields.len();
-                if selected == reset_section_index {
-                    reset_section(config, section);
-                }
+                reset_selected_item(config, section, fields, selected)?;
                 continue;
             }
             MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {
@@ -516,22 +374,97 @@ fn edit_section(
             }
             MenuResponse::Cancel => return Ok(()),
         };
-        let mut index = selection;
-        if section_has_enabled_toggle(section) {
-            if index == 0 {
-                toggle_section(config, section);
-                continue;
-            }
-            index -= 1;
-        }
-        if index < fields.len() {
-            edit_field(theme, config, section, &fields[index])?;
-        } else if index == fields.len() {
-            reset_section(config, section);
-        } else {
+        if !edit_selected_section_item(theme, config, section, fields, selection)? {
             return Ok(());
         }
     }
+}
+
+fn section_menu_items(
+    config: &ObservabilityConfig,
+    section: EditorFieldSpec,
+    fields: &[EditorFieldSpec],
+) -> Result<Vec<MenuItem>, CliError> {
+    let mut items = Vec::new();
+    if section_has_enabled_toggle(section) {
+        let enabled = section_enabled(config, section).unwrap_or(false);
+        items.push(MenuItem::new(format!(
+            "Toggle section [{}]",
+            status_label(enabled)
+        )));
+    }
+    for field in fields {
+        items.push(section_field_menu_item(config, section, *field)?);
+    }
+    items.push(MenuItem::new(shortcut_label("Reset section", "r")));
+    items.push(MenuItem::new(shortcut_label("Back", "q")));
+    Ok(items)
+}
+
+fn section_field_menu_item(
+    config: &ObservabilityConfig,
+    section: EditorFieldSpec,
+    field: EditorFieldSpec,
+) -> Result<MenuItem, CliError> {
+    let configured = section_field_configured(config, section, field)?;
+    let value = section_field_value(config, section, field.name)?
+        .map(|value| display_field_value(section, field, &value))
+        .or_else(|| {
+            default_field_value(section, field)
+                .map(|value| format!("{} (default)", display_value(&value)))
+        })
+        .unwrap_or_else(|| "(default)".to_string());
+    Ok(MenuItem::new(format!(
+        "{} = {}",
+        configured_label(configured, field.name),
+        value
+    )))
+}
+
+fn selected_field_index(section: EditorFieldSpec, selected: usize) -> usize {
+    selected - usize::from(section_has_enabled_toggle(section))
+}
+
+fn reset_section_index(section: EditorFieldSpec, fields: &[EditorFieldSpec]) -> usize {
+    usize::from(section_has_enabled_toggle(section)) + fields.len()
+}
+
+fn reset_selected_item(
+    config: &mut ObservabilityConfig,
+    section: EditorFieldSpec,
+    fields: &[EditorFieldSpec],
+    selected: usize,
+) -> Result<(), CliError> {
+    if reset_selected_field(config, section, fields, selected)? {
+        return Ok(());
+    }
+    if selected == reset_section_index(section, fields) {
+        reset_section(config, section);
+    }
+    Ok(())
+}
+
+fn edit_selected_section_item(
+    theme: &ColorfulTheme,
+    config: &mut ObservabilityConfig,
+    section: EditorFieldSpec,
+    fields: &[EditorFieldSpec],
+    selection: usize,
+) -> Result<bool, CliError> {
+    if section_has_enabled_toggle(section) && selection == 0 {
+        toggle_section(config, section);
+        return Ok(true);
+    }
+    let index = selected_field_index(section, selection);
+    if let Some(field) = fields.get(index) {
+        edit_field(theme, config, section, field)?;
+        return Ok(true);
+    }
+    if index == fields.len() {
+        reset_section(config, section);
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn edit_field(
@@ -658,397 +591,6 @@ fn prompt_value(
             field.name
         ))),
     }
-}
-
-fn ensure_observability_component(config: &mut PluginConfig) -> Result<(), CliError> {
-    if !config
-        .components
-        .iter()
-        .any(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
-    {
-        config.components.push(PluginComponentSpec {
-            kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
-            enabled: true,
-            config: observability_config_map(&ObservabilityConfig::default())?,
-        });
-    }
-    Ok(())
-}
-
-fn component_enabled(config: &PluginConfig) -> bool {
-    observability_component(config)
-        .map(|component| component.enabled)
-        .unwrap_or(true)
-}
-
-fn set_component_enabled(config: &mut PluginConfig, enabled: bool) {
-    if let Some(component) = observability_component_mut(config) {
-        component.enabled = enabled;
-    }
-}
-
-fn component_observability_config(config: &PluginConfig) -> Result<ObservabilityConfig, CliError> {
-    observability_component(config)
-        .map(|component| serde_json::from_value(Value::Object(component.config.clone())))
-        .transpose()
-        .map_err(|error| CliError::Config(format!("invalid observability plugin config: {error}")))?
-        .ok_or_else(|| CliError::Config("observability plugin component is missing".into()))
-}
-
-fn config_with_observability(
-    config: &PluginConfig,
-    observability: &ObservabilityConfig,
-) -> Result<PluginConfig, CliError> {
-    let mut config = config.clone();
-    store_observability_config(&mut config, observability)?;
-    Ok(config)
-}
-
-fn store_observability_config(
-    config: &mut PluginConfig,
-    observability: &ObservabilityConfig,
-) -> Result<(), CliError> {
-    if let Some(component) = observability_component_mut(config) {
-        merge_observability_editor_config(
-            &mut component.config,
-            observability_config_map(observability)?,
-        );
-    }
-    Ok(())
-}
-
-fn ensure_section(config: &mut ObservabilityConfig, section: EditorFieldSpec) {
-    if let Ok(Some(Value::Object(_))) = section_value(config, section) {
-        return;
-    }
-    let Some(default) = section.default_value() else {
-        return;
-    };
-    let _ = set_struct_field(config, section.name, default);
-}
-
-fn toggle_section(config: &mut ObservabilityConfig, section: EditorFieldSpec) {
-    ensure_section(config, section);
-    let enabled = section_enabled(config, section).unwrap_or(false);
-    let _ = set_section_field(config, section, "enabled", json!(!enabled));
-}
-
-fn reset_section(config: &mut ObservabilityConfig, section: EditorFieldSpec) {
-    let value = section.default_value().unwrap_or_else(|| json!({}));
-    let _ = set_struct_field(config, section.name, value);
-}
-
-fn reset_selected_field(
-    config: &mut ObservabilityConfig,
-    section: EditorFieldSpec,
-    fields: &[EditorFieldSpec],
-    selected: usize,
-) -> Result<bool, CliError> {
-    let offset = usize::from(section_has_enabled_toggle(section));
-    let Some(index) = selected.checked_sub(offset) else {
-        return Ok(false);
-    };
-    let Some(field) = fields.get(index) else {
-        return Ok(false);
-    };
-    remove_section_field(config, section, field.name)?;
-    Ok(true)
-}
-
-fn section_has_enabled_toggle(section: EditorFieldSpec) -> bool {
-    section.name != POLICY_SECTION
-        && section
-            .schema()
-            .and_then(|schema| schema.field("enabled"))
-            .is_some_and(|field| field.kind == EditorFieldKind::Boolean)
-}
-
-fn section_enabled(config: &ObservabilityConfig, section: EditorFieldSpec) -> Option<bool> {
-    section_value(config, section)
-        .ok()
-        .flatten()
-        .and_then(|section| section.get("enabled").cloned())
-        .and_then(|enabled| enabled.as_bool())
-}
-
-fn section_configured(config: &ObservabilityConfig, section: EditorFieldSpec) -> bool {
-    let Ok(Some(value)) = section_value(config, section) else {
-        return false;
-    };
-    if section.optional {
-        return true;
-    }
-    section
-        .default_value()
-        .as_ref()
-        .is_none_or(|default| default != &value)
-}
-
-fn section_field_configured(
-    config: &ObservabilityConfig,
-    section: EditorFieldSpec,
-    field: EditorFieldSpec,
-) -> Result<bool, CliError> {
-    let Some(value) = section_field_value(config, section, field.name)? else {
-        return Ok(false);
-    };
-    if field.optional {
-        return Ok(true);
-    }
-    Ok(default_field_value(section, field)
-        .as_ref()
-        .is_none_or(|default| default != &value))
-}
-
-fn section_field_value(
-    config: &ObservabilityConfig,
-    section: EditorFieldSpec,
-    field: &str,
-) -> Result<Option<Value>, CliError> {
-    Ok(section_value(config, section)?
-        .and_then(|section| section.as_object().cloned())
-        .and_then(|section| section.get(field).cloned()))
-}
-
-fn section_value(
-    config: &ObservabilityConfig,
-    section: EditorFieldSpec,
-) -> Result<Option<Value>, CliError> {
-    let value = serde_json::to_value(config).map_err(serde_error)?;
-    Ok(value
-        .as_object()
-        .and_then(|config| config.get(section.name))
-        .filter(|section| !section.is_null())
-        .cloned())
-}
-
-fn set_section_field(
-    config: &mut ObservabilityConfig,
-    section: EditorFieldSpec,
-    field: &str,
-    value: Value,
-) -> Result<(), CliError> {
-    ensure_section(config, section);
-    let mut object = serde_json::to_value(&*config).map_err(serde_error)?;
-    let config_object = ensure_object(&mut object);
-    let section_object = config_object
-        .entry(section.name)
-        .or_insert_with(|| section.default_value().unwrap_or_else(|| json!({})));
-    ensure_object(section_object).insert(field.to_string(), value);
-    *config = serde_json::from_value(object).map_err(serde_error)?;
-    Ok(())
-}
-
-fn remove_section_field(
-    config: &mut ObservabilityConfig,
-    section: EditorFieldSpec,
-    field: &str,
-) -> Result<(), CliError> {
-    let mut object = serde_json::to_value(&*config).map_err(serde_error)?;
-    if let Some(section_object) = object
-        .as_object_mut()
-        .and_then(|config| config.get_mut(section.name))
-        .and_then(Value::as_object_mut)
-    {
-        section_object.remove(field);
-    }
-    *config = serde_json::from_value(object).map_err(serde_error)?;
-    Ok(())
-}
-
-fn set_struct_field<T>(target: &mut T, field: &str, value: Value) -> Result<(), CliError>
-where
-    T: Serialize + DeserializeOwned,
-{
-    let mut object = serde_json::to_value(&*target).map_err(serde_error)?;
-    ensure_object(&mut object).insert(field.to_string(), value);
-    *target = serde_json::from_value(object).map_err(serde_error)?;
-    Ok(())
-}
-
-fn observability_component(config: &PluginConfig) -> Option<&PluginComponentSpec> {
-    config
-        .components
-        .iter()
-        .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
-}
-
-fn observability_component_mut(config: &mut PluginConfig) -> Option<&mut PluginComponentSpec> {
-    config
-        .components
-        .iter_mut()
-        .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
-}
-
-fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
-    if !value.is_object() {
-        *value = json!({});
-    }
-    value.as_object_mut().expect("value initialized as object")
-}
-
-fn observability_config_map(config: &ObservabilityConfig) -> Result<Map<String, Value>, CliError> {
-    let value = serde_json::to_value(config).map_err(serde_error)?;
-    match value {
-        Value::Object(map) => Ok(map),
-        _ => Err(CliError::Config(
-            "observability config must serialize to an object".into(),
-        )),
-    }
-}
-
-fn merge_observability_editor_config(
-    existing: &mut Map<String, Value>,
-    edited: Map<String, Value>,
-) {
-    merge_known_editor_object(
-        existing,
-        edited,
-        &observability_editor_fields_with_version(),
-        ObservabilityConfig::editor_schema(),
-    );
-}
-
-fn merge_known_editor_object(
-    existing: &mut Map<String, Value>,
-    edited: Map<String, Value>,
-    known_keys: &[&str],
-    schema: &nemo_flow::config_editor::EditorSchema,
-) {
-    for key in known_keys {
-        let Some(edited_value) = edited.get(*key) else {
-            existing.remove(*key);
-            continue;
-        };
-        if let Some(field) = schema.field(key)
-            && field.kind == EditorFieldKind::Section
-            && let Some(nested_schema) = field.schema()
-            && let (Some(existing_object), Some(edited_object)) = (
-                existing.get_mut(*key).and_then(Value::as_object_mut),
-                edited_value.as_object(),
-            )
-        {
-            merge_known_editor_object(
-                existing_object,
-                edited_object.clone(),
-                &nested_editor_keys(nested_schema),
-                nested_schema,
-            );
-            continue;
-        }
-        existing.insert((*key).to_string(), edited_value.clone());
-    }
-}
-
-fn observability_editor_fields_with_version() -> Vec<&'static str> {
-    let mut keys = vec!["version"];
-    keys.extend(
-        ObservabilityConfig::editor_schema()
-            .fields
-            .iter()
-            .map(|field| field.name),
-    );
-    keys
-}
-
-fn nested_editor_keys(schema: &nemo_flow::config_editor::EditorSchema) -> Vec<&'static str> {
-    schema.fields.iter().map(|field| field.name).collect()
-}
-
-fn prune_plugin_defaults(value: &mut Value) {
-    let Some(object) = value.as_object_mut() else {
-        return;
-    };
-    remove_default_field(
-        object,
-        "policy",
-        serde_json::to_value(ConfigPolicy::default()).expect("policy default serializes"),
-    );
-    if let Some(components) = object.get_mut("components").and_then(Value::as_array_mut) {
-        for component in components {
-            if let Some(component) = component.as_object_mut()
-                && component.get("enabled") == Some(&Value::Bool(true))
-            {
-                component.remove("enabled");
-            }
-        }
-    }
-}
-
-fn remove_default_field(object: &mut Map<String, Value>, key: &str, default: Value) {
-    let Some(value) = object.get_mut(key) else {
-        return;
-    };
-    remove_matching_defaults(value, &default);
-    if value == &default || value.as_object().is_some_and(|value| value.is_empty()) {
-        object.remove(key);
-    }
-}
-
-fn remove_matching_defaults(value: &mut Value, default: &Value) {
-    let (Some(value), Some(default)) = (value.as_object_mut(), default.as_object()) else {
-        return;
-    };
-    let default_keys = default.keys().cloned().collect::<Vec<_>>();
-    for key in default_keys {
-        if value.get(&key) == default.get(&key) {
-            value.remove(&key);
-        }
-    }
-}
-
-fn serde_error(error: serde_json::Error) -> CliError {
-    CliError::Config(format!("invalid plugin editor value: {error}"))
-}
-
-fn display_field_value(section: EditorFieldSpec, field: EditorFieldSpec, value: &Value) -> String {
-    if default_field_value(section, field)
-        .as_ref()
-        .is_some_and(|default| default == value)
-    {
-        format!("{} (default)", display_value(value))
-    } else {
-        display_value(value)
-    }
-}
-
-fn default_field_value(section: EditorFieldSpec, field: EditorFieldSpec) -> Option<Value> {
-    section
-        .default_value()
-        .and_then(|section| section.as_object().cloned())
-        .and_then(|section| section.get(field.name).cloned())
-}
-
-fn display_value(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        _ => serde_json::to_string(value).unwrap_or_else(|_| "<invalid>".to_string()),
-    }
-}
-
-fn observability_summary(config: &PluginConfig, observability: &ObservabilityConfig) -> String {
-    let enabled_sections = ObservabilityConfig::editor_schema()
-        .fields
-        .iter()
-        .filter(|section| section.name != POLICY_SECTION)
-        .filter(|section| section_enabled(observability, **section).unwrap_or(false))
-        .map(|section| section.label)
-        .collect::<Vec<_>>();
-    format!(
-        "component {}, sections {}",
-        if component_enabled(config) {
-            "enabled"
-        } else {
-            "disabled"
-        },
-        if enabled_sections.is_empty() {
-            "none".into()
-        } else {
-            enabled_sections.join(", ")
-        }
-    )
 }
 
 fn editor_error(err: dialoguer::Error) -> CliError {

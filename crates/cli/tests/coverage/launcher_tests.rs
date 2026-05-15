@@ -455,6 +455,9 @@ fn cursor_patch_restore_restores_original_file() {
             .unwrap()
             .contains("hook-forward cursor")
     );
+    let patched: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(".cursor/hooks.json").unwrap()).unwrap();
+    assert_eq!(patched["version"], json!(1));
     prepared.restore().unwrap();
     assert_eq!(
         std::fs::read_to_string(".cursor/hooks.json").unwrap(),
@@ -495,6 +498,11 @@ fn cursor_patch_restore_uses_nearest_project_cursor_dir() {
             .unwrap()
             .contains("hook-forward cursor")
     );
+    let patched: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(temp.path().join(".cursor/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(patched["version"], json!(1));
     assert!(!Path::new(".cursor/hooks.json").exists());
     prepared.restore().unwrap();
     std::env::set_current_dir(previous).unwrap();
@@ -520,6 +528,9 @@ fn cursor_patch_restore_removes_temporary_file() {
     )
     .unwrap();
     assert!(Path::new(".cursor/hooks.json").exists());
+    let patched: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(".cursor/hooks.json").unwrap()).unwrap();
+    assert_eq!(patched["version"], json!(1));
     prepared.restore().unwrap();
     assert!(!Path::new(".cursor/hooks.json").exists());
     std::env::set_current_dir(previous).unwrap();
@@ -619,6 +630,8 @@ fn cursor_dry_run_does_not_write_hooks() {
 #[tokio::test]
 async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
     let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "[upstream]\n").unwrap();
     let output = temp.path().join("env.txt");
     let command_argv = fake_agent_command(temp.path(), &output);
     let command = RunCommand {
@@ -627,7 +640,7 @@ async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
         // command as pass-through after the configured/default binary — not what this test
         // wants, since it specifically asserts that argv[0] is the fake script.
         agent: None,
-        config: None,
+        config: Some(config),
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,

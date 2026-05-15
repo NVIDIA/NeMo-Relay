@@ -82,11 +82,20 @@ const packInfo = JSON.parse(pack.stdout)[0];
 assert(packInfo, "npm pack did not return package metadata");
 
 const productionSources = walkFiles("src").filter(
-  (file) => file.endsWith(".ts") && !file.includes("/__tests__/") && !file.endsWith(".test.ts"),
+  (file) => file.endsWith(".ts") && !file.endsWith(".test.ts"),
 );
 const packedFiles = new Set(packInfo.files.map((file) => normalizePackagePath(file.path)));
 const packageJson = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
 const declaredFiles = new Set(packageJson.files ?? []);
+
+assert(
+  packageJson.repository?.url === "https://github.com/NVIDIA/NeMo-Flow",
+  'package repository.url must match the GitHub Actions provenance source repository',
+);
+assert(
+  packageJson.repository?.directory === "integrations/openclaw",
+  "package repository.directory must identify the OpenClaw workspace",
+);
 
 for (const entry of declaredFiles) {
   assert(
@@ -129,7 +138,7 @@ assert(packageJson.openclaw?.build?.openclawVersion, "openclaw.build.openclawVer
 assert(packageJson.openclaw?.build?.pluginSdkVersion, "openclaw.build.pluginSdkVersion is required");
 
 for (const file of packedFiles) {
-  assert(!file.includes("__tests__"), `packed package includes test artifact ${file}`);
+  assert(!file.startsWith("test/"), `packed package includes test artifact ${file}`);
   assert(!file.startsWith(".test-dist/"), `packed package includes test output ${file}`);
   assert(!file.endsWith(".map"), `packed package includes source/declaration map ${file}`);
 }

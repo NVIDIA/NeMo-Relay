@@ -15,11 +15,13 @@ from langchain_core.messages import (
     messages_from_dict,
     messages_to_dict,
 )
+from langgraph.types import Command, Send
 
 from nemo_flow.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
+
 
 # In order to infer codec support from LangChain chat model types, we need to import them here.
 # However these may not be installed in the user's environment.
@@ -176,16 +178,34 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
     raise TypeError(f"NeMo Flow model execution returned {type(decoded)!r}, expected ModelResponse")
 
 
-def _prepare_outputs(outputs: dict[str, Any] | list[Any] | ToolMessage | BaseMessage) -> dict[str, Any] | list[Any]:
+def _prepare_outputs(outputs: Any) -> Any:
     """Prepare a NeMo Flow scope output dict for returning to LangChain."""
     if isinstance(outputs, dict):
         prepared_outputs = {}
         for key, value in outputs.items():
             prepared_outputs[key] = _prepare_outputs(value)
-    elif isinstance(outputs, list):
+    elif isinstance(outputs, list | tuple):
         prepared_outputs = []
         for value in outputs:
             prepared_outputs.append(_prepare_outputs(value))
+    elif isinstance(outputs, Command):
+        prepared_outputs = {
+            "type": "command",
+            "command": {
+                "graph": _prepare_outputs(outputs.graph),
+                "update": _prepare_outputs(outputs.update),
+                "resume": _prepare_outputs(outputs.resume),
+                "goto": _prepare_outputs(outputs.goto),
+            },
+        }
+    elif isinstance(outputs, Send):
+        prepared_outputs = {
+            "type": "send",
+            "send": {
+                "node": outputs.node,
+                "arg": _prepare_outputs(outputs.arg),
+            },
+        }
     elif isinstance(outputs, ToolMessage):
         prepared_outputs = {
             "type": "tool_message",

@@ -18,6 +18,8 @@ const (
 	FirstAgentName                 = "go-first-agent"
 	NestedAgentName                = "go-nested-agent"
 	SecondAgentName                = "go-second-agent"
+	fatalErrorFormat               = "%s: %v"
+	failedSuffix                   = " failed"
 )
 
 func TestObservabilityConfigHelpers(t *testing.T) {
@@ -50,7 +52,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 
 func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
 	}
 	t.Cleanup(func() {
 		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
@@ -80,7 +82,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
 	}
 	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf("%s: %v", InitializePluginsFailed, err)
+		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
 	}
 
 	handle, err := PushScope("go-observability-agent", ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":true}`)))
@@ -94,7 +96,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		t.Fatalf("PopScope failed: %v", err)
 	}
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
 	}
 
 	jsonl := string(mustReadFile(t, filepath.Join(dir, eventsJSONLFilename)))
@@ -183,7 +185,7 @@ func TestObservabilityPluginListKindIsAutomatic(t *testing.T) {
 
 func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
 	}
 	t.Cleanup(func() {
 		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
@@ -195,14 +197,14 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	atif.OutputDirectory = dir
 	config.Atif = &atif
 	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf("%s: %v", InitializePluginsFailed, err)
+		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
 	}
 	handle, err := PushScope("go-open-agent", ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf("PushScope failed: %v", err)
 	}
 	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf("%s: %v", ClearPluginConfigurationFailed, err)
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
 	}
 	path := filepath.Join(dir, "nemo-flow-atif-"+handle.UUID()+".json")
 	if _, err := os.Stat(path); err != nil {
@@ -241,14 +243,14 @@ func EmitAgentTrajectory(t *testing.T, Label string, Name string) *ScopeHandle {
 func EmitAgentStart(t *testing.T, Label string, Name string) *ScopeHandle {
 	t.Helper()
 	Handle, Err := PushScope(Name, ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":"`+Label+`"}`)))
-	requireNoError(t, Err, "PushScope "+Label+" failed")
-	requireNoError(t, EmitEvent("go-"+Label+"-mark", WithEventParent(Handle), WithEventData(json.RawMessage(`{"agent":"`+Label+`"}`))), "EmitEvent "+Label+" failed")
+	requireNoError(t, Err, "PushScope "+Label+failedSuffix)
+	requireNoError(t, EmitEvent("go-"+Label+"-mark", WithEventParent(Handle), WithEventData(json.RawMessage(`{"agent":"`+Label+`"}`))), "EmitEvent "+Label+failedSuffix)
 	return Handle
 }
 
 func EmitAgentEnd(t *testing.T, Label string, Handle *ScopeHandle) {
 	t.Helper()
-	requireNoError(t, PopScope(Handle, WithOutput(json.RawMessage(`{"done":true}`))), "PopScope "+Label+" failed")
+	requireNoError(t, PopScope(Handle, WithOutput(json.RawMessage(`{"done":true}`))), "PopScope "+Label+failedSuffix)
 }
 
 func TrajectoryFilePath(Dir string, Handle *ScopeHandle) string {

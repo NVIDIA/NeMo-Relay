@@ -30,6 +30,11 @@ const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
+fn test_http_client() -> reqwest::Client {
+    crate::tls::install_rustls_crypto_provider();
+    reqwest::Client::new()
+}
+
 struct GenericTestPlugin;
 
 impl Plugin for GenericTestPlugin {
@@ -180,7 +185,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     wait_for_gateway(&url).await;
     assert!(nemo_flow::plugin::active_plugin_report().is_some());
 
-    let client = reqwest::Client::new();
+    let client = test_http_client();
     for hook_event_name in ["on_session_start", "on_session_finalize"] {
         let response = client
             .post(format!("{url}/hooks/hermes"))
@@ -253,7 +258,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    let client = reqwest::Client::new();
+    let client = test_http_client();
     for (path, session_id, start_event, end_event) in [
         (
             "/hooks/codex",
@@ -332,7 +337,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
     wait_for_gateway(&url).await;
     assert_eq!(GENERIC_TEST_PLUGIN_REGISTRATIONS.load(Ordering::SeqCst), 1);
 
-    let response = reqwest::Client::new()
+    let response = test_http_client()
         .post(format!("{url}/hooks/codex"))
         .json(&json!({
             "session_id": "generic-plugin-session",
@@ -459,6 +464,8 @@ async fn cursor_hook_returns_cursor_permission_fields() {
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["continue"], json!(true));
     assert_eq!(body["permission"], json!("allow"));
+    assert!(body.get("user_message").is_none());
+    assert!(body.get("agent_message").is_none());
 }
 
 #[tokio::test]
@@ -693,8 +700,41 @@ async fn models_route_forwards_get_requests() {
     assert_eq!(body["authorization"], json!("Bearer test"));
 }
 
+#[tokio::test]
+async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
+    let upstream = spawn_anthropic_upstream().await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages/count_tokens")
+                .header("content-type", "application/json")
+                .header("x-api-key", "sk-ant-test")
+                .body(Body::from(
+                    json!({
+                        "model": "claude-test",
+                        "messages": [{ "role": "user", "content": "hello" }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/messages/count_tokens"));
+    assert_eq!(body["x_api_key"], json!("sk-ant-test"));
+    assert_eq!(body["input_tokens"], json!(12));
+}
+
 async fn wait_for_gateway(url: &str) {
-    let client = reqwest::Client::new();
+    let client = test_http_client();
     for _ in 0..50 {
         if let Ok(response) = client.get(format!("{url}/healthz")).send().await
             && response.status().is_success()
@@ -795,6 +835,29 @@ async fn spawn_models_upstream() -> TestServer {
     }
 
     let app = Router::new().route("/v1/models", get(models));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    TestServer {
+        url: format!("http://{address}"),
+        handle,
+    }
+}
+
+async fn spawn_anthropic_upstream() -> TestServer {
+    async fn count_tokens(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+        Json(json!({
+            "path": request.uri().path(),
+            "x_api_key": headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            "input_tokens": 12
+        }))
+    }
+
+    let app = Router::new().route("/v1/messages/count_tokens", post(count_tokens));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {

@@ -15,9 +15,21 @@ and response lifecycle events through `.cursor/hooks.json`. Complete LLM
 lifecycle observability additionally requires Cursor model traffic to route
 through the gateway if your Cursor build exposes that configuration.
 
-Cursor CLI support must be verified separately with `cursor-agent`. If CLI hooks
-do not fire, treat Cursor CLI support as hook-limited and gateway-only where
-model routing is configurable.
+Cursor CLI support must be verified separately with `cursor-agent`. Current
+Cursor CLI builds require `.cursor/hooks.json` to set top-level `"version": 1`
+and use direct command entries such as
+`{"command": "nemo-flow hook-forward cursor", "timeout": 30}`. The nested
+`{"matcher": "*", "hooks": [...]}` group shape used by Claude Code and Codex
+does not fire in Cursor CLI. If CLI hooks still do not fire with direct
+versioned entries, treat that Cursor CLI version as hook-limited and
+gateway-only where model routing is configurable.
+
+```{warning}
+Cursor CLI hook coverage is not the same as Cursor IDE hook coverage. Current
+headless CLI builds can emit fewer hook events than Cursor IDE sessions. Treat
+missing CLI hook events as a Cursor CLI limitation after `nemo-flow doctor
+cursor` confirms the hook file uses the direct versioned shape.
+```
 
 ## Transparent Run
 
@@ -36,7 +48,8 @@ nemo-flow cursor -- agent --resume <session-id>
 This shortcut is equivalent to `nemo-flow run -- cursor-agent`. The wrapper
 starts a gateway on a dynamic `127.0.0.1` port, temporarily merges NeMo Flow
 hook entries into the project `.cursor/hooks.json`, launches Cursor, and
-restores the original hook file after the agent exits.
+restores the original hook file after the agent exits. The temporary Cursor hook
+file is written with top-level `"version": 1` and direct command entries.
 
 Inspect what would be launched without starting Cursor:
 
@@ -118,9 +131,10 @@ printf '{"session_id":"smoke-cursor","hook_event_name":"sessionStart"}' \
 ```
 
 For Cursor CLI, run an equivalent `cursor-agent` session and verify the gateway
-receives hook requests. If no hook requests arrive, document that CLI version as
-hook-limited and rely only on gateway observability where provider routing is
-available.
+receives hook requests. If no hook requests arrive, confirm `.cursor/hooks.json`
+uses top-level `"version": 1` with direct command entries, then document that
+CLI version as hook-limited and rely only on gateway observability where
+provider routing is available.
 
 ## Verify Export
 
@@ -132,8 +146,9 @@ ls .nemo-flow/atif
 
 The gateway writes `<session-id>.atif.json` on session end. If the file is
 missing, confirm Cursor loaded `.cursor/hooks.json`, the gateway binary is on
-`PATH`, and `plugins.toml` enables the ATIF exporter with a writable
-`output_directory`.
+`PATH`, `--atif-dir` or `NEMO_FLOW_ATIF_DIR` is configured, `plugins.toml`
+enables the ATIF exporter with a writable `output_directory`, and user-managed
+Cursor hooks pass `nemo-flow doctor cursor`.
 
 ## Troubleshoot LLM Lifecycle
 

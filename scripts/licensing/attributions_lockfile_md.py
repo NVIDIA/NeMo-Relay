@@ -5,13 +5,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
+import hmac
 import io
 import json
 import re
 import subprocess
 import sys
 import tarfile
+import tomllib
 import urllib.request
 import zipfile
 from email.parser import Parser
@@ -28,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NODE = ROOT
 MARKDOWN_CODE_FENCE = "```\n"
 MARKDOWN_CODE_BLOCK_END = "```\n\n"
+_NODE_TARBALL_LICENSE_CACHE: dict[tuple[str, str], str | None] = {}
 
 
 class RenderedPythonPackage(TypedDict):
@@ -45,6 +50,18 @@ class LicenseInventoryEntry(TypedDict):
     package: str
     version: str
     license: str
+
+
+class NodeAttributionPackage(TypedDict):
+    """Normalized Node.js package data ready to be rendered into markdown."""
+
+    name: str
+    version: str
+    license_name: str
+    key: str
+    resolved: str
+    integrity: str
+    platform_gated: bool
 
 
 RUST_HEADER = (
@@ -239,8 +256,40 @@ def _cargo_workspace_members() -> set[str]:
     return {str(member) for member in metadata.get("workspace_members", [])}
 
 
+def _cargo_fetch_locked() -> None:
+    """Ensure locked registry crate sources are available for fallback license file reads."""
+    subprocess.run(  # noqa: S607
+        ["cargo", "fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml")],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=True,
+    )
+
+
+def _cargo_metadata() -> dict[str, Any]:
+    """Return full Cargo metadata for the all-features workspace graph."""
+    _cargo_fetch_locked()
+    proc = subprocess.run(  # noqa: S607
+        [
+            "cargo",
+            "metadata",
+            "--format-version=1",
+            "--all-features",
+            "--manifest-path",
+            str(ROOT / "Cargo.toml"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return cast(dict[str, Any], json.loads(proc.stdout))
+
+
 def _cargo_about_json() -> dict[str, Any]:
     """Generate cargo-about JSON for the workspace dependency graph."""
+    _cargo_fetch_locked()
     proc = subprocess.run(  # noqa: S607
         [
             "cargo",
@@ -260,6 +309,119 @@ def _cargo_about_json() -> dict[str, Any]:
         check=True,
     )
     return cast(dict[str, Any], json.loads(proc.stdout))
+
+
+def _rust_package_key(name: str, version: str) -> tuple[str, str]:
+    """Return the stable key used to reconcile Cargo.lock, metadata, and cargo-about rows."""
+    return name, version
+
+
+def _cargo_lock_registry_package_keys() -> set[tuple[str, str]]:
+    """Return third-party package keys from Cargo.lock."""
+    with open(ROOT / "Cargo.lock", "rb") as f:
+        lock: dict[str, Any] = tomllib.load(f)
+
+    keys: set[tuple[str, str]] = set()
+    for pkg in cast(list[dict[str, Any]], lock.get("package", [])):
+        name = str(pkg.get("name") or "")
+        version = str(pkg.get("version") or "")
+        source = str(pkg.get("source") or "")
+        if name and version and source:
+            keys.add(_rust_package_key(name, version))
+    return keys
+
+
+def _cargo_metadata_packages_by_key() -> dict[tuple[str, str], dict[str, Any]]:
+    """Return Cargo metadata package records keyed by package name and version."""
+    metadata = _cargo_metadata()
+    packages: dict[tuple[str, str], dict[str, Any]] = {}
+    for pkg in cast(list[dict[str, Any]], metadata.get("packages", [])):
+        name = str(pkg.get("name") or "")
+        version = str(pkg.get("version") or "")
+        source = str(pkg.get("source") or "")
+        if name and version and source:
+            packages.setdefault(_rust_package_key(name, version), pkg)
+    return packages
+
+
+def _rust_license_files(crate: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return root license files from a downloaded Cargo package."""
+    manifest_path = str(crate.get("manifest_path") or "")
+    if not manifest_path:
+        return []
+    package_dir = Path(manifest_path).parent
+    candidates: list[Path] = []
+
+    license_file = str(crate.get("license_file") or "")
+    if license_file:
+        p = Path(license_file)
+        candidates.append(p if p.is_absolute() else package_dir / p)
+
+    if package_dir.is_dir():
+        for child in package_dir.iterdir():
+            name = child.name.lower()
+            if child.is_file() and (name.startswith(("license", "licence")) or name.startswith("copying")):
+                candidates.append(child)
+
+    seen: set[Path] = set()
+    texts: list[tuple[str, str]] = []
+    for path in sorted(candidates, key=lambda item: item.name.lower()):
+        resolved = path.resolve()
+        if resolved in seen or not path.is_file():
+            continue
+        seen.add(resolved)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        label = path.name if path.parent == package_dir else str(path)
+        if _is_useful_license_text(text):
+            texts.append((label, text))
+    return texts
+
+
+def _render_rust_metadata_fallback_attribution(crate: dict[str, Any]) -> tuple[str, str, str]:
+    """Render one Rust Cargo.lock package omitted by cargo-about."""
+    name = str(crate.get("name") or "unknown")
+    version = str(crate.get("version") or "")
+    repo = str(crate.get("repository") or "").strip()
+    if not repo:
+        repo = f"https://crates.io/crates/{name}"
+    license_name = _normalize_license_name(str(crate.get("license") or "UNKNOWN"))
+
+    parts = [
+        f"## {name} - {version}\n",
+        f"**Repository URL**: {repo}\n",
+        f"**License Type(s)**: {license_name}\n",
+        f"### License: {spdx_url(license_name, fallback='https://spdx.org/licenses/')}\n",
+    ]
+    license_files = _rust_license_files(crate)
+    if license_files:
+        for label, text in license_files:
+            parts.append(f"### License File: {label}\n")
+            parts.append(MARKDOWN_CODE_FENCE)
+            parts.append(text if text.endswith("\n") else text + "\n")
+            parts.append(MARKDOWN_CODE_BLOCK_END)
+    else:
+        parts.append(MARKDOWN_CODE_FENCE)
+        parts.append(f"License expression from Cargo metadata: {license_name}\n")
+        parts.append("No package license file was found in the downloaded crate archive.\n")
+        parts.append(MARKDOWN_CODE_BLOCK_END)
+
+    return name, version, "".join(parts)
+
+
+def _rust_missing_cargo_about_packages(rendered_keys: set[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Return Cargo.lock packages that cargo-about did not render."""
+    lock_keys = _cargo_lock_registry_package_keys()
+    metadata_by_key = _cargo_metadata_packages_by_key()
+    missing: list[dict[str, Any]] = []
+    for key in sorted(lock_keys - rendered_keys, key=lambda item: (item[0].lower(), item[1])):
+        pkg = metadata_by_key.get(key)
+        if pkg is None:
+            raise RuntimeError(f"Cargo.lock package {key[0]} {key[1]} is missing from cargo metadata")
+        missing.append(pkg)
+    return missing
 
 
 def _render_rust_crate_attribution(
@@ -291,9 +453,10 @@ def _render_rust_crate_attribution(
 
 
 def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str]) -> str:
-    """Render cargo-about output while omitting local workspace crates."""
+    """Render Rust attributions for every non-workspace package in Cargo.lock."""
     parts: list[str] = [RUST_HEADER]
     rendered_crates: list[tuple[str, str, str]] = []
+    rendered_keys: set[tuple[str, str]] = set()
     for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
         license_id = str(license_group.get("id") or "UNKNOWN")
         license_text = str(license_group.get("text") or "")
@@ -305,7 +468,13 @@ def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str])
                 workspace_members=workspace_members,
             )
             if rendered:
+                rendered_keys.add(_rust_package_key(rendered[0], rendered[1]))
                 rendered_crates.append(rendered)
+
+    for crate in _rust_missing_cargo_about_packages(rendered_keys):
+        rendered = _render_rust_metadata_fallback_attribution(crate)
+        rendered_keys.add(_rust_package_key(rendered[0], rendered[1]))
+        rendered_crates.append(rendered)
 
     for _, _, rendered in sorted(rendered_crates, key=lambda row: (row[0].lower(), row[1])):
         parts.append(rendered)
@@ -324,7 +493,7 @@ def _rendered_python_package_inventory(pkg: RenderedPythonPackage) -> LicenseInv
 
 
 def _rust_license_inventory(data: dict[str, Any], workspace_members: set[str]) -> list[LicenseInventoryEntry]:
-    """Return minimal Rust dependency license rows while omitting local workspace crates."""
+    """Return Rust license rows for every non-workspace package in Cargo.lock."""
     rows: dict[tuple[str, str], set[str]] = {}
     for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
         license_id = str(license_group.get("id") or "UNKNOWN")
@@ -334,7 +503,13 @@ def _rust_license_inventory(data: dict[str, Any], workspace_members: set[str]) -
                 continue
             name = str(crate.get("name") or "unknown")
             version = str(crate.get("version") or "")
-            rows.setdefault((name, version), set()).add(license_id)
+            rows.setdefault(_rust_package_key(name, version), set()).add(license_id)
+
+    for crate in _rust_missing_cargo_about_packages(set(rows)):
+        name = str(crate.get("name") or "unknown")
+        version = str(crate.get("version") or "")
+        license_name = _normalize_license_name(str(crate.get("license") or "UNKNOWN"))
+        rows.setdefault(_rust_package_key(name, version), set()).add(license_name)
 
     return [
         _license_inventory_entry(name, version, " OR ".join(sorted(licenses)))
@@ -796,6 +971,112 @@ def _node_license_checker_data() -> tuple[dict[str, dict[str, str]], set[str]]:
     return data, workspace_package_keys
 
 
+def _node_attribution_packages(lock: dict[str, Any], workspace_package_keys: set[str]) -> list[NodeAttributionPackage]:
+    """Return all third-party Node.js packages from package-lock.json.
+
+    `license-checker` only sees packages installed for the current platform. The
+    lockfile is the source of truth for attribution so platform-gated optional
+    packages stay present on every machine that regenerates this file.
+    """
+    packages = lock.get("packages") or {}
+    if not isinstance(packages, dict):
+        return []
+
+    rows: dict[str, NodeAttributionPackage] = {}
+    for path, meta in packages.items():
+        normalized_path = str(path).replace("\\", "/")
+        if "node_modules" not in normalized_path.split("/"):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("extraneous"):
+            continue
+        version = str(meta.get("version") or "").strip()
+        if not version:
+            continue
+        name = str(meta.get("name") or _node_package_name_from_lock_path(normalized_path)).strip()
+        if not name:
+            continue
+        key = f"{name}@{version}"
+        if key in workspace_package_keys:
+            continue
+        license_name = str(meta.get("license") or "UNKNOWN")
+        rows[key] = {
+            "name": name,
+            "version": version,
+            "license_name": license_name,
+            "key": key,
+            "resolved": str(meta.get("resolved") or ""),
+            "integrity": str(meta.get("integrity") or ""),
+            "platform_gated": bool(meta.get("optional") or meta.get("os") or meta.get("cpu")),
+        }
+
+    return sorted(rows.values(), key=lambda row: (row["name"].lower(), row["version"], row["license_name"]))
+
+
+def _node_integrity_matches(data: bytes, integrity: str) -> bool:
+    """Validate downloaded npm artifact bytes against package-lock integrity."""
+    if not integrity:
+        return True
+    algorithms = {
+        "sha1": hashlib.sha1,
+        "sha256": hashlib.sha256,
+        "sha384": hashlib.sha384,
+        "sha512": hashlib.sha512,
+    }
+    saw_supported = False
+    for token in integrity.split():
+        algorithm, sep, encoded = token.partition("-")
+        if not sep or algorithm not in algorithms:
+            continue
+        saw_supported = True
+        try:
+            expected = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            return False
+        if hmac.compare_digest(algorithms[algorithm](data).digest(), expected):
+            return True
+    return not saw_supported
+
+
+def _node_license_text_from_tarball(resolved: str, integrity: str) -> str:
+    """Return license text from a locked npm tarball URL, if available."""
+    if not resolved.startswith(("http://", "https://")):
+        return ""
+    cache_key = (resolved, integrity)
+    cached = _NODE_TARBALL_LICENSE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if cache_key in _NODE_TARBALL_LICENSE_CACHE:
+        return ""
+
+    try:
+        with urllib.request.urlopen(resolved, timeout=60) as response:  # noqa: S310
+            raw = response.read()
+    except OSError:
+        _NODE_TARBALL_LICENSE_CACHE[cache_key] = None
+        return ""
+    if not _node_integrity_matches(raw, integrity):
+        _NODE_TARBALL_LICENSE_CACHE[cache_key] = None
+        return ""
+
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as tf:
+            heuristic_candidates: list[tuple[str, str, str]] = []
+            for member_name in _common_license_candidates(tf.getnames()):
+                text = _extract_tar_text(tf, member_name)
+                if text and _is_useful_license_text(text):
+                    display_path = member_name.split("/", 1)[1] if "/" in member_name else member_name
+                    heuristic_candidates.append((display_path, display_path, text))
+            selected = _choose_heuristic_license(heuristic_candidates)
+    except (OSError, tarfile.TarError):
+        selected = None
+
+    text = selected[1] if selected else ""
+    _NODE_TARBALL_LICENSE_CACHE[cache_key] = text or None
+    return text
+
+
 def _node_package_name_from_lock_path(path: str) -> str:
     """Infer an npm package name from a package-lock packages path."""
     parts = path.replace("\\", "/").split("node_modules/")
@@ -837,36 +1118,42 @@ def _node_license_inventory() -> list[LicenseInventoryEntry]:
 
 
 def cmd_node() -> int:
-    """Generate ATTRIBUTIONS-Node.md from package-lock.json via license-checker."""
+    """Generate ATTRIBUTIONS-Node.md from package-lock.json."""
     out = ROOT / "ATTRIBUTIONS-Node.md"
+    lockfile = _node_lockfile_path()
+    lock = cast(dict[str, Any], json.loads(lockfile.read_text(encoding="utf-8")))
     data, workspace_package_keys = _node_license_checker_data()
-    package_rows = [(*_split_node_package_key(key), key) for key in data.keys() if key not in workspace_package_keys]
-    package_rows.sort(key=lambda row: (row[0].lower(), row[1]))
+    package_rows = _node_attribution_packages(lock, workspace_package_keys)
 
     parts: list[str] = [NODE_HEADER]
-    for name, ver, key in package_rows:
-        meta = data[key]
+    for pkg in package_rows:
+        name = pkg["name"]
+        ver = pkg["version"]
+        meta = {} if pkg["platform_gated"] else data.get(pkg["key"], {})
 
-        lic = meta.get("licenses") or "UNKNOWN"
+        lic = meta.get("licenses") or pkg["license_name"] or "UNKNOWN"
         repo = (meta.get("repository") or "").strip()
         if not repo:
             repo = f"https://www.npmjs.com/package/{name}"
         lic_url = spdx_url(str(lic), fallback="https://opensource.org/licenses/")
-        text = ""
-        lf = meta.get("licenseFile")
+        text = _node_license_text_from_tarball(pkg["resolved"], pkg["integrity"]) if pkg["platform_gated"] else ""
+        lf = meta.get("licenseFile") if not text else None
         if lf:
             try:
                 raw = Path(lf).read_text(encoding="utf-8", errors="replace").strip()
                 text = "\n".join(line.rstrip() for line in raw.splitlines())
             except OSError:
                 text = ""
+        if not text:
+            text = _node_license_text_from_tarball(pkg["resolved"], pkg["integrity"])
 
         parts.append(f"## {name} - {ver}\n")
         parts.append(f"**Repository URL**: {repo}\n")
         parts.append(f"**License Type(s)**: {lic}\n")
         parts.append(f"### License: {lic_url}\n")
         parts.append(MARKDOWN_CODE_FENCE)
-        parts.append(text if text else f"(No license file read from node_modules for {name}; see npm metadata.)\n")
+        fallback = f"(No license file read from locked npm artifact for {name}; see npm metadata.)\n"
+        parts.append(text if text else fallback)
         parts.append(MARKDOWN_CODE_BLOCK_END)
 
     out.write_text("".join(parts).rstrip("\n") + "\n", encoding="utf-8")

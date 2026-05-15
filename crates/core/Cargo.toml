@@ -24,6 +24,8 @@ otel = [
     "dep:opentelemetry-http",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
+    "dep:reqwest",
+    "dep:rustls",
     "dep:tonic",
     "dep:web-sys",
     "dep:wasm-bindgen",
@@ -38,6 +40,8 @@ openinference = [
     "dep:opentelemetry-http",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
+    "dep:reqwest",
+    "dep:rustls",
     "dep:tonic",
     "dep:web-sys",
     "dep:wasm-bindgen",
@@ -104,5 +108,7 @@ path = "tests/integration/api_surface_tests.rs"
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls", "grpc-tonic"], optional = true }
+opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tonic = { version = "0.14.1", default-features = false, optional = true }

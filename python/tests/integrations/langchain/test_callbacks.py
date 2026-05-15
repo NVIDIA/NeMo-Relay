@@ -10,6 +10,8 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from nemo_flow.integrations.langchain import callbacks as callbacks_module
 from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
@@ -117,6 +119,59 @@ class TestScopeLifecycle:
 
         mock_nemo_flow.scope.pop.assert_called_once_with(handle, output={"error": "RuntimeError('boom')"})
         assert run_id not in handler._scope_handles
+
+    def test_on_chain_end_prepares_command_outputs(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
+        run_id = uuid4()
+        handler.on_chain_start(
+            {"name": "MyChain"},
+            {"input": "test"},
+            run_id=run_id,
+        )
+        handle = handler._scope_handles[run_id]
+
+        handler.on_chain_end(
+            {
+                "result": Command(
+                    update={
+                        "messages": [
+                            ToolMessage(
+                                content="done",
+                                tool_call_id="call-1",
+                                name="task",
+                            )
+                        ]
+                    }
+                )
+            },
+            run_id=run_id,
+        )
+
+        mock_nemo_flow.scope.pop.assert_called_once_with(
+            handle,
+            output={
+                "result": {
+                    "type": "command",
+                    "command": {
+                        "graph": None,
+                        "update": {
+                            "messages": [
+                                {
+                                    "type": "tool_message",
+                                    "tool_call": {
+                                        "name": "task",
+                                        "id": None,
+                                        "tool_call_id": "call-1",
+                                        "content": "done",
+                                    },
+                                }
+                            ]
+                        },
+                        "resume": None,
+                        "goto": [],
+                    },
+                }
+            },
+        )
 
     def test_parent_scope_passed_to_push(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
         parent_id = uuid4()

@@ -3,6 +3,11 @@
   "version": "0.3.0",
   "description": "NeMo Flow-authored observability plugin for OpenClaw.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NVIDIA/NeMo-Flow",
+    "directory": "integrations/openclaw"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -37,12 +42,12 @@
       "./dist/index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.5.6",
-      "minGatewayVersion": "2026.5.6"
+      "pluginApi": ">=2026.5.12",
+      "minGatewayVersion": "2026.5.12"
     },
     "build": {
-      "openclawVersion": "2026.5.6",
-      "pluginSdkVersion": "2026.5.6"
+      "openclawVersion": "2026.5.12",
+      "pluginSdkVersion": "2026.5.12"
     }
   },
   "scripts": {
@@ -51,14 +56,14 @@
     "pack:check": "node scripts/check-pack-payload.mjs",
     "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build:test && node --test \".test-dist/src/__tests__/*.test.js\"",
-    "test:live": "npm run build:test && NEMO_FLOW_OPENCLAW_LIVE_SMOKE=1 node --test \".test-dist/src/__tests__/live-smoke.test.js\""
+    "test": "npm run build:test && node --test \".test-dist/test/*.test.js\"",
+    "test:live": "npm run build:test && node scripts/test-live.mjs"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.6"
+    "openclaw": ">=2026.5.12"
   },
   "dependencies": {
-    "nemo-flow-node": ">0.1.0 <1.0.0"
+    "nemo-flow-node": "0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

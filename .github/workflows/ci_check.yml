@@ -109,6 +109,7 @@ jobs:
         run: |
           set -e
           uv tool install pre-commit==${{ steps.ci-config.outputs.pre_commit_version }}
+          uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
           if [[ "$FULL_CI" == "true" || -z "$PRE_COMMIT_BASE" ]]; then
             pre-commit run --all-files --show-diff-on-failure
           else
