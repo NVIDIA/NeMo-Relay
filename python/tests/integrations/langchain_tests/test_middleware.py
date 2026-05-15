@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any, TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
@@ -68,7 +69,10 @@ def async_tool_request_handler_fixture(tool_request_handler: tuple[Callable[[Too
 @pytest.fixture(name="mock_tool_execute")
 def mock_tool_execute_fixture() -> AsyncMock:
     async def execute_side_effect(*, func: Any, **kwargs: Any) -> ToolMessage:
-        return func({"query": "intercepted"})
+        result = func({"query": "intercepted"})
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     return AsyncMock(side_effect=execute_side_effect)
 
@@ -146,8 +150,8 @@ def model_request_fixture() -> ModelRequest[Any]:
     )
 
 
-@pytest.fixture(name="tool_request")
-def tool_request_fixture() -> ToolCallRequest:
+@pytest.fixture(name="tool_call_request")
+def tool_call_request_fixture() -> ToolCallRequest:
     from langchain.agents.middleware import ToolCallRequest
     return ToolCallRequest(
         tool_call={"name": "lookup", "args": {"query": "original"}, "id": "call-1"},
@@ -184,14 +188,14 @@ def test_awrap_model_call_routes_through_llm_execute(model_request: ModelRequest
     assert recording_middleware.calls[0]["response_codec"] is None
 
 
-def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_request: ToolCallRequest, tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]):
+def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_call_request: ToolCallRequest, tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]):
     (handler, seen_request) = tool_request_handler
     parent_handle = MagicMock()
 
     monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
     monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
 
-    response = nemo_flow_middleware.wrap_tool_call(tool_request, handler)
+    response = nemo_flow_middleware.wrap_tool_call(tool_call_request, handler)
 
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
@@ -204,14 +208,14 @@ def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPa
     assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
 
 
-def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_request: ToolCallRequest, async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]):
+def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_call_request: ToolCallRequest, async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]):
     parent_handle = MagicMock()
     (handler, seen_request) = async_tool_request_handler
 
     monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
     monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
 
-    response = asyncio.run(nemo_flow_middleware.awrap_tool_call(tool_request, handler))
+    response = asyncio.run(nemo_flow_middleware.awrap_tool_call(tool_call_request, handler))
 
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
