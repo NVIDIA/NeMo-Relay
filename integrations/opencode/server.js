@@ -5,10 +5,6 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 const PLUGIN_ID = "nemo-flow-opencode"
-const DEFAULT_PLUGIN_HOST_CONFIG = Object.freeze({
-  version: 1,
-  components: Object.freeze([]),
-})
 const RECENT_FLUSH_TTL_MS = 2000
 const OBSERVED_EVENTS = new Set([
   "session.created",
@@ -49,9 +45,10 @@ function createLogger(logPath) {
       return
     }
     const text = `[${PLUGIN_ID}] ${message}`
-    if (level === "error") console.error(text, extra ?? "")
-    else if (level === "warn") console.warn(text, extra ?? "")
-    else console.info(text, extra ?? "")
+    const loggedExtra = record.extra ?? ""
+    if (level === "error") console.error(text, loggedExtra)
+    else if (level === "warn") console.warn(text, loggedExtra)
+    else console.info(text, loggedExtra)
   }
 
   return {
@@ -112,7 +109,7 @@ function normalizeOptions(input, options = {}) {
  */
 function normalizePluginHostConfig(baseDir, value) {
   if (value === undefined) {
-    return clonePluginHostConfig(DEFAULT_PLUGIN_HOST_CONFIG)
+    return defaultPluginHostConfig(baseDir)
   }
 
   const raw = asRecord(value, "plugins", false)
@@ -123,23 +120,61 @@ function normalizePluginHostConfig(baseDir, value) {
     throw new Error("plugins.components must be an array")
   }
 
+  const normalizedComponents = components.map((component, index) =>
+    normalizePluginComponent(baseDir, component, `plugins.components[${index}]`),
+  )
+
   return {
     ...raw,
     version,
-    components: components.map((component, index) =>
-      normalizePluginComponent(baseDir, component, `plugins.components[${index}]`),
-    ),
+    components: withDefaultObservabilityComponent(baseDir, normalizedComponents),
   }
 }
 
 /**
- * Clone the mutable generic plugin config before giving it to the runtime.
+ * Build the default generic plugin config used by the OpenCode wrapper.
  */
-function clonePluginHostConfig(config) {
+function defaultPluginHostConfig(baseDir) {
   return {
-    ...config,
-    components: [...config.components],
+    version: 1,
+    components: [defaultObservabilityComponent(baseDir)],
   }
+}
+
+/**
+ * Add a default observability sink unless the caller configured one explicitly.
+ */
+function withDefaultObservabilityComponent(baseDir, components) {
+  if (components.some((component) => component?.kind === "observability")) return components
+  return [...components, defaultObservabilityComponent(baseDir)]
+}
+
+/**
+ * Create the OpenCode filesystem observability defaults.
+ */
+function defaultObservabilityComponent(baseDir) {
+  return normalizePluginComponent(
+    baseDir,
+    {
+      kind: "observability",
+      enabled: true,
+      config: {
+        version: 1,
+        atof: {
+          enabled: true,
+          output_directory: "./.nemoflow",
+          filename: "opencode.atof.jsonl",
+        },
+        atif: {
+          enabled: true,
+          agent_name: "opencode",
+          output_directory: "./.nemoflow",
+          filename_template: "opencode-{session_id}.atif.json",
+        },
+      },
+    },
+    "plugins.components[0]",
+  )
 }
 
 /**
@@ -469,6 +504,18 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
   }
 
   /**
+   * Keep NeMo Flow observability failures from changing OpenCode hook behavior.
+   */
+  function runtimeCall(warnKey, message, callback) {
+    try {
+      return callback()
+    } catch (error) {
+      void logger.warnOnce(warnKey, message, error).catch(() => {})
+      return undefined
+    }
+  }
+
+  /**
    * Create or update the NeMo Flow session state for an OpenCode session.
    */
   function ensureSession(sessionID, metadata = {}) {
@@ -495,17 +542,21 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
       sequence: 0,
     }
 
-    session.scope = withStack(session, () =>
-      lib.pushScope(
-        "opencode.session",
-        lib.ScopeType?.Agent ?? 0,
-        null,
-        null,
-        { sessionID },
-        inputSessionMetadata(sessionID, session),
-        { sessionID, source: "opencode" },
+    const scope = runtimeCall(`scope-push:${sessionID}`, "failed to start OpenCode session scope", () =>
+      withStack(session, () =>
+        lib.pushScope(
+          "opencode.session",
+          lib.ScopeType?.Agent ?? 0,
+          null,
+          null,
+          { sessionID },
+          inputSessionMetadata(sessionID, session),
+          { sessionID, source: "opencode" },
+        ),
       ),
     )
+    if (!scope) return undefined
+    session.scope = scope
     sessions.set(sessionID, session)
     return session
   }
@@ -515,17 +566,19 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
    */
   function emitMark(session, name, data, metadata = {}) {
     if (!session?.scope) return
-    withStack(session, () =>
-      lib.event(
-        name,
-        session.scope,
-        toJsonSafe(data),
-        {
-          source: "opencode",
-          sessionID: session.id,
-          ...toJsonSafe(metadata),
-        },
-        null,
+    runtimeCall(`mark:${name}`, "failed to record OpenCode mark event", () =>
+      withStack(session, () =>
+        lib.event(
+          name,
+          session.scope,
+          toJsonSafe(data),
+          {
+            source: "opencode",
+            sessionID: session.id,
+            ...toJsonSafe(metadata),
+          },
+          null,
+        ),
       ),
     )
   }
@@ -661,18 +714,21 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
       messageID: input.message?.id,
       model,
     })
-    const handle = withStack(session, () =>
-      lib.llmCall(
-        input.provider?.id ?? input.model?.providerID ?? "opencode",
-        buildLlmRequest(session, input, output),
-        session.scope,
-        null,
-        null,
-        metadata,
-        model ?? null,
-        null,
+    const handle = runtimeCall("llm-start", "failed to start OpenCode LLM span", () =>
+      withStack(session, () =>
+        lib.llmCall(
+          input.provider?.id ?? input.model?.providerID ?? "opencode",
+          buildLlmRequest(session, input, output),
+          session.scope,
+          null,
+          null,
+          metadata,
+          model ?? null,
+          null,
+        ),
       ),
     )
+    if (!handle) return
     session.pendingLlm = {
       handle,
       agent: input.agent,
@@ -690,7 +746,9 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
     const pending = session?.pendingLlm
     if (!pending || typeof lib.llmCallEnd !== "function") return
     const response = buildLlmResponse(session, pending, reason)
-    withStack(session, () => lib.llmCallEnd(pending.handle, response, null, pending.metadata, null))
+    runtimeCall("llm-end", "failed to close OpenCode LLM span", () =>
+      withStack(session, () => lib.llmCallEnd(pending.handle, response, null, pending.metadata, null)),
+    )
     session.pendingLlm = undefined
   }
 
@@ -758,7 +816,7 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
     pruneRecentFlushes()
     closeActiveLlm(session, reason)
     for (const [key, tool] of session.pendingTools) {
-      try {
+      runtimeCall(`tool-close:${key}`, "failed to close pending OpenCode tool span", () =>
         withStack(session, () =>
           lib.toolCallEnd(
             tool.handle,
@@ -766,19 +824,15 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
             null,
             { source: "opencode", sessionID, callID: tool.callID },
           ),
-        )
-      } catch (error) {
-        void logger.warnOnce(`tool-close:${key}`, "failed to close pending OpenCode tool span", error)
-      }
+        ),
+      )
     }
     session.pendingTools.clear()
 
     if (session.scope) {
-      try {
-        withStack(session, () => lib.popScope(session.scope, { sessionID, reason }, null))
-      } catch (error) {
-        void logger.warnOnce(`scope-pop:${sessionID}`, "failed to close OpenCode session scope", error)
-      }
+      runtimeCall(`scope-pop:${sessionID}`, "failed to close OpenCode session scope", () =>
+        withStack(session, () => lib.popScope(session.scope, { sessionID, reason }, null)),
+      )
     }
 
     sessions.delete(sessionID)
@@ -809,6 +863,7 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
         agent: typeof props.info?.agent === "string" ? props.info.agent : undefined,
         model: modelName(props.info?.model),
       })
+      if (!session) return
 
       if (event.type.startsWith("message.")) {
         recordMessageEvent(session, event)
@@ -871,18 +926,21 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
         session.toolCalls.set(input.callID, { tool: input.tool, args })
       }
       closeActiveLlm(session, "tool_start")
-      const handle = withStack(session, () =>
-        lib.toolCall(
-          input.tool,
-          args,
-          session.scope,
-          null,
-          { sessionID: input.sessionID, callID: input.callID },
-          { source: "opencode", sessionID: input.sessionID, callID: input.callID },
-          input.callID,
-          null,
+      const handle = runtimeCall(`tool-start:${input.callID ?? input.tool}`, "failed to start OpenCode tool span", () =>
+        withStack(session, () =>
+          lib.toolCall(
+            input.tool,
+            args,
+            session.scope,
+            null,
+            { sessionID: input.sessionID, callID: input.callID },
+            { source: "opencode", sessionID: input.sessionID, callID: input.callID },
+            input.callID,
+            null,
+          ),
         ),
       )
+      if (!handle) return
       session.pendingTools.set(input.callID, { handle, callID: input.callID, tool: input.tool, args })
     },
 
@@ -899,31 +957,36 @@ function createNemoFlowAdapter(lib, pluginHost, logger) {
         if (input.callID) {
           session.toolCalls.set(input.callID, { tool: input.tool, args })
         }
-        const handle = withStack(session, () =>
-          lib.toolCall(
-            input.tool,
-            args,
-            session.scope,
-            null,
-            { sessionID: input.sessionID, callID: input.callID },
-            { source: "opencode", sessionID: input.sessionID, callID: input.callID, recovered: true },
-            input.callID,
-            null,
+        const handle = runtimeCall(`tool-start:${input.callID ?? input.tool}`, "failed to start OpenCode tool span", () =>
+          withStack(session, () =>
+            lib.toolCall(
+              input.tool,
+              args,
+              session.scope,
+              null,
+              { sessionID: input.sessionID, callID: input.callID },
+              { source: "opencode", sessionID: input.sessionID, callID: input.callID, recovered: true },
+              input.callID,
+              null,
+            ),
           ),
         )
+        if (!handle) return
         pending = { handle, callID: input.callID, tool: input.tool, args }
       }
-      withStack(session, () =>
-        lib.toolCallEnd(
-          pending.handle,
-          toJsonSafe({
-            title: output?.title,
-            output: output?.output,
-            metadata: output?.metadata,
-          }),
-          null,
-          { source: "opencode", sessionID: input.sessionID, callID: input.callID },
-          null,
+      runtimeCall(`tool-end:${input.callID ?? input.tool}`, "failed to close OpenCode tool span", () =>
+        withStack(session, () =>
+          lib.toolCallEnd(
+            pending.handle,
+            toJsonSafe({
+              title: output?.title,
+              output: output?.output,
+              metadata: output?.metadata,
+            }),
+            null,
+            { source: "opencode", sessionID: input.sessionID, callID: input.callID },
+            null,
+          ),
         ),
       )
       session.pendingTools.delete(input.callID)

@@ -212,6 +212,21 @@ async function makeTempDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), "nemo-flow-opencode-"))
 }
 
+async function waitForLogMatch(logPath, pattern) {
+  let log = ""
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      log = await fs.readFile(logPath, "utf8")
+      if (pattern.test(log)) return log
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.match(log, pattern)
+  return log
+}
+
 async function statIsDirectory(targetPath) {
   try {
     return (await fs.stat(targetPath)).isDirectory()
@@ -354,6 +369,24 @@ describe("NeMo Flow OpenCode plugin", () => {
     })
 
     await server({ directory: dir }, { enabled: true, plugins: pluginConfig() })
+  })
+
+  it("registers default observability output when plugins are omitted", async () => {
+    const dir = await makeTempDir()
+    const { pluginHost, server } = createHarness()
+    const hooks = await server({ directory: dir })
+
+    assert.equal(typeof hooks.event, "function")
+    assert.equal(pluginHost.validateCalls.length, 1)
+    assert.equal(pluginHost.initializeCalls.length, 1)
+    const component = pluginHost.validateCalls[0].components[0]
+    assert.equal(component.kind, "observability")
+    assert.equal(component.config.atof.enabled, true)
+    assert.equal(component.config.atof.output_directory, path.join(dir, ".nemoflow"))
+    assert.equal(component.config.atof.filename, "opencode.atof.jsonl")
+    assert.equal(component.config.atif.enabled, true)
+    assert.equal(component.config.atif.output_directory, path.join(dir, ".nemoflow"))
+    assert.equal(component.config.atif.filename_template, "opencode-{session_id}.atif.json")
   })
 
   it("keeps normal bus events internal while recording session errors", async () => {
@@ -515,6 +548,149 @@ describe("NeMo Flow OpenCode plugin", () => {
     const log = await fs.readFile(path.join(dir, ".nemoflow", "opencode-plugin.log"), "utf8")
     assert.match(log, /plugin.unknown_component/)
     assert.match(log, /plugin host config validation failed/)
+  })
+
+  it("redacts console diagnostics when file logging is disabled", async () => {
+    const dir = await makeTempDir()
+    const warnings = []
+    const originalWarn = console.warn
+    console.warn = (...args) => {
+      warnings.push(args)
+    }
+
+    try {
+      const { server } = createHarness({
+        validateDiagnostics: [
+          {
+            level: "error",
+            code: "plugin.invalid",
+            message: "invalid config",
+            apiKey: "secret-value",
+          },
+        ],
+      })
+      const hooks = await server({ directory: dir }, { enabled: true, logPath: "", plugins: pluginConfig() })
+
+      assert.deepEqual(hooks, {})
+    } finally {
+      console.warn = originalWarn
+    }
+
+    assert.ok(warnings.length > 0)
+    assert.equal(warnings[0][1].apiKey, "[Redacted]")
+    assert.equal(JSON.stringify(warnings).includes("secret-value"), false)
+  })
+
+  it("keeps hooks non-fatal when NeMo Flow runtime calls throw", async () => {
+    async function assertRuntimeFailure(mutator, runHook, pattern) {
+      const dir = await makeTempDir()
+      const runtime = createFakeRuntime()
+      mutator(runtime)
+      const { server } = createHarness({ runtime })
+      const hooks = await server({ directory: dir }, { enabled: true, plugins: pluginConfig() })
+
+      await assert.doesNotReject(async () => {
+        await runHook(hooks)
+      })
+      await waitForLogMatch(path.join(dir, ".nemoflow", "opencode-plugin.log"), pattern)
+    }
+
+    await assertRuntimeFailure(
+      (runtime) => {
+        runtime.pushScope = () => {
+          throw new Error("scope failed")
+        }
+      },
+      (hooks) =>
+        hooks["chat.message"]?.(
+          { sessionID: "ses_scope", agent: "build" },
+          { message: { id: "msg_scope", role: "user" }, parts: [] },
+        ),
+      /failed to start OpenCode session scope/,
+    )
+
+    await assertRuntimeFailure(
+      (runtime) => {
+        runtime.event = () => {
+          throw new Error("event failed")
+        }
+      },
+      (hooks) =>
+        hooks.event?.({
+          event: {
+            id: "evt_error",
+            type: "session.error",
+            properties: { sessionID: "ses_event", error: { message: "provider failed" } },
+          },
+        }),
+      /failed to record OpenCode mark event/,
+    )
+
+    await assertRuntimeFailure(
+      (runtime) => {
+        runtime.llmCall = () => {
+          throw new Error("llm failed")
+        }
+      },
+      (hooks) =>
+        hooks["chat.params"]?.(
+          { sessionID: "ses_llm", agent: "build", model: { providerID: "test-provider", id: "test-model" } },
+          {},
+        ),
+      /failed to start OpenCode LLM span/,
+    )
+
+    await assertRuntimeFailure(
+      (runtime) => {
+        runtime.llmCallEnd = () => {
+          throw new Error("llm end failed")
+        }
+      },
+      async (hooks) => {
+        await hooks["chat.params"]?.(
+          { sessionID: "ses_llm_end", agent: "build", model: { providerID: "test-provider", id: "test-model" } },
+          {},
+        )
+        await hooks["tool.execute.before"]?.(
+          { tool: "write", sessionID: "ses_llm_end", callID: "call_llm_end" },
+          { args: { path: "x" } },
+        )
+      },
+      /failed to close OpenCode LLM span/,
+    )
+
+    await assertRuntimeFailure(
+      (runtime) => {
+        runtime.toolCall = () => {
+          throw new Error("tool failed")
+        }
+      },
+      (hooks) =>
+        hooks["tool.execute.before"]?.(
+          { tool: "write", sessionID: "ses_tool", callID: "call_tool" },
+          { args: { path: "x" } },
+        ),
+      /failed to start OpenCode tool span/,
+    )
+
+    await assertRuntimeFailure(
+      (runtime) => {
+        runtime.toolCallEnd = () => {
+          throw new Error("tool end failed")
+        }
+      },
+      async (hooks) => {
+        await hooks["tool.execute.before"]?.(
+          { tool: "write", sessionID: "ses_tool_end", callID: "call_tool_end" },
+          { args: { path: "x" } },
+        )
+        await hooks["tool.execute.after"]?.(
+          { tool: "write", sessionID: "ses_tool_end", callID: "call_tool_end" },
+          { output: "done" },
+        )
+      },
+      /failed to close OpenCode tool span/,
+    )
   })
 
   it("flushes open sessions and clears the plugin host during cleanup", async () => {
