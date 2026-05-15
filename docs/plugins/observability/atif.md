@@ -60,10 +60,133 @@ The plugin writes each trajectory when the top-level agent scope closes. If the
 plugin is cleared while an agent is still open, teardown flushes the partial
 trajectory.
 
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Flow own the ATIF
+dispatcher lifecycle.
+
+:::::{tab-set}
+:sync-group: language
+
+::::{tab-item} Python
+:sync: python
+
+```python
+from nemo_flow import plugin
+from nemo_flow.observability import AtifConfig, ComponentSpec, ObservabilityConfig
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                atif=AtifConfig(
+                    enabled=True,
+                    agent_name="Planner",
+                    agent_version="1.0.0",
+                    model_name="unknown",
+                    output_directory="logs",
+                    filename_template="trajectory-{session_id}.json",
+                )
+            )
+        )
+    ]
+)
+
+report = plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await plugin.initialize(config)
+try:
+    # Run instrumented application work here.
+    pass
+finally:
+    plugin.clear()
+```
+
+::::
+
+::::{tab-item} Node.js
+:sync: node
+
+```js
+const plugin = require("nemo-flow-node/plugin");
+const observability = require("nemo-flow-node/observability");
+
+await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 1,
+      atif: observability.atifConfig({
+        enabled: true,
+        agent_name: "Planner",
+        agent_version: "1.0.0",
+        model_name: "unknown",
+        output_directory: "logs",
+        filename_template: "trajectory-{session_id}.json",
+      }),
+    }),
+  ],
+});
+
+try {
+  // Run instrumented application work here.
+} finally {
+  plugin.clear();
+}
+```
+
+::::
+
+::::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::plugin_component::{
+    AtifSectionConfig, ComponentSpec, ObservabilityConfig,
+};
+use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    atif: Some(AtifSectionConfig {
+        enabled: true,
+        agent_name: "Planner".into(),
+        agent_version: "1.0.0".into(),
+        model_name: "unknown".into(),
+        output_directory: Some("logs".into()),
+        filename_template: "trajectory-{session_id}.json".into(),
+        ..AtifSectionConfig::default()
+    }),
+    ..ObservabilityConfig::default()
+});
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+};
+
+let report = validate_plugin_config(&config);
+assert!(!report.has_errors());
+
+let active = initialize_plugins(config).await?;
+```
+
+::::
+
+:::::
+
 ## Manual API
 
 Use the manual `AtifExporter` API when you need explicit collection boundaries
 or one exporter object per run.
+
+:::::{tab-set}
+:sync-group: language
+
+::::{tab-item} Python
+:sync: python
 
 ```python
 from nemo_flow import AtifExporter
@@ -77,6 +200,63 @@ trajectory = exporter.export()
 exporter.deregister("atif-exporter")
 exporter.clear()
 ```
+
+::::
+
+::::{tab-item} Node.js
+:sync: node
+
+```js
+const { AtifExporter } = require("nemo-flow-node");
+
+const exporter = new AtifExporter("session-1", "agent", "1.0.0", "demo-model");
+exporter.register("atif-exporter");
+
+try {
+  // Run instrumented application work here.
+
+  const trajectoryJson = exporter.exportJson();
+  console.log(trajectoryJson);
+} finally {
+  exporter.deregister("atif-exporter");
+  exporter.clear();
+}
+```
+
+::::
+
+::::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_flow::observability::atif::{AtifAgentInfo, AtifExporter};
+
+let exporter = AtifExporter::new(
+    "session-1".to_string(),
+    AtifAgentInfo {
+        name: "agent".to_string(),
+        version: "1.0.0".to_string(),
+        model_name: Some("demo-model".to_string()),
+        tool_definitions: None,
+        extra: None,
+    },
+);
+register_subscriber("atif-exporter", exporter.subscriber())?;
+
+// Run instrumented application work here.
+
+let trajectory = exporter.export();
+let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
+println!("{trajectory_json}");
+
+let _ = deregister_subscriber("atif-exporter")?;
+exporter.clear();
+```
+
+::::
+
+:::::
 
 ## Common Validation Failures
 

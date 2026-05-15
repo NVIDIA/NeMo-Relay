@@ -72,10 +72,146 @@ when provider responses include usage information.
 Redact sensitive event payloads with sanitize guardrails before production
 export.
 
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Flow own the
+OpenInference subscriber lifecycle.
+
+:::::{tab-set}
+:sync-group: language
+
+::::{tab-item} Python
+:sync: python
+
+```python
+from nemo_flow import plugin
+from nemo_flow.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                openinference=OtlpConfig(
+                    enabled=True,
+                    transport="http_binary",
+                    endpoint="http://localhost:6006/v1/traces",
+                    service_name="agent-service",
+                    service_namespace="nemo",
+                    service_version="1.0.0",
+                    instrumentation_scope="nemo-flow-openinference",
+                    resource_attributes={"deployment.environment": "dev"},
+                    headers={"authorization": "Bearer <token>"},
+                )
+            )
+        )
+    ]
+)
+
+report = plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await plugin.initialize(config)
+try:
+    # Run instrumented application work here.
+    pass
+finally:
+    plugin.clear()
+```
+
+::::
+
+::::{tab-item} Node.js
+:sync: node
+
+```js
+const plugin = require("nemo-flow-node/plugin");
+const observability = require("nemo-flow-node/observability");
+
+await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 1,
+      openinference: observability.otlpConfig({
+        enabled: true,
+        transport: "http_binary",
+        endpoint: "http://localhost:6006/v1/traces",
+        service_name: "agent-service",
+        service_namespace: "nemo",
+        service_version: "1.0.0",
+        instrumentation_scope: "nemo-flow-openinference",
+        resource_attributes: {
+          "deployment.environment": "dev",
+        },
+        headers: {
+          authorization: "Bearer <token>",
+        },
+      }),
+    }),
+  ],
+});
+
+try {
+  // Run instrumented application work here.
+} finally {
+  plugin.clear();
+}
+```
+
+::::
+
+::::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::plugin_component::{
+    ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
+};
+use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    openinference: Some(OtlpSectionConfig {
+        enabled: true,
+        transport: "http_binary".into(),
+        endpoint: Some("http://localhost:6006/v1/traces".into()),
+        service_name: "agent-service".into(),
+        service_namespace: Some("nemo".into()),
+        service_version: Some("1.0.0".into()),
+        instrumentation_scope: Some("nemo-flow-openinference".into()),
+        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+        headers: [("authorization".into(), "Bearer <token>".into())].into(),
+        ..OtlpSectionConfig::default()
+    }),
+    ..ObservabilityConfig::default()
+});
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+};
+
+let report = validate_plugin_config(&config);
+assert!(!report.has_errors());
+
+let active = initialize_plugins(config).await?;
+```
+
+::::
+
+:::::
+
 ## Manual API
 
 Use the manual subscriber API when you need an explicit subscriber name or
 direct `force_flush` control.
+
+:::::{tab-set}
+:sync-group: language
+
+::::{tab-item} Python
+:sync: python
 
 ```python
 from nemo_flow import OpenInferenceConfig, OpenInferenceSubscriber
@@ -84,6 +220,7 @@ config = OpenInferenceConfig()
 config.transport = "http_binary"
 config.endpoint = "http://localhost:6006/v1/traces"
 config.service_name = "agent-service"
+config.set_resource_attribute("deployment.environment", "dev")
 
 subscriber = OpenInferenceSubscriber(config)
 subscriber.register("openinference-exporter")
@@ -94,6 +231,62 @@ subscriber.force_flush()
 subscriber.deregister("openinference-exporter")
 subscriber.shutdown()
 ```
+
+::::
+
+::::{tab-item} Node.js
+:sync: node
+
+```js
+const { OpenInferenceSubscriber } = require("nemo-flow-node");
+
+const subscriber = new OpenInferenceSubscriber({
+  transport: "http_binary",
+  endpoint: "http://localhost:6006/v1/traces",
+  serviceName: "agent-service",
+  resourceAttributes: {
+    "deployment.environment": "dev",
+  },
+});
+subscriber.register("openinference-exporter");
+
+try {
+  // Run instrumented application work here.
+
+  subscriber.forceFlush();
+} finally {
+  subscriber.deregister("openinference-exporter");
+  subscriber.shutdown();
+}
+```
+
+::::
+
+::::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::openinference::{
+    OpenInferenceConfig, OpenInferenceSubscriber,
+};
+
+let config = OpenInferenceConfig::new()
+    .with_service_name("agent-service")
+    .with_endpoint("http://localhost:6006/v1/traces")
+    .with_resource_attribute("deployment.environment", "dev");
+let subscriber = OpenInferenceSubscriber::new(config)?;
+subscriber.register("openinference-exporter")?;
+
+// Run instrumented application work here.
+
+subscriber.force_flush()?;
+let _ = subscriber.deregister("openinference-exporter")?;
+subscriber.shutdown()?;
+```
+
+::::
+
+:::::
 
 ## Common Validation Failures
 

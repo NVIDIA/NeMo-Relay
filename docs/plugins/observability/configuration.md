@@ -112,7 +112,7 @@ Include only the sections you want to configure. In layered `plugins.toml`
 files, omission inherits lower-precedence values; write `enabled = false` to
 disable an inherited section.
 
-## Activate From Code
+## Per-Language Plugin Configuration
 
 :::::{tab-set}
 :sync-group: language
@@ -127,6 +127,7 @@ from nemo_flow.observability import (
     AtofConfig,
     ComponentSpec,
     ObservabilityConfig,
+    OtlpConfig,
 )
 
 config = plugin.PluginConfig(
@@ -143,6 +144,24 @@ config = plugin.PluginConfig(
                     enabled=True,
                     output_directory="logs",
                     filename_template="trajectory-{session_id}.json",
+                ),
+                opentelemetry=OtlpConfig(
+                    enabled=True,
+                    endpoint="http://localhost:4318/v1/traces",
+                    service_name="nemo-flow",
+                    service_namespace="agent",
+                    service_version="0.2.0",
+                    instrumentation_scope="nemo-flow-observability",
+                    resource_attributes={"deployment.environment": "dev"},
+                ),
+                openinference=OtlpConfig(
+                    enabled=True,
+                    endpoint="http://localhost:6006/v1/traces",
+                    service_name="nemo-flow",
+                    service_namespace="agent",
+                    service_version="0.2.0",
+                    instrumentation_scope="nemo-flow-openinference",
+                    resource_attributes={"deployment.environment": "dev"},
                 ),
             )
         )
@@ -186,6 +205,28 @@ await plugin.initialize({
         output_directory: "logs",
         filename_template: "trajectory-{session_id}.json",
       }),
+      opentelemetry: observability.otlpConfig({
+        enabled: true,
+        endpoint: "http://localhost:4318/v1/traces",
+        service_name: "nemo-flow",
+        service_namespace: "agent",
+        service_version: "0.2.0",
+        instrumentation_scope: "nemo-flow-observability",
+        resource_attributes: {
+          "deployment.environment": "dev",
+        },
+      }),
+      openinference: observability.otlpConfig({
+        enabled: true,
+        endpoint: "http://localhost:6006/v1/traces",
+        service_name: "nemo-flow",
+        service_namespace: "agent",
+        service_version: "0.2.0",
+        instrumentation_scope: "nemo-flow-openinference",
+        resource_attributes: {
+          "deployment.environment": "dev",
+        },
+      }),
     }),
   ],
 });
@@ -205,6 +246,7 @@ try {
 ```rust
 use nemo_flow::observability::plugin_component::{
     AtifSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
+    OtlpSectionConfig,
 };
 use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
@@ -220,6 +262,26 @@ let component = ComponentSpec::new(ObservabilityConfig {
         output_directory: Some("logs".into()),
         filename_template: "trajectory-{session_id}.json".into(),
         ..AtifSectionConfig::default()
+    }),
+    opentelemetry: Some(OtlpSectionConfig {
+        enabled: true,
+        endpoint: Some("http://localhost:4318/v1/traces".into()),
+        service_name: "nemo-flow".into(),
+        service_namespace: Some("agent".into()),
+        service_version: Some("0.2.0".into()),
+        instrumentation_scope: Some("nemo-flow-observability".into()),
+        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+        ..OtlpSectionConfig::default()
+    }),
+    openinference: Some(OtlpSectionConfig {
+        enabled: true,
+        endpoint: Some("http://localhost:6006/v1/traces".into()),
+        service_name: "nemo-flow".into(),
+        service_namespace: Some("agent".into()),
+        service_version: Some("0.2.0".into()),
+        instrumentation_scope: Some("nemo-flow-openinference".into()),
+        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+        ..OtlpSectionConfig::default()
     }),
     ..ObservabilityConfig::default()
 });

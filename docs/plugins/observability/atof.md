@@ -52,10 +52,126 @@ JSON object per line. For event field semantics, see
 Register the plugin before instrumented work starts and clear it during
 shutdown so file handles flush.
 
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Flow own the ATOF
+exporter lifecycle.
+
+:::::{tab-set}
+:sync-group: language
+
+::::{tab-item} Python
+:sync: python
+
+```python
+from nemo_flow import plugin
+from nemo_flow.observability import AtofConfig, ComponentSpec, ObservabilityConfig
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                atof=AtofConfig(
+                    enabled=True,
+                    output_directory="logs",
+                    filename="events.jsonl",
+                    mode="overwrite",
+                )
+            )
+        )
+    ]
+)
+
+report = plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await plugin.initialize(config)
+try:
+    # Run instrumented application work here.
+    pass
+finally:
+    plugin.clear()
+```
+
+::::
+
+::::{tab-item} Node.js
+:sync: node
+
+```js
+const plugin = require("nemo-flow-node/plugin");
+const observability = require("nemo-flow-node/observability");
+
+await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 1,
+      atof: observability.atofConfig({
+        enabled: true,
+        output_directory: "logs",
+        filename: "events.jsonl",
+        mode: "overwrite",
+      }),
+    }),
+  ],
+});
+
+try {
+  // Run instrumented application work here.
+} finally {
+  plugin.clear();
+}
+```
+
+::::
+
+::::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::plugin_component::{
+    AtofSectionConfig, ComponentSpec, ObservabilityConfig,
+};
+use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    atof: Some(AtofSectionConfig {
+        enabled: true,
+        output_directory: Some("logs".into()),
+        filename: Some("events.jsonl".into()),
+        mode: "overwrite".into(),
+    }),
+    ..ObservabilityConfig::default()
+});
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+};
+
+let report = validate_plugin_config(&config);
+assert!(!report.has_errors());
+
+let active = initialize_plugins(config).await?;
+```
+
+::::
+
+:::::
+
 ## Manual API
 
 Use the manual `AtofExporter` API when a test or script needs a custom
 subscriber name or explicit registration window.
+
+:::::{tab-set}
+:sync-group: language
+
+::::{tab-item} Python
+:sync: python
 
 ```python
 from nemo_flow import AtofExporter, AtofExporterConfig, AtofExporterMode
@@ -66,12 +182,67 @@ config.filename = "events.jsonl"
 config.mode = AtofExporterMode.Overwrite
 
 exporter = AtofExporter(config)
-exporter.register("atof-jsonl")
+exporter.register("atof-exporter")
 
 # Run instrumented application work here.
 
-exporter.deregister("atof-jsonl")
+exporter.force_flush()
+exporter.deregister("atof-exporter")
+exporter.shutdown()
 ```
+
+::::
+
+::::{tab-item} Node.js
+:sync: node
+
+```js
+const { AtofExporter } = require("nemo-flow-node");
+
+const exporter = new AtofExporter({
+  outputDirectory: "logs",
+  filename: "events.jsonl",
+  mode: "overwrite",
+});
+exporter.register("atof-exporter");
+
+try {
+  // Run instrumented application work here.
+
+  exporter.forceFlush();
+} finally {
+  exporter.deregister("atof-exporter");
+  exporter.shutdown();
+}
+```
+
+::::
+
+::::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow::observability::atof::{
+    AtofExporter, AtofExporterConfig, AtofExporterMode,
+};
+
+let config = AtofExporterConfig::new()
+    .with_output_directory("logs")
+    .with_filename("events.jsonl")
+    .with_mode(AtofExporterMode::Overwrite);
+let exporter = AtofExporter::new(config)?;
+exporter.register("atof-exporter")?;
+
+// Run instrumented application work here.
+
+exporter.force_flush()?;
+let _ = exporter.deregister("atof-exporter")?;
+exporter.shutdown()?;
+```
+
+::::
+
+:::::
 
 ## Common Validation Failures
 

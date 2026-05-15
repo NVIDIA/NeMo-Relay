@@ -93,7 +93,7 @@ This configuration activates adaptive telemetry, keeps tool parallelism
 observational, injects adaptive hints, and leaves ACG in `passthrough` mode so
 requests can be observed without provider-specific cache translation.
 
-## Activate From Code
+## Per-Language Plugin Configuration
 
 ::::{tab-set}
 :sync-group: language
@@ -114,6 +114,10 @@ adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
         learners=["tool_parallelism"],
     ),
     tool_parallelism=nemo_flow.adaptive.ToolParallelismConfig(mode="observe_only"),
+    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+        inject_body_path="nvext.agent_hints",
+    ),
+    acg=nemo_flow.adaptive.AcgConfig(provider="passthrough"),
 )
 
 plugin_config = nemo_flow.plugin.PluginConfig(
@@ -143,6 +147,10 @@ adaptiveConfig.telemetry = adaptive.telemetryConfig({
   learners: ["tool_parallelism"],
 });
 adaptiveConfig.tool_parallelism = adaptive.toolParallelismConfig({ mode: "observe_only" });
+adaptiveConfig.adaptive_hints = adaptive.adaptiveHintsConfig({
+  inject_body_path: "nvext.agent_hints",
+});
+adaptiveConfig.acg = adaptive.acgConfig({ provider: "passthrough" });
 
 const pluginConfig = plugin.defaultConfig();
 pluginConfig.components = [adaptive.ComponentSpec(adaptiveConfig)];
@@ -168,6 +176,8 @@ use nemo_flow_adaptive::{
     StateConfig,
     TelemetryComponentConfig,
     ToolParallelismComponentConfig,
+    AdaptiveHintsComponentConfig,
+    AcgComponentConfig,
 };
 
 let mut adaptive = AdaptiveConfig::default();
@@ -180,6 +190,14 @@ adaptive.telemetry = Some(TelemetryComponentConfig {
     learners: vec!["tool_parallelism".into()],
 });
 adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
+adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
+    inject_body_path: "nvext.agent_hints".into(),
+    ..AdaptiveHintsComponentConfig::default()
+});
+adaptive.acg = Some(AcgComponentConfig {
+    provider: "passthrough".into(),
+    ..AcgComponentConfig::default()
+});
 
 let mut plugin_config = PluginConfig::default();
 plugin_config.components.push(ComponentSpec::new(adaptive).into());
@@ -188,6 +206,94 @@ let report = validate_plugin_config(&plugin_config);
 assert!(!report.has_errors());
 
 let active = initialize_plugins(plugin_config).await?;
+```
+:::
+
+::::
+
+## Manual API
+
+Use the manual runtime API when an integration needs to own adaptive lifecycle
+directly instead of activating the top-level plugin component.
+
+::::{tab-set}
+:sync-group: language
+
+:::{tab-item} Python
+:sync: python
+
+```python
+import nemo_flow
+
+adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
+    agent_id="planner",
+    state=nemo_flow.adaptive.StateConfig(
+        backend=nemo_flow.adaptive.BackendSpec.in_memory(),
+    ),
+    telemetry=nemo_flow.adaptive.TelemetryConfig(
+        subscriber_name="adaptive.telemetry",
+        learners=["tool_parallelism"],
+    ),
+    tool_parallelism=nemo_flow.adaptive.ToolParallelismConfig(mode="observe_only"),
+    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+        inject_body_path="nvext.agent_hints",
+    ),
+    acg=nemo_flow.adaptive.AcgConfig(provider="passthrough"),
+)
+
+runtime = nemo_flow.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+await runtime.register()
+try:
+    # Run instrumented application work here.
+    runtime.wait_for_idle()
+finally:
+    await runtime.shutdown()
+```
+:::
+
+:::{tab-item} Node.js
+:sync: node
+
+The Node.js binding exposes the built-in adaptive runtime through the adaptive
+plugin component helpers. Use the Plugin Configuration example above when
+activating adaptive behavior from Node.js.
+:::
+
+:::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow_adaptive::{
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
+    BackendSpec, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
+};
+
+let mut adaptive = AdaptiveConfig::default();
+adaptive.agent_id = Some("planner".into());
+adaptive.state = Some(StateConfig {
+    backend: BackendSpec::in_memory(),
+});
+adaptive.telemetry = Some(TelemetryComponentConfig {
+    subscriber_name: Some("adaptive.telemetry".into()),
+    learners: vec!["tool_parallelism".into()],
+});
+adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
+adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
+    inject_body_path: "nvext.agent_hints".into(),
+    ..AdaptiveHintsComponentConfig::default()
+});
+adaptive.acg = Some(AcgComponentConfig {
+    provider: "passthrough".into(),
+    ..AcgComponentConfig::default()
+});
+
+let mut runtime = AdaptiveRuntime::new(adaptive).await?;
+runtime.register().await?;
+
+// Run instrumented application work here.
+
+runtime.wait_for_idle();
+runtime.shutdown().await?;
 ```
 :::
 

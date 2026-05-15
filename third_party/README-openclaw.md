@@ -44,7 +44,7 @@ npm run build
 ## Usage Example
 
 Install or enable the local extension from the patched OpenClaw checkout, then
-enable wrapping and ATIF export in the OpenClaw plugin config:
+configure the NeMo Flow plugin host directly under the OpenClaw plugin config:
 
 ```json
 {
@@ -53,21 +53,25 @@ enable wrapping and ATIF export in the OpenClaw plugin config:
       "nemo-flow": {
         "enabled": true,
         "config": {
-          "wrapping": {
-            "tools": true,
-            "llm": true
-          },
-          "atif": {
-            "enabled": true
-          },
-          "codecs": {
-            "default": "auto",
-            "providers": {
-              "anthropic": "anthropic_messages"
-            },
-            "models": {
-              "gpt-5*": "openai_responses"
+          "version": 1,
+          "components": [
+            {
+              "kind": "observability",
+              "enabled": true,
+              "config": {
+                "version": 1,
+                "atif": {
+                  "enabled": true,
+                  "agent_name": "openclaw",
+                  "output_directory": "./nemo-flow-atif"
+                }
+              }
             }
+          ],
+          "policy": {
+            "unknown_component": "warn",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
           }
         }
       }
@@ -76,9 +80,16 @@ enable wrapping and ATIF export in the OpenClaw plugin config:
 }
 ```
 
-With that config, OpenClaw tool calls and LLM streams are routed through the
-registered NeMo Flow middleware when the plugin is active. ATIF output is
-written to the configured plugin state directory when sessions end.
+With that config, the patched plugin initializes the NeMo Flow plugin host and
+activates the `observability` component. Wrapping is implicit when the plugin is
+enabled and initialized: the extension registers PI runtime streaming LLM and
+tool-call middleware with OpenClaw.
+
+The patched plugin config is the canonical NeMo Flow plugin-host document. Old
+wrapper keys are rejected, including `enabled`, `backend`, `capture`,
+`correlation`, `plugins`, `nemoFlow`, `atif`, and `telemetry`. Configure
+observability through component-local keys such as `atof`, `atif`,
+`opentelemetry`, and `openinference`.
 
 ## Validation
 

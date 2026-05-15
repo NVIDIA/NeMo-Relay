@@ -42,7 +42,10 @@ inject_body_path = "nvext.agent_hints"
 This configuration injects adaptive guidance into outgoing model requests while
 allowing later request intercepts to continue running.
 
-## Helper Example
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Flow own the
+Adaptive Hints request-intercept lifecycle.
 
 ::::{tab-set}
 :sync-group: language
@@ -51,6 +54,8 @@ allowing later request intercepts to continue running.
 :sync: python
 
 ```python
+import nemo_flow
+
 adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
     agent_id="planner",
     state=nemo_flow.adaptive.StateConfig(
@@ -61,6 +66,21 @@ adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
         inject_body_path="nvext.agent_hints",
     ),
 )
+
+plugin_config = nemo_flow.plugin.PluginConfig(
+    components=[nemo_flow.adaptive.ComponentSpec(adaptive_config)]
+)
+
+report = nemo_flow.plugin.validate(plugin_config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await nemo_flow.plugin.initialize(plugin_config)
+try:
+    # Run instrumented application work here.
+    pass
+finally:
+    nemo_flow.plugin.clear()
 ```
 :::
 
@@ -68,6 +88,9 @@ adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
 :sync: node
 
 ```js
+const adaptive = require("nemo-flow-node/adaptive");
+const plugin = require("nemo-flow-node/plugin");
+
 const adaptiveConfig = adaptive.defaultConfig();
 adaptiveConfig.agent_id = "planner";
 adaptiveConfig.state = { backend: adaptive.inMemoryBackend() };
@@ -75,6 +98,21 @@ adaptiveConfig.telemetry = adaptive.telemetryConfig({ learners: ["tool_paralleli
 adaptiveConfig.adaptive_hints = adaptive.adaptiveHintsConfig({
   inject_body_path: "nvext.agent_hints",
 });
+
+const pluginConfig = plugin.defaultConfig();
+pluginConfig.components = [adaptive.ComponentSpec(adaptiveConfig)];
+
+const report = plugin.validate(pluginConfig);
+if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+  throw new Error(JSON.stringify(report.diagnostics));
+}
+
+await plugin.initialize(pluginConfig);
+try {
+  // Run instrumented application work here.
+} finally {
+  plugin.clear();
+}
 ```
 :::
 
@@ -82,11 +120,111 @@ adaptiveConfig.adaptive_hints = adaptive.adaptiveHintsConfig({
 :sync: rust
 
 ```rust
-use nemo_flow_adaptive::{AdaptiveConfig, AdaptiveHintsComponentConfig};
+use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_flow_adaptive::{
+    AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, ComponentSpec, StateConfig,
+    TelemetryComponentConfig,
+};
 
 let mut adaptive = AdaptiveConfig::default();
 adaptive.agent_id = Some("planner".into());
-adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig::default());
+adaptive.state = Some(StateConfig {
+    backend: BackendSpec::in_memory(),
+});
+adaptive.telemetry = Some(TelemetryComponentConfig {
+    learners: vec!["tool_parallelism".into()],
+    ..TelemetryComponentConfig::default()
+});
+adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
+    inject_body_path: "nvext.agent_hints".into(),
+    ..AdaptiveHintsComponentConfig::default()
+});
+
+let mut plugin_config = PluginConfig::default();
+plugin_config.components.push(ComponentSpec::new(adaptive).into());
+
+let report = validate_plugin_config(&plugin_config);
+assert!(!report.has_errors());
+
+let active = initialize_plugins(plugin_config).await?;
+```
+:::
+
+::::
+
+## Manual API
+
+Use the manual runtime API when an integration needs to own adaptive lifecycle
+directly instead of activating the top-level plugin component.
+
+::::{tab-set}
+:sync-group: language
+
+:::{tab-item} Python
+:sync: python
+
+```python
+import nemo_flow
+
+adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
+    agent_id="planner",
+    state=nemo_flow.adaptive.StateConfig(
+        backend=nemo_flow.adaptive.BackendSpec.in_memory(),
+    ),
+    telemetry=nemo_flow.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
+    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+        inject_body_path="nvext.agent_hints",
+    ),
+)
+
+runtime = nemo_flow.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+await runtime.register()
+try:
+    # Run instrumented application work here.
+    nemo_flow.adaptive.set_latency_sensitivity(8)
+finally:
+    await runtime.shutdown()
+```
+:::
+
+:::{tab-item} Node.js
+:sync: node
+
+The Node.js binding exposes Adaptive Hints through the adaptive plugin component
+helpers. Use the Plugin Configuration example above when activating Adaptive
+Hints from Node.js.
+:::
+
+:::{tab-item} Rust
+:sync: rust
+
+```rust
+use nemo_flow_adaptive::{
+    set_latency_sensitivity, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
+    BackendSpec, StateConfig, TelemetryComponentConfig,
+};
+
+let mut adaptive = AdaptiveConfig::default();
+adaptive.agent_id = Some("planner".into());
+adaptive.state = Some(StateConfig {
+    backend: BackendSpec::in_memory(),
+});
+adaptive.telemetry = Some(TelemetryComponentConfig {
+    learners: vec!["tool_parallelism".into()],
+    ..TelemetryComponentConfig::default()
+});
+adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
+    inject_body_path: "nvext.agent_hints".into(),
+    ..AdaptiveHintsComponentConfig::default()
+});
+
+let mut runtime = AdaptiveRuntime::new(adaptive).await?;
+runtime.register().await?;
+
+// Run instrumented application work here.
+set_latency_sensitivity(8);
+
+runtime.shutdown().await?;
 ```
 :::
 
