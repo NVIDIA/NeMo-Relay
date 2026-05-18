@@ -341,29 +341,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          version="${{ github.ref_name }}"
-          expected_assets=(
-            "nemo-flow-cli-x86_64-unknown-linux-musl-${version}"
-            "nemo-flow-cli-aarch64-unknown-linux-musl-${version}"
-            "nemo-flow-cli-aarch64-apple-darwin-${version}"
-            "nemo-flow-cli-x86_64-pc-windows-msvc-${version}.exe"
-            "nemo-flow-cli-aarch64-pc-windows-msvc-${version}.exe"
-          )
-
           (
             cd release-assets
-            sha256sum "${expected_assets[@]}" > SHA256SUMS
+            cli_assets=(nemo-flow-cli-*)
+            sha256sum "${cli_assets[@]}" > SHA256SUMS
             sha256sum --check SHA256SUMS
 
             while read -r digest filename; do
               printf '%s  %s\n' "$digest" "$filename" > "${filename}.sha256"
             done < SHA256SUMS
-          )
 
-          printf 'CLI release assets:\n'
-          printf '  release-assets/%s\n' "${expected_assets[@]}"
-          printf '  release-assets/%s.sha256\n' "${expected_assets[@]}"
-          printf '  release-assets/SHA256SUMS\n'
+            printf 'CLI release assets:\n'
+            printf '  release-assets/%s\n' *
+          )
 
       - name: Upload CLI assets and checksums to draft GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
