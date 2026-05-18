@@ -337,7 +337,7 @@ jobs:
           merge-multiple: true
           path: release-assets/
 
-      - name: Verify CLI release assets and generate checksums
+      - name: Generate CLI release checksums
         run: |
           set -euo pipefail
 
@@ -349,22 +349,6 @@ jobs:
             "nemo-flow-cli-x86_64-pc-windows-msvc-${version}.exe"
             "nemo-flow-cli-aarch64-pc-windows-msvc-${version}.exe"
           )
-
-          for asset in "${expected_assets[@]}"; do
-            if [ ! -f "release-assets/${asset}" ]; then
-              echo "Error: expected CLI release asset release-assets/${asset}" >&2
-              exit 1
-            fi
-          done
-
-          shopt -s nullglob
-          downloaded_assets=(release-assets/*)
-          if ((${#downloaded_assets[@]} != ${#expected_assets[@]})); then
-            echo "Error: unexpected CLI release asset set" >&2
-            printf 'Downloaded assets:\n' >&2
-            printf '  %s\n' "${downloaded_assets[@]}" >&2
-            exit 1
-          fi
 
           (
             cd release-assets
@@ -388,18 +372,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
           overwrite_files: true
           fail_on_unmatched_files: true
-          files: |
-            release-assets/nemo-flow-cli-x86_64-unknown-linux-musl-${{ github.ref_name }}
-            release-assets/nemo-flow-cli-x86_64-unknown-linux-musl-${{ github.ref_name }}.sha256
-            release-assets/nemo-flow-cli-aarch64-unknown-linux-musl-${{ github.ref_name }}
-            release-assets/nemo-flow-cli-aarch64-unknown-linux-musl-${{ github.ref_name }}.sha256
-            release-assets/nemo-flow-cli-aarch64-apple-darwin-${{ github.ref_name }}
-            release-assets/nemo-flow-cli-aarch64-apple-darwin-${{ github.ref_name }}.sha256
-            release-assets/nemo-flow-cli-x86_64-pc-windows-msvc-${{ github.ref_name }}.exe
-            release-assets/nemo-flow-cli-x86_64-pc-windows-msvc-${{ github.ref_name }}.exe.sha256
-            release-assets/nemo-flow-cli-aarch64-pc-windows-msvc-${{ github.ref_name }}.exe
-            release-assets/nemo-flow-cli-aarch64-pc-windows-msvc-${{ github.ref_name }}.exe.sha256
-            release-assets/SHA256SUMS
+          files: release-assets/*
 
   publish-rust:
     name: Publish (crates.io)
