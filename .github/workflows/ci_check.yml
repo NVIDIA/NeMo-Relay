@@ -119,7 +119,7 @@ jobs:
           if [[ "$PYTHON_INTEGRATION_LANGCHAIN" == "true" ]]; then
             FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langgraph --extra deepagents)
           fi
-          
+
           uv sync --inexact --no-install-project --no-install-package nemo-flow "${FLOW_CI_UV_SYNC_EXTRA_ARGS[@]}"
           if [[ "$FULL_CI" == "true" || -z "$PRE_COMMIT_BASE" ]]; then
             pre-commit run --all-files --show-diff-on-failure
