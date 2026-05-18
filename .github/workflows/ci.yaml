@@ -203,7 +203,7 @@ jobs:
     name: Python
     needs: [prepare, ci_changes, ci_check]
     uses: ./.github/workflows/ci_python.yml
-    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_python == 'true' }}
+    if: ${{ needs.ci_check.result == 'success' && ( needs.ci_changes.outputs.run_python == 'true' || needs.ci_changes.outputs.run_python_integration_langchain == 'true' ) }}
     permissions:
       contents: read
     secrets:
@@ -211,7 +211,8 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
-      run_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
+      run_package: ${{ ( needs.ci_changes.outputs.run_python == 'true' || needs.ci_changes.outputs.run_python_integration_langchain == 'true' ) }}
+      run_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
 
   ci_wasm:
     name: WebAssembly
