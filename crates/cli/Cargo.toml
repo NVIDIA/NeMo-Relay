@@ -14,7 +14,7 @@ name = "nemo-flow"
 path = "src/main.rs"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }-{ version }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }-{ version }{ binary-ext }"
 pkg-fmt = "bin"
 
 [lints]
