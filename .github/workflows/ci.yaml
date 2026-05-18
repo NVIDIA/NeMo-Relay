@@ -337,26 +337,69 @@ jobs:
           merge-multiple: true
           path: release-assets/
 
-      - name: Verify CLI release assets
+      - name: Verify CLI release assets and generate checksums
         run: |
           set -euo pipefail
+
+          version="${{ github.ref_name }}"
+          expected_assets=(
+            "nemo-flow-cli-x86_64-unknown-linux-musl-${version}"
+            "nemo-flow-cli-aarch64-unknown-linux-musl-${version}"
+            "nemo-flow-cli-aarch64-apple-darwin-${version}"
+            "nemo-flow-cli-x86_64-pc-windows-msvc-${version}.exe"
+            "nemo-flow-cli-aarch64-pc-windows-msvc-${version}.exe"
+          )
+
+          for asset in "${expected_assets[@]}"; do
+            if [ ! -f "release-assets/${asset}" ]; then
+              echo "Error: expected CLI release asset release-assets/${asset}" >&2
+              exit 1
+            fi
+          done
+
           shopt -s nullglob
-          assets=(release-assets/*)
-          if ((${#assets[@]} == 0)); then
-            echo "Error: no CLI release assets were downloaded" >&2
+          downloaded_assets=(release-assets/*)
+          if ((${#downloaded_assets[@]} != ${#expected_assets[@]})); then
+            echo "Error: unexpected CLI release asset set" >&2
+            printf 'Downloaded assets:\n' >&2
+            printf '  %s\n' "${downloaded_assets[@]}" >&2
             exit 1
           fi
-          printf 'CLI release assets:\n'
-          printf '  %s\n' "${assets[@]}"
 
-      - name: Upload CLI assets to draft GitHub Release
+          (
+            cd release-assets
+            sha256sum "${expected_assets[@]}" > SHA256SUMS
+            sha256sum --check SHA256SUMS
+
+            while read -r digest filename; do
+              printf '%s  %s\n' "$digest" "$filename" > "${filename}.sha256"
+            done < SHA256SUMS
+          )
+
+          printf 'CLI release assets:\n'
+          printf '  release-assets/%s\n' "${expected_assets[@]}"
+          printf '  release-assets/%s.sha256\n' "${expected_assets[@]}"
+          printf '  release-assets/SHA256SUMS\n'
+
+      - name: Upload CLI assets and checksums to draft GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
           overwrite_files: true
           fail_on_unmatched_files: true
-          files: release-assets/*
+          files: |
+            release-assets/nemo-flow-cli-x86_64-unknown-linux-musl-${{ github.ref_name }}
+            release-assets/nemo-flow-cli-x86_64-unknown-linux-musl-${{ github.ref_name }}.sha256
+            release-assets/nemo-flow-cli-aarch64-unknown-linux-musl-${{ github.ref_name }}
+            release-assets/nemo-flow-cli-aarch64-unknown-linux-musl-${{ github.ref_name }}.sha256
+            release-assets/nemo-flow-cli-aarch64-apple-darwin-${{ github.ref_name }}
+            release-assets/nemo-flow-cli-aarch64-apple-darwin-${{ github.ref_name }}.sha256
+            release-assets/nemo-flow-cli-x86_64-pc-windows-msvc-${{ github.ref_name }}.exe
+            release-assets/nemo-flow-cli-x86_64-pc-windows-msvc-${{ github.ref_name }}.exe.sha256
+            release-assets/nemo-flow-cli-aarch64-pc-windows-msvc-${{ github.ref_name }}.exe
+            release-assets/nemo-flow-cli-aarch64-pc-windows-msvc-${{ github.ref_name }}.exe.sha256
+            release-assets/SHA256SUMS
 
   publish-rust:
     name: Publish (crates.io)
