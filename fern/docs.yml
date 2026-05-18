@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 instances:
-- url: https://nemo-flow.docs.buildwithfern.com
+- url: nvidia-nemo-flow.docs.buildwithfern.com/nemo-flow
 title: NVIDIA NeMo Flow
 footer: ./components/CustomFooter.tsx
 layout:
