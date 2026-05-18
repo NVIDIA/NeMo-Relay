@@ -89,11 +89,6 @@ jobs:
         with:
           tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
 
-      - name: Install just
-        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
-        with:
-          tool: just@${{ steps.ci-config.outputs.just_version }}
-
       - name: Cache pre-commit environments
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
