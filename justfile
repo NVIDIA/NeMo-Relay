@@ -1111,7 +1111,7 @@ package-python:
     export_uv_python_runtime
     cd "$NEMO_FLOW_REPO_ROOT"
     package_dir="$(prepare_package_dir wheels)"
-    sync_args=(--no-install-project --no-install-package nemo-flow --no-group docs)
+    sync_args=(--no-install-project --no-install-package nemo-flow)
     uv sync --inexact "${sync_args[@]}"
     activate_project_venv
     if [[ -z "{{ ref_name }}" ]]; then

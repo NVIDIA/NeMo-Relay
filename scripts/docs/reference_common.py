@@ -41,11 +41,14 @@ def frontmatter(
     position: int,
     *,
     sidebar_title: str | None = None,
+    slug: str | None = None,
     normalize: TextNormalizer = identity,
 ) -> str:
     lines = ["---", f"title: {quote_yaml_string(title, normalize=normalize)}"]
     if sidebar_title is not None:
         lines.append(f"sidebar-title: {quote_yaml_string(sidebar_title, normalize=normalize)}")
+    if slug is not None:
+        lines.append(f"slug: {quote_yaml_string(slug, normalize=normalize)}")
     lines.extend(
         [
             f"description: {quote_yaml_string(description, normalize=normalize)}",

@@ -164,6 +164,11 @@ def _page_url(output_rel: Path) -> str:
     return f"{BASE_URL}/{'/'.join(parts)}"
 
 
+def _needs_explicit_slug(page: Page) -> bool:
+    """Fern drops underscores from auto-discovered folder URLs."""
+    return "_" in page.url
+
+
 def _discover_pages(doc_root: Path, output_dir: Path) -> dict[Path, Page]:
     pages: dict[Path, Page] = {}
     for crate_name, crate_dir_name, _description in CRATES:
@@ -463,6 +468,7 @@ def _render_page(page: Page, pages_by_html: dict[Path, Page], position: int) -> 
             description,
             position,
             sidebar_title=_sidebar_title(soup, page),
+            slug=page.url if _needs_explicit_slug(page) else None,
             normalize=_ascii,
         ),
         f"{GENERATED_BY}\n\n",
