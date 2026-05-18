@@ -11,12 +11,12 @@ usage() {
     cat <<'EOF'
 Usage: ./scripts/build-docs.sh [html|check|linkcheck]
 
-Compatibility wrapper around the `just` docs recipes.
+Compatibility wrapper around the `just docs` recipe.
 
 Modes:
-- html       Run `just docs` (Fern validation)
+- html       Run `just docs`
 - check      Run `just docs`
-- linkcheck  Run `just docs-linkcheck`
+- linkcheck  Run `just docs` for compatibility
 
 EOF
     return $?
@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
             mode="docs"
             ;;
         linkcheck)
-            mode="docs-linkcheck"
+            mode="docs"
             ;;
         -h|--help)
             usage

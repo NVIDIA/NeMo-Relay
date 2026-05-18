@@ -685,17 +685,8 @@ is_true() {
 }
 '''
 
-# build the documentation site
+# validate the documentation site, links, navigation, and generated references
 docs:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    ensure_docs_dependencies
-    generate_docs_api_references
-    cd "$NEMO_FLOW_REPO_ROOT/fern"
-    npx fern check --warnings
-
-# validate documentation links and navigation
-docs-linkcheck:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     ensure_docs_dependencies

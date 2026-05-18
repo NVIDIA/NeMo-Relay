@@ -12,7 +12,7 @@ Keep `scripts/` focused on helpers that are still script-native:
 
 ## Top-Level Commands
 
-- `build-docs.sh`: compatibility wrapper around the Fern documentation validation recipes; these regenerate ignored Fern API reference pages before checking the site
+- `build-docs.sh`: compatibility wrapper around the Fern documentation validation recipe; it regenerates ignored Fern API reference pages before checking the site
 - `generate_attributions.sh`: regenerate attribution documents
 - `bootstrap-third-party.sh`: compatibility wrapper for `scripts/third-party/bootstrap.sh`
 - `apply-patches.sh`: compatibility wrapper for `scripts/third-party/apply-patches.sh`
