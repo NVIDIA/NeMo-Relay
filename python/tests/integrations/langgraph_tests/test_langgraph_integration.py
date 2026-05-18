@@ -86,15 +86,14 @@ def test_handler_type(callback_handler: NemoFlowCallbackHandler):
 
 
 class TestGraphCallbacks:
-    def __init__(self):
-        self._expected_events = [
-            "scope.start.request",
-            "scope.start.LangGraph",
-            "scope.start.increment",
-            "scope.end.increment",
-            "scope.end.LangGraph",
-            "scope.end.request",
-        ]
+    _expected_events = [
+        "scope.start.request",
+        "scope.start.LangGraph",
+        "scope.start.increment",
+        "scope.end.increment",
+        "scope.end.LangGraph",
+        "scope.end.request",
+    ]
 
     def test_sync(
         self,
