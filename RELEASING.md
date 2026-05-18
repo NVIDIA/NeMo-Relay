@@ -33,7 +33,6 @@ The release pipeline publishes these package surfaces from a tag push:
 | crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, `nemo-flow-cli` |
 | PyPI | `nemo-flow` |
 | npm | `nemo-flow-node`, `nemo-flow-openclaw`, `nemo-flow-wasm` |
-| GitHub Pages | The documentation site, including the versioned docs build |
 
 Go remains source-first. There is no separate Go package-manager publication
 step in the repository release workflow.
@@ -164,7 +163,7 @@ Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- [`docs/getting-started/installation.md`](docs/getting-started/installation.md)
+- [`fern/versions/dev/pages/getting-started/installation.mdx`](fern/versions/dev/pages/getting-started/installation.mdx)
 - Any binding README or example that pins a release number
 
 Do not commit a static Python package version into `pyproject.toml` just to cut
@@ -182,8 +181,8 @@ just test-python
 just test-go
 just test-node
 just test-wasm
+./scripts/build-docs.sh check
 ./scripts/build-docs.sh linkcheck
-./scripts/build-docs.sh pages
 ```
 
 If you want to validate the packaging recipes before pushing a tag, run:
@@ -223,21 +222,20 @@ git push upstream 0.1.0-rc.1
 ## What CI Does On A Tag Push
 
 Pushing a valid tag triggers [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml).
-That workflow then calls [`.github/workflows/ci_pipe.yml`](.github/workflows/ci_pipe.yml)
-for the shared release documentation and packaging stages.
+That workflow then calls the language-specific reusable workflows for validation
+and package artifact creation.
 
 The release pipeline then:
 
 1. Validates the tag format in the `prepare` job.
-2. Skips repo checks and the Rust, Python, Go, Node.js, and WebAssembly test jobs.
-   Run those checks before creating and pushing the release tag.
-3. Builds and uploads the versioned GitHub Pages documentation artifact.
-4. Builds publishable package artifacts with the exact tag version:
+2. Runs the required repository checks, language test jobs, and Fern documentation
+   validation.
+3. Builds publishable package artifacts with the exact tag version:
    - `package-node` packs the npm Node.js package.
    - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform wheels.
    - `package-wasm` packs the npm WebAssembly package.
-5. Publishes packages from the top-level workflow after the reusable packaging
+4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
      runs `cargo publish --package` for `nemo-flow`, `nemo-flow-adaptive`,
@@ -250,17 +248,15 @@ The release pipeline then:
      - Stable tags publish to the npm `latest` dist-tag
      - Prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
-6. Deploys the GitHub Pages docs site.
 
 The workflow boundary is split intentionally:
 
-- [`.github/workflows/ci_pipe.yml`](.github/workflows/ci_pipe.yml) produces the
-  publishable package artifacts, runs the docs build, and uploads the GitHub
-  Pages artifact.
+- The language-specific reusable workflows produce publishable package artifacts
+  after their tests pass.
+- [`.github/workflows/ci_docs.yml`](.github/workflows/ci_docs.yml) validates the
+  Fern documentation.
 - [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) owns all crates.io,
   PyPI, and npm publication decisions and credentials.
-- [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) performs only the
-  `actions/deploy-pages` step for documentation publication.
 - This layout also satisfies the official `pypa/gh-action-pypi-publish`
   guidance that trusted publishing should not run inside reusable workflows.
 
@@ -284,14 +280,10 @@ npm trusted publishing has its own registry-side constraints:
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
-Stable docs versioning is narrower than package publication:
-
-- Stable released docs are selected from tags that match `X.Y.Z`.
-- Prerelease tags such as `0.1.0-rc.1` still run the docs workflow, but they
-  are not treated as stable released versions by the Sphinx multiversion
-  configuration.
-- Those prerelease docs can still appear in the published version switcher as
-  prerelease snapshots when they are among the selected recent release tags.
+Stable docs versioning is managed through Fern configuration, not the release
+tag workflow. Update the Fern version entries when introducing a stable
+documentation version; prerelease tags do not publish a separate documentation
+artifact from CI.
 
 ## Publish The GitHub Release Entry
 
@@ -312,7 +304,7 @@ After the release is live, verify:
 2. The `nemo-flow` wheel is visible on PyPI.
 3. The `nemo-flow-node`, `nemo-flow-openclaw`, and `nemo-flow-wasm` packages
    are visible on npm.
-4. The GitHub Pages deployment completed successfully.
+4. The Fern documentation site shows the expected version and release notes.
 5. The GitHub Release page is complete and accurate.
 
 ## If Something Fails

@@ -84,10 +84,10 @@ third_party/hermes-agent/
 third_party/openclaw/
 third_party/opencode/
 
-# documentation
-docs/_build/**/*
-docs/reference/api/**/_generated/
-docs/reference/api/**/_source/
+# Documentation
+docs/reference/api/nodejs-library-reference/
+docs/reference/api/python-library-reference/
+docs/reference/api/rust-library-reference/
 **/release-notes.md
 CHANGELOG.md
 

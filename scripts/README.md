@@ -12,7 +12,7 @@ Keep `scripts/` focused on helpers that are still script-native:
 
 ## Top-Level Commands
 
-- `build-docs.sh`: compatibility wrapper around `just docs`, `just docs-linkcheck`, and `just docs-github-pages`
+- `build-docs.sh`: compatibility wrapper around the Fern documentation validation recipes; these regenerate ignored Fern API reference pages before checking the site
 - `generate_attributions.sh`: regenerate attribution documents
 - `bootstrap-third-party.sh`: compatibility wrapper for `scripts/third-party/bootstrap.sh`
 - `apply-patches.sh`: compatibility wrapper for `scripts/third-party/apply-patches.sh`
@@ -20,7 +20,7 @@ Keep `scripts/` focused on helpers that are still script-native:
 
 ## Internal Layout
 
-- `docs/`: documentation build helpers
+- `docs/`: Fern reference-generation and migration cleanup helpers. Generated API reference output under `docs/reference/api/*-library-reference/` is ignored and recreated by `just docs`.
 - `licensing/`: attribution generation helpers, including license inventory diff scripts
 - `lint/`: pre-commit and local lint helpers
 - `test-support/`: shared test utilities

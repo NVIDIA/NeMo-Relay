@@ -1,0 +1,169 @@
+---
+title: "Code Examples"
+description: ""
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page collects concrete examples for the surrounding guide area.
+
+## Dynamic Header Injection
+
+Use an LLM request intercept when a plugin needs to inject tenant or routing metadata into every provider request.
+
+<CodeGroup>
+
+```python title="Python" for="python"
+import nemo_flow
+
+class HeaderPlugin:
+    def validate(self, plugin_config):
+        if "header_name" not in plugin_config or "value" not in plugin_config:
+            return [{
+                "level": "error",
+                "code": "header-plugin.invalid_config",
+                "message": "header_name and value are required",
+            }]
+        return []
+
+    def register(self, plugin_config, context):
+        def add_header(name, request, annotated):
+            request.headers[plugin_config["header_name"]] = plugin_config["value"]
+            return request, annotated
+
+        context.register_llm_request_intercept("inject-header", 100, False, add_header)
+
+nemo_flow.plugin.register("header-plugin", HeaderPlugin())
+```
+
+```ts title="Node.js" for="node"
+import * as plugin from 'nemo-flow-node/plugin';
+
+const headerPlugin: plugin.Plugin = {
+  validate(pluginConfig) {
+    if (typeof pluginConfig.header_name !== 'string' || typeof pluginConfig.value !== 'string') {
+      return [
+        {
+          level: 'error',
+          code: 'header-plugin.invalid_config',
+          message: 'header_name and value are required',
+        },
+      ];
+    }
+    return [];
+  },
+  register(pluginConfig, context) {
+    context.registerLlmRequestIntercept('inject-header', 100, false, ({ request, annotated }) => ({
+      request: {
+        ...request,
+        headers: {
+          ...(request.headers as Record<string, string>),
+          [String(pluginConfig.header_name)]: String(pluginConfig.value),
+        },
+      },
+      annotated,
+    }));
+  },
+};
+
+plugin.register('header-plugin', headerPlugin);
+```
+
+</CodeGroup>
+
+This pattern is useful for:
+
+- Tenant identity
+- Trace correlation
+- Region or deployment routing
+
+## OpenInference Export
+
+Use a subscriber-oriented plugin when the component should watch the full lifecycle rather than rewrite requests.
+
+<CodeGroup>
+
+```python title="Python" for="python"
+import nemo_flow
+
+class OpenInferencePlugin:
+    def validate(self, plugin_config):
+        if "endpoint" not in plugin_config:
+            return [{
+                "level": "error",
+                "code": "openinference-export.invalid_config",
+                "message": "endpoint is required",
+            }]
+        return []
+
+    def register(self, plugin_config, context):
+        endpoint = plugin_config["endpoint"]
+
+        def on_event(event):
+            print("export", endpoint, event.kind, event.name)
+
+        context.register_subscriber("openinference-export", on_event)
+
+nemo_flow.plugin.register("openinference-export", OpenInferencePlugin())
+```
+
+```ts title="Node.js" for="node"
+import * as plugin from 'nemo-flow-node/plugin';
+
+const openInferencePlugin: plugin.Plugin = {
+  validate(pluginConfig) {
+    if (typeof pluginConfig.endpoint !== 'string') {
+      return [
+        {
+          level: 'error',
+          code: 'openinference-export.invalid_config',
+          message: 'endpoint is required',
+        },
+      ];
+    }
+    return [];
+  },
+  register(pluginConfig, context) {
+    const endpoint = String(pluginConfig.endpoint);
+    context.registerSubscriber('openinference-export', (event) => {
+      console.log('export', endpoint, event.kind, event.name);
+    });
+  },
+};
+
+plugin.register('openinference-export', openInferencePlugin);
+```
+
+</CodeGroup>
+
+This is the right pattern when the component:
+
+- Exports traces or metrics
+- Aggregates events across tools and LLMs
+- Should not change execution behavior
+
+## Multi-Surface Policy Bundle
+
+A plugin can register more than one runtime surface when one configuration document controls a related behavior bundle.
+
+For example, a policy bundle can install:
+
+- A telemetry subscriber
+- LLM request intercepts for request metadata
+- Tool guardrails for policy enforcement
+- Sanitize guardrails for exported payloads
+- Shared component-local state used by those hooks
+
+Use this pattern when the configured behavior is easier to reason about as one component than as several unrelated plugin components. Keep each registered surface small and make the component config explicit about which surfaces are enabled.
+
+## Framework-Facing Plugins
+
+Plugins can stay framework-agnostic if they operate on the normalized runtime data rather than framework-specific objects.
+
+Good examples:
+
+- Rewrite provider headers
+- Emit tracing data
+- Attach scheduling hints
+- Apply cross-framework safety policies

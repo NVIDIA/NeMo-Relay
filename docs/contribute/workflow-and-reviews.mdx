@@ -1,0 +1,99 @@
+---
+title: "Workflow and Reviews"
+description: ""
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page describes the contribution workflow from local hooks through PR review.
+
+## Pre-Commit Hooks
+
+Install hooks after cloning:
+
+```bash
+uv run pre-commit install
+```
+
+Run them manually across the repo with:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+The configured hooks include a lightweight Markdown link check for
+`README.md`, `CONTRIBUTING.md`, and files under `fern/`.
+
+## Pull Request Process
+
+Before submitting a PR:
+
+1. Ensure relevant hooks and tests pass.
+2. Verify the workspace builds cleanly.
+3. Update docs for public changes.
+4. Rebase on the latest `main`.
+
+## Release Tags
+
+Versioned release tags must be created as raw SemVer tags without a leading
+`v`.
+
+- Use `0.1.0` for stable releases.
+- Use `0.1.0-rc.1` for prereleases.
+- Do not create tags such as `v0.1.0` or `v0.1.0-rc.1`.
+
+This keeps tags aligned with Cargo versions across the workspace. CI still
+rejects `v`-prefixed release tags.
+
+For the maintainer release process and release-notes policy, see
+[`RELEASING.md`](https://github.com/NVIDIA/NeMo-Flow/blob/main/RELEASING.md).
+
+## PR Description
+
+Include:
+
+- **What changed**
+- **Why it changed**
+- **How it was implemented**
+- **What testing was run**
+- **Any breaking changes**
+
+## Review Expectations
+
+These expectations describe how review is handled before changes are merged.
+
+- At least one approving review is required.
+- CI must pass before merge
+- Reviewers may request changes for code quality, docs, tests, or architecture.
+- Do not force-push during active review.
+
+## DCO Sign-Off
+
+Every commit in a PR must include a DCO sign-off. Use:
+
+```bash
+git commit -s
+```
+
+## Commit Messages
+
+Use the format:
+
+```text
+type: short description
+```
+
+Common types:
+
+- `feat`
+- `fix`
+- `docs`
+- `test`
+- `refactor`
+- `chore`
+- `perf`
+
+## Sonar Suppressions
+
+Use `SONAR_IGNORE_START` and `SONAR_IGNORE_END` only for narrow, documented false positives. Keep the suppressed region small and call it out explicitly in the PR description for reviewer sign-off.

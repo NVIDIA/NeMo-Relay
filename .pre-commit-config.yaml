@@ -52,12 +52,22 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check . --exclude docs/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
+        entry: uv run ty check . --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
         language: system
         types: [python]
         pass_filenames: false
 
-  # Documentation — link validation
+  # Documentation — Fern validation
+  - repo: local
+    hooks:
+      - id: fern-docs-linkcheck
+        name: fern docs linkcheck
+        entry: just docs-linkcheck
+        language: system
+        files: '^(fern/|docs/)'
+        pass_filenames: false
+
+  # Documentation — external link validation
   - repo: https://github.com/lycheeverse/lychee.git
     rev: lychee-v0.23.0
     hooks:
@@ -66,11 +76,21 @@ repos:
         args:
           - --no-progress
           - --include-fragments
+          - --root-dir
+          - /
+          - --scheme
+          - http
+          - --scheme
+          - https
+          - --accept
+          - '200..=299,403,429'
           - --exclude
           - '^https://www\.npmjs\.com/package/nemo-flow-(node|wasm)$'
+          - --exclude
+          - '^https://nemo-flow\.docs\.buildwithfern\.com/dev/?$'
           - README.md
           - CONTRIBUTING.md
-          - docs/**/*.md
+          - docs/**/*.mdx
         always_run: true
         pass_filenames: false
 

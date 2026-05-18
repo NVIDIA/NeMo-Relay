@@ -152,5 +152,5 @@ The script also accepts `NVIDIA_MODEL`, `NVIDIA_BASE_URL`, and
 `NEMO_GUARDRAILS_TOOL` as environment variable equivalents for the config lane,
 config path, and tool selection.
 
-See [NeMo Guardrails Example Plugin](../../docs/build-plugins/nemoguardrails.md)
+See [NeMo Guardrails Example Plugin](../../docs/build-plugins/nemoguardrails.mdx)
 for the full configuration and limitation notes.
