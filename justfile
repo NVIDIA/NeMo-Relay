@@ -155,9 +155,27 @@ ensure_docs_dependencies() {
     npm install --ignore-scripts
 }
 
+ensure_node_docs_declarations() {
+    cd "$NEMO_FLOW_REPO_ROOT"
+    local types_file="crates/node/index.d.ts"
+    local newest_source=""
+
+    if [[ -f "$types_file" ]]; then
+        newest_source="$(
+            find crates/node/src crates/node/Cargo.toml crates/node/build.rs \
+                -type f -newer "$types_file" -print -quit
+        )"
+    fi
+
+    if [[ ! -f "$types_file" || -n "$newest_source" ]]; then
+        npm run build-debug --workspace=nemo-flow-node
+    fi
+}
+
 generate_docs_api_references() {
     cd "$NEMO_FLOW_REPO_ROOT"
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
+    ensure_node_docs_declarations
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
     uv run --no-sync python scripts/docs/generate_rust_library_reference.py
 }
