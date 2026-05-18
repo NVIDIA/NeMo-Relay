@@ -12,7 +12,6 @@ from uuid import uuid4
 
 import pytest
 
-
 if typing.TYPE_CHECKING:
     from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
 
@@ -35,11 +34,14 @@ def _make_mock_nemo_flow() -> MagicMock:
     mock_nemo_flow.scope = scope
     return mock_nemo_flow
 
+
 @pytest.fixture(name="callbacks_module", scope="session")
 def callbacks_module_fixture() -> types.ModuleType:
     """Fixture to provide the callbacks module."""
     import nemo_flow.integrations.langchain.callbacks as callbacks_module
+
     return callbacks_module
+
 
 @pytest.fixture()
 def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType) -> MagicMock:
@@ -51,6 +53,7 @@ def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch, callbacks_module: types.Modu
 @pytest.fixture()
 def handler(mock_nemo_flow: MagicMock) -> NemoFlowCallbackHandler:
     from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
     return NemoFlowCallbackHandler()
 
 
@@ -127,8 +130,9 @@ class TestScopeLifecycle:
         assert run_id not in handler._scope_handles
 
     def test_on_chain_end_prepares_command_outputs(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
-        from langgraph.types import Command
         from langchain_core.messages import ToolMessage
+        from langgraph.types import Command
+
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
@@ -227,6 +231,7 @@ class TestGracefulNoOp:
     def test_no_nemo_flow_on_chain_start(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
         monkeypatch.setattr(callbacks_module, "nemo_flow", None)
         from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())
@@ -234,6 +239,7 @@ class TestGracefulNoOp:
     def test_no_nemo_flow_on_chain_end(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
         monkeypatch.setattr(callbacks_module, "nemo_flow", None)
         from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_end({}, run_id=uuid4())
@@ -241,6 +247,7 @@ class TestGracefulNoOp:
     def test_no_nemo_flow_on_chain_error(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
         monkeypatch.setattr(callbacks_module, "nemo_flow", None)
         from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_error(RuntimeError("e"), run_id=uuid4())

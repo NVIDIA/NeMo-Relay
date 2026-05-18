@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,19 +17,20 @@ import nemo_flow
 from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 if TYPE_CHECKING:
-    from langchain_core.messages import AIMessage
-    from langchain_core.messages import ToolMessage
-    from langchain.agents.middleware import ToolCallRequest
-    from langchain.agents.middleware import ModelRequest, ModelResponse
+    from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
+    from langchain_core.messages import AIMessage, ToolMessage
 
     from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
 
 _DEFAULT_MOCK_RESPONSE_MSG = "nemo_flow unittest result"
 
+
 @pytest.fixture(name="model_request_handler")
-def model_request_handler_fixture() -> tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]]:
-    from langchain_core.messages import AIMessage
+def model_request_handler_fixture() -> tuple[
+    Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]
+]:
     from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
 
     seen_request: dict[str, ModelRequest[Any]] = {}
 
@@ -39,17 +40,23 @@ def model_request_handler_fixture() -> tuple[Callable[[ModelRequest[Any]], Model
 
     return handler, seen_request
 
+
 @pytest.fixture(name="async_model_request_handler")
-def async_model_request_handler_fixture(model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]]) -> tuple[Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]]:
+def async_model_request_handler_fixture(
+    model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
+) -> tuple[Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]]:
     (sync_handler, seen_request) = model_request_handler
+
     async def handler(request: ModelRequest[Any]) -> ModelResponse[Any]:
         return sync_handler(request)
 
     return handler, seen_request
 
+
 @pytest.fixture(name="tool_request_handler")
 def tool_request_handler_fixture() -> tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]:
     from langchain_core.messages import ToolMessage
+
     seen_request: dict[str, ToolCallRequest] = {}
 
     def handler(request: ToolCallRequest) -> ToolMessage:
@@ -58,13 +65,18 @@ def tool_request_handler_fixture() -> tuple[Callable[[ToolCallRequest], ToolMess
 
     return handler, seen_request
 
+
 @pytest.fixture(name="async_tool_request_handler")
-def async_tool_request_handler_fixture(tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]) -> tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]:
+def async_tool_request_handler_fixture(
+    tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]],
+) -> tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]:
     (sync_handler, seen_request) = tool_request_handler
+
     async def handler(request: ToolCallRequest) -> ToolMessage:
         return sync_handler(request)
 
     return handler, seen_request
+
 
 @pytest.fixture(name="mock_tool_execute")
 def mock_tool_execute_fixture() -> AsyncMock:
@@ -96,14 +108,18 @@ def _mk_mock_model(returned_message: str | list[AIMessage] = _DEFAULT_MOCK_RESPO
 
     return mock_model
 
+
 @pytest.fixture(name="nemo_flow_middleware")
 def nemo_flow_middleware_fixture() -> NemoFlowMiddleware:
     from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
+
     return NemoFlowMiddleware()
+
 
 @pytest.fixture(name="recording_middleware")
 def recording_middleware_fixture() -> NemoFlowMiddleware:
     from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
+
     class RecordingMiddleware(NemoFlowMiddleware):
         def __init__(self):
             super().__init__()
@@ -136,6 +152,7 @@ def recording_middleware_fixture() -> NemoFlowMiddleware:
 
     return RecordingMiddleware()
 
+
 @pytest.fixture(name="model_request")
 def model_request_fixture() -> ModelRequest[Any]:
     from langchain.agents.middleware import ModelRequest
@@ -153,6 +170,7 @@ def model_request_fixture() -> ModelRequest[Any]:
 @pytest.fixture(name="tool_call_request")
 def tool_call_request_fixture() -> ToolCallRequest:
     from langchain.agents.middleware import ToolCallRequest
+
     return ToolCallRequest(
         tool_call={"name": "lookup", "args": {"query": "original"}, "id": "call-1"},
         tool=None,
@@ -161,8 +179,11 @@ def tool_call_request_fixture() -> ToolCallRequest:
     )
 
 
-def test_wrap_model_call_routes_through_llm_execute(model_request: ModelRequest[Any], model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]], recording_middleware: NemoFlowMiddleware):
-    
+def test_wrap_model_call_routes_through_llm_execute(
+    model_request: ModelRequest[Any],
+    model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
+    recording_middleware: NemoFlowMiddleware,
+):
     (handler, seen_request) = model_request_handler
 
     response = recording_middleware.wrap_model_call(model_request, handler)
@@ -175,7 +196,13 @@ def test_wrap_model_call_routes_through_llm_execute(model_request: ModelRequest[
     assert recording_middleware.calls[0]["response_codec"] is None
 
 
-def test_awrap_model_call_routes_through_llm_execute(model_request: ModelRequest[Any], async_model_request_handler: tuple[Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]], recording_middleware: NemoFlowMiddleware):
+def test_awrap_model_call_routes_through_llm_execute(
+    model_request: ModelRequest[Any],
+    async_model_request_handler: tuple[
+        Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]
+    ],
+    recording_middleware: NemoFlowMiddleware,
+):
     (handler, seen_request) = async_model_request_handler
 
     response = asyncio.run(recording_middleware.awrap_model_call(model_request, handler))
@@ -188,7 +215,13 @@ def test_awrap_model_call_routes_through_llm_execute(model_request: ModelRequest
     assert recording_middleware.calls[0]["response_codec"] is None
 
 
-def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_call_request: ToolCallRequest, tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]]):
+def test_wrap_tool_call_routes_through_tool_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    nemo_flow_middleware: NemoFlowMiddleware,
+    mock_tool_execute: AsyncMock,
+    tool_call_request: ToolCallRequest,
+    tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]],
+):
     (handler, seen_request) = tool_request_handler
     parent_handle = MagicMock()
 
@@ -208,7 +241,13 @@ def test_wrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPa
     assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
 
 
-def test_awrap_tool_call_routes_through_tool_execute(monkeypatch: pytest.MonkeyPatch, nemo_flow_middleware: NemoFlowMiddleware, mock_tool_execute: AsyncMock, tool_call_request: ToolCallRequest, async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]]):
+def test_awrap_tool_call_routes_through_tool_execute(
+    monkeypatch: pytest.MonkeyPatch,
+    nemo_flow_middleware: NemoFlowMiddleware,
+    mock_tool_execute: AsyncMock,
+    tool_call_request: ToolCallRequest,
+    async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]],
+):
     parent_handle = MagicMock()
     (handler, seen_request) = async_tool_request_handler
 
@@ -260,7 +299,7 @@ def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddle
     from langchain.agents import create_agent
     from langchain_core.messages import AIMessage
     from langchain_core.tools import tool
-    
+
     model_responses = [
         AIMessage(
             content="",

@@ -5,7 +5,8 @@ import types
 
 import pytest
 
-@pytest.fixture(name="integration_langchain", scope='session', autouse=True)
+
+@pytest.fixture(name="integration_langchain", scope="session", autouse=True)
 def integration_langchain_fixture(integration_langchain: types.ModuleType) -> types.ModuleType:
     """
     Override the integration_langchain fixture to make it autouse

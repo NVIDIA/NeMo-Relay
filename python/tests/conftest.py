@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import typing
 from collections.abc import Iterator
-import types
 from uuid import uuid4
 
 import pytest
