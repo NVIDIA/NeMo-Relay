@@ -113,6 +113,10 @@ package = true
 testpaths = ["python/tests", "third_party/langgraph_tests"]
 asyncio_mode = "auto"
 
+[tool.coverage.run]
+# Exclude integration tests from coverage, since we don't run these by default
+omit = ["python/nemo_flow/integrations/*"]
+
 [tool.ty.analysis]
 # nemo_flow._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
