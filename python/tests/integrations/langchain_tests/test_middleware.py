@@ -115,6 +115,7 @@ def nemo_flow_middleware_fixture() -> NemoFlowMiddleware:
 
     return NemoFlowMiddleware()
 
+
 class RecordingMiddleware(Protocol):
     calls: list[dict[str, Any]]
     wrap_model_call: Callable
