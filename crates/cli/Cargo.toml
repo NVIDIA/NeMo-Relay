@@ -13,6 +13,10 @@ description = "Coding-agent gateway CLI for NeMo Flow observability."
 name = "nemo-flow"
 path = "src/main.rs"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }-{ version }{ archive-suffix }"
+pkg-fmt = "bin"
+
 [lints]
 workspace = true
 

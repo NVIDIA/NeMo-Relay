@@ -321,6 +321,43 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
 
+  release-cli-artifacts:
+    name: Release CLI Artifacts
+    needs: [prepare, ci_required]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download CLI binary artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release-assets/
+
+      - name: Verify CLI release assets
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/*)
+          if ((${#assets[@]} == 0)); then
+            echo "Error: no CLI release assets were downloaded" >&2
+            exit 1
+          fi
+          printf 'CLI release assets:\n'
+          printf '  %s\n' "${assets[@]}"
+
+      - name: Upload CLI assets to draft GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: release-assets/*
+
   publish-rust:
     name: Publish (crates.io)
     needs: [prepare, ci_required]
