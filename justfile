@@ -854,12 +854,12 @@ test-python:
         fi
         cargo test -p nemo-flow-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-flow
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
     "$python_executable" -m maturin develop --skip-install
-    "$python_executable" -m "${pytest_cmd[@]}"
+    "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
             -p nemo-flow-python \
@@ -867,6 +867,21 @@ test-python:
             --cobertura \
             --output-path "$rust_coverage_out"
     fi
+
+test-python-langchain:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    pytest_cmd=(pytest)
+    cd "$NEMO_FLOW_REPO_ROOT"
+    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --skip-install
+    "$python_executable" -m "${pytest_cmd[@]}" \
+        python/tests/integrations/deepagents_tests \
+        python/tests/integrations/langchain_tests \
+        python/tests/integrations/langgraph_tests
 
 # --set [output_dir=<path>] [ci=true|false]
 test-go:
@@ -1012,7 +1027,7 @@ test-wasm:
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-go test-node test-openclaw test-wasm
+test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-wasm
 
 # [version] or --set ref_name=<version>
 set-version version="":
