@@ -15,6 +15,7 @@ use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::response::{AnnotatedLlmResponse, Usage};
 use crate::json::Json;
+use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
@@ -803,6 +804,92 @@ fn preserves_parent_child_relationships() {
     );
     assert_eq!(child.parent_span_id, parent.span_context.span_id());
     assert!(!child.parent_span_is_remote);
+}
+
+#[test]
+fn atif_lineage_correlates_with_openinference_span_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+
+    let agent_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+    let atif_exporter = AtifExporter::new(
+        agent_uuid.to_string(),
+        AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    );
+    let atif_subscriber = atif_exporter.subscriber();
+
+    let events = vec![
+        make_start_event(agent_uuid, None, "agent", ScopeType::Agent, None),
+        make_start_event(
+            llm_uuid,
+            Some(agent_uuid),
+            "model-call",
+            ScopeType::Llm,
+            Some(json!({"messages": [{"role": "user", "content": "hello"}]})),
+        ),
+        make_end_event(
+            llm_uuid,
+            Some(agent_uuid),
+            "model-call",
+            ScopeType::Llm,
+            Some(json!({"content": "hi", "role": "assistant"})),
+        ),
+        make_end_event(agent_uuid, None, "agent", ScopeType::Agent, None),
+    ];
+
+    for event in &events {
+        processor.process(event);
+        atif_subscriber(event);
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let agent_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "agent")
+        .unwrap();
+    let llm_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "model-call")
+        .unwrap();
+    let agent_attributes = attr_map(&agent_span.attributes);
+    let llm_attributes = attr_map(&llm_span.attributes);
+
+    assert_eq!(
+        agent_attributes.get("nemo_flow.uuid"),
+        Some(&agent_uuid.to_string())
+    );
+    assert_eq!(
+        llm_attributes.get("nemo_flow.uuid"),
+        Some(&llm_uuid.to_string())
+    );
+    assert_eq!(
+        llm_attributes.get("nemo_flow.parent_uuid"),
+        Some(&agent_uuid.to_string())
+    );
+
+    let trajectory = atif_exporter.export();
+    assert_eq!(trajectory.session_id, agent_uuid.to_string());
+    let agent_step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .unwrap();
+    let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+
+    assert_eq!(
+        llm_attributes.get("nemo_flow.uuid"),
+        Some(&extra.ancestry.function_id)
+    );
+    assert_eq!(extra.ancestry.parent_id, Some(trajectory.session_id));
 }
 
 #[test]
