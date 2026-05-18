@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -115,12 +115,17 @@ def nemo_flow_middleware_fixture() -> NemoFlowMiddleware:
 
     return NemoFlowMiddleware()
 
+class RecordingMiddleware(Protocol):
+    calls: list[dict[str, Any]]
+    wrap_model_call: Callable
+    awrap_model_call: Callable
+
 
 @pytest.fixture(name="recording_middleware")
-def recording_middleware_fixture() -> NemoFlowMiddleware:
+def recording_middleware_fixture() -> RecordingMiddleware:
     from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
 
-    class RecordingMiddleware(NemoFlowMiddleware):
+    class _RecordingMiddleware(NemoFlowMiddleware, RecordingMiddleware):
         def __init__(self):
             super().__init__()
             self.calls: list[dict[str, Any]] = []
@@ -150,7 +155,7 @@ def recording_middleware_fixture() -> NemoFlowMiddleware:
             )
             return await func(intercepted)
 
-    return RecordingMiddleware()
+    return _RecordingMiddleware()
 
 
 @pytest.fixture(name="model_request")
@@ -182,7 +187,7 @@ def tool_call_request_fixture() -> ToolCallRequest:
 def test_wrap_model_call_routes_through_llm_execute(
     model_request: ModelRequest[Any],
     model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
-    recording_middleware: NemoFlowMiddleware,
+    recording_middleware: RecordingMiddleware,
 ):
     (handler, seen_request) = model_request_handler
 
@@ -201,7 +206,7 @@ def test_awrap_model_call_routes_through_llm_execute(
     async_model_request_handler: tuple[
         Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]
     ],
-    recording_middleware: NemoFlowMiddleware,
+    recording_middleware: RecordingMiddleware,
 ):
     (handler, seen_request) = async_model_request_handler
 
@@ -233,6 +238,7 @@ def test_wrap_tool_call_routes_through_tool_execute(
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
     mock_tool_execute.assert_awaited_once()
+    assert mock_tool_execute.await_args is not None
     kwargs = mock_tool_execute.await_args.kwargs
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
@@ -259,6 +265,7 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
     mock_tool_execute.assert_awaited_once()
+    assert mock_tool_execute.await_args is not None
     kwargs = mock_tool_execute.await_args.kwargs
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
