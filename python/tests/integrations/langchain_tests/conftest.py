@@ -11,4 +11,4 @@ def integration_langchain_fixture(integration_langchain: types.ModuleType) -> ty
     """
     Override the integration_langchain fixture to make it autouse
     """
-    yield integration_langchain
+    return integration_langchain

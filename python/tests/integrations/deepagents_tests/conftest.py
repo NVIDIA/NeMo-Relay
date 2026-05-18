@@ -11,4 +11,4 @@ def integration_deepagents_fixture(integration_deepagents: types.ModuleType) -> 
     """
     Override the integration_deepagents fixture to make it autouse
     """
-    yield integration_deepagents
+    return integration_deepagents

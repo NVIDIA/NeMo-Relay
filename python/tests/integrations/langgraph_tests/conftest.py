@@ -11,4 +11,4 @@ def integration_langgraph_fixture(integration_langgraph: types.ModuleType) -> ty
     """
     Override the integration_langgraph fixture to make it autouse
     """
-    yield integration_langgraph
+    return integration_langgraph
