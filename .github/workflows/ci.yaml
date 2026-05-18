@@ -127,6 +127,7 @@ jobs:
     with:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
+      run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
 
   ci_license_diff:
     name: License Diff
