@@ -67,6 +67,20 @@ python_package:
   - 'rust-toolchain.toml'
   - 'uv.lock'
 
+python_integration_langchain:
+  # Includes LangGraph and DeepAgents integrations as well
+  - 'justfile'
+  - 'pyproject.toml'
+  - 'python/nemo_flow/integrations/deepagents/**'
+  - 'python/nemo_flow/integrations/langchain/**'
+  - 'python/nemo_flow/integrations/langgraph/**'
+  - 'python/tests/integrations/conftest.py'
+  - 'python/tests/integrations/deepagents_tests/**'
+  - 'python/tests/integrations/langchain_tests/**'
+  - 'python/tests/integrations/langgraph_tests/**'
+  - 'rust-toolchain.toml'
+  - 'uv.lock'
+
 wasm_package:
   - 'Cargo.lock'
   - 'Cargo.toml'
