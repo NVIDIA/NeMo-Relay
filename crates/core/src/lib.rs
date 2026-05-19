@@ -61,6 +61,7 @@ pub mod config_editor;
 mod context;
 pub mod error;
 pub mod json;
+pub mod nemoguardrails;
 pub mod observability;
 pub mod plugin;
 pub mod registry;
