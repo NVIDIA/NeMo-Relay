@@ -108,6 +108,10 @@ struct Session {
     tools: HashMap<String, ToolHandle>,
     pending_llm_hints: Vec<PendingLlmHint>,
     pending_tool_hints: Vec<PendingToolHint>,
+    // Maps stable user-task text from confidently owned LLM requests to the subagent that owns
+    // that conversation. This gives parallel Claude Code workers a stronger fallback than a single
+    // global "last tool owner" when their Anthropic requests lack subagent headers.
+    llm_request_affinity: HashMap<String, Option<String>>,
     last_llm_owner: Option<LastLlmOwner>,
     config: SessionConfig,
 }
@@ -629,6 +633,7 @@ impl Session {
             tools: HashMap::new(),
             pending_llm_hints: Vec::new(),
             pending_tool_hints: Vec::new(),
+            llm_request_affinity: HashMap::new(),
             last_llm_owner: None,
             config,
         }
@@ -689,6 +694,11 @@ impl Session {
                     attributes |= LlmAttributes::STREAMING;
                 }
                 let owner = self.resolve_llm_owner(&start);
+                self.record_llm_request_affinity(
+                    &start.request,
+                    owner.subagent_id.as_deref(),
+                    owner.status,
+                );
                 let metadata = merge_metadata(
                     llm_correlation_metadata(
                         start.metadata,
@@ -739,6 +749,11 @@ impl Session {
                     attributes |= LlmAttributes::STREAMING;
                 }
                 let owner = self.resolve_llm_owner(&start);
+                self.record_llm_request_affinity(
+                    &start.request,
+                    owner.subagent_id.as_deref(),
+                    owner.status,
+                );
                 let metadata = merge_metadata(
                     llm_correlation_metadata(
                         start.metadata,
@@ -884,6 +899,7 @@ impl Session {
     fn clear_correlation_state(&mut self) {
         self.pending_llm_hints.clear();
         self.pending_tool_hints.clear();
+        self.llm_request_affinity.clear();
         self.last_llm_owner = None;
     }
 
@@ -1005,6 +1021,8 @@ impl Session {
         self.completed_subagents.insert(subagent_id.to_string());
         self.pending_tool_hints
             .retain(|pending| pending.hint.subagent_id.as_deref() != Some(subagent_id));
+        self.llm_request_affinity
+            .retain(|_, owner| owner.as_deref() != Some(subagent_id));
         if self
             .last_llm_owner
             .as_ref()
@@ -1251,6 +1269,9 @@ impl Session {
         if let Some(resolution) = self.matched_hint_owner(start) {
             return resolution;
         }
+        if let Some(resolution) = self.request_affinity_owner(start) {
+            return resolution;
+        }
         if let Some(resolution) = self.sticky_llm_owner() {
             return resolution;
         }
@@ -1299,6 +1320,31 @@ impl Session {
             return Some(self.resolution_from_hint(hint, "matched_hint"));
         }
         None
+    }
+
+    // Reuses a learned request affinity before falling back to the session-global sticky owner.
+    // This addresses Claude Code's parallel subagents: their provider requests often repeat the
+    // original worker prompt but omit an explicit worker id, so task-text affinity is safer than
+    // whichever subagent happened to emit the last tool hook.
+    fn request_affinity_owner(&mut self, start: &LlmGatewayStart) -> Option<LlmOwnerResolution> {
+        let key = alignment::llm_request_affinity_key(&start.request)?;
+        let subagent_id = self.llm_request_affinity.get(&key).cloned().flatten()?;
+        let parent = match self.subagents.get(&subagent_id).cloned() {
+            Some(parent) => parent,
+            None => {
+                self.llm_request_affinity.remove(&key);
+                return None;
+            }
+        };
+        self.set_last_llm_owner(Some(subagent_id.clone()));
+        Some(LlmOwnerResolution {
+            parent: Some(parent),
+            subagent_id: Some(subagent_id.clone()),
+            status: "request_affinity",
+            source: Some("llm_request".to_string()),
+            hint: None,
+            metadata: self.subagent_llm_metadata(&subagent_id),
+        })
     }
 
     // Reuses the previous LLM owner while its TTL is valid and its scope can still be resolved.
@@ -1452,6 +1498,36 @@ impl Session {
                 updated_at: Instant::now(),
                 source: LastLlmOwnerSource::SubagentStart,
             });
+        }
+    }
+
+    // Learns a subagent owner from high-confidence LLM resolutions only. Tool-owned and sticky
+    // resolutions are intentionally excluded because they are the ambiguous path this affinity map
+    // is meant to correct in parallel Claude Code traces.
+    fn record_llm_request_affinity(
+        &mut self,
+        request: &LlmRequest,
+        subagent_id: Option<&str>,
+        status: &str,
+    ) {
+        if !llm_status_teaches_request_affinity(status) {
+            return;
+        }
+        let Some(subagent_id) = subagent_id else {
+            return;
+        };
+        let Some(key) = alignment::llm_request_affinity_key(request) else {
+            return;
+        };
+        match self.llm_request_affinity.get_mut(&key) {
+            Some(Some(existing)) if existing == subagent_id => {}
+            // If two live subagents share the same prompt text, the key is no longer safe as a
+            // discriminator. Mark it ambiguous instead of allowing either worker to claim it.
+            Some(owner) => *owner = None,
+            None => {
+                self.llm_request_affinity
+                    .insert(key, Some(subagent_id.to_string()));
+            }
         }
     }
 
@@ -1748,6 +1824,18 @@ fn tool_hint_match_score(hint: &ToolHint, event: &ToolEvent) -> u8 {
 
 fn same_optional(left: Option<&str>, right: Option<&str>) -> bool {
     matches!((left, right), (Some(left), Some(right)) if left == right)
+}
+
+fn llm_status_teaches_request_affinity(status: &str) -> bool {
+    matches!(
+        status,
+        "explicit"
+            | "single_hint"
+            | "matched_hint"
+            | "active_subagent"
+            | "subagent_start"
+            | "request_affinity"
+    )
 }
 
 // Parses stringified tool arguments when providers encode them as JSON text. Non-JSON strings are

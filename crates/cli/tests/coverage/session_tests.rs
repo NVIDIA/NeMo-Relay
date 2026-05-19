@@ -2269,6 +2269,138 @@ async fn explicit_subagent_tool_owner_claims_next_unhinted_llm() {
 }
 
 #[tokio::test]
+async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("parallel-affinity", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "parallel-affinity".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "python-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "parallel-affinity".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "go-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let python_first = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                subagent_id: Some("python-worker".into()),
+                ..llm_start_with_user_task(
+                    "parallel-affinity",
+                    "Very thorough analysis of the python/nemo_flow package.",
+                )
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(python_first, json!({ "output_text": "python" }), json!({}))
+        .await
+        .unwrap();
+
+    let go_first = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                subagent_id: Some("go-worker".into()),
+                ..llm_start_with_user_task(
+                    "parallel-affinity",
+                    "Very thorough analysis of the go/nemo_flow binding.",
+                )
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(go_first, json!({ "output_text": "go" }), json!({}))
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "parallel-affinity".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "go-tool".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("go-worker".into()),
+                    arguments: json!({ "file_path": "go/nemo_flow/nemo_flow.go" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "parallel-affinity".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "go-tool".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("go-worker".into()),
+                    arguments: Value::Null,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let python_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("parallel-affinity")
+            .unwrap()
+            .subagents
+            .get("python-worker")
+            .unwrap()
+            .uuid
+    };
+    let python_later = manager
+        .start_llm(
+            &HeaderMap::new(),
+            llm_start_with_user_task(
+                "parallel-affinity",
+                "Very thorough analysis of the python/nemo_flow package.",
+            ),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(python_later.handle.parent_uuid, Some(python_uuid));
+    assert_eq!(
+        python_later.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("request_affinity")
+    );
+    assert_eq!(
+        python_later.handle.metadata.as_ref().unwrap()["llm_correlation_source"],
+        json!("llm_request")
+    );
+}
+
+#[tokio::test]
 async fn claude_agent_tool_completion_closes_subagents_before_final_llm() {
     let manager = SessionManager::new(session_test_config());
     manager
@@ -3034,6 +3166,41 @@ fn llm_start() -> LlmGatewayStart {
         request: LlmRequest {
             headers: Map::new(),
             content: json!({ "model": "gpt-test", "input": "hello" }),
+        },
+        streaming: false,
+        metadata: json!({}),
+    }
+}
+
+fn llm_start_with_user_task(session_id: &str, task: &str) -> LlmGatewayStart {
+    LlmGatewayStart {
+        session_id: Some(session_id.into()),
+        provider: "anthropic.messages".into(),
+        model_name: Some("claude-test".into()),
+        subagent_id: None,
+        conversation_id: None,
+        generation_id: None,
+        request_id: None,
+        request: LlmRequest {
+            headers: Map::new(),
+            content: json!({
+                "model": "claude-test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "<system-reminder>\nToday is 2026-05-19.\n</system-reminder>"
+                            },
+                            {
+                                "type": "text",
+                                "text": task
+                            }
+                        ]
+                    }
+                ]
+            }),
         },
         streaming: false,
         metadata: json!({}),

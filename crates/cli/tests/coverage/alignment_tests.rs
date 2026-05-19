@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderValue;
+use nemo_flow::api::llm::LlmRequest;
+use serde_json::Map;
 
 use super::*;
 use crate::model::{LlmEvent, LlmHintEvent};
@@ -179,6 +181,39 @@ fn agent_kind_inference_covers_known_provider_names() {
         agent_kind_for_gateway_provider("openai.chat_completions"),
         AgentKind::Gateway
     );
+}
+
+#[test]
+fn llm_request_affinity_key_uses_stable_user_task_text() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": "<system-reminder>\nToday is 2026-05-19.\n</system-reminder>" },
+                        { "type": "text", "text": "  Analyze the python binding\n\nwith detail.  " }
+                    ]
+                }
+            ]
+        }),
+    };
+
+    assert_eq!(
+        llm_request_affinity_key(&request).as_deref(),
+        Some("Analyze the python binding with detail.")
+    );
+}
+
+#[test]
+fn llm_request_affinity_key_ignores_count_token_style_payloads() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!("// source text without a chat user task"),
+    };
+
+    assert_eq!(llm_request_affinity_key(&request), None);
 }
 
 #[test]

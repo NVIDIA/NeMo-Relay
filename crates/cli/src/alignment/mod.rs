@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use axum::http::HeaderMap;
+use nemo_flow::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
@@ -342,6 +343,17 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
     codex::llm_owner_metadata(scope_metadata)
 }
 
+// Builds a stable request affinity key from the user task text carried in common chat payloads.
+// Claude Code subagent calls repeat the original worker prompt on later model requests, which is a
+// stronger signal than the last tool owner when several subagents run in parallel. The extractor is
+// intentionally conservative: raw count-token/file payloads and system-reminder-only messages do
+// not produce keys, so they continue through the normal hint/sticky/fallback resolution path.
+pub(crate) fn llm_request_affinity_key(request: &LlmRequest) -> Option<String> {
+    let task_text = first_user_task_text(&request.content)?;
+    let normalized = normalize_affinity_text(task_text);
+    (normalized.len() >= 24).then(|| truncate_affinity_text(&normalized, 512))
+}
+
 // Detects tool results that imply a subagent completed. Claude Code reports this through the
 // `Agent` tool today; keeping the check here avoids leaking that tool shape into session teardown.
 pub(crate) fn completed_subagent_from_tool(event: &ToolEvent) -> Option<String> {
@@ -476,6 +488,55 @@ fn route_tool_event(event: &mut ToolEvent, alias: &SessionAlias, metadata: Value
     event.session_id = alias.parent_session_id.clone();
     event.subagent_id = Some(alias.subagent_id.clone());
     event.metadata = merge_metadata(event.metadata.clone(), metadata);
+}
+
+fn first_user_task_text(payload: &Value) -> Option<&str> {
+    payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|messages| messages.iter().find_map(user_message_task_text))
+        .or_else(|| openai_responses_input_task_text(payload.get("input")?))
+}
+
+fn user_message_task_text(message: &Value) -> Option<&str> {
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    content_task_text(message.get("content")?)
+}
+
+fn openai_responses_input_task_text(input: &Value) -> Option<&str> {
+    match input {
+        Value::String(text) => Some(text.as_str()).filter(|text| is_affinity_candidate(text)),
+        Value::Array(items) => items.iter().find_map(user_message_task_text),
+        _ => None,
+    }
+}
+
+fn content_task_text(content: &Value) -> Option<&str> {
+    match content {
+        Value::String(text) => Some(text.as_str()).filter(|text| is_affinity_candidate(text)),
+        Value::Array(blocks) => blocks.iter().find_map(|block| {
+            block
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| is_affinity_candidate(text))
+        }),
+        _ => None,
+    }
+}
+
+fn is_affinity_candidate(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    !trimmed.is_empty() && !trimmed.starts_with("<system-reminder>")
+}
+
+fn normalize_affinity_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_affinity_text(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
 }
 
 // Reads the first string-like value from any candidate JSON path. Scalar numbers and booleans are
