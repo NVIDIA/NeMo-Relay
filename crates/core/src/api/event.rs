@@ -338,6 +338,32 @@ impl Event {
         }
     }
 
+    /// Return this event as the canonical JSON object delivered by language
+    /// bindings to subscriber callbacks.
+    pub fn to_json_value(&self) -> Json {
+        let mut value = serde_json::to_value(self).unwrap_or(Json::Null);
+        if let Json::Object(ref mut object) = value {
+            if let Some(request) = self.annotated_request() {
+                object.insert(
+                    "annotated_request".to_string(),
+                    serde_json::to_value(request.as_ref()).unwrap_or(Json::Null),
+                );
+            }
+            if let Some(response) = self.annotated_response() {
+                object.insert(
+                    "annotated_response".to_string(),
+                    serde_json::to_value(response.as_ref()).unwrap_or(Json::Null),
+                );
+            }
+        }
+        value
+    }
+
+    /// Return this event as canonical JSON.
+    pub fn to_json_string(&self) -> serde_json::Result<String> {
+        serde_json::to_string(&self.to_json_value())
+    }
+
     /// Return the lifecycle phase for scope events.
     pub fn scope_category(&self) -> Option<ScopeCategory> {
         match self {

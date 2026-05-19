@@ -90,6 +90,7 @@ const {
 async function main() {
   registerSubscriber("printer", (runtimeEvent) => {
     console.log(`${runtimeEvent.kind} ${runtimeEvent.name}`);
+    console.log(JSON.stringify(runtimeEvent));
   });
 
   await withScope("demo-agent", ScopeType.Agent, async (handle) => {

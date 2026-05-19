@@ -306,22 +306,7 @@ pub struct JsEvent(serde_json::Value);
 
 impl From<&Event> for JsEvent {
     fn from(e: &Event) -> Self {
-        let mut value = serde_json::to_value(e).unwrap_or(Json::Null);
-        if let Json::Object(ref mut object) = value {
-            if let Some(request) = e.annotated_request() {
-                object.insert(
-                    "annotated_request".to_string(),
-                    serde_json::to_value(request.as_ref()).unwrap_or(Json::Null),
-                );
-            }
-            if let Some(response) = e.annotated_response() {
-                object.insert(
-                    "annotated_response".to_string(),
-                    serde_json::to_value(response.as_ref()).unwrap_or(Json::Null),
-                );
-            }
-        }
-        Self(value)
+        Self(e.to_json_value())
     }
 }
 // ---------------------------------------------------------------------------

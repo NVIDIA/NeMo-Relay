@@ -658,6 +658,11 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
 
         let events = lock_unpoisoned(event_log()).clone();
         assert!(events.iter().any(|event| event["name"] == "ffi_tool"));
+        assert!(events.iter().any(|event| {
+            event["json"]["kind"] == json!("scope")
+                && event["json"]["name"] == json!("ffi_tool")
+                && event["json"]["category"] == json!("tool")
+        }));
         assert!(
             events
                 .iter()
@@ -685,6 +690,8 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
         assert!(events.iter().any(|event| {
             event["name"] == "ffi_mark"
                 && event["kind"] == json!("mark")
+                && event["json"]["kind"] == json!("mark")
+                && event["json"]["name"] == json!("ffi_mark")
                 && event["data"] == json!({"mark": true})
                 && event["metadata"] == json!({"origin": "ffi"})
         }));

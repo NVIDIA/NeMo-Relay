@@ -600,6 +600,19 @@ pub unsafe extern "C" fn nemo_flow_event_kind(ptr: *const FfiEvent) -> *mut c_ch
     str_to_c_string(unsafe { &*ptr }.0.kind())
 }
 
+/// Return the canonical subscriber event JSON as a C string.
+/// Caller must free the result with `nemo_flow_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_flow_event_json(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    json_to_c_string(&unsafe { &*ptr }.0.to_json_value())
+}
+
 /// Return the ATOF version as a C string.
 ///
 /// # Safety

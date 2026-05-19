@@ -503,6 +503,15 @@ fn test_subscriber_event_properties() {
     let kind = js_sys::Reflect::get(&event, &"kind".into()).unwrap();
     assert!(kind.is_string(), "Event should have kind string");
 
+    let encoded = js_sys::JSON::stringify(&event).unwrap();
+    let decoded = js_sys::JSON::parse(&encoded.as_string().unwrap()).unwrap();
+    let decoded_kind = js_sys::Reflect::get(&decoded, &"kind".into()).unwrap();
+    assert_eq!(
+        decoded_kind.as_string(),
+        kind.as_string(),
+        "Event should be directly JSON serializable"
+    );
+
     deregister_subscriber("wasm_prop_collector").unwrap();
     js_sys::eval("delete globalThis.__wasm_evt_props").unwrap();
 }

@@ -120,8 +120,9 @@ omit = ["python/nemo_flow/integrations/*"]
 [tool.ty.analysis]
 # nemo_flow._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
-# LangChain and LangGraph are optional integration dependencies which aren't installed by default.
-allowed-unresolved-imports = ["langchain.**", "langchain_*.**", "langgraph.**", "nemo_flow._native", "pytest"]
+# LangChain, LangGraph, and Deep Agents are optional integration dependencies
+# which aren't installed by default.
+allowed-unresolved-imports = ["deepagents.**", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_flow._native", "pytest"]
 
 [tool.ruff]
 line-length = 120

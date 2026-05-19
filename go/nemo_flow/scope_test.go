@@ -120,6 +120,55 @@ func assertJSONFieldNumber(t *testing.T, raw json.RawMessage, field string, want
 	}
 }
 
+func TestEventJSONHelpers(t *testing.T) {
+	var captured Event
+	var mu sync.Mutex
+	subscriberName := "go_event_json_sub"
+
+	_ = DeregisterSubscriber(subscriberName)
+	if err := RegisterSubscriber(subscriberName, func(event Event) {
+		if event.Name() == "go_json_mark" {
+			mu.Lock()
+			captured = event
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber(subscriberName)
+
+	if err := EmitEvent("go_json_mark", WithEventData(json.RawMessage(`{"ok":true}`))); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+
+	mu.Lock()
+	event := captured
+	mu.Unlock()
+	if event == nil {
+		t.Fatal("expected subscriber to capture event")
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(event.JSON(), &payload); err != nil {
+		t.Fatalf("event.JSON returned invalid JSON: %v", err)
+	}
+	if payload["kind"] != "mark" || payload["name"] != "go_json_mark" {
+		t.Fatalf("unexpected event JSON payload: %#v", payload)
+	}
+
+	marshaled, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("json.Marshal(event) failed: %v", err)
+	}
+	var marshaledPayload map[string]interface{}
+	if err := json.Unmarshal(marshaled, &marshaledPayload); err != nil {
+		t.Fatalf("json.Marshal(event) returned invalid JSON: %v", err)
+	}
+	if marshaledPayload["kind"] != payload["kind"] || marshaledPayload["name"] != payload["name"] {
+		t.Fatalf("MarshalJSON payload mismatch: raw=%#v marshaled=%#v", payload, marshaledPayload)
+	}
+}
+
 func runConcurrentScopePushPopWorker(errCh chan<- error) {
 	stack, err := NewScopeStack()
 	if err != nil {

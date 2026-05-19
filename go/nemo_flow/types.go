@@ -56,6 +56,7 @@ extern void nemo_flow_llm_request_free(FfiLLMRequest* ptr);
 extern char* nemo_flow_event_uuid(const FfiEvent* ptr);
 extern char* nemo_flow_event_name(const FfiEvent* ptr);
 extern char* nemo_flow_event_kind(const FfiEvent* ptr);
+extern char* nemo_flow_event_json(const FfiEvent* ptr);
 extern char* nemo_flow_event_atof_version(const FfiEvent* ptr);
 extern char* nemo_flow_event_scope_category(const FfiEvent* ptr);
 extern char* nemo_flow_event_category(const FfiEvent* ptr);
@@ -380,6 +381,8 @@ type Event interface {
 	ToolCallID() string
 	AnnotatedRequest() json.RawMessage
 	AnnotatedResponse() json.RawMessage
+	JSON() json.RawMessage
+	MarshalJSON() ([]byte, error)
 }
 
 type eventBase struct {
@@ -409,6 +412,7 @@ type eventSnapshot struct {
 	toolCallID        string
 	annotatedRequest  json.RawMessage
 	annotatedResponse json.RawMessage
+	eventJSON         json.RawMessage
 }
 
 func (e eventBase) UUID() string {
@@ -540,6 +544,19 @@ func (e eventBase) AnnotatedResponse() json.RawMessage {
 	}
 	return goJSONOpt(C.nemo_flow_event_annotated_response(e.ptr))
 }
+func (e eventBase) JSON() json.RawMessage {
+	if e.snapshot != nil {
+		return cloneJSON(e.snapshot.eventJSON)
+	}
+	return goJSONOpt(C.nemo_flow_event_json(e.ptr))
+}
+func (e eventBase) MarshalJSON() ([]byte, error) {
+	raw := e.JSON()
+	if raw == nil {
+		return []byte("null"), nil
+	}
+	return cloneJSON(raw), nil
+}
 
 // ScopeEvent is the typed wrapper for an ATOF scope lifecycle event.
 type ScopeEvent struct{ eventBase }
@@ -571,6 +588,7 @@ func newEvent(ptr *C.FfiEvent) Event {
 			toolCallID:        goStringOpt((*C.char)(C.nemo_flow_event_tool_call_id(unsafe.Pointer(ptr)))),
 			annotatedRequest:  goJSONOpt(C.nemo_flow_event_annotated_request(ptr)),
 			annotatedResponse: goJSONOpt(C.nemo_flow_event_annotated_response(ptr)),
+			eventJSON:         goJSONOpt(C.nemo_flow_event_json(ptr)),
 		},
 	}
 	switch base.Kind() {

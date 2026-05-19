@@ -3,6 +3,8 @@
 
 //! Unit tests for types in the NeMo Flow core crate.
 
+use std::sync::Arc;
+
 use serde_json::{Map, json};
 use uuid::{Uuid, Version};
 
@@ -13,6 +15,8 @@ use crate::api::event::{
 use crate::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use crate::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::{ToolAttributes, ToolHandle};
+use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use crate::codec::response::AnnotatedLlmResponse;
 
 #[test]
 fn handle_constructors_preserve_supplied_metadata() {
@@ -187,6 +191,74 @@ fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
     assert_eq!(mark_event.input(), None);
     assert_eq!(mark_event.output(), None);
     assert_eq!(mark_event.tool_call_id(), None);
+}
+
+#[test]
+fn event_json_value_uses_canonical_subscriber_shape() {
+    let request = AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: MessageContent::Text("hi".into()),
+            name: None,
+        }],
+        model: Some("demo-model".into()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: Map::new(),
+    };
+    let response = AnnotatedLlmResponse {
+        id: Some("resp-1".into()),
+        model: Some("demo-model".into()),
+        message: Some(MessageContent::Text("hello".into())),
+        tool_calls: None,
+        finish_reason: None,
+        usage: None,
+        api_specific: None,
+        extra: Map::new(),
+    };
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("llm")
+            .data(json!({"input": true}))
+            .metadata(json!({"trace": "abc"}))
+            .build(),
+        ScopeCategory::End,
+        llm_attributes_to_strings(LlmAttributes::STATEFUL),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("demo-model")
+                .annotated_request(Arc::new(request))
+                .annotated_response(Arc::new(response))
+                .build(),
+        ),
+    ));
+
+    let value = event.to_json_value();
+    assert_eq!(value["kind"], json!("scope"));
+    assert_eq!(value["scope_category"], json!("end"));
+    assert_eq!(value["category"], json!("llm"));
+    assert_eq!(value["data"], json!({"input": true}));
+    assert_eq!(value["metadata"], json!({"trace": "abc"}));
+    assert_eq!(value["annotated_request"]["model"], json!("demo-model"));
+    assert_eq!(value["annotated_response"]["id"], json!("resp-1"));
+
+    let encoded = event.to_json_string().unwrap();
+    let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, value);
 }
 
 #[test]
