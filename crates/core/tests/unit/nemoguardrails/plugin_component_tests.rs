@@ -250,6 +250,11 @@ fn registration_is_explicit_not_automatic() {
     ensure_registered();
     assert!(list_plugin_kinds().contains(&NEMO_GUARDRAILS_PLUGIN_KIND.to_string()));
     assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some());
+
+    ensure_registered();
+    assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some());
+    assert!(deregister_nemoguardrails_component());
+    assert!(!deregister_nemoguardrails_component());
 }
 
 #[test]
@@ -364,6 +369,64 @@ fn invalid_shapes_and_values_are_reported() {
             .contains("remote.config_id and remote.config_ids cannot be used together")
     }));
 
+    let missing_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(missing_codec.has_errors());
+    assert!(
+        missing_codec
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("codec"))
+    );
+
+    let bad_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_agents",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(bad_codec.has_errors());
+    assert!(bad_codec.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'")
+    }));
+
+    let remote_empty_fields = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "",
+            "config_id": "",
+            "config_ids": ["default", ""]
+        }
+    })));
+    assert!(remote_empty_fields.has_errors());
+    assert!(
+        remote_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("remote.endpoint"))
+    );
+    assert!(
+        remote_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("remote.config_id"))
+    );
+    assert!(
+        remote_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("remote.config_ids[1]"))
+    );
+
     let remote_local_mix = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "config_path": "./rails",
@@ -400,6 +463,33 @@ fn invalid_shapes_and_values_are_reported() {
             .diagnostics
             .iter()
             .any(|diag| diag.message.contains("at least one Guardrails surface"))
+    );
+
+    let local_empty_fields = validate_plugin_config(&plugin_config(json!({
+        "mode": "local",
+        "config_yaml": "",
+        "colang_content": "",
+        "codec": "openai_chat",
+        "local": {"python_module": ""}
+    })));
+    assert!(local_empty_fields.has_errors());
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("config_yaml"))
+    );
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("colang_content"))
+    );
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("local.python_module"))
     );
 }
 
