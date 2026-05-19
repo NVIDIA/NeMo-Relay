@@ -23,18 +23,13 @@ use nemo_flow::codec::traits::LlmResponseCodec;
 use nemo_flow::error::FlowError;
 use serde_json::{Map, Value, json};
 
+use crate::alignment::{self, GatewayRouteKind};
 use crate::config::header_string;
 use crate::error::CliError;
 use crate::server::AppState;
 use crate::session::{GatewayCallPrep, LlmGatewayStart};
 
 const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
-
-// ChatGPT backend base URL used by Codex when authenticated with ChatGPT-Plus OAuth. Mirrors the
-// `CHATGPT_CODEX_BASE_URL` constant in `codex-rs/model-provider-info/src/lib.rs`, which Codex
-// selects in `ModelProviderInfo::to_api_provider` when `auth_mode` is `Chatgpt` or
-// `ChatgptAuthTokens`. The standard `api.openai.com/v1` base is used for API-key auth instead.
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 /// Proxies supported LLM API requests through NeMo Flow's managed execution pipeline.
 ///
@@ -92,11 +87,8 @@ async fn prepare_gateway_request(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or(parts.uri.path());
-    let upstream_url = if should_use_chatgpt_backend(provider, &parts.headers) {
-        chatgpt_upstream_url(path_and_query)
-    } else {
-        provider.upstream_url(config, path_and_query)
-    };
+    let upstream_url = gateway_upstream_url_override(provider, &parts.headers, path_and_query)
+        .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
     let streaming = request_json
         .get("stream")
         .and_then(Value::as_bool)
@@ -115,15 +107,23 @@ async fn prepare_gateway_request(
 
 // Builds the [`LlmGatewayStart`] payload from a prepared request. Identifier resolution is shared
 // across streaming and non-streaming paths so correlation behavior is consistent for every route.
+// Provider-specific fallbacks are resolved here, before request execution leaves the gateway path,
+// because the later runtime-managed LLM call only sees this normalized start payload.
 fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
     LlmGatewayStart {
-        session_id: gateway_session_id(&request.headers),
+        // Explicit NeMo Flow headers still win, but alignment can recover agent-native session
+        // signals when available. Applies to Claude Code's session header and Codex's Responses
+        // prompt-cache thread id today.
+        session_id: gateway_session_id(&request.headers, &request.request_json, request.provider),
         provider: request.provider.name().to_string(),
         model_name: request
             .request_json
             .get("model")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
+        // Subagent ownership is intentionally header-only at the gateway layer. Body fields can be
+        // provider payload content rather than scope identity, so the session layer handles other
+        // ownership hints.
         subagent_id: gateway_subagent_id(&request.headers),
         conversation_id: gateway_identifier(
             &request.headers,
@@ -152,6 +152,8 @@ fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart 
                 &["metadata", "request_id"],
             ],
         )
+        // Preserve a transport request id as a weak fallback for debugging even when the provider
+        // body does not expose an LLM request id.
         .or_else(|| header_string(&request.headers, "x-request-id")),
         request: LlmRequest {
             headers: observable_headers(&request.headers),
@@ -545,9 +547,8 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> String {
 }
 
 // Forwards the buffered request to the upstream provider with only the safe request headers. This
-// is shared by the buffered and streaming managed funcs so header filtering stays consistent. When
-// `OPENAI_API_KEY` is set the gateway replaces any inbound ChatGPT-Plus OAuth JWT with the env
-// key; otherwise the inbound credentials are forwarded as-is.
+// is shared by the buffered and streaming managed funcs so header filtering stays consistent.
+// Agent-native credential quirks are normalized by alignment before provider auth injection runs.
 async fn forward_upstream_request(
     http: &reqwest::Client,
     method: &Method,
@@ -556,17 +557,7 @@ async fn forward_upstream_request(
     headers: &HeaderMap,
     route: ProviderRoute,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    // Only strip the inbound JWT when we actually have a replacement key to inject. Without one
-    // the upstream just receives no auth and 401s, which is no better than letting it reject the
-    // JWT itself — and stripping silently can break setups that point the gateway at an upstream
-    // that happens to accept the ChatGPT-Plus token.
-    // Whitespace-only keys are effectively missing: stripping the inbound JWT and injecting an
-    // empty/whitespace bearer just trades one 401 for another while losing observability.
-    let has_openai_env = std::env::var("OPENAI_API_KEY")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .is_some();
-    let sanitized = strip_chatgpt_oauth_for_openai_route(headers, route, has_openai_env);
+    let sanitized = gateway_forward_headers(headers, route);
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
@@ -577,82 +568,10 @@ async fn forward_upstream_request(
     upstream.send().await
 }
 
-// Builds the upstream URL for the ChatGPT backend. OpenAI API bases commonly include `/v1`, while
-// the ChatGPT backend base is
-// `chatgpt.com/backend-api/codex` (no `/v1`). Both append `/responses` to their base, so the
-// ChatGPT path is `.../codex/responses`, not `.../codex/v1/responses`. Strip any `/v1` prefix
-// that the gateway's route matcher may have included from the inbound request path.
-fn chatgpt_upstream_url(path_and_query: &str) -> String {
-    let path = path_and_query.strip_prefix("/v1").unwrap_or(path_and_query);
-    format!("{CHATGPT_CODEX_BASE_URL}{path}")
-}
-
-// Returns `true` when the `Authorization` header carries a JWT-shaped bearer token (`Bearer eyJ`
-// prefix). Codex stores ChatGPT-Plus OAuth tokens in `~/.codex/auth.json` as a `TokenData`
-// struct with `access_token`, `refresh_token`, and `id_token` fields (see
-// `codex-rs/login/src/token_data.rs`). The access token is a JWT whose base64 header starts
-// with `eyJ`. Real `sk-...` API keys and opaque tokens do not match this pattern.
-fn has_chatgpt_jwt(headers: &HeaderMap) -> bool {
-    headers
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("Bearer eyJ"))
-}
-
-// Returns `true` when the gateway should route the request to the ChatGPT backend
-// (`chatgpt.com/backend-api/codex`) instead of the configured `openai_base_url`. Mirrors the
-// base-URL selection in Codex's `ModelProviderInfo::to_api_provider` (`codex-rs/model-provider-
-// info/src/lib.rs`): ChatGPT OAuth routes to `CHATGPT_CODEX_BASE_URL`, API-key auth routes to
-// `api.openai.com/v1`. Fires when all of: (1) the route is OpenAI-family, (2) the inbound
-// request carries a ChatGPT OAuth JWT, and (3) no `OPENAI_API_KEY` is available to substitute.
-fn should_use_chatgpt_backend(route: ProviderRoute, headers: &HeaderMap) -> bool {
-    route.is_openai()
-        && has_chatgpt_jwt(headers)
-        && std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .is_none()
-}
-
-// Removes JWT-shaped bearer tokens from inbound `Authorization` on OpenAI routes when we have a
-// replacement `OPENAI_API_KEY` to inject. Codex's `BearerAuthProvider` (`codex-rs/model-provider/
-// src/bearer_auth_provider.rs`) always sets an `Authorization: Bearer <token>` header — either
-// the ChatGPT OAuth access token (a JWT starting `eyJ`) or a plain API key (`sk-...`). When
-// `OPENAI_API_KEY` is set, the gateway strips the JWT so `inject_provider_auth` can substitute
-// the env key for the `api.openai.com` route. When the key is absent, the JWT is preserved and
-// `should_use_chatgpt_backend` routes to the ChatGPT backend. Real `sk-...` keys are unaffected.
-fn strip_chatgpt_oauth_for_openai_route(
-    headers: &HeaderMap,
-    route: ProviderRoute,
-    has_replacement_key: bool,
-) -> HeaderMap {
-    if !matches!(
-        route,
-        ProviderRoute::OpenAiResponses
-            | ProviderRoute::OpenAiChatCompletions
-            | ProviderRoute::OpenAiModels
-    ) || !has_replacement_key
-    {
-        return headers.clone();
-    }
-    let mut out = headers.clone();
-    let looks_like_jwt = out
-        .get(http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.starts_with("Bearer eyJ"))
-        .unwrap_or(false);
-    if looks_like_jwt {
-        out.remove(http::header::AUTHORIZATION);
-    }
-    out
-}
-
 // If the inbound request has no provider auth header (Authorization / x-api-key / api-key), read
-// the provider's standard API key env var and attach it to the outbound request. When codex sends
-// its ChatGPT-Plus OAuth JWT the gateway forwards it unless `OPENAI_API_KEY` is set, in which case
-// `strip_chatgpt_oauth_for_openai_route` removes the JWT first and this function injects the env
-// key. If neither inbound auth nor the env var is present, the request is forwarded as-is and the
-// upstream returns a real 401 (caller can detect and surface).
+// the provider's standard API key env var and attach it to the outbound request. Alignment may
+// have already normalized agent-native auth material; this function remains provider-generic and
+// only handles standard upstream auth injection.
 fn inject_provider_auth(
     builder: reqwest::RequestBuilder,
     route: ProviderRoute,
@@ -772,18 +691,9 @@ pub(crate) async fn models(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or(parts.uri.path());
-    let upstream_url = if should_use_chatgpt_backend(provider, &parts.headers) {
-        chatgpt_upstream_url(path_and_query)
-    } else {
-        provider.upstream_url(&state.config, path_and_query)
-    };
-    // Whitespace-only keys are effectively missing: stripping the inbound JWT and injecting an
-    // empty/whitespace bearer just trades one 401 for another while losing observability.
-    let has_openai_env = std::env::var("OPENAI_API_KEY")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .is_some();
-    let sanitized = strip_chatgpt_oauth_for_openai_route(&parts.headers, provider, has_openai_env);
+    let upstream_url = gateway_upstream_url_override(provider, &parts.headers, path_and_query)
+        .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
+    let sanitized = gateway_forward_headers(&parts.headers, provider);
     let mut upstream = state.http.get(upstream_url);
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
@@ -824,13 +734,6 @@ impl ProviderRoute {
         }
     }
 
-    const fn is_openai(self) -> bool {
-        matches!(
-            self,
-            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels
-        )
-    }
-
     // Returns the provider route name recorded in LLM event metadata. These names split OpenAI API
     // variants because their request/response schemas differ even when they share a base URL.
     const fn name(self) -> &'static str {
@@ -858,8 +761,8 @@ impl ProviderRoute {
         self.upstream_url_with_base(base, path_and_query)
     }
 
-    // Like `upstream_url` but with an explicit base URL. Used by the ChatGPT OAuth fallback path
-    // which routes to `CHATGPT_CODEX_BASE_URL` instead of the configured `openai_base_url`.
+    // Like `upstream_url` but with an explicit base URL. This keeps OpenAI `/v1` normalization in
+    // one place for configured public, enterprise, or local proxy bases.
     fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
         let base = base.trim_end_matches('/');
         let path_and_query = match self {
@@ -869,6 +772,19 @@ impl ProviderRoute {
             _ => path_and_query.to_string(),
         };
         format!("{base}{path_and_query}")
+    }
+
+    // Narrows gateway routing to the smaller taxonomy used by trace alignment. Keeping this
+    // conversion here prevents provider-specific alignment code from depending on gateway URL
+    // routing internals.
+    const fn alignment_route(self) -> GatewayRouteKind {
+        match self {
+            Self::OpenAiResponses => GatewayRouteKind::OpenAiResponses,
+            Self::OpenAiChatCompletions => GatewayRouteKind::OpenAiChatCompletions,
+            Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
+            Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
+            Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
+        }
     }
 }
 
@@ -883,47 +799,81 @@ fn normalize_openai_path_for_base(base: &str, path_and_query: &str) -> String {
     }
 }
 
-// Reads the gateway session id from explicit gateway headers first, with Claude's session header
-// accepted for compatibility with Claude Code environments that already propagate it.
-fn gateway_session_id(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, "x-nemo-flow-session-id")
-        .or_else(|| header_string(headers, "x-claude-code-session-id"))
+// Gives alignment adapters a chance to choose an agent-native upstream before default provider
+// routing runs. Today this supports Codex ChatGPT OAuth; future harness fallbacks should stay in
+// alignment rather than adding provider-shaped checks here.
+fn gateway_upstream_url_override(
+    route: ProviderRoute,
+    headers: &HeaderMap,
+    path_and_query: &str,
+) -> Option<String> {
+    gateway_upstream_url_override_with_openai_key_state(
+        route,
+        headers,
+        path_and_query,
+        env_var_is_nonempty("OPENAI_API_KEY"),
+    )
+}
+
+fn gateway_upstream_url_override_with_openai_key_state(
+    route: ProviderRoute,
+    headers: &HeaderMap,
+    path_and_query: &str,
+    has_openai_replacement_key: bool,
+) -> Option<String> {
+    alignment::gateway_upstream_url_override(
+        headers,
+        route.alignment_route(),
+        path_and_query,
+        has_openai_replacement_key,
+    )
+}
+
+// Lets alignment adapters normalize agent-native credentials before the gateway injects standard
+// provider API keys. Whitespace-only env vars are treated as missing because forwarding an empty
+// bearer value only replaces one authentication failure with another.
+fn gateway_forward_headers(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
+    gateway_forward_headers_with_openai_key_state(
+        headers,
+        route,
+        env_var_is_nonempty("OPENAI_API_KEY"),
+    )
+}
+
+fn gateway_forward_headers_with_openai_key_state(
+    headers: &HeaderMap,
+    route: ProviderRoute,
+    has_openai_replacement_key: bool,
+) -> HeaderMap {
+    alignment::gateway_forward_headers(headers, route.alignment_route(), has_openai_replacement_key)
+}
+
+fn env_var_is_nonempty(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_some()
+}
+
+// Delegates provider-specific session fallbacks to `alignment` so request construction stays
+// generic and each coding-agent quirk has one documented adapter.
+fn gateway_session_id(headers: &HeaderMap, body: &Value, route: ProviderRoute) -> Option<String> {
+    alignment::gateway_session_id(headers, body, route.alignment_route())
 }
 
 fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, "x-nemo-flow-subagent-id")
+    alignment::gateway_subagent_id(headers)
 }
 
-// Resolves a correlation identifier from a dedicated header before trying known JSON body paths.
-// Header precedence lets callers disambiguate requests even when provider payloads contain stale
-// or differently scoped identifiers.
+// Keeps the gateway-facing helper local for tests while the generic extraction pattern lives in
+// `alignment`.
 fn gateway_identifier(
     headers: &HeaderMap,
     body: &Value,
     header_name: &'static str,
     body_paths: &[&[&str]],
 ) -> Option<String> {
-    header_string(headers, header_name).or_else(|| {
-        body_paths
-            .iter()
-            .find_map(|path| string_at(body, path))
-            .filter(|value| !value.is_empty())
-    })
-}
-
-// Reads nested JSON as a string, accepting scalar numeric and boolean forms for provider metadata
-// fields that are not consistently serialized as strings. Arrays and objects are ignored.
-fn string_at(payload: &Value, path: &[&str]) -> Option<String> {
-    let mut current = payload;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    match current {
-        Value::String(value) => Some(value.clone()),
-        Value::Number(value) => Some(value.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
-    }
+    alignment::gateway_identifier(headers, body, header_name, body_paths)
 }
 
 // Copies only non-sensitive, forwardable request headers into LLM request metadata. This preserves

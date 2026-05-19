@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,7 +9,9 @@ use axum::http::HeaderMap;
 use nemo_flow::api::llm::{
     LlmAttributes, LlmCallEndParams, LlmCallParams, LlmHandle, LlmRequest, llm_call, llm_call_end,
 };
-use nemo_flow::api::runtime::{ScopeStackHandle, TASK_SCOPE_STACK, create_scope_stack};
+use nemo_flow::api::runtime::{
+    ScopeStackHandle, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
+};
 use nemo_flow::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
     event as emit_mark_event, get_handle, pop_scope, push_scope,
@@ -20,6 +22,10 @@ use nemo_flow::api::tool::{
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
+use crate::alignment::{
+    self, PendingSubagentStart, SessionAlias, SessionAlignmentState, insert_optional,
+    json_string_at, json_value_at, merge_metadata,
+};
 use crate::config::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
 use crate::model::{
@@ -33,6 +39,10 @@ const LAST_OWNER_TTL: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub(crate) struct SessionManager {
     inner: Arc<Mutex<HashMap<String, Session>>>,
+    // Cross-session alignment state owns child-session aliases and child-first SessionStart hooks.
+    // Applies to Codex child threads today; the generic state lives in `alignment` so session code
+    // only orchestrates when promotion is safe.
+    alignment: Arc<Mutex<SessionAlignmentState>>,
     default_config: GatewayConfig,
 }
 
@@ -87,7 +97,13 @@ struct Session {
     scope_stack: ScopeStackHandle,
     agent_scope: Option<ScopeHandle>,
     subagents: HashMap<String, ScopeHandle>,
+    // Each active subagent gets its own scope stack seeded with the parent agent handle. This lets
+    // sibling workers close out of order without corrupting the task-local stack.
+    subagent_stacks: HashMap<String, ScopeStackHandle>,
     subagent_stack: Vec<String>,
+    // Tracks subagents closed by synthetic or provider-specific completion signals so a later
+    // duplicate end hook does not reopen or mark an already-closed worker.
+    completed_subagents: HashSet<String>,
     llms: HashMap<String, LlmHandle>,
     tools: HashMap<String, ToolHandle>,
     pending_llm_hints: Vec<PendingLlmHint>,
@@ -119,8 +135,36 @@ struct ToolHint {
 
 #[derive(Debug, Clone)]
 struct LastLlmOwner {
-    subagent_id: Option<String>,
+    subagent_id: String,
     updated_at: Instant,
+    // The source is exported in correlation metadata, which makes sticky ownership easier to audit
+    // in Phoenix when explicit gateway headers are absent.
+    source: LastLlmOwnerSource,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LastLlmOwnerSource {
+    Llm,
+    Tool,
+    SubagentStart,
+}
+
+impl LastLlmOwnerSource {
+    const fn status(self) -> &'static str {
+        match self {
+            Self::Llm => "sticky_last_owner",
+            Self::Tool => "recent_tool_owner",
+            Self::SubagentStart => "subagent_start",
+        }
+    }
+
+    const fn metadata_source(self) -> Option<&'static str> {
+        match self {
+            Self::Llm => None,
+            Self::Tool => Some("tool_owner"),
+            Self::SubagentStart => Some("subagent_start"),
+        }
+    }
 }
 
 struct LlmOwnerResolution {
@@ -129,6 +173,7 @@ struct LlmOwnerResolution {
     status: &'static str,
     source: Option<String>,
     hint: Option<LlmHintEvent>,
+    metadata: Value,
 }
 
 struct ToolOwnerResolution {
@@ -147,6 +192,7 @@ impl SessionManager {
     pub(crate) fn new(default_config: GatewayConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            alignment: Arc::new(Mutex::new(SessionAlignmentState::default())),
             default_config,
         }
     }
@@ -168,30 +214,50 @@ impl SessionManager {
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
     ) -> Result<(), CliError> {
+        let mut alignment_state = self.alignment.lock().await;
         let mut sessions = self.inner.lock().await;
         for event in events {
+            let mut event = event;
+            let config = self.default_config.session_config_from_headers(headers);
+            if queue_or_promote_child_start(
+                &mut event,
+                &mut sessions,
+                &mut alignment_state,
+                config.clone(),
+            )
+            .await?
+            {
+                continue;
+            }
+
+            let event = alignment_state.route_event(event);
             let session_id = event.session_id().to_string();
+            let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
             if event.is_terminal() && !sessions.contains_key(&session_id) {
                 continue;
             }
-            let config = self.default_config.session_config_from_headers(headers);
             let event_kind = event_agent_kind(&event);
-            let session = sessions
-                .entry(session_id.clone())
-                .or_insert_with(|| Session::new(session_id.clone(), event_kind, config.clone()));
-            if matches!(&event, NormalizedEvent::AgentStarted(_))
-                && session.agent_kind == AgentKind::Gateway
-                && event_kind != AgentKind::Gateway
-            {
-                session.agent_kind = event_kind;
+            let should_remove_session = apply_event_to_session(
+                &mut sessions,
+                &session_id,
+                event,
+                event_kind,
+                config.clone(),
+                is_agent_started,
+            )
+            .await?;
+            if is_agent_started {
+                // A just-opened parent may unlock one or more child SessionStart hooks that arrived
+                // earlier in this batch or an earlier request.
+                promote_pending_subagents_for_parent(
+                    &mut sessions,
+                    &mut alignment_state,
+                    &session_id,
+                    config.clone(),
+                )
+                .await?;
             }
-            session.apply(event).await?;
-            if session.agent_scope.is_none()
-                && session.subagents.is_empty()
-                && session.subagent_stack.is_empty()
-                && session.llms.is_empty()
-                && session.tools.is_empty()
-            {
+            if should_remove_session {
                 sessions.remove(&session_id);
             }
         }
@@ -217,18 +283,25 @@ impl SessionManager {
         headers: &HeaderMap,
         start: LlmGatewayStart,
     ) -> Result<ActiveLlm, CliError> {
-        let mut sessions = self.inner.lock().await;
+        let mut start = start;
         let config = self.default_config.session_config_from_headers(headers);
+        let alias = self.resolve_start_alias(&mut start, config.clone()).await?;
+        let mut sessions = self.inner.lock().await;
         let session_id = start
             .session_id
             .clone()
             .or_else(|| single_active_session_id(&sessions))
             .unwrap_or_else(|| format!("{}-gateway", AgentKind::Gateway.as_str()));
-        let inferred_agent_kind = agent_kind_for_gateway_provider(&start.provider);
+        let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
         let session = sessions
             .entry(session_id.clone())
             .or_insert_with(|| Session::new(session_id, inferred_agent_kind, config));
-        session.start_llm(start).await
+        let mut active = session.start_llm(start).await?;
+        if let Some(alias) = alias {
+            active.session_id = alias.parent_session_id;
+            active.owner_subagent_id = active.owner_subagent_id.or(Some(alias.subagent_id));
+        }
+        Ok(active)
     }
 
     /// Prepares a managed LLM execution against the right session and scope context.
@@ -246,8 +319,10 @@ impl SessionManager {
         headers: &HeaderMap,
         start: LlmGatewayStart,
     ) -> Result<GatewayCallPrep, CliError> {
-        let mut sessions = self.inner.lock().await;
+        let mut start = start;
         let config = self.default_config.session_config_from_headers(headers);
+        self.resolve_start_alias(&mut start, config.clone()).await?;
+        let mut sessions = self.inner.lock().await;
         let session_id = start
             .session_id
             .clone()
@@ -256,7 +331,7 @@ impl SessionManager {
         // Match `start_llm`: when this path creates a brand-new session (real agent's gateway
         // request beats its SessionStart hook), label the session by the provider so ATIF and
         // Phoenix scopes carry the agent identity instead of freezing on "gateway".
-        let inferred_agent_kind = agent_kind_for_gateway_provider(&start.provider);
+        let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
         let session = sessions
             .entry(session_id.clone())
             .or_insert_with(|| Session::new(session_id, inferred_agent_kind, config));
@@ -319,18 +394,30 @@ impl SessionManager {
         owner_subagent_id: Option<String>,
         response: Value,
     ) {
+        let alias = {
+            let alignment_state = self.alignment.lock().await;
+            alignment_state.alias_for_session(session_id)
+        };
+        let (session_id, owner_subagent_id) = match alias {
+            Some(alias) => (
+                alias.parent_session_id,
+                owner_subagent_id.or(Some(alias.subagent_id)),
+            ),
+            None => (session_id.to_string(), owner_subagent_id),
+        };
         let mut sessions = self.inner.lock().await;
-        if let Some(session) = sessions.get_mut(session_id) {
+        if let Some(session) = sessions.get_mut(&session_id) {
             session.add_tool_hints_from_llm_response(response, owner_subagent_id);
         }
     }
 
     /// Closes every still-open session before gateway teardown.
     ///
-    /// Codex transparent runs can exit without a native `SessionEnd` hook. Gateway shutdown is the
-    /// last deterministic lifecycle boundary for those sessions, so close open scopes while
-    /// observability plugins are still active.
+    /// Some harnesses can exit without a native `SessionEnd` hook. Gateway shutdown is the last
+    /// deterministic lifecycle boundary for those sessions, so close open scopes while
+    /// observability plugins are still active. Applies to Codex transparent runs today.
     pub(crate) async fn close_all(&self, reason: &str) -> Result<(), CliError> {
+        self.alignment.lock().await.clear();
         let mut sessions = {
             let mut guard = self.inner.lock().await;
             guard
@@ -340,6 +427,173 @@ impl SessionManager {
         };
         close_sessions_for_shutdown(&mut sessions, reason).await
     }
+
+    // Applies known or pending child-session aliases before the gateway chooses a session. This is
+    // deliberately before the `inner` lock in `start_llm`/`prepare_gateway_call` so a child-thread
+    // gateway request can promote its pending parent/subagent relationship instead of creating a
+    // synthetic child root.
+    async fn resolve_start_alias(
+        &self,
+        start: &mut LlmGatewayStart,
+        config: SessionConfig,
+    ) -> Result<Option<SessionAlias>, CliError> {
+        let Some(session_id) = start.session_id.clone() else {
+            return Ok(None);
+        };
+        let mut alignment_state = self.alignment.lock().await;
+        if let Some(alias) = alignment_state.alias_for_session(&session_id) {
+            apply_start_alias(start, &alias);
+            return Ok(Some(alias));
+        }
+        let Some(pending) = alignment_state.pending_for_session(&session_id) else {
+            return Ok(None);
+        };
+        let mut sessions = self.inner.lock().await;
+        let alias = promote_pending_subagent(
+            &mut sessions,
+            &mut alignment_state,
+            session_id,
+            pending,
+            config,
+        )
+        .await?;
+        if let Some(alias) = alias.as_ref() {
+            apply_start_alias(start, alias);
+        }
+        Ok(alias)
+    }
+}
+
+// Mutates a gateway LLM start in place after alias resolution. The parent session id is what the
+// runtime session manager should open, while the subagent id and alias metadata preserve the child
+// thread as the LLM owner.
+fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlias) {
+    start.session_id = Some(alias.parent_session_id.clone());
+    if start.subagent_id.is_none() {
+        start.subagent_id = Some(alias.subagent_id.clone());
+    }
+    start.metadata = merge_metadata(start.metadata.clone(), alias.metadata());
+}
+
+// Handles child SessionStart events before normal per-session dispatch. Some harnesses advertise a
+// parent session on SessionStart; when the child is still empty, queue or promote that start as a
+// subagent instead of letting it open a new root trace. Applies to Codex child threads today.
+async fn queue_or_promote_child_start(
+    event: &mut NormalizedEvent,
+    sessions: &mut HashMap<String, Session>,
+    alignment_state: &mut SessionAlignmentState,
+    config: SessionConfig,
+) -> Result<bool, CliError> {
+    let Some((child_session_id, pending)) = alignment::pending_subagent_start(event) else {
+        return Ok(false);
+    };
+    if sessions
+        .get(&child_session_id)
+        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
+    {
+        return Ok(false);
+    }
+    if sessions.contains_key(pending.parent_session_id()) {
+        alignment_state.remove_pending(&child_session_id);
+        promote_pending_subagent(sessions, alignment_state, child_session_id, pending, config)
+            .await?;
+    } else {
+        // Child-first ordering is possible for harness-managed children. Drop any empty child
+        // placeholder and wait until the parent hook or a gateway LLM forces promotion. Applies to
+        // Codex transparent runs today.
+        sessions.remove(&child_session_id);
+        alignment_state.insert_pending(child_session_id, pending);
+    }
+    Ok(true)
+}
+
+async fn apply_event_to_session(
+    sessions: &mut HashMap<String, Session>,
+    session_id: &str,
+    event: NormalizedEvent,
+    event_kind: AgentKind,
+    config: SessionConfig,
+    is_agent_started: bool,
+) -> Result<bool, CliError> {
+    let session = sessions
+        .entry(session_id.to_string())
+        .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
+    if is_agent_started
+        && session.agent_kind == AgentKind::Gateway
+        && event_kind != AgentKind::Gateway
+    {
+        session.agent_kind = event_kind;
+    }
+    session.apply(event).await?;
+    Ok(session.is_empty())
+}
+
+// Promotes all child SessionStart hooks that were waiting on a newly opened parent. Multiple
+// children can wait for the same parent when parallel harness-managed subagents start before the
+// root hook is observed. Applies to Codex child threads today.
+async fn promote_pending_subagents_for_parent(
+    sessions: &mut HashMap<String, Session>,
+    alignment_state: &mut SessionAlignmentState,
+    parent_session_id: &str,
+    config: SessionConfig,
+) -> Result<(), CliError> {
+    for (child_session_id, pending) in alignment_state.pending_for_parent(parent_session_id) {
+        promote_pending_subagent(
+            sessions,
+            alignment_state,
+            child_session_id,
+            pending,
+            config.clone(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+// Converts one pending child SessionStart into a parent-owned subagent and installs the alias used
+// by later child-session events. If the child session gained real activity while pending, promotion
+// is skipped rather than moving existing LLM/tool handles across scopes. Applies to Codex child
+// threads today.
+async fn promote_pending_subagent(
+    sessions: &mut HashMap<String, Session>,
+    alignment_state: &mut SessionAlignmentState,
+    child_session_id: String,
+    pending: PendingSubagentStart,
+    config: SessionConfig,
+) -> Result<Option<SessionAlias>, CliError> {
+    if sessions
+        .get(&child_session_id)
+        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
+    {
+        return Ok(None);
+    }
+    sessions.remove(&child_session_id);
+    let parent_session_id = pending.parent_session_id().to_string();
+    let parent_session = sessions
+        .entry(parent_session_id.clone())
+        .or_insert_with(|| {
+            Session::new(parent_session_id.clone(), pending.event.agent_kind, config)
+        });
+    if parent_session.agent_scope.is_none() {
+        // Gateway traffic can be the first signal that forces promotion. In that case, synthesize a
+        // minimal parent agent scope so the subagent still has a valid runtime parent.
+        parent_session
+            .apply(NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: parent_session_id,
+                agent_kind: pending.event.agent_kind,
+                event_name: "implicit_parent_for_aligned_subagent".into(),
+                payload: Value::Null,
+                metadata: Value::Null,
+            }))
+            .await?;
+    }
+    let subagent_event = pending.subagent_start_event();
+    parent_session
+        .apply(NormalizedEvent::SubagentStarted(subagent_event))
+        .await?;
+    let alias = pending.alias_for_child_session(child_session_id.clone());
+    alignment_state.insert_alias(child_session_id, alias.clone());
+    Ok(Some(alias))
 }
 
 async fn close_sessions_for_shutdown(
@@ -368,7 +622,9 @@ impl Session {
             scope_stack: create_scope_stack(),
             agent_scope: None,
             subagents: HashMap::new(),
+            subagent_stacks: HashMap::new(),
             subagent_stack: Vec::new(),
+            completed_subagents: HashSet::new(),
             llms: HashMap::new(),
             tools: HashMap::new(),
             pending_llm_hints: Vec::new(),
@@ -376,6 +632,22 @@ impl Session {
             last_llm_owner: None,
             config,
         }
+    }
+
+    // A child session can only be converted into a subagent before any real scope, LLM, or tool
+    // state has been opened for it. Once work exists under the child, reparenting would move only
+    // future events and leave an inconsistent trace.
+    fn can_reparent_as_subagent_alias(&self) -> bool {
+        self.is_empty()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.agent_scope.is_none()
+            && self.subagents.is_empty()
+            && self.subagent_stacks.is_empty()
+            && self.subagent_stack.is_empty()
+            && self.llms.is_empty()
+            && self.tools.is_empty()
     }
 
     // Runs one normalized hook event inside this session's scope stack. Dispatch stays synchronous
@@ -386,15 +658,15 @@ impl Session {
             .scope(stack, async move {
                 match event {
                     NormalizedEvent::AgentStarted(event) => self.start_agent(event),
-                    NormalizedEvent::AgentEnded(event) => self.end_agent(event),
+                    NormalizedEvent::AgentEnded(event) => self.end_agent(event).await,
                     NormalizedEvent::TurnEnded(_) => Ok(()),
-                    NormalizedEvent::SubagentStarted(event) => self.start_subagent(event),
-                    NormalizedEvent::SubagentEnded(event) => self.end_subagent(event),
+                    NormalizedEvent::SubagentStarted(event) => self.start_subagent(event).await,
+                    NormalizedEvent::SubagentEnded(event) => self.end_subagent(event).await,
                     NormalizedEvent::LlmHint(event) => self.add_llm_hint(event),
                     NormalizedEvent::LlmStarted(event) => self.start_hook_llm(event),
                     NormalizedEvent::LlmEnded(event) => self.end_hook_llm(event),
                     NormalizedEvent::ToolStarted(event) => self.start_tool(event),
-                    NormalizedEvent::ToolEnded(event) => self.end_tool(event),
+                    NormalizedEvent::ToolEnded(event) => self.end_tool(event).await,
                     NormalizedEvent::PromptSubmitted(event) => self.mark("prompt_submitted", event),
                     NormalizedEvent::Compaction(event) => self.mark("compaction", event),
                     NormalizedEvent::Notification(event) => self.mark("notification", event),
@@ -417,12 +689,15 @@ impl Session {
                     attributes |= LlmAttributes::STREAMING;
                 }
                 let owner = self.resolve_llm_owner(&start);
-                let metadata = llm_correlation_metadata(
-                    start.metadata,
-                    owner.status,
-                    owner.source.as_deref(),
-                    owner.subagent_id.as_deref(),
-                    owner.hint.as_ref(),
+                let metadata = merge_metadata(
+                    llm_correlation_metadata(
+                        start.metadata,
+                        owner.status,
+                        owner.source.as_deref(),
+                        owner.subagent_id.as_deref(),
+                        owner.hint.as_ref(),
+                    ),
+                    owner.metadata,
                 );
                 let handle = llm_call(
                     LlmCallParams::builder()
@@ -464,12 +739,15 @@ impl Session {
                     attributes |= LlmAttributes::STREAMING;
                 }
                 let owner = self.resolve_llm_owner(&start);
-                let metadata = llm_correlation_metadata(
-                    start.metadata,
-                    owner.status,
-                    owner.source.as_deref(),
-                    owner.subagent_id.as_deref(),
-                    owner.hint.as_ref(),
+                let metadata = merge_metadata(
+                    llm_correlation_metadata(
+                        start.metadata,
+                        owner.status,
+                        owner.source.as_deref(),
+                        owner.subagent_id.as_deref(),
+                        owner.hint.as_ref(),
+                    ),
+                    owner.metadata,
                 );
                 Ok(GatewayCallPrep {
                     scope_stack: stack,
@@ -525,7 +803,7 @@ impl Session {
 
     // Closes the session in a fail-safe order: active LLMs/tools first, nested subagents from the
     // top down, correlation state, then the root agent scope.
-    fn end_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
+    async fn end_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
         // Duplicate agent-end hooks (e.g., hermes-agent emitting `on_session_end` more than once
         // per session) must not reopen the agent scope.
         if self.agent_scope.is_none() {
@@ -534,7 +812,7 @@ impl Session {
         self.ensure_agent_started(event.metadata.clone())?;
         self.close_active_llms_for_agent_end()?;
         self.close_active_tools_for_agent_end()?;
-        self.close_active_subagents_for_agent_end()?;
+        self.close_active_subagents_for_agent_end().await?;
         self.clear_correlation_state();
         self.close_agent_scope(event.payload)?;
         Ok(())
@@ -550,7 +828,7 @@ impl Session {
                 }
                 self.close_active_llms_for_agent_end()?;
                 self.close_active_tools_for_agent_end()?;
-                self.close_active_subagents_for_agent_end()?;
+                self.close_active_subagents_for_agent_end().await?;
                 self.clear_correlation_state();
                 self.close_agent_scope(payload)?;
                 Ok(())
@@ -589,20 +867,16 @@ impl Session {
         Ok(())
     }
 
-    // Pops active subagent scopes in stack order so nested subagents close from child to parent. The
-    // map is cleared afterward to discard any out-of-order stale handles not present in the stack.
-    fn close_active_subagents_for_agent_end(&mut self) -> Result<(), CliError> {
+    // Pops active subagent scopes in reverse start order. Each subagent owns an independent runtime
+    // stack so parallel harness workers can still close cleanly when their completion hooks arrive
+    // out of order. Applies to Claude Code Agent workers and Codex child threads today.
+    async fn close_active_subagents_for_agent_end(&mut self) -> Result<(), CliError> {
         while let Some(subagent_id) = self.subagent_stack.pop() {
-            if let Some(handle) = self.subagents.remove(&subagent_id) {
-                pop_scope(
-                    PopScopeParams::builder()
-                        .handle_uuid(&handle.uuid)
-                        .output(json!({ "status": "closed_by_agent_end" }))
-                        .build(),
-                )?;
-            }
+            self.close_subagent_scope(&subagent_id, json!({ "status": "closed_by_agent_end" }))
+                .await?;
         }
         self.subagents.clear();
+        self.subagent_stacks.clear();
         Ok(())
     }
 
@@ -628,32 +902,59 @@ impl Session {
         Ok(())
     }
 
-    // Starts a subagent scope under the current session. Duplicate subagent starts are ignored so
+    // Starts a subagent scope under the root agent scope. Duplicate subagent starts are ignored so
     // integrations that retry or emit both "start" and "created" style hooks do not double-nest.
-    fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
+    //
+    // Subagents get their own runtime stack seeded with the root agent handle. That keeps Phoenix
+    // parentage sibling-shaped while still allowing parallel workers to end out of order.
+    async fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         if self.subagents.contains_key(&event.subagent_id) {
             return Ok(());
         }
-        let scope = push_scope(
-            PushScopeParams::builder()
-                .name(format!("subagent:{}", event.subagent_id).as_str())
-                .scope_type(ScopeType::Agent)
-                .metadata(event.metadata)
-                .input(event.payload)
-                .build(),
-        )?;
-        self.subagent_stack.push(event.subagent_id.clone());
-        self.subagents.insert(event.subagent_id, scope);
+        let has_parallel_sibling = !self.subagents.is_empty();
+        let agent_scope = self
+            .agent_scope
+            .clone()
+            .expect("ensure_agent_started should initialize the agent scope");
+        let subagent_id = event.subagent_id;
+        let subagent_name = format!("subagent:{subagent_id}");
+        let subagent_stack = create_scope_stack();
+        let scope = TASK_SCOPE_STACK
+            .scope(subagent_stack.clone(), async {
+                task_scope_push(agent_scope.clone());
+                push_scope(
+                    PushScopeParams::builder()
+                        .name(subagent_name.as_str())
+                        .scope_type(ScopeType::Agent)
+                        .parent(&agent_scope)
+                        .metadata(event.metadata)
+                        .input(event.payload)
+                        .build(),
+                )
+                .map_err(CliError::from)
+            })
+            .await?;
+        self.completed_subagents.remove(&subagent_id);
+        if has_parallel_sibling {
+            self.set_last_subagent_start_owner(Some(subagent_id.clone()));
+        }
+        self.subagent_stack.push(subagent_id.clone());
+        self.subagent_stacks
+            .insert(subagent_id.clone(), subagent_stack);
+        self.subagents.insert(subagent_id, scope);
         Ok(())
     }
 
-    // Ends a subagent only when it is the current top of the subagent stack. Unknown or out-of-order
-    // endings become mark events instead of corrupting the scope stack, preserving evidence of the
-    // mismatch for observability consumers.
-    fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
+    // Ends a subagent by id. Unknown endings become mark events, while duplicate endings for a
+    // subagent already closed by another provider-specific completion signal are ignored. Applies
+    // to Claude Code Agent-tool completion today.
+    async fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
-        let Some(scope) = self.subagents.get(&event.subagent_id).cloned() else {
+        if self.completed_subagents.contains(&event.subagent_id) {
+            return Ok(());
+        }
+        if !self.subagents.contains_key(&event.subagent_id) {
             eprintln!(
                 "nemo-flow CLI gateway: received {} for subagent {} without a matching start",
                 event.event_name, event.subagent_id
@@ -669,45 +970,49 @@ impl Session {
                 },
             );
         };
-        if self.subagent_stack.last() != Some(&event.subagent_id) {
-            return emit_mark_event(
-                EmitMarkEventParams::builder()
-                    .name("subagent_end_not_top")
-                    .data(event.payload)
-                    .metadata(event.metadata)
-                    .build(),
-            )
-            .map_err(CliError::from);
-        }
-        if pop_scope(
-            PopScopeParams::builder()
-                .handle_uuid(&scope.uuid)
-                .output(event.payload.clone())
-                .build(),
-        )
-        .is_err()
-        {
-            return emit_mark_event(
-                EmitMarkEventParams::builder()
-                    .name("subagent_end_not_top")
-                    .data(event.payload)
-                    .metadata(event.metadata)
-                    .build(),
-            )
-            .map_err(CliError::from);
-        }
-        self.subagent_stack.pop();
-        self.subagents.remove(&event.subagent_id);
+        self.close_subagent_scope(&event.subagent_id, event.payload)
+            .await?;
+        Ok(())
+    }
+
+    // Closes one subagent using that subagent's own scope stack. This is shared by explicit end
+    // hooks, provider-specific tool-completion signals, and agent shutdown so all paths clean up
+    // ownership hints the same way. Applies to Claude Code Agent-tool completion today.
+    async fn close_subagent_scope(
+        &mut self,
+        subagent_id: &str,
+        output: Value,
+    ) -> Result<bool, CliError> {
+        let Some(scope) = self.subagents.remove(subagent_id) else {
+            return Ok(false);
+        };
+        let stack = self
+            .subagent_stacks
+            .remove(subagent_id)
+            .unwrap_or_else(|| self.scope_stack.clone());
+        TASK_SCOPE_STACK
+            .scope(stack, async {
+                pop_scope(
+                    PopScopeParams::builder()
+                        .handle_uuid(&scope.uuid)
+                        .output(output)
+                        .build(),
+                )
+                .map_err(CliError::from)
+            })
+            .await?;
+        self.subagent_stack.retain(|id| id != subagent_id);
+        self.completed_subagents.insert(subagent_id.to_string());
         self.pending_tool_hints
-            .retain(|pending| pending.hint.subagent_id.as_ref() != Some(&event.subagent_id));
+            .retain(|pending| pending.hint.subagent_id.as_deref() != Some(subagent_id));
         if self
             .last_llm_owner
             .as_ref()
-            .is_some_and(|owner| owner.subagent_id.as_ref() == Some(&event.subagent_id))
+            .is_some_and(|owner| owner.subagent_id == subagent_id)
         {
             self.last_llm_owner = None;
         }
-        Ok(())
+        Ok(true)
     }
 
     // Stores an LLM correlation hint from hook activity after pruning expired hints. Hints do not
@@ -725,12 +1030,15 @@ impl Session {
     }
 
     // Starts an LLM call from hook activity such as Hermes API request hooks. Duplicate call IDs are
-    // ignored so repeated pre hooks do not create parallel handles for one provider call.
+    // ignored so repeated pre hooks do not create parallel handles for one provider call. Aliased
+    // child-session LLMs carry their subagent owner in metadata and are resolved by
+    // `hook_llm_owner`.
     fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
         if self.llms.contains_key(&event.api_call_id) {
             return Ok(());
         }
+        let (parent, metadata) = self.hook_llm_owner(event.metadata);
         let handle = llm_call(
             LlmCallParams::builder()
                 .name(event.provider.as_str())
@@ -738,8 +1046,9 @@ impl Session {
                     headers: Map::new(),
                     content: event.request,
                 })
+                .parent_opt(parent.as_ref())
                 .attributes(LlmAttributes::empty())
-                .metadata(event.metadata)
+                .metadata(metadata)
                 .model_name_opt(event.model_name)
                 .build(),
         )?;
@@ -747,8 +1056,12 @@ impl Session {
         Ok(())
     }
 
+    // Ends a hook-observed LLM call, synthesizing a start if only the post hook arrives. The same
+    // alias metadata recovery used by `start_hook_llm` keeps post-only aliased child LLMs under the
+    // subagent instead of falling back to the root agent.
     fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
+        let (parent, metadata) = self.hook_llm_owner(event.metadata);
         let handle = match self.llms.remove(&event.api_call_id) {
             Some(handle) => handle,
             None => llm_call(
@@ -758,8 +1071,9 @@ impl Session {
                         headers: Map::new(),
                         content: event.request,
                     })
+                    .parent_opt(parent.as_ref())
                     .attributes(LlmAttributes::empty())
-                    .metadata(event.metadata.clone())
+                    .metadata(metadata.clone())
                     .model_name_opt(event.model_name.clone())
                     .build(),
             )?,
@@ -768,10 +1082,29 @@ impl Session {
             LlmCallEndParams::builder()
                 .handle(&handle)
                 .response(event.response)
-                .metadata(event.metadata)
+                .metadata(metadata)
                 .build(),
         )?;
         Ok(())
+    }
+
+    // Recovers owner information stamped by alignment when a hook-originated LLM event came from
+    // an aliased child session. Gateway LLM calls have first-class owner resolution, but hook LLM
+    // events only carry metadata, so this is the bridge that keeps aliased child LLMs under the
+    // subagent instead of the root agent.
+    fn hook_llm_owner(&mut self, metadata: Value) -> (Option<ScopeHandle>, Value) {
+        let Some(subagent_id) = json_string_at(&metadata, &[&["llm_correlation_subagent_id"][..]])
+        else {
+            return (self.agent_scope.clone(), metadata);
+        };
+        let Some(scope) = self.subagents.get(&subagent_id).cloned() else {
+            return (self.agent_scope.clone(), metadata);
+        };
+        self.set_last_llm_owner(Some(subagent_id.clone()));
+        (
+            Some(scope),
+            merge_metadata(metadata, self.subagent_llm_metadata(&subagent_id)),
+        )
     }
 
     // Starts a tool call under an explicit subagent when available, otherwise under the agent
@@ -799,6 +1132,7 @@ impl Session {
             owner.subagent_id.as_deref(),
             owner.hint.as_ref(),
         );
+        self.set_last_tool_owner(owner.subagent_id.clone());
         let handle = tool_call(
             ToolCallParams::builder()
                 .name(event.tool_name.as_str())
@@ -814,8 +1148,13 @@ impl Session {
 
     // Ends a tool call, synthesizing a start if no matching handle exists. This keeps post-only
     // hooks observable and preserves the final result/status instead of dropping orphaned endings.
-    fn end_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
+    async fn end_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
         self.ensure_agent_started(event.metadata.clone())?;
+        let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
+        let explicit_subagent_id = event
+            .subagent_id
+            .clone()
+            .filter(|subagent_id| self.subagents.contains_key(subagent_id));
         let handle = match self.tools.remove(&event.tool_call_id) {
             Some(handle) => handle,
             None => {
@@ -836,6 +1175,7 @@ impl Session {
                     owner.subagent_id.as_deref(),
                     owner.hint.as_ref(),
                 );
+                self.set_last_tool_owner(owner.subagent_id.clone());
                 tool_call(
                     ToolCallParams::builder()
                         .name(event.tool_name.as_str())
@@ -850,13 +1190,18 @@ impl Session {
         tool_call_end(
             ToolCallEndParams::builder()
                 .handle(&handle)
-                .result(event.result)
+                .result(event.result.clone())
                 .metadata(merge_metadata(
                     event.metadata,
                     json!({ "status": event.status }),
                 ))
                 .build(),
         )?;
+        self.set_last_tool_owner(explicit_subagent_id);
+        if let Some(subagent_id) = completed_agent_subagent_id {
+            self.close_subagent_scope(&subagent_id, event.result)
+                .await?;
+        }
         Ok(())
     }
 
@@ -930,6 +1275,7 @@ impl Session {
                 status: "explicit",
                 source: Some("gateway_header".to_string()),
                 hint: None,
+                metadata: self.subagent_llm_metadata(subagent_id),
             });
         }
         None
@@ -959,14 +1305,15 @@ impl Session {
     // This covers agents that emit one hint followed by a cluster of related provider calls.
     fn sticky_llm_owner(&self) -> Option<LlmOwnerResolution> {
         if let Some(owner) = self.last_llm_owner.as_ref()
-            && let Some(parent) = self.scope_for_owner(owner.subagent_id.as_deref())
+            && let Some(parent) = self.subagents.get(&owner.subagent_id).cloned()
         {
             return Some(LlmOwnerResolution {
                 parent: Some(parent),
-                subagent_id: owner.subagent_id.clone(),
-                status: "sticky_last_owner",
-                source: None,
+                subagent_id: Some(owner.subagent_id.clone()),
+                status: owner.source.status(),
+                source: owner.source.metadata_source().map(ToOwned::to_owned),
                 hint: None,
+                metadata: self.subagent_llm_metadata(&owner.subagent_id),
             });
         }
         None
@@ -981,6 +1328,7 @@ impl Session {
         {
             let subagent_id = subagent_id.clone();
             let scope = scope.clone();
+            let metadata = self.subagent_llm_metadata(&subagent_id);
             self.set_last_llm_owner(Some(subagent_id.clone()));
             return Some(LlmOwnerResolution {
                 parent: Some(scope),
@@ -988,6 +1336,7 @@ impl Session {
                 status: "active_subagent",
                 source: None,
                 hint: None,
+                metadata,
             });
         }
         None
@@ -1006,6 +1355,7 @@ impl Session {
             },
             source: None,
             hint: None,
+            metadata: Value::Null,
         }
     }
 
@@ -1018,12 +1368,16 @@ impl Session {
         status: &'static str,
     ) -> LlmOwnerResolution {
         let hinted_subagent_id = hint.subagent_id.clone().or_else(|| hint.agent_id.clone());
-        let (parent, subagent_id) = match hinted_subagent_id.as_deref() {
+        let (parent, subagent_id, metadata) = match hinted_subagent_id.as_deref() {
             Some(id) => match self.subagents.get(id).cloned() {
-                Some(scope) => (Some(scope), Some(id.to_string())),
-                None => (self.agent_scope.clone(), None),
+                Some(scope) => (
+                    Some(scope),
+                    Some(id.to_string()),
+                    self.subagent_llm_metadata(id),
+                ),
+                None => (self.agent_scope.clone(), None, Value::Null),
             },
-            None => (self.agent_scope.clone(), None),
+            None => (self.agent_scope.clone(), None, Value::Null),
         };
         if parent.is_some() {
             self.set_last_llm_owner(subagent_id.clone());
@@ -1034,7 +1388,15 @@ impl Session {
             status,
             source: Some(hint.event_name.clone()),
             hint: Some(hint),
+            metadata,
         }
+    }
+
+    fn subagent_llm_metadata(&self, subagent_id: &str) -> Value {
+        let Some(scope) = self.subagents.get(subagent_id) else {
+            return Value::Null;
+        };
+        alignment::llm_owner_metadata(scope.metadata.as_ref())
     }
 
     // Finds a single best pending hint for a gateway call. Ties are treated as ambiguous and return
@@ -1057,21 +1419,40 @@ impl Session {
         (best.len() == 1).then_some(best[0].0)
     }
 
-    // Resolves a stored owner back to a live scope, falling back to the agent scope when no subagent
-    // id is present or the subagent has already ended.
-    fn scope_for_owner(&self, subagent_id: Option<&str>) -> Option<ScopeHandle> {
-        subagent_id
-            .and_then(|id| self.subagents.get(id).cloned())
-            .or_else(|| self.agent_scope.clone())
-    }
-
     // Records the most recent LLM owner with a timestamp so nearby gateway calls can inherit the
     // same parent scope when explicit IDs and hints are absent.
     fn set_last_llm_owner(&mut self, subagent_id: Option<String>) {
-        self.last_llm_owner = Some(LastLlmOwner {
+        self.last_llm_owner = subagent_id.map(|subagent_id| LastLlmOwner {
             subagent_id,
             updated_at: Instant::now(),
+            source: LastLlmOwnerSource::Llm,
         });
+    }
+
+    // Records explicit or hint-resolved tool ownership as a short-lived cue for the next unhinted
+    // LLM call. Coding-agent hooks often identify tool ownership more reliably than provider
+    // requests, especially for subagents that do not propagate gateway headers.
+    fn set_last_tool_owner(&mut self, subagent_id: Option<String>) {
+        if let Some(subagent_id) = subagent_id {
+            self.last_llm_owner = Some(LastLlmOwner {
+                subagent_id,
+                updated_at: Instant::now(),
+                source: LastLlmOwnerSource::Tool,
+            });
+        }
+    }
+
+    // Parallel subagent starts are a weak but useful ownership signal: if a new worker starts while
+    // siblings are active and the next LLM lacks headers/hints, prefer the newest worker over the
+    // root agent. Single-subagent ownership is handled by `sole_subagent_owner`.
+    fn set_last_subagent_start_owner(&mut self, subagent_id: Option<String>) {
+        if let Some(subagent_id) = subagent_id {
+            self.last_llm_owner = Some(LastLlmOwner {
+                subagent_id,
+                updated_at: Instant::now(),
+                source: LastLlmOwnerSource::SubagentStart,
+            });
+        }
     }
 
     // Records tool-call suggestions from LLM responses as private correlation hints. These hints
@@ -1369,31 +1750,6 @@ fn same_optional(left: Option<&str>, right: Option<&str>) -> bool {
     matches!((left, right), (Some(left), Some(right)) if left == right)
 }
 
-// Reads the first string-like value from any candidate JSON path. Scalar numbers and booleans are
-// accepted for IDs because provider payloads are not always strict about identifier types.
-fn json_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
-    json_value_at(payload, paths)
-        .and_then(|value| match value {
-            Value::String(value) => Some(value),
-            Value::Number(value) => Some(value.to_string()),
-            Value::Bool(value) => Some(value.to_string()),
-            _ => None,
-        })
-        .filter(|value| !value.is_empty())
-}
-
-// Reads the first JSON value from any candidate path. The clone is intentional because extracted
-// hint data must live independently of the response body stored on the LLM end event.
-fn json_value_at(payload: &Value, paths: &[&[&str]]) -> Option<Value> {
-    paths.iter().find_map(|path| {
-        let mut current = payload;
-        for key in *path {
-            current = current.get(*key)?;
-        }
-        Some(current.clone())
-    })
-}
-
 // Parses stringified tool arguments when providers encode them as JSON text. Non-JSON strings are
 // preserved as strings so metadata still reflects what the provider actually returned.
 fn normalize_tool_arguments(arguments: Value) -> Value {
@@ -1481,14 +1837,6 @@ fn tool_correlation_metadata(
     merge_metadata(metadata, Value::Object(correlation))
 }
 
-// Inserts an optional string value into a JSON object while omitting absent fields entirely. This
-// keeps correlation metadata compact and avoids serializing nulls as meaningful observations.
-fn insert_optional(object: &mut Map<String, Value>, key: &str, value: Option<&str>) {
-    if let Some(value) = value {
-        object.insert(key.to_string(), json!(value));
-    }
-}
-
 // Extracts the source agent kind from any normalized event variant so newly created sessions can
 // inherit the correct agent identity before an explicit agent-start hook arrives.
 fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
@@ -1515,44 +1863,6 @@ fn single_active_session_id(sessions: &HashMap<String, Session>) -> Option<Strin
     (sessions.len() == 1)
         .then(|| sessions.keys().next().cloned())
         .flatten()
-}
-
-// Infers the owning agent for a session created by a gateway request that beat its SessionStart
-// hook. Mapping is by provider route name (set by `gateway::start_gateway_llm`):
-// `anthropic.messages` → ClaudeCode, `openai.responses` → Codex. Unknown providers fall back to
-// `Gateway` so synthetic sessions opened by pure proxy use still get the legacy label. This is
-// the only chance to label the session correctly because observer identities (ATIF agent name,
-// OpenInference scope name) are baked at scope-open time inside `ensure_agent_started`.
-fn agent_kind_for_gateway_provider(provider: &str) -> AgentKind {
-    match provider {
-        "anthropic.messages" | "anthropic.count_tokens" => AgentKind::ClaudeCode,
-        "openai.responses" => AgentKind::Codex,
-        _ => AgentKind::Gateway,
-    }
-}
-
-// Merges metadata objects with right-hand values taking precedence and null right-hand fields
-// ignored. Non-object values are preserved under separate keys so callers do not lose unusual
-// metadata shapes supplied by configuration or hooks.
-fn merge_metadata(left: Value, right: Value) -> Value {
-    match (left, right) {
-        (Value::Object(mut left), Value::Object(right)) => {
-            for (key, value) in right {
-                if !value.is_null() {
-                    left.insert(key, value);
-                }
-            }
-            Value::Object(left)
-        }
-        (Value::Null, right) => right,
-        (left, Value::Null) => left,
-        (left, right) => {
-            let mut object = Map::new();
-            object.insert("metadata".into(), left);
-            object.insert("extra_metadata".into(), right);
-            Value::Object(object)
-        }
-    }
 }
 
 #[cfg(test)]

@@ -66,6 +66,22 @@ fn event_has_session_id(event: &Value, session_id: &str) -> bool {
         || event["data"]["extra"]["session_id"] == json!(session_id)
 }
 
+async fn alignment_alias(manager: &SessionManager, session_id: &str) -> Option<SessionAlias> {
+    manager.alignment.lock().await.alias_for_session(session_id)
+}
+
+async fn has_alignment_alias(manager: &SessionManager, session_id: &str) -> bool {
+    manager.alignment.lock().await.has_alias(session_id)
+}
+
+async fn has_pending_alignment(manager: &SessionManager, session_id: &str) -> bool {
+    manager
+        .alignment
+        .lock()
+        .await
+        .has_pending_session(session_id)
+}
+
 #[tokio::test]
 async fn nests_agent_subagent_and_tool_lifecycle() {
     let config = GatewayConfig {
@@ -138,6 +154,813 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
     ];
     manager.apply_events(&headers, events).await.unwrap();
     assert!(manager.inner.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn parallel_subagents_are_siblings_under_agent_scope() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("sibling-subagents", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "sibling-subagents".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "sibling-subagents".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("sibling-subagents").unwrap();
+    let agent_uuid = session.agent_scope.as_ref().unwrap().uuid;
+    assert_eq!(
+        session.subagents.get("worker-1").unwrap().parent_uuid,
+        Some(agent_uuid)
+    );
+    assert_eq!(
+        session.subagents.get("worker-2").unwrap().parent_uuid,
+        Some(agent_uuid)
+    );
+}
+
+#[tokio::test]
+async fn new_subagent_claims_first_unhinted_llm_when_siblings_active() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("new-subagent-owner", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "new-subagent-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let first = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("new-subagent-owner".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(first, json!({ "output_text": "worker-1" }), json!({}))
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                session_id: "new-subagent-owner".into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "SubagentStart".into(),
+                subagent_id: "worker-2".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let worker_2_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("new-subagent-owner")
+            .unwrap()
+            .subagents
+            .get("worker-2")
+            .unwrap()
+            .uuid
+    };
+    let second = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("new-subagent-owner".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.handle.parent_uuid, Some(worker_2_uuid));
+    assert_eq!(
+        second.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("subagent_start")
+    );
+    assert_eq!(
+        second.handle.metadata.as_ref().unwrap()["llm_correlation_source"],
+        json!("subagent_start")
+    );
+    manager
+        .end_llm(second, json!({ "output_text": "worker-2" }), json!({}))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn codex_subagent_session_start_uses_transcript_parent_thread() {
+    let manager = SessionManager::new(session_test_config());
+    let temp = tempfile::tempdir().unwrap();
+    let child_transcript = temp.path().join("child.jsonl");
+    std::fs::write(
+        &child_transcript,
+        serde_json::to_string(&json!({
+            "type": "session_meta",
+            "payload": {
+                "id": "child-thread",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": "parent-thread",
+                            "depth": 1,
+                            "agent_nickname": "Hume",
+                            "agent_role": "explorer"
+                        }
+                    }
+                },
+                "thread_source": "subagent",
+                "agent_nickname": "Hume",
+                "agent_role": "explorer"
+            }
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "child-thread",
+                    "SessionStart",
+                    json!({ "transcript_path": child_transcript }),
+                )),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    assert!(sessions.get("child-thread").is_none());
+    let parent = sessions.get("parent-thread").unwrap();
+    let agent_uuid = parent.agent_scope.as_ref().unwrap().uuid;
+    assert_eq!(
+        parent.subagents.get("child-thread").unwrap().parent_uuid,
+        Some(agent_uuid)
+    );
+    drop(sessions);
+
+    let alias = alignment_alias(&manager, "child-thread").await.unwrap();
+    assert_eq!(alias.parent_session_id, "parent-thread");
+    assert_eq!(alias.subagent_id, "child-thread");
+}
+
+#[tokio::test]
+async fn codex_subagent_agent_end_removes_alias_and_closes_scope() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "parent-thread"
+                                }
+                            }
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionEnd".into(),
+                payload: json!({ "done": true }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    let sessions = manager.inner.lock().await;
+    let parent = sessions.get("parent-thread").unwrap();
+    assert!(!parent.subagents.contains_key("child-thread"));
+}
+
+#[tokio::test]
+async fn codex_parent_end_clears_alias_before_late_child_end() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "parent-thread"
+                                }
+                            }
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "parent-thread",
+                "SessionEnd",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    assert!(!manager.inner.lock().await.contains_key("parent-thread"));
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionEnd".into(),
+                payload: json!({ "late": true }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    assert!(!manager.inner.lock().await.contains_key("parent-thread"));
+}
+
+#[tokio::test]
+async fn codex_child_session_start_waits_for_parent_session() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "parent-thread",
+                                "agent_nickname": "Late",
+                                "agent_role": "worker"
+                            }
+                        }
+                    }
+                }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    assert!(!manager.inner.lock().await.contains_key("child-thread"));
+    assert!(has_pending_alignment(&manager, "child-thread").await);
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(codex_session_event(
+                "parent-thread",
+                "SessionStart",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+
+    assert!(!has_pending_alignment(&manager, "child-thread").await);
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+    let sessions = manager.inner.lock().await;
+    assert!(!sessions.contains_key("child-thread"));
+    assert!(
+        sessions
+            .get("parent-thread")
+            .unwrap()
+            .subagents
+            .contains_key("child-thread")
+    );
+}
+
+#[tokio::test]
+async fn codex_pending_child_gateway_llm_promotes_parent_subagent() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "parent-thread"
+                            }
+                        }
+                    }
+                }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("child-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(active.session_id, "parent-thread");
+    assert_eq!(active.owner_subagent_id.as_deref(), Some("child-thread"));
+    assert!(!has_pending_alignment(&manager, "child-thread").await);
+    assert!(has_alignment_alias(&manager, "child-thread").await);
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(!sessions.contains_key("child-thread"));
+        assert!(
+            sessions
+                .get("parent-thread")
+                .unwrap()
+                .subagents
+                .contains_key("child-thread")
+        );
+    }
+
+    manager
+        .end_llm(active, json!({ "output_text": "done" }), json!({}))
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_subagent_start_does_not_reparent_active_child_session() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(codex_session_event(
+                "parent-thread",
+                "SessionStart",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+
+    let active_child_llm = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("child-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "child-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SessionStart".into(),
+                payload: json!({
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "parent-thread"
+                            }
+                        }
+                    }
+                }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    assert!(!has_alignment_alias(&manager, "child-thread").await);
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.contains_key("child-thread"));
+        assert!(
+            !sessions
+                .get("parent-thread")
+                .unwrap()
+                .subagents
+                .contains_key("child-thread")
+        );
+    }
+
+    manager
+        .end_llm(
+            active_child_llm,
+            json!({ "output_text": "child" }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_aliased_hook_llm_routes_to_subagent_scope() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "parent-thread"
+                                }
+                            }
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmStarted(LlmEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreLlm".into(),
+                    api_call_id: "hook-llm".into(),
+                    provider: "openai.responses".into(),
+                    model_name: Some("gpt-test".into()),
+                    request: json!({ "input": "hello" }),
+                    response: Value::Null,
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let parent = sessions.get("parent-thread").unwrap();
+    let subagent_uuid = parent.subagents.get("child-thread").unwrap().uuid;
+    let handle = parent.llms.get("hook-llm").unwrap();
+    assert_eq!(handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("session_alias")
+    );
+    assert_eq!(
+        handle.metadata.as_ref().unwrap()["llm_correlation_subagent_id"],
+        json!("child-thread")
+    );
+    drop(sessions);
+
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
+async fn codex_subagent_gateway_llm_routes_to_parent_subagent() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(codex_session_event(
+                    "parent-thread",
+                    "SessionStart",
+                    json!({}),
+                )),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "child-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "parent-thread",
+                                    "agent_nickname": "Bohr",
+                                    "agent_role": "explorer"
+                                }
+                            }
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let subagent_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("parent-thread")
+            .unwrap()
+            .subagents
+            .get("child-thread")
+            .unwrap()
+            .uuid
+    };
+
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("child-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(active.session_id, "parent-thread");
+    assert_eq!(active.owner_subagent_id.as_deref(), Some("child-thread"));
+    assert_eq!(active.handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("explicit")
+    );
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["llm_correlation_subagent_id"],
+        json!("child-thread")
+    );
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["codex_parent_thread_id"],
+        json!("parent-thread")
+    );
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["codex_subagent_session_id"],
+        json!("child-thread")
+    );
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["agent_nickname"],
+        json!("Bohr")
+    );
+
+    manager
+        .end_llm(active, json!({ "output_text": "child" }), json!({}))
+        .await
+        .unwrap();
+
+    let sticky = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("parent-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sticky.session_id, "parent-thread");
+    assert_eq!(sticky.owner_subagent_id.as_deref(), Some("child-thread"));
+    assert_eq!(sticky.handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        sticky.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("sticky_last_owner")
+    );
+    assert_eq!(
+        sticky.handle.metadata.as_ref().unwrap()["llm_correlation_subagent_id"],
+        json!("child-thread")
+    );
+    assert_eq!(
+        sticky.handle.metadata.as_ref().unwrap()["codex_parent_thread_id"],
+        json!("parent-thread")
+    );
+    assert_eq!(
+        sticky.handle.metadata.as_ref().unwrap()["codex_subagent_session_id"],
+        json!("child-thread")
+    );
+    assert_eq!(
+        sticky.handle.metadata.as_ref().unwrap()["agent_nickname"],
+        json!("Bohr")
+    );
+
+    manager
+        .end_llm(sticky, json!({ "output_text": "child-again" }), json!({}))
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "parent-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "exec_command".into(),
+                    subagent_id: Some("child-thread".into()),
+                    arguments: json!({ "cmd": "true" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "parent-thread".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "exec_command".into(),
+                    subagent_id: Some("child-thread".into()),
+                    arguments: Value::Null,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let tool_owned = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("parent-thread".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(tool_owned.handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        tool_owned.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("recent_tool_owner")
+    );
+    assert_eq!(
+        tool_owned.handle.metadata.as_ref().unwrap()["codex_parent_thread_id"],
+        json!("parent-thread")
+    );
+    assert_eq!(
+        tool_owned.handle.metadata.as_ref().unwrap()["codex_subagent_session_id"],
+        json!("child-thread")
+    );
+
+    manager
+        .end_llm(
+            tool_owned,
+            json!({ "output_text": "after-tool" }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::LlmHint(LlmHintEvent {
+                session_id: "parent-thread".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "AgentMessageDelta".into(),
+                subagent_id: Some("child-thread".into()),
+                agent_id: None,
+                agent_type: Some("explorer".into()),
+                conversation_id: None,
+                generation_id: Some("generation-1".into()),
+                request_id: None,
+                model: Some("gpt-test".into()),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let hinted = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("parent-thread".into()),
+                generation_id: Some("generation-1".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(hinted.handle.parent_uuid, Some(subagent_uuid));
+    assert_eq!(
+        hinted.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("single_hint")
+    );
+    assert_eq!(
+        hinted.handle.metadata.as_ref().unwrap()["codex_parent_thread_id"],
+        json!("parent-thread")
+    );
+    assert_eq!(
+        hinted.handle.metadata.as_ref().unwrap()["codex_subagent_session_id"],
+        json!("child-thread")
+    );
+
+    manager
+        .end_llm(hinted, json!({ "output_text": "after-hint" }), json!({}))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1262,6 +2085,288 @@ async fn no_active_hint_reuses_last_llm_owner() {
 }
 
 #[tokio::test]
+async fn root_llm_hint_does_not_stick_over_later_subagent() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("root-sticky", "SessionStart")),
+                NormalizedEvent::LlmHint(LlmHintEvent {
+                    session_id: "root-sticky".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptSubmit".into(),
+                    subagent_id: None,
+                    agent_id: None,
+                    agent_type: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    model: Some("gpt-test".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let first = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("root-sticky".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        first.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("single_hint")
+    );
+    manager
+        .end_llm(first, json!({ "output_text": "root" }), json!({}))
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                session_id: "root-sticky".into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "SubagentStart".into(),
+                subagent_id: "worker".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let worker_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("root-sticky")
+            .unwrap()
+            .subagents
+            .get("worker")
+            .unwrap()
+            .uuid
+    };
+    let second = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("root-sticky".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.handle.parent_uuid, Some(worker_uuid));
+    assert_eq!(
+        second.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("active_subagent")
+    );
+    manager
+        .end_llm(second, json!({ "output_text": "worker" }), json!({}))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn explicit_subagent_tool_owner_claims_next_unhinted_llm() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("tool-owner", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "tool-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "tool-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "tool-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: json!({ "file_path": "README.md" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "tool-owner".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: Value::Null,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let worker_uuid = {
+        let sessions = manager.inner.lock().await;
+        sessions
+            .get("tool-owner")
+            .unwrap()
+            .subagents
+            .get("worker-1")
+            .unwrap()
+            .uuid
+    };
+    let active = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("tool-owner".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(active.handle.parent_uuid, Some(worker_uuid));
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("recent_tool_owner")
+    );
+    assert_eq!(
+        active.handle.metadata.as_ref().unwrap()["llm_correlation_source"],
+        json!("tool_owner")
+    );
+    manager
+        .end_llm(active, json!({ "output_text": "again" }), json!({}))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn claude_agent_tool_completion_closes_subagents_before_final_llm() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("agent-tool-finish", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "agent-tool-finish".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "agent-tool-finish".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "agent-tool-finish".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "agent-tool-1".into(),
+                    tool_name: "Agent".into(),
+                    subagent_id: None,
+                    arguments: Value::Null,
+                    result: json!({
+                        "agentId": "worker-1",
+                        "status": "completed"
+                    }),
+                    status: Some("completed".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: "agent-tool-finish".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "agent-tool-2".into(),
+                    tool_name: "Agent".into(),
+                    subagent_id: None,
+                    arguments: Value::Null,
+                    result: json!({
+                        "agentId": "worker-2",
+                        "status": "completed"
+                    }),
+                    status: Some("completed".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: "agent-tool-finish".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({ "duplicate": true }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let agent_uuid = {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("agent-tool-finish").unwrap();
+        assert!(session.subagents.is_empty());
+        assert!(session.subagent_stacks.is_empty());
+        session.agent_scope.as_ref().unwrap().uuid
+    };
+    let final_llm = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("agent-tool-finish".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(final_llm.handle.parent_uuid, Some(agent_uuid));
+    assert_eq!(
+        final_llm.handle.metadata.as_ref().unwrap()["llm_correlation_status"],
+        json!("agent_fallback")
+    );
+    manager
+        .end_llm(final_llm, json!({ "output_text": "final" }), json!({}))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn agent_end_closes_active_tools_and_duplicate_starts_are_ignored() {
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();
@@ -1904,6 +3009,16 @@ fn session_event(session_id: &str, event_name: &str) -> SessionEvent {
         event_name: event_name.into(),
         payload: json!({ "event": event_name }),
         metadata: json!({}),
+    }
+}
+
+fn codex_session_event(session_id: &str, event_name: &str, metadata: Value) -> SessionEvent {
+    SessionEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::Codex,
+        event_name: event_name.into(),
+        payload: json!({ "event": event_name }),
+        metadata,
     }
 }
 
