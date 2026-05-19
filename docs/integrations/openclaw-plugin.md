@@ -9,13 +9,14 @@ Use the OpenClaw plugin when OpenClaw owns the agent, tool, and LLM lifecycle
 that needs NeMo Flow observability. The plugin observes supported OpenClaw
 plugin hooks and converts them into NeMo Flow sessions, LLM spans, tool spans,
 and marks that the generic NeMo Flow observability component can export as
-Agent Trajectory Interchange Format (ATIF) JSON, OpenTelemetry spans, and
-OpenInference/Phoenix spans.
+Agent Trajectory Interchange Format (ATIF) JSON, OpenTelemetry spans,
+OpenInference/Phoenix spans, and adaptive telemetry inputs.
 
-This public OpenClaw plugin provides observability support only. It does not
-add NeMo Flow security middleware or adaptive optimization behavior to OpenClaw
-execution. For middleware-backed behavior, use the patch-based OpenClaw
-integration from the NeMo Flow repository.
+This public OpenClaw plugin uses OpenClaw public hooks. It can initialize
+generic NeMo Flow plugin components such as `observability` and `adaptive`, but
+hook-backed mode does not rewrite OpenClaw tool execution, provider routing, or
+model requests. For middleware-backed behavior that changes execution, use the
+patch-based OpenClaw integration from the NeMo Flow repository.
 
 Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
 outputs, verify exported traces, and understand current LLM replay fidelity.
@@ -103,6 +104,23 @@ access, and place the OpenClaw plugin configuration under
                     "service_name": "openclaw-nemo-flow"
                   }
                 }
+              },
+              {
+                "kind": "adaptive",
+                "enabled": true,
+                "config": {
+                  "version": 1,
+                  "agent_id": "openclaw",
+                  "state": {
+                    "backend": {
+                      "kind": "in_memory",
+                      "config": {}
+                    }
+                  },
+                  "telemetry": {
+                    "learners": ["tool_parallelism"]
+                  }
+                }
               }
             ]
           },
@@ -138,7 +156,8 @@ do not use, or set their `enabled` fields to `false`.
 - `config.enabled` disables or enables the NeMo Flow OpenClaw wrapper without
   removing the plugin entry. `config.backend` currently supports only `hooks`.
 - `config.plugins` is the generic NeMo Flow plugin configuration document. Use
-  this object to configure built-in components such as `observability`.
+  this object to configure built-in components such as `observability` and
+  `adaptive`.
 - `config.plugins.components[].config.atif` writes ATIF trajectory JSON files.
   Set `output_directory` to the directory where OpenClaw should write files.
 - `config.plugins.components[].config.opentelemetry` sends generic OTLP spans to
@@ -146,6 +165,10 @@ do not use, or set their `enabled` fields to `false`.
 - `config.plugins.components[].config.openinference` sends OpenInference OTLP
   spans to Phoenix or another OpenInference-compatible collector when `enabled`
   is `true`.
+- `config.plugins.components[]` entries with `kind: "adaptive"` initialize the
+  Adaptive plugin. In hook-backed OpenClaw mode, adaptive telemetry can consume
+  replayed NeMo Flow events, while request-rewrite features such as adaptive
+  hints require a managed execution path.
 - `config.capture` controls prompt, response, tool argument, and tool result
   capture. Tool arguments and tool results are stripped by default because they
   often contain user data, local paths, tokens, or large payloads.
@@ -223,11 +246,11 @@ reason when present.
 
 ## Runtime Mapping
 
-The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
-changing OpenClaw execution behavior.
+The plugin maps supported OpenClaw hook events into NeMo Flow telemetry and
+adaptive inputs without changing OpenClaw execution behavior.
 
 It does not change OpenClaw tool execution, provider routing, policy decisions,
-or adaptive behavior.
+or provider request payloads.
 
 | OpenClaw hook | NeMo Flow behavior |
 | --- | --- |

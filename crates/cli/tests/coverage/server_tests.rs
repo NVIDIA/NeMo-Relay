@@ -359,6 +359,48 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
 }
 
 #[tokio::test]
+async fn serve_listener_activates_adaptive_plugin_config() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_flow::plugin::clear_plugin_configuration();
+
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "adaptive",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "agent_id": "cli-test",
+                    "state": {
+                        "backend": {
+                            "kind": "in_memory",
+                            "config": {}
+                        }
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let report = nemo_flow::plugin::active_plugin_report().unwrap();
+    assert!(report.diagnostics.is_empty());
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+}
+
+#[tokio::test]
 async fn serve_listener_rejects_invalid_plugin_config() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
     let _ = nemo_flow::plugin::clear_plugin_configuration();
@@ -751,8 +793,12 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         Json(json!({
             "model": payload["model"],
+            "input": payload["input"],
             "authorization": headers
                 .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            "x_test_intercept": headers
+                .get("x-test-intercept")
                 .and_then(|value| value.to_str().ok()),
             "connection": headers
                 .get(header::CONNECTION)

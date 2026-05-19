@@ -5,6 +5,32 @@ use super::*;
 use crate::config::{global_plugin_config_path, project_plugin_config_path};
 use nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_flow_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+
+fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
+    json!({
+        "version": 1,
+        "agent_id": agent_id,
+        "state": {
+            "backend": {
+                "kind": "in_memory",
+                "config": {}
+            }
+        },
+        "telemetry": {
+            "learners": ["tool_parallelism"]
+        },
+        "adaptive_hints": {
+            "priority": 100,
+            "break_chain": false,
+            "inject_header": true,
+            "inject_body_path": "nvext.agent_hints"
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
 
 #[test]
 fn target_scope_defaults_to_user_and_rejects_conflicts() {
@@ -262,15 +288,39 @@ fn write_plugin_config_prunes_defaults_and_round_trips() {
     let path = temp.path().join("plugins.toml");
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();
+    config.components.push(PluginComponentSpec {
+        kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+        enabled: true,
+        config: adaptive_component_config("cli-roundtrip"),
+    });
 
     write_plugin_config(&path, &config).unwrap();
 
     let rendered = std::fs::read_to_string(&path).unwrap();
     assert!(rendered.contains("kind = \"observability\""));
+    assert!(rendered.contains("kind = \"adaptive\""));
     assert!(!rendered.contains("enabled = true"));
     let round_tripped = read_plugin_config(&path).unwrap();
-    assert_eq!(round_tripped.components.len(), 1);
+    assert_eq!(round_tripped.components.len(), 2);
     assert_eq!(round_tripped.components[0].kind, OBSERVABILITY_PLUGIN_KIND);
+    let adaptive = round_tripped
+        .components
+        .iter()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+        .unwrap();
+    assert_eq!(
+        adaptive.config.get("agent_id"),
+        Some(&json!("cli-roundtrip"))
+    );
+    let adaptive_hints = adaptive
+        .config
+        .get("adaptive_hints")
+        .and_then(Value::as_object)
+        .unwrap();
+    assert_eq!(
+        adaptive_hints.get("inject_body_path"),
+        Some(&json!("nvext.agent_hints"))
+    );
 }
 
 #[test]
@@ -320,6 +370,20 @@ fn validate_config_reports_plugin_diagnostics() {
         "error was: {error}"
     );
     assert!(error.contains("ATOF mode"), "error was: {error}");
+}
+
+#[test]
+fn validate_config_accepts_adaptive_component() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: adaptive_component_config("cli-validation"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    validate_config(&config).unwrap();
 }
 
 #[test]

@@ -7,7 +7,7 @@ use crate::server::AppState;
 use crate::session::SessionManager;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use reqwest::Client;
 
@@ -138,6 +138,87 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         ProviderRoute::OpenAiResponses.upstream_url(&config, "/v1/responses"),
         "http://openai/v1/responses"
     );
+}
+
+#[test]
+fn effective_upstream_request_overlays_runtime_body_and_headers() {
+    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer original"),
+    );
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            ("x-runtime".to_string(), json!("enabled")),
+            ("x-runtime-json".to_string(), json!({ "enabled": true })),
+        ]),
+        content: json!({
+            "model": "rewritten",
+            "nvext": { "agent_hints": { "priority": 1 } }
+        }),
+    };
+
+    let (body, headers) =
+        effective_upstream_request(&original_body, &original_headers, Some(&request));
+    let body: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(body["model"], json!("rewritten"));
+    assert_eq!(body["nvext"]["agent_hints"]["priority"], json!(1));
+    assert_eq!(
+        headers.get(header::AUTHORIZATION).unwrap(),
+        "Bearer original"
+    );
+    assert_eq!(headers.get("x-runtime").unwrap(), "enabled");
+    assert_eq!(
+        headers.get("x-runtime-json").unwrap(),
+        r#"{"enabled":true}"#
+    );
+}
+
+#[test]
+fn effective_upstream_request_returns_original_without_runtime_request() {
+    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer original"),
+    );
+    original_headers.insert("x-request-id", HeaderValue::from_static("request-1"));
+
+    let (body, headers) = effective_upstream_request(&original_body, &original_headers, None);
+
+    assert_eq!(body, original_body);
+    assert_eq!(
+        headers.get(header::AUTHORIZATION).unwrap(),
+        "Bearer original"
+    );
+    assert_eq!(headers.get("x-request-id").unwrap(), "request-1");
+}
+
+#[test]
+fn effective_upstream_request_skips_invalid_runtime_headers() {
+    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert("x-original", HeaderValue::from_static("kept"));
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            ("bad header".to_string(), json!("skip")),
+            ("x-invalid-value".to_string(), json!("line\nbreak")),
+            ("x-good".to_string(), json!("ok")),
+        ]),
+        content: json!({ "model": "rewritten" }),
+    };
+
+    let (body, headers) =
+        effective_upstream_request(&original_body, &original_headers, Some(&request));
+    let body: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(body["model"], json!("rewritten"));
+    assert_eq!(headers.get("x-original").unwrap(), "kept");
+    assert_eq!(headers.get("x-good").unwrap(), "ok");
+    assert!(headers.get("x-invalid-value").is_none());
+    assert!(headers.keys().all(|name| name.as_str() != "bad header"));
 }
 
 #[test]

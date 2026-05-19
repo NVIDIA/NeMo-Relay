@@ -1253,6 +1253,7 @@ dependencies = [
  "http",
  "http-body-util",
  "nemo-flow",
+ "nemo-flow-adaptive",
  "reqwest",
  "rustls",
  "serde",

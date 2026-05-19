@@ -45,6 +45,23 @@ it(
                 },
               },
             },
+            {
+              kind: "adaptive",
+              enabled: true,
+              config: {
+                version: 1,
+                agent_id: "openclaw-live",
+                state: {
+                  backend: {
+                    kind: "in_memory",
+                    config: {},
+                  },
+                },
+                telemetry: {
+                  learners: ["tool_parallelism"],
+                },
+              },
+            },
           ],
         },
       },

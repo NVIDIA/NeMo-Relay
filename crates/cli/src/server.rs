@@ -8,6 +8,7 @@ use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use nemo_flow::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_flow_adaptive::plugin_component::register_adaptive_component;
 use reqwest::Client;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -152,6 +153,9 @@ impl PluginActivation {
         let Some(config) = config else {
             return Ok(Self { active: false });
         };
+        register_adaptive_component().map_err(|error| {
+            CliError::Config(format!("adaptive plugin registration failed: {error}"))
+        })?;
         let plugin_config: PluginConfig = serde_json::from_value(config)
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
         initialize_plugins(plugin_config)

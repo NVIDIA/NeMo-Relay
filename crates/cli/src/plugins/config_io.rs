@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use console::style;
 use nemo_flow::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
+use nemo_flow_adaptive::plugin_component::register_adaptive_component;
 use serde_json::{Map, Value};
 
 use crate::config::{
@@ -115,6 +116,9 @@ pub(super) fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
 }
 
 pub(super) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
+    register_adaptive_component().map_err(|error| {
+        CliError::Config(format!("adaptive plugin registration failed: {error}"))
+    })?;
     let report = validate_plugin_config(config);
     if report.has_errors() {
         let messages = report

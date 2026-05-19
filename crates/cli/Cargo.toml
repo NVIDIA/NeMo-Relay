@@ -22,6 +22,7 @@ workspace = true
 
 [dependencies]
 nemo-flow = { workspace = true, features = ["openinference"] }
+nemo-flow-adaptive = { workspace = true, features = ["redis-backend"] }
 async-stream = "0.3"
 axum = "0.8"
 bytes = "1"
