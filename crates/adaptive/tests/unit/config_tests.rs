@@ -4,6 +4,7 @@
 //! Unit tests for config in the NeMo Flow adaptive crate.
 
 use super::*;
+use nemo_flow::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
 #[test]
@@ -70,4 +71,51 @@ fn test_component_configs_deserialize_with_default_helpers() {
         serde_json::from_value(json!({})).unwrap();
     assert_eq!(tool_parallelism.priority, 100);
     assert_eq!(tool_parallelism.mode, "observe_only");
+}
+
+#[test]
+fn test_adaptive_editor_schema_covers_canonical_options() {
+    let schema = AdaptiveConfig::editor_schema();
+    let fields = schema
+        .fields
+        .iter()
+        .map(|field| field.name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        vec![
+            "agent_id",
+            "state",
+            "telemetry",
+            "adaptive_hints",
+            "tool_parallelism",
+            "acg",
+            "policy",
+        ]
+    );
+
+    let state = schema.field("state").unwrap().schema().unwrap();
+    let backend = state.field("backend").unwrap().schema().unwrap();
+    assert_eq!(backend.field("kind").unwrap().kind, EditorFieldKind::Enum);
+    assert_eq!(backend.field("config").unwrap().kind, EditorFieldKind::Json);
+
+    let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
+    assert_eq!(
+        telemetry.field("learners").unwrap().kind,
+        EditorFieldKind::Json
+    );
+
+    let acg = schema.field("acg").unwrap().schema().unwrap();
+    let thresholds = acg.field("stability_thresholds").unwrap().schema().unwrap();
+    assert_eq!(
+        thresholds.field("stable_threshold").unwrap().kind,
+        EditorFieldKind::Float
+    );
+    assert_eq!(
+        thresholds
+            .field("min_observations_for_full_confidence")
+            .unwrap()
+            .kind,
+        EditorFieldKind::Integer
+    );
 }

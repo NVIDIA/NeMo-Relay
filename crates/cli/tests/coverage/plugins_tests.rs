@@ -5,11 +5,11 @@ use super::*;
 use crate::config::{global_plugin_config_path, project_plugin_config_path};
 use nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_flow_adaptive::AdaptiveConfig;
 use nemo_flow_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 
 fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
     json!({
-        "version": 1,
         "agent_id": agent_id,
         "state": {
             "backend": {
@@ -86,6 +86,34 @@ fn typed_editor_model_contains_observability_sections() {
 }
 
 #[test]
+fn typed_editor_model_contains_adaptive_options() {
+    let schema = AdaptiveConfig::editor_schema();
+    assert!(!schema.fields.iter().any(|field| field.name == "version"));
+    assert!(schema.fields.iter().any(|field| field.name == "agent_id"));
+
+    let state = schema.field("state").unwrap().schema().unwrap();
+    let backend = state.field("backend").unwrap().schema().unwrap();
+    assert_eq!(
+        backend.field("kind").unwrap().enum_values,
+        &["in_memory", "redis"]
+    );
+    assert_eq!(backend.field("config").unwrap().kind, EditorFieldKind::Json);
+
+    let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
+    assert_eq!(
+        telemetry.field("learners").unwrap().kind,
+        EditorFieldKind::Json
+    );
+
+    let acg = schema.field("acg").unwrap().schema().unwrap();
+    let thresholds = acg.field("stability_thresholds").unwrap().schema().unwrap();
+    assert_eq!(
+        thresholds.field("stable_threshold").unwrap().kind,
+        EditorFieldKind::Float
+    );
+}
+
+#[test]
 fn plugin_menu_uses_setup_theme_markers() {
     let theme = ColorfulTheme::default();
     let lines = render_menu(
@@ -101,6 +129,16 @@ fn plugin_menu_uses_setup_theme_markers() {
     assert!(rendered.contains('❯'));
     assert!(rendered.contains("↑/↓"));
     assert!(!rendered.contains("> First"));
+}
+
+#[test]
+fn menu_response_index_tracks_selected_and_shortcut_positions() {
+    assert_eq!(menu_response_index(&MenuResponse::Selected(3)), Some(3));
+    assert_eq!(
+        menu_response_index(&MenuResponse::Shortcut(MenuShortcut::Reset, 4)),
+        Some(4)
+    );
+    assert_eq!(menu_response_index(&MenuResponse::Cancel), None);
 }
 
 #[test]
@@ -134,6 +172,19 @@ fn editor_model_renders_valid_observability_plugin_config() {
     store_observability_config(&mut config, &observability).unwrap();
 
     validate_config(&config).unwrap();
+}
+
+#[test]
+fn editor_model_adds_disabled_adaptive_component() {
+    let mut config = PluginConfig::default();
+
+    ensure_adaptive_component(&mut config).unwrap();
+
+    let component = adaptive_component(&config).unwrap();
+    assert_eq!(component.kind, ADAPTIVE_PLUGIN_KIND);
+    assert!(!component.enabled);
+    assert!(!component.config.contains_key("version"));
+    assert!(component.config.contains_key("policy"));
 }
 
 #[test]
@@ -217,6 +268,165 @@ fn editor_save_preserves_unknown_observability_fields() {
     );
     assert_eq!(atof_config.get("filename"), Some(&json!("events.jsonl")));
     assert!(!atof_config.contains_key("output_directory"));
+}
+
+#[test]
+fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
+    let mut config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "version": 1,
+                "future_top_level": "preserve",
+                "state": {
+                    "future_state": "preserve",
+                    "backend": {
+                        "kind": "in_memory",
+                        "config": {},
+                        "future_backend": "preserve"
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+    let mut adaptive = component_adaptive_config(&config).unwrap();
+    let schema = AdaptiveConfig::editor_schema();
+    let state = schema.field("state").unwrap();
+    let telemetry = schema.field("telemetry").unwrap();
+    let adaptive_hints = schema.field("adaptive_hints").unwrap();
+    let tool_parallelism = schema.field("tool_parallelism").unwrap();
+    let acg = schema.field("acg").unwrap();
+
+    set_struct_field(&mut adaptive, "agent_id", json!("planner")).unwrap();
+    set_section_field(
+        &mut adaptive,
+        state,
+        "backend",
+        json!({
+            "kind": "redis",
+            "config": {
+                "url": "redis://127.0.0.1/",
+                "key_prefix": "adaptive:"
+            }
+        }),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        telemetry,
+        "learners",
+        json!(["tool_parallelism", "acg"]),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        telemetry,
+        "subscriber_name",
+        json!("adaptive"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        adaptive_hints,
+        "inject_body_path",
+        json!("nvext.agent_hints"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        tool_parallelism,
+        "mode",
+        json!("inject_hints"),
+    )
+    .unwrap();
+    set_section_field(&mut adaptive, acg, "provider", json!("anthropic")).unwrap();
+    set_section_field(
+        &mut adaptive,
+        acg,
+        "stability_thresholds",
+        json!({
+            "stable_threshold": 0.9,
+            "semi_stable_threshold": 0.4,
+            "min_observations_for_full_confidence": 10
+        }),
+    )
+    .unwrap();
+
+    store_adaptive_config(&mut config, &adaptive).unwrap();
+
+    let component = adaptive_component(&config).unwrap();
+    assert!(!component.config.contains_key("version"));
+    assert_eq!(
+        component.config.get("future_top_level"),
+        Some(&json!("preserve"))
+    );
+    let state = component.config["state"].as_object().unwrap();
+    assert_eq!(state.get("future_state"), Some(&json!("preserve")));
+    let backend = state["backend"].as_object().unwrap();
+    assert_eq!(backend.get("kind"), Some(&json!("redis")));
+    assert_eq!(backend.get("future_backend"), Some(&json!("preserve")));
+    assert_eq!(backend["config"]["key_prefix"], json!("adaptive:"));
+    assert_eq!(
+        component.config["telemetry"]["learners"],
+        json!(["tool_parallelism", "acg"])
+    );
+    assert_eq!(
+        component.config["adaptive_hints"]["inject_body_path"],
+        json!("nvext.agent_hints")
+    );
+    assert_eq!(
+        component.config["tool_parallelism"]["mode"],
+        json!("inject_hints")
+    );
+    assert_eq!(
+        component.config["acg"]["stability_thresholds"]["stable_threshold"],
+        json!(0.9)
+    );
+}
+
+#[test]
+fn adaptive_config_field_reset_handles_optional_and_default_fields() {
+    let mut adaptive = AdaptiveConfig {
+        agent_id: Some("planner".into()),
+        acg: Some(Default::default()),
+        ..AdaptiveConfig::default()
+    };
+    let schema = AdaptiveConfig::editor_schema();
+
+    reset_config_field(&mut adaptive, schema.field("agent_id").unwrap()).unwrap();
+    reset_config_field(&mut adaptive, schema.field("acg").unwrap()).unwrap();
+
+    assert!(adaptive.agent_id.is_none());
+    assert!(adaptive.acg.is_none());
+}
+
+#[test]
+fn adaptive_summary_tracks_component_and_configured_fields() {
+    let mut config = PluginConfig::default();
+    ensure_adaptive_component(&mut config).unwrap();
+    let mut adaptive = component_adaptive_config(&config).unwrap();
+
+    assert_eq!(
+        adaptive_summary(&config, &adaptive),
+        "component disabled, fields none"
+    );
+
+    set_adaptive_component_enabled(&mut config, true);
+    set_struct_field(&mut adaptive, "agent_id", json!("planner")).unwrap();
+    let adaptive_hints = AdaptiveConfig::editor_schema()
+        .field("adaptive_hints")
+        .unwrap();
+    set_section_field(&mut adaptive, adaptive_hints, "inject_header", json!(true)).unwrap();
+
+    assert_eq!(
+        adaptive_summary(&config, &adaptive),
+        "component enabled, fields agent_id, adaptive_hints"
+    );
 }
 
 #[test]

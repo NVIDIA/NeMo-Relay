@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Testable Observability plugin editor state helpers.
+//! Testable plugin editor state helpers.
 
 use nemo_flow::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use nemo_flow::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_flow::plugin::{PluginComponentSpec, PluginConfig};
+use nemo_flow_adaptive::AdaptiveConfig;
+use nemo_flow_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -29,6 +31,21 @@ pub(super) fn ensure_observability_component(config: &mut PluginConfig) -> Resul
     Ok(())
 }
 
+pub(super) fn ensure_adaptive_component(config: &mut PluginConfig) -> Result<(), CliError> {
+    if !config
+        .components
+        .iter()
+        .any(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+    {
+        config.components.push(PluginComponentSpec {
+            kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+            enabled: false,
+            config: adaptive_config_map(&AdaptiveConfig::default())?,
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn component_enabled(config: &PluginConfig) -> bool {
     observability_component(config)
         .map(|component| component.enabled)
@@ -37,6 +54,18 @@ pub(super) fn component_enabled(config: &PluginConfig) -> bool {
 
 pub(super) fn set_component_enabled(config: &mut PluginConfig, enabled: bool) {
     if let Some(component) = observability_component_mut(config) {
+        component.enabled = enabled;
+    }
+}
+
+pub(super) fn adaptive_component_enabled(config: &PluginConfig) -> bool {
+    adaptive_component(config)
+        .map(|component| component.enabled)
+        .unwrap_or(false)
+}
+
+pub(super) fn set_adaptive_component_enabled(config: &mut PluginConfig, enabled: bool) {
+    if let Some(component) = adaptive_component_mut(config) {
         component.enabled = enabled;
     }
 }
@@ -51,12 +80,22 @@ pub(super) fn component_observability_config(
         .ok_or_else(|| CliError::Config("observability plugin component is missing".into()))
 }
 
-pub(super) fn config_with_observability(
+pub(super) fn component_adaptive_config(config: &PluginConfig) -> Result<AdaptiveConfig, CliError> {
+    adaptive_component(config)
+        .map(|component| serde_json::from_value(Value::Object(component.config.clone())))
+        .transpose()
+        .map_err(|error| CliError::Config(format!("invalid adaptive plugin config: {error}")))?
+        .ok_or_else(|| CliError::Config("adaptive plugin component is missing".into()))
+}
+
+pub(super) fn config_with_components(
     config: &PluginConfig,
     observability: &ObservabilityConfig,
+    adaptive: &AdaptiveConfig,
 ) -> Result<PluginConfig, CliError> {
     let mut config = config.clone();
     store_observability_config(&mut config, observability)?;
+    store_adaptive_config(&mut config, adaptive)?;
     Ok(config)
 }
 
@@ -73,7 +112,20 @@ pub(super) fn store_observability_config(
     Ok(())
 }
 
-pub(super) fn ensure_section(config: &mut ObservabilityConfig, section: EditorFieldSpec) {
+pub(super) fn store_adaptive_config(
+    config: &mut PluginConfig,
+    adaptive: &AdaptiveConfig,
+) -> Result<(), CliError> {
+    if let Some(component) = adaptive_component_mut(config) {
+        merge_adaptive_editor_config(&mut component.config, adaptive_config_map(adaptive)?);
+    }
+    Ok(())
+}
+
+pub(super) fn ensure_section<T>(config: &mut T, section: EditorFieldSpec)
+where
+    T: Serialize + DeserializeOwned,
+{
     if let Ok(Some(Value::Object(_))) = section_value(config, section) {
         return;
     }
@@ -83,23 +135,32 @@ pub(super) fn ensure_section(config: &mut ObservabilityConfig, section: EditorFi
     let _ = set_struct_field(config, section.name, default);
 }
 
-pub(super) fn toggle_section(config: &mut ObservabilityConfig, section: EditorFieldSpec) {
+pub(super) fn toggle_section<T>(config: &mut T, section: EditorFieldSpec)
+where
+    T: Serialize + DeserializeOwned,
+{
     ensure_section(config, section);
     let enabled = section_enabled(config, section).unwrap_or(false);
     let _ = set_section_field(config, section, "enabled", json!(!enabled));
 }
 
-pub(super) fn reset_section(config: &mut ObservabilityConfig, section: EditorFieldSpec) {
+pub(super) fn reset_section<T>(config: &mut T, section: EditorFieldSpec)
+where
+    T: Serialize + DeserializeOwned,
+{
     let value = section.default_value().unwrap_or_else(|| json!({}));
     let _ = set_struct_field(config, section.name, value);
 }
 
-pub(super) fn reset_selected_field(
-    config: &mut ObservabilityConfig,
+pub(super) fn reset_selected_field<T>(
+    config: &mut T,
     section: EditorFieldSpec,
     fields: &[EditorFieldSpec],
     selected: usize,
-) -> Result<bool, CliError> {
+) -> Result<bool, CliError>
+where
+    T: Serialize + DeserializeOwned,
+{
     let offset = usize::from(section_has_enabled_toggle(section));
     let Some(index) = selected.checked_sub(offset) else {
         return Ok(false);
@@ -119,10 +180,10 @@ pub(super) fn section_has_enabled_toggle(section: EditorFieldSpec) -> bool {
             .is_some_and(|field| field.kind == EditorFieldKind::Boolean)
 }
 
-pub(super) fn section_enabled(
-    config: &ObservabilityConfig,
-    section: EditorFieldSpec,
-) -> Option<bool> {
+pub(super) fn section_enabled<T>(config: &T, section: EditorFieldSpec) -> Option<bool>
+where
+    T: Serialize,
+{
     section_value(config, section)
         .ok()
         .flatten()
@@ -130,7 +191,10 @@ pub(super) fn section_enabled(
         .and_then(|enabled| enabled.as_bool())
 }
 
-pub(super) fn section_configured(config: &ObservabilityConfig, section: EditorFieldSpec) -> bool {
+pub(super) fn section_configured<T>(config: &T, section: EditorFieldSpec) -> bool
+where
+    T: Serialize,
+{
     let Ok(Some(value)) = section_value(config, section) else {
         return false;
     };
@@ -143,11 +207,14 @@ pub(super) fn section_configured(config: &ObservabilityConfig, section: EditorFi
         .is_none_or(|default| default != &value)
 }
 
-pub(super) fn section_field_configured(
-    config: &ObservabilityConfig,
+pub(super) fn section_field_configured<T>(
+    config: &T,
     section: EditorFieldSpec,
     field: EditorFieldSpec,
-) -> Result<bool, CliError> {
+) -> Result<bool, CliError>
+where
+    T: Serialize,
+{
     let Some(value) = section_field_value(config, section, field.name)? else {
         return Ok(false);
     };
@@ -159,20 +226,26 @@ pub(super) fn section_field_configured(
         .is_none_or(|default| default != &value))
 }
 
-pub(super) fn section_field_value(
-    config: &ObservabilityConfig,
+pub(super) fn section_field_value<T>(
+    config: &T,
     section: EditorFieldSpec,
     field: &str,
-) -> Result<Option<Value>, CliError> {
+) -> Result<Option<Value>, CliError>
+where
+    T: Serialize,
+{
     Ok(section_value(config, section)?
         .and_then(|section| section.as_object().cloned())
         .and_then(|section| section.get(field).cloned()))
 }
 
-pub(super) fn section_value(
-    config: &ObservabilityConfig,
+pub(super) fn section_value<T>(
+    config: &T,
     section: EditorFieldSpec,
-) -> Result<Option<Value>, CliError> {
+) -> Result<Option<Value>, CliError>
+where
+    T: Serialize,
+{
     let value = serde_json::to_value(config).map_err(serde_error)?;
     Ok(value
         .as_object()
@@ -181,12 +254,15 @@ pub(super) fn section_value(
         .cloned())
 }
 
-pub(super) fn set_section_field(
-    config: &mut ObservabilityConfig,
+pub(super) fn set_section_field<T>(
+    config: &mut T,
     section: EditorFieldSpec,
     field: &str,
     value: Value,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    T: Serialize + DeserializeOwned,
+{
     ensure_section(config, section);
     let mut object = serde_json::to_value(&*config).map_err(serde_error)?;
     let config_object = ensure_object(&mut object);
@@ -198,11 +274,14 @@ pub(super) fn set_section_field(
     Ok(())
 }
 
-pub(super) fn remove_section_field(
-    config: &mut ObservabilityConfig,
+pub(super) fn remove_section_field<T>(
+    config: &mut T,
     section: EditorFieldSpec,
     field: &str,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    T: Serialize + DeserializeOwned,
+{
     let mut object = serde_json::to_value(&*config).map_err(serde_error)?;
     if let Some(section_object) = object
         .as_object_mut()
@@ -225,6 +304,69 @@ where
     Ok(())
 }
 
+pub(super) fn remove_struct_field<T>(target: &mut T, field: &str) -> Result<(), CliError>
+where
+    T: Serialize + DeserializeOwned,
+{
+    let mut object = serde_json::to_value(&*target).map_err(serde_error)?;
+    if let Some(object) = object.as_object_mut() {
+        object.remove(field);
+    }
+    *target = serde_json::from_value(object).map_err(serde_error)?;
+    Ok(())
+}
+
+pub(super) fn config_field_value<T>(config: &T, field: &str) -> Result<Option<Value>, CliError>
+where
+    T: Serialize,
+{
+    let value = serde_json::to_value(config).map_err(serde_error)?;
+    Ok(value
+        .as_object()
+        .and_then(|config| config.get(field))
+        .filter(|value| !value.is_null())
+        .cloned())
+}
+
+pub(super) fn config_field_configured<T>(
+    config: &T,
+    field: EditorFieldSpec,
+) -> Result<bool, CliError>
+where
+    T: Default + Serialize,
+{
+    let Some(value) = config_field_value(config, field.name)? else {
+        return Ok(false);
+    };
+    if field.optional {
+        return Ok(true);
+    }
+    Ok(default_config_field_value::<T>(field)
+        .as_ref()
+        .is_none_or(|default| default != &value))
+}
+
+pub(super) fn reset_config_field<T>(config: &mut T, field: EditorFieldSpec) -> Result<(), CliError>
+where
+    T: Default + Serialize + DeserializeOwned,
+{
+    if let Some(default) = default_config_field_value::<T>(field) {
+        set_struct_field(config, field.name, default)
+    } else {
+        remove_struct_field(config, field.name)
+    }
+}
+
+pub(super) fn default_config_field_value<T>(field: EditorFieldSpec) -> Option<Value>
+where
+    T: Default + Serialize,
+{
+    serde_json::to_value(T::default())
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .and_then(|config| config.get(field.name).cloned())
+}
+
 pub(super) fn observability_component(config: &PluginConfig) -> Option<&PluginComponentSpec> {
     config
         .components
@@ -239,6 +381,22 @@ pub(super) fn observability_component_mut(
         .components
         .iter_mut()
         .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
+}
+
+pub(super) fn adaptive_component(config: &PluginConfig) -> Option<&PluginComponentSpec> {
+    config
+        .components
+        .iter()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+}
+
+pub(super) fn adaptive_component_mut(
+    config: &mut PluginConfig,
+) -> Option<&mut PluginComponentSpec> {
+    config
+        .components
+        .iter_mut()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
 }
 
 pub(super) fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
@@ -260,6 +418,21 @@ pub(super) fn observability_config_map(
     }
 }
 
+pub(super) fn adaptive_config_map(config: &AdaptiveConfig) -> Result<Map<String, Value>, CliError> {
+    let value = serde_json::to_value(config).map_err(serde_error)?;
+    match value {
+        Value::Object(mut map) => {
+            if map.get("version") == Some(&json!(1)) {
+                map.remove("version");
+            }
+            Ok(map)
+        }
+        _ => Err(CliError::Config(
+            "adaptive config must serialize to an object".into(),
+        )),
+    }
+}
+
 pub(super) fn merge_observability_editor_config(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
@@ -269,6 +442,21 @@ pub(super) fn merge_observability_editor_config(
         edited,
         &observability_editor_fields_with_version(),
         ObservabilityConfig::editor_schema(),
+    );
+}
+
+pub(super) fn merge_adaptive_editor_config(
+    existing: &mut Map<String, Value>,
+    edited: Map<String, Value>,
+) {
+    if existing.get("version") == Some(&json!(1)) {
+        existing.remove("version");
+    }
+    merge_known_editor_object(
+        existing,
+        edited,
+        &nested_editor_keys(AdaptiveConfig::editor_schema()),
+        AdaptiveConfig::editor_schema(),
     );
 }
 
@@ -380,6 +568,29 @@ pub(super) fn observability_summary(
             "none".into()
         } else {
             enabled_sections.join(", ")
+        }
+    )
+}
+
+pub(super) fn adaptive_summary(config: &PluginConfig, adaptive: &AdaptiveConfig) -> String {
+    let configured_fields = AdaptiveConfig::editor_schema()
+        .fields
+        .iter()
+        .filter(|field| field.name != POLICY_SECTION)
+        .filter(|field| config_field_configured(adaptive, **field).unwrap_or(false))
+        .map(|field| field.label)
+        .collect::<Vec<_>>();
+    format!(
+        "component {}, fields {}",
+        if adaptive_component_enabled(config) {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if configured_fields.is_empty() {
+            "none".into()
+        } else {
+            configured_fields.join(", ")
         }
     )
 }

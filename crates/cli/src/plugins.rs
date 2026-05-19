@@ -15,6 +15,7 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 use nemo_flow::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use nemo_flow::observability::plugin_component::ObservabilityConfig;
+use nemo_flow_adaptive::AdaptiveConfig;
 use serde_json::{Value, json};
 
 use crate::config::PluginsEditCommand;
@@ -89,27 +90,39 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     let path = target_path(scope)?;
     let mut config = read_plugin_config(&path)?;
     ensure_observability_component(&mut config)?;
+    ensure_adaptive_component(&mut config)?;
     let mut observability = component_observability_config(&config)?;
+    let mut adaptive = component_adaptive_config(&config)?;
 
     let theme = ColorfulTheme::default();
     crate::banner::print_intro();
-    println!(
-        "  Editing Observability plugin config at {}",
-        path.display()
-    );
+    println!("  Editing plugin config at {}", path.display());
     println!("  Tip: ↑/↓ or j/k to move, SPACE/ENTER to select, p to preview, s to save.");
     println!();
+    let mut selected_index = 0;
     loop {
         let summary = observability_summary(&config, &observability);
-        let section_fields = ObservabilityConfig::editor_schema().fields;
+        let adaptive_summary = adaptive_summary(&config, &adaptive);
+        let observability_fields = ObservabilityConfig::editor_schema().fields;
+        let adaptive_fields = AdaptiveConfig::editor_schema().fields;
         let mut items = vec![MenuItem::new(format!(
             "Toggle Observability component [{}]",
             status_label(component_enabled(&config))
         ))];
-        items.extend(section_fields.iter().map(|section| {
+        items.extend(observability_fields.iter().map(|section| {
             MenuItem::new(configured_label(
                 section_configured(&observability, *section),
                 format!("Edit {}", section.label),
+            ))
+        }));
+        items.push(MenuItem::new(format!(
+            "Toggle Adaptive component [{}]",
+            status_label(adaptive_component_enabled(&config))
+        )));
+        items.extend(adaptive_fields.iter().map(|field| {
+            MenuItem::new(configured_label(
+                config_field_configured(&adaptive, *field).unwrap_or(false),
+                format!("Edit Adaptive {}", field.label),
             ))
         }));
         items.push(MenuItem::new(shortcut_label("Preview TOML", "p")));
@@ -120,26 +133,50 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
         items.push(MenuItem::new(shortcut_label("Cancel", "q")));
         println!();
         println!("Observability: {summary}");
-        let preview_index = section_fields.len() + 1;
-        let save_index = section_fields.len() + 2;
-        let cancel_index = section_fields.len() + 3;
-        let selection = prompt_menu(&theme, "plugins.toml", &items, 0)?;
+        println!("Adaptive: {adaptive_summary}");
+        let adaptive_toggle_index = observability_fields.len() + 1;
+        let adaptive_start_index = adaptive_toggle_index + 1;
+        let preview_index = adaptive_start_index + adaptive_fields.len();
+        let save_index = preview_index + 1;
+        let cancel_index = preview_index + 2;
+        let selection = prompt_menu(&theme, "plugins.toml", &items, selected_index)?;
+        if let Some(selected) = menu_response_index(&selection) {
+            selected_index = selected;
+        }
         match selection {
             MenuResponse::Selected(0) => {
                 let enabled = !component_enabled(&config);
                 set_component_enabled(&mut config, enabled);
             }
             MenuResponse::Selected(selection)
-                if (1..=section_fields.len()).contains(&selection) =>
+                if (1..=observability_fields.len()).contains(&selection) =>
             {
-                edit_section(&theme, &mut observability, section_fields[selection - 1])?
+                edit_section(
+                    &theme,
+                    &mut observability,
+                    observability_fields[selection - 1],
+                )?
+            }
+            MenuResponse::Selected(selection) if selection == adaptive_toggle_index => {
+                let enabled = !adaptive_component_enabled(&config);
+                set_adaptive_component_enabled(&mut config, enabled);
+            }
+            MenuResponse::Selected(selection)
+                if (adaptive_start_index..preview_index).contains(&selection) =>
+            {
+                edit_config_field(
+                    &theme,
+                    &mut adaptive,
+                    adaptive_fields[selection - adaptive_start_index],
+                )?
             }
             MenuResponse::Selected(selection) if selection == preview_index => {
-                let preview_config = config_with_observability(&config, &observability)?;
+                let preview_config = config_with_components(&config, &observability, &adaptive)?;
                 print_preview(&preview_config)?;
             }
             MenuResponse::Selected(selection) if selection == save_index => {
                 store_observability_config(&mut config, &observability)?;
+                store_adaptive_config(&mut config, &adaptive)?;
                 validate_config(&config)?;
                 write_plugin_config(&path, &config)?;
                 print_save_success(&path);
@@ -151,19 +188,27 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
                 ));
             }
             MenuResponse::Shortcut(MenuShortcut::Preview, _) => {
-                let preview_config = config_with_observability(&config, &observability)?;
+                let preview_config = config_with_components(&config, &observability, &adaptive)?;
                 print_preview(&preview_config)?;
             }
             MenuResponse::Shortcut(MenuShortcut::Save, _) => {
                 store_observability_config(&mut config, &observability)?;
+                store_adaptive_config(&mut config, &adaptive)?;
                 validate_config(&config)?;
                 write_plugin_config(&path, &config)?;
                 print_save_success(&path);
                 return Ok(());
             }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
-            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
-                println!("  Select a section first, then use reset or clear on a field.");
+            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, selected) => {
+                if (adaptive_start_index..preview_index).contains(&selected) {
+                    reset_config_field(
+                        &mut adaptive,
+                        adaptive_fields[selected - adaptive_start_index],
+                    )?;
+                } else {
+                    println!("  Select an Adaptive field or a section field to reset or clear.");
+                }
             }
             MenuResponse::Cancel | MenuResponse::Selected(_) => {
                 return Err(CliError::Config(
@@ -171,6 +216,21 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
                 ));
             }
         }
+    }
+}
+
+fn menu_response_index(response: &MenuResponse) -> Option<usize> {
+    match response {
+        MenuResponse::Selected(index)
+        | MenuResponse::Shortcut(
+            MenuShortcut::Preview
+            | MenuShortcut::Save
+            | MenuShortcut::Help
+            | MenuShortcut::Reset
+            | MenuShortcut::Clear,
+            index,
+        ) => Some(*index),
+        MenuResponse::Cancel => None,
     }
 }
 
@@ -338,19 +398,26 @@ fn ensure_tty() -> Result<(), CliError> {
     Ok(())
 }
 
-fn edit_section(
+fn edit_section<T>(
     theme: &ColorfulTheme,
-    config: &mut ObservabilityConfig,
+    config: &mut T,
     section: EditorFieldSpec,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    T: SerializeConfig,
+{
     ensure_section(config, section);
     let fields = section
         .schema()
         .ok_or_else(|| CliError::Config(format!("{} is not an editable section", section.name)))?
         .fields;
+    let mut selected_index = 0;
     loop {
         let items = section_menu_items(config, section, fields)?;
-        let selection = prompt_menu(theme, section.name, &items, 0)?;
+        let selection = prompt_menu(theme, section.name, &items, selected_index)?;
+        if let Some(selected) = menu_response_index(&selection) {
+            selected_index = selected;
+        }
         let selection = match selection {
             MenuResponse::Selected(selection) => selection,
             MenuResponse::Shortcut(MenuShortcut::Help, _) => {
@@ -380,11 +447,14 @@ fn edit_section(
     }
 }
 
-fn section_menu_items(
-    config: &ObservabilityConfig,
+fn section_menu_items<T>(
+    config: &T,
     section: EditorFieldSpec,
     fields: &[EditorFieldSpec],
-) -> Result<Vec<MenuItem>, CliError> {
+) -> Result<Vec<MenuItem>, CliError>
+where
+    T: serde::Serialize,
+{
     let mut items = Vec::new();
     if section_has_enabled_toggle(section) {
         let enabled = section_enabled(config, section).unwrap_or(false);
@@ -401,11 +471,14 @@ fn section_menu_items(
     Ok(items)
 }
 
-fn section_field_menu_item(
-    config: &ObservabilityConfig,
+fn section_field_menu_item<T>(
+    config: &T,
     section: EditorFieldSpec,
     field: EditorFieldSpec,
-) -> Result<MenuItem, CliError> {
+) -> Result<MenuItem, CliError>
+where
+    T: serde::Serialize,
+{
     let configured = section_field_configured(config, section, field)?;
     let value = section_field_value(config, section, field.name)?
         .map(|value| display_field_value(section, field, &value))
@@ -429,12 +502,15 @@ fn reset_section_index(section: EditorFieldSpec, fields: &[EditorFieldSpec]) -> 
     usize::from(section_has_enabled_toggle(section)) + fields.len()
 }
 
-fn reset_selected_item(
-    config: &mut ObservabilityConfig,
+fn reset_selected_item<T>(
+    config: &mut T,
     section: EditorFieldSpec,
     fields: &[EditorFieldSpec],
     selected: usize,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    T: SerializeConfig,
+{
     if reset_selected_field(config, section, fields, selected)? {
         return Ok(());
     }
@@ -444,13 +520,16 @@ fn reset_selected_item(
     Ok(())
 }
 
-fn edit_selected_section_item(
+fn edit_selected_section_item<T>(
     theme: &ColorfulTheme,
-    config: &mut ObservabilityConfig,
+    config: &mut T,
     section: EditorFieldSpec,
     fields: &[EditorFieldSpec],
     selection: usize,
-) -> Result<bool, CliError> {
+) -> Result<bool, CliError>
+where
+    T: SerializeConfig,
+{
     if section_has_enabled_toggle(section) && selection == 0 {
         toggle_section(config, section);
         return Ok(true);
@@ -467,12 +546,19 @@ fn edit_selected_section_item(
     Ok(false)
 }
 
-fn edit_field(
+fn edit_field<T>(
     theme: &ColorfulTheme,
-    config: &mut ObservabilityConfig,
+    config: &mut T,
     section: EditorFieldSpec,
     field: &EditorFieldSpec,
-) -> Result<(), CliError> {
+) -> Result<(), CliError>
+where
+    T: SerializeConfig,
+{
+    if field.kind == EditorFieldKind::Section {
+        edit_nested_section(theme, config, section, *field)?;
+        return Ok(());
+    }
     let current = section_field_value(config, section, field.name)?;
     let actions = [
         MenuItem::new("Set value"),
@@ -514,6 +600,347 @@ fn edit_field(
     Ok(())
 }
 
+fn edit_config_field<T>(
+    theme: &ColorfulTheme,
+    config: &mut T,
+    field: EditorFieldSpec,
+) -> Result<(), CliError>
+where
+    T: Default + SerializeConfig,
+{
+    if field.kind == EditorFieldKind::Section {
+        let mut value = config_field_value(config, field.name)?
+            .or_else(|| field.default_value())
+            .unwrap_or_else(|| json!({}));
+        let schema = field.schema().ok_or_else(|| {
+            CliError::Config(format!("{} is not an editable section", field.name))
+        })?;
+        edit_value_section(theme, field.name, &mut value, schema, field.default_value())?;
+        set_struct_field(config, field.name, value)?;
+        return Ok(());
+    }
+
+    let current = config_field_value(config, field.name)?;
+    let actions = [
+        MenuItem::new("Set value"),
+        MenuItem::new(shortcut_label(
+            "Reset to default/none",
+            "r, Backspace, Delete",
+        )),
+        MenuItem::new(shortcut_label("Back", "q")),
+    ];
+    let action = prompt_menu(
+        theme,
+        &format!(
+            "{}, current {}",
+            field.name,
+            current
+                .as_ref()
+                .map(display_value)
+                .or_else(|| default_config_field_value::<T>(field)
+                    .map(|value| { format!("{} (default)", display_value(&value)) }))
+                .unwrap_or_else(|| "(default)".to_string())
+        ),
+        &actions,
+        0,
+    )?;
+    match action {
+        MenuResponse::Selected(0) => {
+            let value = prompt_value(theme, &field, current.as_ref())?;
+            set_struct_field(config, field.name, value)?;
+        }
+        MenuResponse::Selected(1)
+        | MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
+            reset_config_field(config, field)?
+        }
+        MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
+        MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+            println!("  Preview and save are available from the main plugins.toml menu.");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn edit_nested_section<T>(
+    theme: &ColorfulTheme,
+    config: &mut T,
+    section: EditorFieldSpec,
+    field: EditorFieldSpec,
+) -> Result<(), CliError>
+where
+    T: SerializeConfig,
+{
+    let mut value = section_field_value(config, section, field.name)?
+        .or_else(|| field.default_value())
+        .unwrap_or_else(|| json!({}));
+    let schema = field
+        .schema()
+        .ok_or_else(|| CliError::Config(format!("{} is not an editable section", field.name)))?;
+    edit_value_section(
+        theme,
+        &format!("{}.{}", section.name, field.name),
+        &mut value,
+        schema,
+        field.default_value(),
+    )?;
+    set_section_field(config, section, field.name, value)
+}
+
+fn edit_value_section(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    schema: &nemo_flow::config_editor::EditorSchema,
+    default: Option<Value>,
+) -> Result<(), CliError> {
+    ensure_object(value);
+    let mut selected_index = 0;
+    loop {
+        let items = value_section_menu_items(value, schema, default.as_ref())?;
+        let selection = prompt_menu(theme, prompt, &items, selected_index)?;
+        if let Some(selected) = menu_response_index(&selection) {
+            selected_index = selected;
+        }
+        let selection = match selection {
+            MenuResponse::Selected(selection) => selection,
+            MenuResponse::Shortcut(MenuShortcut::Help, _) => {
+                print_editor_help();
+                continue;
+            }
+            MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
+                reset_value_section_item(value, schema, default.as_ref(), selected);
+                continue;
+            }
+            MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {
+                if clear_value_field(value, schema, selected) {
+                    continue;
+                }
+                println!("  Select a field to clear.");
+                continue;
+            }
+            MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+                println!("  Preview and save are available from the main plugins.toml menu.");
+                continue;
+            }
+            MenuResponse::Cancel => return Ok(()),
+        };
+        if !edit_selected_value_item(theme, prompt, value, schema, default.as_ref(), selection)? {
+            return Ok(());
+        }
+    }
+}
+
+fn value_section_menu_items(
+    value: &Value,
+    schema: &nemo_flow::config_editor::EditorSchema,
+    default: Option<&Value>,
+) -> Result<Vec<MenuItem>, CliError> {
+    let mut items = schema
+        .fields
+        .iter()
+        .map(|field| value_field_menu_item(value, *field, default))
+        .collect::<Result<Vec<_>, _>>()?;
+    items.push(MenuItem::new(shortcut_label("Reset section", "r")));
+    items.push(MenuItem::new(shortcut_label("Back", "q")));
+    Ok(items)
+}
+
+fn value_field_menu_item(
+    value: &Value,
+    field: EditorFieldSpec,
+    default: Option<&Value>,
+) -> Result<MenuItem, CliError> {
+    let configured = value_field_configured(value, field, default);
+    let rendered = value_field_value(value, field.name)
+        .map(|value| display_value_with_default(&value, default_object_field_value(default, field)))
+        .or_else(|| {
+            default_object_field_value(default, field)
+                .map(|value| format!("{} (default)", display_value(&value)))
+        })
+        .unwrap_or_else(|| "(default)".to_string());
+    Ok(MenuItem::new(format!(
+        "{} = {}",
+        configured_label(configured, field.name),
+        rendered
+    )))
+}
+
+fn edit_selected_value_item(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    schema: &nemo_flow::config_editor::EditorSchema,
+    default: Option<&Value>,
+    selection: usize,
+) -> Result<bool, CliError> {
+    if let Some(field) = schema.fields.get(selection) {
+        edit_value_field(theme, prompt, value, *field, default)?;
+        return Ok(true);
+    }
+    if selection == schema.fields.len() {
+        *value = default.cloned().unwrap_or_else(|| json!({}));
+        ensure_object(value);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn edit_value_field(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    field: EditorFieldSpec,
+    default: Option<&Value>,
+) -> Result<(), CliError> {
+    if field.kind == EditorFieldKind::Section {
+        let mut nested_value = value_field_value(value, field.name)
+            .or_else(|| field.default_value())
+            .unwrap_or_else(|| json!({}));
+        let nested_schema = field.schema().ok_or_else(|| {
+            CliError::Config(format!("{} is not an editable section", field.name))
+        })?;
+        edit_value_section(
+            theme,
+            &format!("{prompt}.{}", field.name),
+            &mut nested_value,
+            nested_schema,
+            field.default_value(),
+        )?;
+        set_value_field(value, field.name, nested_value);
+        return Ok(());
+    }
+
+    let current = value_field_value(value, field.name);
+    let actions = [
+        MenuItem::new("Set value"),
+        MenuItem::new(shortcut_label(
+            "Reset to default/none",
+            "r, Backspace, Delete",
+        )),
+        MenuItem::new(shortcut_label("Back", "q")),
+    ];
+    let action = prompt_menu(
+        theme,
+        &format!(
+            "{prompt}.{}, current {}",
+            field.name,
+            current
+                .as_ref()
+                .map(|value| {
+                    display_value_with_default(value, default_object_field_value(default, field))
+                })
+                .or_else(|| {
+                    default_object_field_value(default, field)
+                        .map(|value| format!("{} (default)", display_value(&value)))
+                })
+                .unwrap_or_else(|| "(default)".to_string())
+        ),
+        &actions,
+        0,
+    )?;
+    match action {
+        MenuResponse::Selected(0) => {
+            let field_value = prompt_value(theme, &field, current.as_ref())?;
+            set_value_field(value, field.name, field_value);
+        }
+        MenuResponse::Selected(1)
+        | MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
+            reset_value_field(value, field, default)
+        }
+        MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
+        MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+            println!("  Preview and save are available from the main plugins.toml menu.");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn reset_value_section_item(
+    value: &mut Value,
+    schema: &nemo_flow::config_editor::EditorSchema,
+    default: Option<&Value>,
+    selected: usize,
+) {
+    if let Some(field) = schema.fields.get(selected) {
+        reset_value_field(value, *field, default);
+    } else if selected == schema.fields.len() {
+        *value = default.cloned().unwrap_or_else(|| json!({}));
+        ensure_object(value);
+    }
+}
+
+fn clear_value_field(
+    value: &mut Value,
+    schema: &nemo_flow::config_editor::EditorSchema,
+    selected: usize,
+) -> bool {
+    let Some(field) = schema.fields.get(selected) else {
+        return false;
+    };
+    remove_value_field(value, field.name);
+    true
+}
+
+fn value_field_configured(value: &Value, field: EditorFieldSpec, default: Option<&Value>) -> bool {
+    let Some(current) = value_field_value(value, field.name) else {
+        return false;
+    };
+    if field.optional {
+        return true;
+    }
+    default_object_field_value(default, field)
+        .as_ref()
+        .is_none_or(|default| default != &current)
+}
+
+fn value_field_value(value: &Value, field: &str) -> Option<Value> {
+    value
+        .as_object()
+        .and_then(|object| object.get(field))
+        .filter(|value| !value.is_null())
+        .cloned()
+}
+
+fn default_object_field_value(default: Option<&Value>, field: EditorFieldSpec) -> Option<Value> {
+    default
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(field.name))
+        .filter(|value| !value.is_null())
+        .cloned()
+}
+
+fn set_value_field(target: &mut Value, field: &str, field_value: Value) {
+    ensure_object(target).insert(field.to_string(), field_value);
+}
+
+fn remove_value_field(target: &mut Value, field: &str) {
+    if let Some(object) = target.as_object_mut() {
+        object.remove(field);
+    }
+}
+
+fn reset_value_field(value: &mut Value, field: EditorFieldSpec, default: Option<&Value>) {
+    if let Some(default) = default_object_field_value(default, field) {
+        set_value_field(value, field.name, default);
+    } else {
+        remove_value_field(value, field.name);
+    }
+}
+
+fn display_value_with_default(value: &Value, default: Option<Value>) -> String {
+    if default.as_ref().is_some_and(|default| default == value) {
+        format!("{} (default)", display_value(value))
+    } else {
+        display_value(value)
+    }
+}
+
+trait SerializeConfig: serde::Serialize + serde::de::DeserializeOwned {}
+
+impl<T> SerializeConfig for T where T: serde::Serialize + serde::de::DeserializeOwned {}
+
 fn prompt_value(
     theme: &ColorfulTheme,
     field: &EditorFieldSpec,
@@ -541,14 +968,26 @@ fn prompt_value(
                 .with_initial_text(initial)
                 .interact_text()
                 .map_err(editor_error)?;
-            let parsed = value.trim().parse::<u64>().map_err(|error| {
+            let parsed = value.trim().parse::<i64>().map_err(|error| {
                 CliError::Config(format!("{} must be an integer: {error}", field.name))
+            })?;
+            Ok(json!(parsed))
+        }
+        EditorFieldKind::Float => {
+            let initial = current.map(display_value).unwrap_or_default();
+            let value: String = Input::with_theme(theme)
+                .with_prompt(field.name)
+                .with_initial_text(initial)
+                .interact_text()
+                .map_err(editor_error)?;
+            let parsed = value.trim().parse::<f64>().map_err(|error| {
+                CliError::Config(format!("{} must be a number: {error}", field.name))
             })?;
             Ok(json!(parsed))
         }
         EditorFieldKind::StringMap | EditorFieldKind::Json => {
             let initial = current.map(display_value).unwrap_or_else(|| {
-                if field.name == "tool_definitions" {
+                if matches!(field.name, "tool_definitions" | "learners") {
                     "[]".to_string()
                 } else {
                     "{}".to_string()

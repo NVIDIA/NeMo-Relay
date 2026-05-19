@@ -133,7 +133,7 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
     for path in &written {
         println!("    {}", path.display());
     }
-    println!("  Configure observability with `nemo-flow plugins edit`.");
+    println!("  Configure plugins with `nemo-flow plugins edit`.");
     println!();
     Ok(())
 }

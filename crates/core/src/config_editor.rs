@@ -18,6 +18,8 @@ pub enum EditorFieldKind {
     String,
     /// Integer value.
     Integer,
+    /// Floating-point number value.
+    Float,
     /// String enum with a fixed set of allowed values.
     Enum,
     /// Object with string keys and string values.
@@ -132,6 +134,7 @@ macro_rules! editor_config {
     (@kind Boolean) => { $crate::config_editor::EditorFieldKind::Boolean };
     (@kind String) => { $crate::config_editor::EditorFieldKind::String };
     (@kind Integer) => { $crate::config_editor::EditorFieldKind::Integer };
+    (@kind Float) => { $crate::config_editor::EditorFieldKind::Float };
     (@kind Enum) => { $crate::config_editor::EditorFieldKind::Enum };
     (@kind StringMap) => { $crate::config_editor::EditorFieldKind::StringMap };
     (@kind Json) => { $crate::config_editor::EditorFieldKind::Json };

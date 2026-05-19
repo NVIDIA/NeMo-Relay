@@ -97,7 +97,7 @@ without process-level plugin activation.
 
 ## Editing Files
 
-Use the interactive editor for Observability plugin configuration:
+Use the interactive editor for Observability and Adaptive plugin configuration:
 
 ```bash
 nemo-flow plugins edit
@@ -194,9 +194,9 @@ Tables inside component config merge recursively.
 
 ## Explicit Defaults And Overrides
 
-The editor writes explicit defaults for edited Observability sections. This is
-intentional. In a layered config model, omitting a field means "inherit a lower
-precedence value"; it does not mean "delete that value."
+The editor writes explicit defaults for edited Observability and Adaptive
+sections. This is intentional. In a layered config model, omitting a field means
+"inherit a lower precedence value"; it does not mean "delete that value."
 
 For example, this user file disables ATOF even if a project file enables it:
 

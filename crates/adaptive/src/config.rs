@@ -52,7 +52,7 @@ impl Default for AdaptiveConfig {
 }
 
 /// Shared state configuration consumed by adaptive features that need persistence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StateConfig {
     /// Backend selection for adaptive state.
     pub backend: BackendSpec,
@@ -66,6 +66,12 @@ pub struct BackendSpec {
     /// Backend-specific JSON object.
     #[serde(default)]
     pub config: Map<String, Json>,
+}
+
+impl Default for BackendSpec {
+    fn default() -> Self {
+        Self::in_memory()
+    }
 }
 
 impl BackendSpec {
@@ -207,6 +213,127 @@ fn default_acg_observation_window() -> usize {
 
 fn default_acg_priority() -> i32 {
     50
+}
+
+nemo_flow::editor_config! {
+    impl AdaptiveConfig {
+        agent_id => { label: "agent_id", kind: String, optional: true },
+        state => {
+            label: "state",
+            kind: Section,
+            optional: true,
+            nested: StateConfig,
+            default: StateConfig,
+        },
+        telemetry => {
+            label: "telemetry",
+            kind: Section,
+            optional: true,
+            nested: TelemetryComponentConfig,
+            default: TelemetryComponentConfig,
+        },
+        adaptive_hints => {
+            label: "adaptive_hints",
+            kind: Section,
+            optional: true,
+            nested: AdaptiveHintsComponentConfig,
+            default: AdaptiveHintsComponentConfig,
+        },
+        tool_parallelism => {
+            label: "tool_parallelism",
+            kind: Section,
+            optional: true,
+            nested: ToolParallelismComponentConfig,
+            default: ToolParallelismComponentConfig,
+        },
+        acg => {
+            label: "acg",
+            kind: Section,
+            optional: true,
+            nested: AcgComponentConfig,
+            default: AcgComponentConfig,
+        },
+        policy => {
+            label: "policy",
+            kind: Section,
+            nested: ConfigPolicy,
+            default: ConfigPolicy,
+        },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl StateConfig {
+        backend => {
+            label: "backend",
+            kind: Section,
+            nested: BackendSpec,
+            default: BackendSpec,
+        },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl BackendSpec {
+        kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },
+        config => { label: "config", kind: Json },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl TelemetryComponentConfig {
+        subscriber_name => { label: "subscriber_name", kind: String, optional: true },
+        learners => { label: "learners", kind: Json },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl AdaptiveHintsComponentConfig {
+        priority => { label: "priority", kind: Integer },
+        break_chain => { label: "break_chain", kind: Boolean },
+        inject_header => { label: "inject_header", kind: Boolean },
+        inject_body_path => { label: "inject_body_path", kind: String },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl ToolParallelismComponentConfig {
+        priority => { label: "priority", kind: Integer },
+        mode => {
+            label: "mode",
+            kind: Enum,
+            values: ["observe_only", "inject_hints", "schedule"],
+        },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl AcgComponentConfig {
+        provider => {
+            label: "provider",
+            kind: Enum,
+            values: ["passthrough", "anthropic", "openai"],
+        },
+        observation_window => { label: "observation_window", kind: Integer },
+        priority => { label: "priority", kind: Integer },
+        stability_thresholds => {
+            label: "stability_thresholds",
+            kind: Section,
+            nested: crate::acg::stability::StabilityThresholds,
+            default: crate::acg::stability::StabilityThresholds,
+        },
+    }
+}
+
+nemo_flow::editor_config! {
+    impl crate::acg::stability::StabilityThresholds {
+        stable_threshold => { label: "stable_threshold", kind: Float },
+        semi_stable_threshold => { label: "semi_stable_threshold", kind: Float },
+        min_observations_for_full_confidence => {
+            label: "min_observations_for_full_confidence",
+            kind: Integer,
+        },
+    }
 }
 
 #[cfg(test)]
