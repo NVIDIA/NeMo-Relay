@@ -19,6 +19,8 @@ use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentE
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 
+const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
+
 #[derive(Debug, Clone)]
 pub(crate) enum SubagentSessionContext {
     Codex(codex::SubagentContext),
@@ -149,8 +151,8 @@ impl SessionAlignmentState {
         let (event, finished_alias) = route_event_through_alias(event, &self.aliases);
         let session_id = event.session_id().to_string();
         if let Some(child_session_id) = finished_alias.as_ref() {
-            // Remove aliases before terminal skip checks so a late child AgentEnd cannot leave
-            // stale reparenting state after its parent session has already closed.
+            // Remove aliases before terminal skip checks so a late child AgentEnd, or a child
+            // TurnEnded used as a subagent completion signal, cannot leave stale reparenting state.
             self.aliases.remove(child_session_id);
             self.pending_subagents.remove(child_session_id);
         }
@@ -182,12 +184,25 @@ impl SessionAlignmentState {
             .collect()
     }
 
-    fn clear_for_ended_agent(&mut self, session_id: &str) {
+    pub(crate) fn clear_for_ended_agent(&mut self, session_id: &str) {
         self.aliases.retain(|child_session_id, alias| {
             child_session_id != session_id && alias.parent_session_id != session_id
         });
         self.pending_subagents.retain(|child_session_id, pending| {
             child_session_id != session_id && pending.parent_session_id() != session_id
+        });
+    }
+
+    pub(crate) fn clear_for_ended_subagent(&mut self, parent_session_id: &str, subagent_id: &str) {
+        self.aliases.retain(|child_session_id, alias| {
+            child_session_id != subagent_id
+                && !(alias.parent_session_id == parent_session_id
+                    && alias.subagent_id == subagent_id)
+        });
+        self.pending_subagents.retain(|child_session_id, pending| {
+            child_session_id != subagent_id
+                && !(pending.parent_session_id() == parent_session_id
+                    && pending.event.session_id == subagent_id)
         });
     }
 }
@@ -264,6 +279,13 @@ pub(crate) fn agent_kind_for_gateway_provider(provider: &str) -> AgentKind {
     } else {
         AgentKind::Gateway
     }
+}
+
+// Not every harness has a reliable process/session end signal. Claude Code and Codex sessions can
+// outlive a user-visible run, so the CLI represents their work with bounded turn scopes instead of
+// exporting a long-lived agent scope that needs synthetic termination.
+pub(crate) fn should_emit_session_agent_scope(agent_kind: AgentKind) -> bool {
+    !matches!(agent_kind, AgentKind::ClaudeCode | AgentKind::Codex)
 }
 
 // Detects agent harnesses that report a child session which should become a subagent under another
@@ -350,14 +372,27 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
 // Responses shapes, and deliberately ignores raw count-token/file payloads.
 pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
     let task_text = request_user_task_text(&request.content)?;
-    let normalized = normalize_affinity_text(task_text);
-    (normalized.len() >= 24).then(|| truncate_affinity_text(&normalized, 512))
+    let normalized = normalize_affinity_text(&task_text);
+    (normalized.len() >= 24)
+        .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
 }
 
 // Detects tool results that imply a subagent completed. Claude Code reports this through the
 // `Agent` tool today; keeping the check here avoids leaking that tool shape into session teardown.
 pub(crate) fn completed_subagent_from_tool(event: &ToolEvent) -> Option<String> {
     claude_code::completed_subagent_from_agent_tool(event)
+}
+
+// Some harnesses route child-session turn boundaries through a parent-owned subagent alias. A
+// child turn end should close that subagent, not the parent turn containing all sibling work.
+pub(crate) fn aliased_turn_subagent_id(event: &SessionEvent) -> Option<String> {
+    json_string_at(
+        &event.metadata,
+        &[
+            &["codex_subagent_session_id"][..],
+            &["subagent_session_id"][..],
+        ],
+    )
 }
 
 // Routes events from an aliased child session through the parent session/subagent pair. The alias
@@ -397,7 +432,7 @@ pub(crate) fn route_event_through_alias(
         ),
         NormalizedEvent::TurnEnded(mut event) => {
             route_session_event(&mut event, &alias, metadata);
-            (NormalizedEvent::TurnEnded(event), None)
+            (NormalizedEvent::TurnEnded(event), Some(child_session_id))
         }
         NormalizedEvent::PromptSubmitted(mut event) => {
             route_session_event(&mut event, &alias, metadata);
@@ -490,50 +525,67 @@ fn route_tool_event(event: &mut ToolEvent, alias: &SessionAlias, metadata: Value
     event.metadata = merge_metadata(event.metadata.clone(), metadata);
 }
 
-fn request_user_task_text(payload: &Value) -> Option<&str> {
+fn request_user_task_text(payload: &Value) -> Option<String> {
     payload
         .get("messages")
         .and_then(Value::as_array)
-        .and_then(|messages| messages.iter().find_map(user_message_task_text))
+        .and_then(|messages| messages.iter().rev().find_map(user_message_task_text))
         .or_else(|| responses_input_task_text(payload.get("input")?))
         .or_else(|| prompt_task_text(payload.get("prompt")?))
 }
 
-fn user_message_task_text(message: &Value) -> Option<&str> {
+fn user_message_task_text(message: &Value) -> Option<String> {
     if message.get("role").and_then(Value::as_str) != Some("user") {
         return None;
     }
     content_task_text(message.get("content")?)
 }
 
-fn responses_input_task_text(input: &Value) -> Option<&str> {
+fn responses_input_task_text(input: &Value) -> Option<String> {
     match input {
-        Value::String(text) => Some(text.as_str()).filter(|text| is_affinity_candidate(text)),
-        Value::Array(items) => items.iter().find_map(user_message_task_text),
+        Value::String(text) => affinity_candidate_text(text),
+        Value::Array(items) => items.iter().rev().find_map(user_message_task_text),
         _ => None,
     }
 }
 
-fn prompt_task_text(prompt: &Value) -> Option<&str> {
-    prompt.as_str().filter(|text| is_affinity_candidate(text))
+fn prompt_task_text(prompt: &Value) -> Option<String> {
+    prompt.as_str().and_then(affinity_candidate_text)
 }
 
-fn content_task_text(content: &Value) -> Option<&str> {
+fn content_task_text(content: &Value) -> Option<String> {
     match content {
-        Value::String(text) => Some(text.as_str()).filter(|text| is_affinity_candidate(text)),
-        Value::Array(blocks) => blocks.iter().find_map(|block| {
-            block
-                .get("text")
-                .and_then(Value::as_str)
-                .filter(|text| is_affinity_candidate(text))
-        }),
+        Value::String(text) => affinity_candidate_text(text),
+        Value::Array(blocks) => blocks.iter().rev().find_map(content_block_task_text),
         _ => None,
     }
 }
 
-fn is_affinity_candidate(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    !trimmed.is_empty() && !trimmed.starts_with("<system-reminder>")
+fn content_block_task_text(block: &Value) -> Option<String> {
+    if let Some(block_type) = block.get("type").and_then(Value::as_str)
+        && !matches!(block_type, "text" | "input_text")
+    {
+        return None;
+    }
+    block
+        .get("text")
+        .and_then(Value::as_str)
+        .and_then(affinity_candidate_text)
+}
+
+fn affinity_candidate_text(text: &str) -> Option<String> {
+    let cleaned = text.trim();
+    if cleaned.is_empty() || looks_like_json_payload(cleaned) {
+        return None;
+    }
+    Some(cleaned.to_string())
+}
+
+fn looks_like_json_payload(text: &str) -> bool {
+    matches!(
+        serde_json::from_str::<Value>(text),
+        Ok(Value::Object(_) | Value::Array(_))
+    )
 }
 
 fn normalize_affinity_text(text: &str) -> String {

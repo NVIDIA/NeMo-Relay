@@ -184,6 +184,13 @@ fn agent_kind_inference_covers_known_provider_names() {
 }
 
 #[test]
+fn session_agent_scope_policy_skips_unbounded_coding_agent_sessions() {
+    assert!(!should_emit_session_agent_scope(AgentKind::ClaudeCode));
+    assert!(!should_emit_session_agent_scope(AgentKind::Codex));
+    assert!(should_emit_session_agent_scope(AgentKind::Gateway));
+}
+
+#[test]
 fn request_affinity_key_reads_messages_content_blocks() {
     let request = LlmRequest {
         headers: Map::new(),
@@ -221,6 +228,100 @@ fn request_affinity_key_reads_chat_completion_string_messages() {
     assert_eq!(
         request_affinity_key(&request).as_deref(),
         Some("Review the Rust CLI gateway alignment code.")
+    );
+}
+
+#[test]
+fn request_affinity_key_preserves_leading_tagged_context_text() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "<runtime-context>\nTrace run 7.\n</runtime-context>\n<system-reminder>\nToday is 2026-05-19.\n</system-reminder>\n\nReview the gateway correlation logic."
+                }
+            ]
+        }),
+    };
+
+    assert_eq!(
+        request_affinity_key(&request).as_deref(),
+        Some(
+            "<runtime-context> Trace run 7. </runtime-context> <system-reminder> Today is 2026-05-19. </system-reminder> Review the gateway correlation logic."
+        )
+    );
+}
+
+#[test]
+fn request_affinity_key_keeps_task_after_large_prefix() {
+    let prefix = "volatile context ".repeat(80);
+    let task = "Review the gateway correlation logic.";
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": format!("<runtime-context>{prefix}</runtime-context> {task}")
+                }
+            ]
+        }),
+    };
+
+    let key = request_affinity_key(&request).unwrap();
+    assert!(key.starts_with("<runtime-context>volatile context"));
+    assert!(
+        key.ends_with(task),
+        "larger affinity prefixes should preserve the task text after volatile context"
+    );
+}
+
+#[test]
+fn request_affinity_key_preserves_fully_tagged_prompt_text() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "<task>Review the gateway correlation logic.</task>"
+                }
+            ]
+        }),
+    };
+
+    assert_eq!(
+        request_affinity_key(&request).as_deref(),
+        Some("<task>Review the gateway correlation logic.</task>")
+    );
+}
+
+#[test]
+fn request_affinity_key_prefers_latest_task_message_over_root_history() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Can you analyze the whole codebase with parallel subagents?"
+                },
+                {
+                    "role": "assistant",
+                    "content": "I will delegate the directory reviews."
+                },
+                {
+                    "role": "user",
+                    "content": "Thoroughly explore the crates/ffi directory."
+                }
+            ]
+        }),
+    };
+
+    assert_eq!(
+        request_affinity_key(&request).as_deref(),
+        Some("Thoroughly explore the crates/ffi directory.")
     );
 }
 
@@ -270,6 +371,35 @@ fn request_affinity_key_ignores_count_token_style_payloads() {
 }
 
 #[test]
+fn request_affinity_key_ignores_tool_results_and_sidecar_json() {
+    let tool_result = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "content": "// SPDX-FileCopyrightText: Copyright (c) 2026\npub fn source() {}"
+                        }
+                    ]
+                }
+            ]
+        }),
+    };
+    let sidecar_json = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "input": "{\"parentUuid\":\"scope\",\"childUuid\":\"scope\"}"
+        }),
+    };
+
+    assert_eq!(request_affinity_key(&tool_result), None);
+    assert_eq!(request_affinity_key(&sidecar_json), None);
+}
+
+#[test]
 fn route_event_through_alias_covers_all_event_variants() {
     let aliases = aliases();
     let cases = vec![
@@ -290,7 +420,10 @@ fn route_event_through_alias_covers_all_event_variants() {
     ];
 
     for event in cases {
-        let was_agent_end = matches!(event, NormalizedEvent::AgentEnded(_));
+        let closes_alias = matches!(
+            event,
+            NormalizedEvent::AgentEnded(_) | NormalizedEvent::TurnEnded(_)
+        );
         let (event, finished_alias) = route_event_through_alias(event, &aliases);
         assert_eq!(event.session_id(), "parent");
         assert_eq!(
@@ -298,7 +431,7 @@ fn route_event_through_alias_covers_all_event_variants() {
             json!(true),
             "alias metadata should be stamped on {event:?}"
         );
-        assert_eq!(finished_alias.as_deref(), was_agent_end.then_some("child"));
+        assert_eq!(finished_alias.as_deref(), closes_alias.then_some("child"));
 
         match event {
             NormalizedEvent::AgentStarted(event) => panic!("unexpected agent start: {event:?}"),

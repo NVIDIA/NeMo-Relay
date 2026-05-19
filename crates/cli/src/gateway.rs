@@ -27,7 +27,7 @@ use crate::alignment::{self, GatewayRouteKind};
 use crate::config::header_string;
 use crate::error::CliError;
 use crate::server::AppState;
-use crate::session::{GatewayCallPrep, LlmGatewayStart};
+use crate::session::{GatewayCallPrep, LlmGatewayStart, SessionManager};
 
 const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 
@@ -267,6 +267,7 @@ async fn run_managed_buffered(
                 .sessions
                 .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
                 .await;
+            state.sessions.finish_gateway_call(&session_id).await;
             let (status, headers) = upstream_info
                 .lock()
                 .expect("upstream info lock poisoned")
@@ -279,7 +280,10 @@ async fn run_managed_buffered(
                 .unwrap_or_default();
             build_response(status, headers, Body::from(bytes))
         }
-        Err(error) => Err(translate_runtime_error(error, &upstream_error)),
+        Err(error) => {
+            state.sessions.finish_gateway_call(&session_id).await;
+            Err(translate_runtime_error(error, &upstream_error))
+        }
     }
 }
 
@@ -364,10 +368,20 @@ async fn run_managed_streaming(
     // collector and finalizer for managed streaming, so without a codec we cannot use the managed
     // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
     let Some(streaming_codec) = codecs.streaming else {
+        state.sessions.finish_gateway_call(&prep.session_id).await;
         return passthrough_streaming(state, prepared).await;
     };
     let collector = streaming_codec.collector();
-    let finalizer = streaming_codec.finalizer();
+    let final_response = Arc::new(Mutex::new(None));
+    let final_response_for_finalizer = final_response.clone();
+    let original_finalizer = streaming_codec.finalizer();
+    let finalizer = Box::new(move || {
+        let response = original_finalizer();
+        *final_response_for_finalizer
+            .lock()
+            .expect("stream final response lock poisoned") = Some(response.clone());
+        response
+    });
 
     let GatewayCallPrep {
         scope_stack,
@@ -398,23 +412,30 @@ async fn run_managed_streaming(
             async move { llm_stream_call_execute(params).await },
         )
         .await;
-    let json_stream =
-        json_stream_result.map_err(|error| translate_runtime_error(error, &upstream_error))?;
+    let json_stream = match json_stream_result {
+        Ok(json_stream) => json_stream,
+        Err(error) => {
+            state.sessions.finish_gateway_call(&session_id).await;
+            return Err(translate_runtime_error(error, &upstream_error));
+        }
+    };
     let (status, headers) = upstream_info
         .lock()
         .expect("upstream info lock poisoned")
         .take()
         .unwrap_or((StatusCode::OK, HeaderMap::new()));
-    let body = client_sse_body(json_stream, provider_route);
+    let body = client_sse_body(
+        json_stream,
+        provider_route,
+        state.sessions.clone(),
+        session_id.clone(),
+        owner_subagent_id,
+        final_response,
+    );
 
-    // Tool hint extraction from streamed responses is intentionally deferred: the runtime
-    // synthesizes the aggregate response inside `LlmStreamWrapper::emit_end_event` and does not
-    // surface it back to the caller. Non-streamed responses continue to feed
-    // `record_gateway_response_hints` from `run_managed_buffered`. Wiring streamed hints back would
-    // require either a runtime hook or a finalizer-tap channel; neither is in scope for the
-    // initial managed-execution refactor.
-    let _ = (session_id, owner_subagent_id);
-
+    // Streamed responses are finalized inside the runtime stream wrapper. The small finalizer tap
+    // above copies only the aggregate JSON payload so the session can update turn output and tool
+    // hints after the downstream client consumes the stream, without buffering SSE bytes here.
     build_response(status, headers, body)
 }
 
@@ -506,8 +527,16 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
 // names are reconstructed from the JSON `type` field where providers populate it (Anthropic
 // Messages, OpenAI Responses); OpenAI Chat omits the `event:` line and appends the original
 // `data: [DONE]` terminator after the runtime stream completes.
-fn client_sse_body(json_stream: LlmJsonStream, route: ProviderRoute) -> Body {
+fn client_sse_body(
+    json_stream: LlmJsonStream,
+    route: ProviderRoute,
+    sessions: SessionManager,
+    session_id: String,
+    owner_subagent_id: Option<String>,
+    final_response: Arc<Mutex<Option<Value>>>,
+) -> Body {
     let mut json_stream = json_stream;
+    let mut guard = GatewayCallGuard::new(sessions, session_id, owner_subagent_id, final_response);
     let stream = stream! {
         while let Some(item) = json_stream.next().await {
             match item {
@@ -516,16 +545,89 @@ fn client_sse_body(json_stream: LlmJsonStream, route: ProviderRoute) -> Body {
                     yield Ok::<Bytes, CliError>(Bytes::from(frame));
                 }
                 Err(error) => {
+                    guard.finish().await;
                     yield Err(CliError::InvalidPayload(error.to_string()));
                     return;
                 }
             }
         }
+        guard.finish().await;
         if matches!(route, ProviderRoute::OpenAiChatCompletions) {
             yield Ok::<Bytes, CliError>(Bytes::from_static(b"data: [DONE]\n\n"));
         }
     };
     Body::from_stream(stream)
+}
+
+// Keeps the session idle detector honest for streaming responses. Normal completion calls
+// `finish`, while early client disconnects drop the body stream and use the drop path to release
+// the in-flight gateway call asynchronously.
+struct GatewayCallGuard {
+    sessions: Option<SessionManager>,
+    session_id: String,
+    owner_subagent_id: Option<String>,
+    final_response: Arc<Mutex<Option<Value>>>,
+}
+
+impl GatewayCallGuard {
+    fn new(
+        sessions: SessionManager,
+        session_id: String,
+        owner_subagent_id: Option<String>,
+        final_response: Arc<Mutex<Option<Value>>>,
+    ) -> Self {
+        Self {
+            sessions: Some(sessions),
+            session_id,
+            owner_subagent_id,
+            final_response,
+        }
+    }
+
+    async fn finish(&mut self) {
+        if let Some(sessions) = self.sessions.take() {
+            let response = self
+                .final_response
+                .lock()
+                .expect("stream final response lock poisoned")
+                .take();
+            if let Some(response) = response {
+                sessions
+                    .record_gateway_response_hints(
+                        &self.session_id,
+                        self.owner_subagent_id.clone(),
+                        response,
+                    )
+                    .await;
+            }
+            sessions.finish_gateway_call(&self.session_id).await;
+        }
+    }
+}
+
+impl Drop for GatewayCallGuard {
+    fn drop(&mut self) {
+        let Some(sessions) = self.sessions.take() else {
+            return;
+        };
+        let session_id = self.session_id.clone();
+        let owner_subagent_id = self.owner_subagent_id.clone();
+        let response = self
+            .final_response
+            .lock()
+            .expect("stream final response lock poisoned")
+            .take();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Some(response) = response {
+                    sessions
+                        .record_gateway_response_hints(&session_id, owner_subagent_id, response)
+                        .await;
+                }
+                sessions.finish_gateway_call(&session_id).await;
+            });
+        }
+    }
 }
 
 // Formats one SSE frame from a parsed event payload. Anthropic and OpenAI Responses events carry

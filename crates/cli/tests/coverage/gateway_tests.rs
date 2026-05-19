@@ -5,7 +5,7 @@ use super::*;
 use crate::alignment::GatewayRouteKind;
 use crate::config::GatewayConfig;
 use crate::server::AppState;
-use crate::session::SessionManager;
+use crate::session::{LlmGatewayStart, SessionManager};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
@@ -666,7 +666,136 @@ fn response_headers_preserve_duplicates() {
     assert_eq!(copied.get_all("set-cookie").iter().count(), 2);
 }
 
-// `stream_response_records_preview_and_truncation` and `streaming_llm_guard_closes_on_drop` were
-// removed when the gateway moved to `llm_stream_call_execute`. The runtime now owns stream-end
-// lifecycle (start/end events emitted by `LlmStreamWrapper`); core tests cover that contract,
-// and the gateway no longer carries a stream preview/truncation helper or a separate guard struct.
+#[tokio::test]
+async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("stream-drop".into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "input": "Analyze enough text to create a stable idle-timeout test."
+                    }),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+        std::result::Result<Value, FlowError>,
+    >());
+    let body = client_sse_body(
+        stream,
+        ProviderRoute::OpenAiResponses,
+        manager.clone(),
+        prep.session_id,
+        prep.owner_subagent_id,
+        Arc::new(Mutex::new(None)),
+    );
+
+    drop(body);
+    tokio::task::yield_now().await;
+
+    let closed = manager
+        .close_idle_sessions_at(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed, 1);
+}
+
+#[tokio::test]
+async fn streaming_body_records_final_response_for_turn_output() {
+    let subscriber_name = "gateway-stream-final-response-turn-output-test";
+    let _ = nemo_flow::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_output = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_output.clone();
+    nemo_flow::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(nemo_flow::api::event::ScopeCategory::End)
+                && event.name() == "codex-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("stream-final")
+            {
+                *captured.lock().unwrap() = event.output().cloned();
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("stream-final".into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "input": "Stream enough text to create a final response."
+                    }),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let session_id = prep.session_id.clone();
+    let owner_subagent_id = prep.owner_subagent_id.clone();
+    let final_response = json!({ "output_text": "streamed final" });
+    let stream: LlmJsonStream = Box::pin(futures_util::stream::empty::<
+        std::result::Result<Value, FlowError>,
+    >());
+    let body = client_sse_body(
+        stream,
+        ProviderRoute::OpenAiResponses,
+        manager.clone(),
+        session_id,
+        owner_subagent_id,
+        Arc::new(Mutex::new(Some(final_response.clone()))),
+    );
+    let _ = body.collect().await.unwrap();
+
+    manager
+        .close_idle_sessions_at(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
+    nemo_flow::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+}
+
+// `stream_response_records_preview_and_truncation` was removed when the gateway moved to
+// `llm_stream_call_execute`. The runtime now owns stream-end lifecycle (start/end events emitted
+// by `LlmStreamWrapper`); core tests cover that contract, and the gateway no longer carries a
+// stream preview/truncation helper.

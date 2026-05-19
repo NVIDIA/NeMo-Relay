@@ -26,11 +26,14 @@ pub(crate) fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-claude-code-session-id")
 }
 
-// Claude's `Agent` tool result names the spawned worker as `agentId`. Treating that as a
-// completion signal gives the CLI a deterministic subagent end even when Claude does not emit a
-// separate `SubagentStop` hook until session teardown.
+// Claude's `Agent` tool can report either an asynchronous launch acknowledgement or a terminal
+// worker result. Only the terminal result should close the subagent scope; otherwise parallel
+// workers that launch in the background are closed before their later tool/LLM hooks arrive.
 pub(crate) fn completed_subagent_from_agent_tool(event: &ToolEvent) -> Option<String> {
     if event.agent_kind != AgentKind::ClaudeCode || event.tool_name != "Agent" {
+        return None;
+    }
+    if !is_terminal_agent_tool_result(&event.result) {
         return None;
     }
     json_string_at(
@@ -42,6 +45,35 @@ pub(crate) fn completed_subagent_from_agent_tool(event: &ToolEvent) -> Option<St
             &["subagent_id"][..],
         ],
     )
+}
+
+fn is_terminal_agent_tool_result(result: &serde_json::Value) -> bool {
+    let status = json_string_at(result, &[&["status"][..]])
+        .map(|status| status.trim().to_ascii_lowercase().replace(['-', ' '], "_"));
+    match status.as_deref() {
+        Some("async_launched" | "launched" | "started" | "running" | "pending" | "in_progress") => {
+            false
+        }
+        Some(
+            "completed" | "complete" | "success" | "succeeded" | "failed" | "error" | "errored"
+            | "cancelled" | "canceled" | "timeout" | "timed_out",
+        ) => true,
+        Some(_) | None => has_terminal_agent_tool_evidence(result),
+    }
+}
+
+fn has_terminal_agent_tool_evidence(result: &serde_json::Value) -> bool {
+    [
+        "content",
+        "output",
+        "totalDurationMs",
+        "totalTokens",
+        "totalToolUseCount",
+        "durationMs",
+        "usage",
+    ]
+    .into_iter()
+    .any(|key| result.get(key).is_some_and(|value| !value.is_null()))
 }
 
 #[cfg(test)]

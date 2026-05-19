@@ -107,6 +107,7 @@ impl AppState {
     fn new(config: GatewayConfig) -> Self {
         crate::tls::install_rustls_crypto_provider();
         let sessions = SessionManager::new(config.clone());
+        sessions.start_idle_sweeper();
         let http = Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .timeout(HTTP_REQUEST_TIMEOUT)

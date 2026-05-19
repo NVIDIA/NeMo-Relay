@@ -35,6 +35,8 @@ use crate::model::{
 const LLM_HINT_TTL: Duration = Duration::from_secs(300);
 const TOOL_HINT_TTL: Duration = Duration::from_secs(300);
 const LAST_OWNER_TTL: Duration = Duration::from_secs(300);
+const AGENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const AGENT_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub(crate) struct SessionManager {
@@ -77,7 +79,7 @@ pub(crate) struct ActiveLlm {
 ///
 /// The session lock is released after the prep is built, so the gateway can run
 /// the upstream HTTP work without blocking unrelated session activity. The
-/// preserved `scope_stack` is what restores the agent/subagent scope context
+/// preserved `scope_stack` is what restores the turn/subagent scope context
 /// the call was opened against when the runtime emits start/end events.
 pub(crate) struct GatewayCallPrep {
     pub(crate) scope_stack: ScopeStackHandle,
@@ -95,7 +97,12 @@ struct Session {
     agent_kind: AgentKind,
     session_id: String,
     scope_stack: ScopeStackHandle,
+    session_started: bool,
+    session_metadata: Value,
     agent_scope: Option<ScopeHandle>,
+    turn_scope: Option<ScopeHandle>,
+    turn_index: u64,
+    last_turn_llm_output: Option<Value>,
     subagents: HashMap<String, ScopeHandle>,
     // Each active subagent gets its own scope stack seeded with the parent agent handle. This lets
     // sibling workers close out of order without corrupting the task-local stack.
@@ -113,6 +120,8 @@ struct Session {
     // neutral fallback than a single global "last tool owner" when requests lack subagent headers.
     llm_request_affinity: HashMap<String, Option<String>>,
     last_llm_owner: Option<LastLlmOwner>,
+    last_activity: Instant,
+    active_gateway_calls: usize,
     config: SessionConfig,
 }
 
@@ -199,6 +208,39 @@ impl SessionManager {
             alignment: Arc::new(Mutex::new(SessionAlignmentState::default())),
             default_config,
         }
+    }
+
+    /// Starts the fail-safe idle closer used by the HTTP gateway.
+    ///
+    /// Some coding agents, notably Codex child threads, do not always emit native agent-end hooks.
+    /// The sweeper is provider-neutral: it closes any open turn that has had no hook or gateway
+    /// activity for a short interval, while leaving turns with active tools or managed LLM calls
+    /// alone. Weak references keep the task from extending the manager lifetime in tests or
+    /// shutdown paths.
+    pub(crate) fn start_idle_sweeper(&self) {
+        let inner = Arc::downgrade(&self.inner);
+        let alignment = Arc::downgrade(&self.alignment);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(AGENT_IDLE_SWEEP_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                let (Some(inner), Some(alignment)) = (inner.upgrade(), alignment.upgrade()) else {
+                    break;
+                };
+                if let Err(error) = close_idle_sessions_from_parts(
+                    &inner,
+                    &alignment,
+                    Instant::now(),
+                    AGENT_IDLE_TIMEOUT,
+                    "idle_timeout",
+                )
+                .await
+                {
+                    eprintln!("nemo-flow CLI gateway: idle session teardown failed: {error}");
+                }
+            }
+        });
     }
 
     /// Applies normalized hook events to their owning sessions in arrival order.
@@ -310,7 +352,7 @@ impl SessionManager {
 
     /// Prepares a managed LLM execution against the right session and scope context.
     ///
-    /// Resolves the session, opens the agent scope if needed, computes the parent scope and
+    /// Resolves the session, opens the turn scope if needed, computes the parent scope and
     /// correlation metadata, and returns a [`GatewayCallPrep`]. The returned prep carries the
     /// `ScopeStackHandle` that callers must restore around `llm_call_execute` /
     /// `llm_stream_call_execute` so the runtime emits start/end events under the same agent or
@@ -340,6 +382,18 @@ impl SessionManager {
             .entry(session_id.clone())
             .or_insert_with(|| Session::new(session_id, inferred_agent_kind, config));
         session.prepare_gateway_call(start).await
+    }
+
+    /// Marks a managed gateway LLM call as finished for idle-timeout purposes.
+    ///
+    /// Runtime-managed LLM spans are emitted outside the session lock, so the session keeps a small
+    /// in-flight counter to prevent the idle sweeper from closing a turn while an upstream
+    /// provider request or streaming response is still active.
+    pub(crate) async fn finish_gateway_call(&self, session_id: &str) {
+        let mut sessions = self.inner.lock().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.finish_gateway_call();
+        }
     }
 
     /// Legacy manual-lifecycle close paired with [`Self::start_llm`]. Production gateway traffic
@@ -381,7 +435,7 @@ impl SessionManager {
             .await?;
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.add_tool_hints_from_llm_response(response_for_hints, owner_subagent_id);
+            session.record_completed_llm_response(response_for_hints, owner_subagent_id);
         }
         Ok(())
     }
@@ -411,7 +465,7 @@ impl SessionManager {
         };
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(&session_id) {
-            session.add_tool_hints_from_llm_response(response, owner_subagent_id);
+            session.record_completed_llm_response(response, owner_subagent_id);
         }
     }
 
@@ -430,6 +484,16 @@ impl SessionManager {
                 .collect::<Vec<_>>()
         };
         close_sessions_for_shutdown(&mut sessions, reason).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn close_idle_sessions_at(
+        &self,
+        now: Instant,
+        timeout: Duration,
+        reason: &str,
+    ) -> Result<usize, CliError> {
+        close_idle_sessions_from_parts(&self.inner, &self.alignment, now, timeout, reason).await
     }
 
     // Applies known or pending child-session aliases before the gateway chooses a session. This is
@@ -578,9 +642,9 @@ async fn promote_pending_subagent(
         .or_insert_with(|| {
             Session::new(parent_session_id.clone(), pending.event.agent_kind, config)
         });
-    if parent_session.agent_scope.is_none() {
-        // Gateway traffic can be the first signal that forces promotion. In that case, synthesize a
-        // minimal parent agent scope so the subagent still has a valid runtime parent.
+    if !parent_session.session_started && parent_session.agent_scope.is_none() {
+        // Gateway traffic can be the first signal that forces promotion. In that case, synthesize
+        // the parent session metadata; the later subagent start will create a turn-scoped parent.
         parent_session
             .apply(NormalizedEvent::AgentStarted(SessionEvent {
                 session_id: parent_session_id,
@@ -615,6 +679,69 @@ async fn close_sessions_for_shutdown(
     first_error.map_or(Ok(()), Err)
 }
 
+async fn close_idle_sessions_from_parts(
+    inner: &Arc<Mutex<HashMap<String, Session>>>,
+    alignment: &Arc<Mutex<SessionAlignmentState>>,
+    now: Instant,
+    timeout: Duration,
+    reason: &str,
+) -> Result<usize, CliError> {
+    let mut idle_sessions = Vec::new();
+    {
+        let mut sessions = inner.lock().await;
+        let ids = sessions
+            .iter()
+            .filter_map(|(session_id, session)| {
+                session
+                    .is_idle_for(now, timeout)
+                    .then_some(session_id.clone())
+            })
+            .collect::<Vec<_>>();
+        for session_id in ids {
+            if let Some(session) = sessions.remove(&session_id) {
+                idle_sessions.push((session_id, session));
+            }
+        }
+    }
+    if idle_sessions.is_empty() {
+        return Ok(0);
+    }
+    let mut closed_turns = 0;
+    let mut closed_subagents = Vec::new();
+    let mut retained_sessions = Vec::new();
+    let mut first_error = None;
+    for (session_id, mut session) in idle_sessions {
+        let stack = session.scope_stack.clone();
+        let result = TASK_SCOPE_STACK
+            .scope(stack, async { session.close_turn_for_reason(reason).await })
+            .await;
+        match result {
+            Ok(subagent_ids) => {
+                closed_turns += 1;
+                for subagent_id in subagent_ids {
+                    closed_subagents.push((session_id.clone(), subagent_id));
+                }
+            }
+            Err(error) if first_error.is_none() => first_error = Some(error),
+            Err(_) => {}
+        }
+        if !session.is_empty() {
+            retained_sessions.push((session_id, session));
+        }
+    }
+    {
+        let mut sessions = inner.lock().await;
+        sessions.extend(retained_sessions);
+    }
+    if !closed_subagents.is_empty() {
+        let mut alignment_state = alignment.lock().await;
+        for (session_id, subagent_id) in closed_subagents {
+            alignment_state.clear_for_ended_subagent(&session_id, &subagent_id);
+        }
+    }
+    first_error.map_or(Ok(closed_turns), Err)
+}
+
 impl Session {
     // Constructs per-session runtime state without creating a scope yet. The root agent scope is
     // opened lazily on the first event or gateway LLM call so sessions created from hints and pure
@@ -624,7 +751,12 @@ impl Session {
             agent_kind,
             session_id,
             scope_stack: create_scope_stack(),
+            session_started: false,
+            session_metadata: Value::Null,
             agent_scope: None,
+            turn_scope: None,
+            turn_index: 0,
+            last_turn_llm_output: None,
             subagents: HashMap::new(),
             subagent_stacks: HashMap::new(),
             subagent_stack: Vec::new(),
@@ -635,6 +767,8 @@ impl Session {
             pending_tool_hints: Vec::new(),
             llm_request_affinity: HashMap::new(),
             last_llm_owner: None,
+            last_activity: Instant::now(),
+            active_gateway_calls: 0,
             config,
         }
     }
@@ -647,7 +781,9 @@ impl Session {
     }
 
     fn is_empty(&self) -> bool {
-        self.agent_scope.is_none()
+        !self.session_started
+            && self.agent_scope.is_none()
+            && self.turn_scope.is_none()
             && self.subagents.is_empty()
             && self.subagent_stacks.is_empty()
             && self.subagent_stack.is_empty()
@@ -655,16 +791,39 @@ impl Session {
             && self.tools.is_empty()
     }
 
+    fn touch_activity(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    fn begin_gateway_call(&mut self) {
+        self.touch_activity();
+        self.active_gateway_calls += 1;
+    }
+
+    fn finish_gateway_call(&mut self) {
+        self.touch_activity();
+        self.active_gateway_calls = self.active_gateway_calls.saturating_sub(1);
+    }
+
+    fn is_idle_for(&self, now: Instant, timeout: Duration) -> bool {
+        self.turn_scope.is_some()
+            && self.active_gateway_calls == 0
+            && self.llms.is_empty()
+            && self.tools.is_empty()
+            && now.duration_since(self.last_activity) >= timeout
+    }
+
     // Runs one normalized hook event inside this session's scope stack. Dispatch stays synchronous
     // inside the scoped closure so lifecycle ordering from each hook request is preserved exactly.
     async fn apply(&mut self, event: NormalizedEvent) -> Result<(), CliError> {
+        self.touch_activity();
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack, async move {
                 match event {
                     NormalizedEvent::AgentStarted(event) => self.start_agent(event),
                     NormalizedEvent::AgentEnded(event) => self.end_agent(event).await,
-                    NormalizedEvent::TurnEnded(_) => Ok(()),
+                    NormalizedEvent::TurnEnded(event) => self.end_turn(event).await,
                     NormalizedEvent::SubagentStarted(event) => self.start_subagent(event).await,
                     NormalizedEvent::SubagentEnded(event) => self.end_subagent(event).await,
                     NormalizedEvent::LlmHint(event) => self.add_llm_hint(event),
@@ -672,7 +831,7 @@ impl Session {
                     NormalizedEvent::LlmEnded(event) => self.end_hook_llm(event),
                     NormalizedEvent::ToolStarted(event) => self.start_tool(event),
                     NormalizedEvent::ToolEnded(event) => self.end_tool(event).await,
-                    NormalizedEvent::PromptSubmitted(event) => self.mark("prompt_submitted", event),
+                    NormalizedEvent::PromptSubmitted(event) => self.start_turn(event).await,
                     NormalizedEvent::Compaction(event) => self.mark("compaction", event),
                     NormalizedEvent::Notification(event) => self.mark("notification", event),
                     NormalizedEvent::HookMark(event) => self.mark("hook_mark", event),
@@ -685,10 +844,11 @@ impl Session {
     // `prepare_gateway_call` + managed execution.
     #[cfg(test)]
     async fn start_llm(&mut self, start: LlmGatewayStart) -> Result<ActiveLlm, CliError> {
+        self.touch_activity();
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
-                self.ensure_agent_started(Value::Null)?;
+                self.ensure_turn_started(Value::Null)?;
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
@@ -740,10 +900,11 @@ impl Session {
         &mut self,
         start: LlmGatewayStart,
     ) -> Result<GatewayCallPrep, CliError> {
+        self.begin_gateway_call();
         let stack = self.scope_stack.clone();
-        TASK_SCOPE_STACK
-            .scope(stack.clone(), async move {
-                self.ensure_agent_started(Value::Null)?;
+        let result = TASK_SCOPE_STACK
+            .scope(stack.clone(), async {
+                self.ensure_turn_started(Value::Null)?;
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
@@ -765,7 +926,7 @@ impl Session {
                     owner.metadata,
                 );
                 Ok(GatewayCallPrep {
-                    scope_stack: stack,
+                    scope_stack: stack.clone(),
                     session_id: self.session_id.clone(),
                     provider_name: start.provider,
                     request: start.request,
@@ -776,34 +937,37 @@ impl Session {
                     owner_subagent_id: owner.subagent_id,
                 })
             })
-            .await
+            .await;
+        if result.is_err() {
+            self.finish_gateway_call();
+        }
+        result
     }
 
-    // Records an explicit top-level agent start. Repeated start hooks are idempotent because
-    // `ensure_agent_started` leaves an existing agent scope open and only updates agent kind first.
+    // Records a harness session start without assuming that every harness exposes a reliable
+    // session-length span. Some session ids can outlive user-visible work, so those harnesses store
+    // metadata here and wait for a bounded turn scope before emitting trace structure.
     fn start_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
         self.agent_kind = event.agent_kind;
+        self.session_started = true;
+        self.session_metadata =
+            merge_metadata(self.session_metadata.clone(), event.metadata.clone());
         self.ensure_agent_started(event.metadata)
     }
 
-    // Lazily opens the root agent scope and merges metadata from config, event payload, and
-    // gateway headers. Later calls are no-ops to keep duplicate hooks from nesting agent scopes.
+    // Lazily opens the root agent scope for harnesses that have a meaningful session boundary.
+    // Harnesses without a reliable session end deliberately skip this and use bounded turn agent
+    // scopes as the top-level observable unit.
     fn ensure_agent_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
-        if self.agent_scope.is_some() {
+        if self.agent_scope.is_some()
+            || !alignment::should_emit_session_agent_scope(self.agent_kind)
+        {
             return Ok(());
         }
         let _root = get_handle()?;
         let metadata = merge_metadata(
-            merge_metadata(
-                self.config.metadata.clone().unwrap_or(Value::Null),
-                event_metadata,
-            ),
-            json!({
-                "session_id": self.session_id,
-                "gateway_config_profile": self.config.profile,
-                "plugin_config": self.config.plugin_config,
-                "gateway_mode": self.config.gateway_mode,
-            }),
+            self.scope_metadata(event_metadata),
+            json!({ "nemo_flow_scope_role": "session" }),
         );
         let scope = push_scope(
             PushScopeParams::builder()
@@ -816,20 +980,121 @@ impl Session {
         Ok(())
     }
 
-    // Closes the session in a fail-safe order: active LLMs/tools first, nested subagents from the
-    // top down, correlation state, then the root agent scope.
-    async fn end_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
-        // Duplicate agent-end hooks (e.g., hermes-agent emitting `on_session_end` more than once
-        // per session) must not reopen the agent scope.
-        if self.agent_scope.is_none() {
+    // Opens a new turn agent scope for a user prompt. If the previous turn never received a
+    // terminal hook, close it first so each user input gets a bounded reviewable trace segment.
+    async fn start_turn(&mut self, event: SessionEvent) -> Result<(), CliError> {
+        if alignment::aliased_turn_subagent_id(&event).is_some() {
+            self.ensure_turn_started(event.metadata.clone())?;
+            return self.mark("prompt_submitted", event);
+        }
+        if self.turn_scope.is_some() {
+            self.close_turn_for_reason("superseded_by_next_turn")
+                .await?;
+        }
+        self.open_turn(event.metadata, event.payload, "user_prompt")
+    }
+
+    // Lazily creates an implicit turn when gateway/tool/LLM activity arrives before a prompt hook.
+    // This keeps direct gateway traffic and sparse hook streams bounded by the same lifecycle as
+    // prompt-driven turns.
+    fn ensure_turn_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
+        if self.turn_scope.is_some() {
             return Ok(());
         }
-        self.ensure_agent_started(event.metadata.clone())?;
-        self.close_active_llms_for_agent_end()?;
-        self.close_active_tools_for_agent_end()?;
-        self.close_active_subagents_for_agent_end().await?;
+        self.open_turn(event_metadata, Value::Null, "implicit")
+    }
+
+    fn open_turn(
+        &mut self,
+        event_metadata: Value,
+        input: Value,
+        turn_source: &str,
+    ) -> Result<(), CliError> {
+        self.ensure_agent_started(event_metadata.clone())?;
+        self.turn_index += 1;
+        let metadata = merge_metadata(
+            self.scope_metadata(event_metadata),
+            json!({
+                "nemo_flow_scope_role": "turn",
+                "turn_index": self.turn_index,
+                "turn_source": turn_source,
+            }),
+        );
+        let turn_name = self.turn_scope_name();
+        let scope = push_scope(
+            PushScopeParams::builder()
+                .name(turn_name.as_str())
+                .scope_type(ScopeType::Agent)
+                .parent_opt(self.agent_scope.as_ref())
+                .metadata(metadata)
+                .input(input)
+                .build(),
+        )?;
+        self.turn_scope = Some(scope);
+        self.last_turn_llm_output = None;
+        Ok(())
+    }
+
+    fn turn_scope_name(&self) -> String {
+        format!("{}-turn", self.agent_kind.as_str())
+    }
+
+    fn scope_metadata(&self, event_metadata: Value) -> Value {
+        merge_metadata(
+            merge_metadata(
+                merge_metadata(
+                    self.config.metadata.clone().unwrap_or(Value::Null),
+                    self.session_metadata.clone(),
+                ),
+                event_metadata,
+            ),
+            json!({
+                "session_id": self.session_id,
+                "agent_kind": self.agent_kind.as_str(),
+                "gateway_config_profile": self.config.profile,
+                "plugin_config": self.config.plugin_config,
+                "gateway_mode": self.config.gateway_mode,
+            }),
+        )
+    }
+
+    async fn end_turn(&mut self, event: SessionEvent) -> Result<(), CliError> {
+        if let Some(subagent_id) = alignment::aliased_turn_subagent_id(&event) {
+            self.close_subagent_scope(&subagent_id, event.payload)
+                .await?;
+            return Ok(());
+        }
+        self.close_turn(event.payload, "closed_by_turn_end").await?;
+        Ok(())
+    }
+
+    async fn close_turn_for_reason(&mut self, reason: &str) -> Result<Vec<String>, CliError> {
+        self.close_turn(json!({ "status": reason }), reason).await
+    }
+
+    async fn close_turn(&mut self, output: Value, reason: &str) -> Result<Vec<String>, CliError> {
+        if self.turn_scope.is_none() {
+            return Ok(Vec::new());
+        }
+        self.close_active_llms(reason)?;
+        self.close_active_tools(reason)?;
+        let closed_subagents = self.close_active_subagents(reason).await?;
+        let output = self.last_turn_llm_output.take().unwrap_or(output);
+        self.clear_correlation_state();
+        self.close_turn_scope(output)?;
+        Ok(closed_subagents)
+    }
+
+    // Closes the session in a fail-safe order: active turn first, then the root agent scope when
+    // the harness has one. Duplicate terminal hooks must not reopen scopes.
+    async fn end_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
+        if !self.session_started && self.agent_scope.is_none() && self.turn_scope.is_none() {
+            return Ok(());
+        }
+        self.close_turn_for_reason("closed_by_agent_end").await?;
         self.clear_correlation_state();
         self.close_agent_scope(event.payload)?;
+        self.session_started = false;
         Ok(())
     }
 
@@ -838,28 +1103,27 @@ impl Session {
         let payload = json!({ "status": reason });
         TASK_SCOPE_STACK
             .scope(stack, async move {
-                if self.agent_scope.is_none() {
+                if self.agent_scope.is_none() && self.turn_scope.is_none() {
                     return Ok(());
                 }
-                self.close_active_llms_for_agent_end()?;
-                self.close_active_tools_for_agent_end()?;
-                self.close_active_subagents_for_agent_end().await?;
+                self.close_turn_for_reason(reason).await?;
                 self.clear_correlation_state();
                 self.close_agent_scope(payload)?;
+                self.session_started = false;
                 Ok(())
             })
             .await
     }
 
     // Ends all active hook-observed LLM calls before closing their containing scopes.
-    fn close_active_llms_for_agent_end(&mut self) -> Result<(), CliError> {
+    fn close_active_llms(&mut self, reason: &str) -> Result<(), CliError> {
         let active_llms: Vec<_> = self.llms.drain().map(|(_, handle)| handle).collect();
         for handle in active_llms {
             llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
-                    .response(json!({ "status": "closed_by_agent_end" }))
-                    .metadata(json!({ "status": "closed_by_agent_end" }))
+                    .response(json!({ "status": reason }))
+                    .metadata(json!({ "status": reason }))
                     .build(),
             )?;
         }
@@ -868,14 +1132,14 @@ impl Session {
 
     // Ends all active tool calls with a synthetic close result before ending their containing scopes.
     // Draining first avoids holding mutable map state while the runtime emits lifecycle events.
-    fn close_active_tools_for_agent_end(&mut self) -> Result<(), CliError> {
+    fn close_active_tools(&mut self, reason: &str) -> Result<(), CliError> {
         let active_tools: Vec<_> = self.tools.drain().map(|(_, handle)| handle).collect();
         for handle in active_tools {
             tool_call_end(
                 ToolCallEndParams::builder()
                     .handle(&handle)
-                    .result(json!({ "status": "closed_by_agent_end" }))
-                    .metadata(json!({ "status": "closed_by_agent_end" }))
+                    .result(json!({ "status": reason }))
+                    .metadata(json!({ "status": reason }))
                     .build(),
             )?;
         }
@@ -885,17 +1149,19 @@ impl Session {
     // Pops active subagent scopes in reverse start order. Each subagent owns an independent runtime
     // stack so parallel harness workers can still close cleanly when their completion hooks arrive
     // out of order. Applies to Claude Code Agent workers and Codex child threads today.
-    async fn close_active_subagents_for_agent_end(&mut self) -> Result<(), CliError> {
+    async fn close_active_subagents(&mut self, reason: &str) -> Result<Vec<String>, CliError> {
+        let mut closed = Vec::new();
         while let Some(subagent_id) = self.subagent_stack.pop() {
-            self.close_subagent_scope(&subagent_id, json!({ "status": "closed_by_agent_end" }))
+            self.close_subagent_scope(&subagent_id, json!({ "status": reason }))
                 .await?;
+            closed.push(subagent_id);
         }
         self.subagents.clear();
         self.subagent_stacks.clear();
-        Ok(())
+        Ok(closed)
     }
 
-    // Clears sticky LLM/tool ownership hints that should not survive an agent root shutdown.
+    // Clears sticky LLM/tool ownership hints that should not survive a turn boundary.
     fn clear_correlation_state(&mut self) {
         self.pending_llm_hints.clear();
         self.pending_tool_hints.clear();
@@ -918,33 +1184,59 @@ impl Session {
         Ok(())
     }
 
-    // Starts a subagent scope under the root agent scope. Duplicate subagent starts are ignored so
+    fn close_turn_scope(&mut self, output: Value) -> Result<(), CliError> {
+        let Some(scope) = self.turn_scope.take() else {
+            return Ok(());
+        };
+        pop_scope(
+            PopScopeParams::builder()
+                .handle_uuid(&scope.uuid)
+                .output(output)
+                .build(),
+        )?;
+        Ok(())
+    }
+
+    fn root_work_scope(&self) -> Option<ScopeHandle> {
+        self.turn_scope.clone().or_else(|| self.agent_scope.clone())
+    }
+
+    // Starts a subagent agent scope under the active turn. Duplicate subagent starts are ignored so
     // integrations that retry or emit both "start" and "created" style hooks do not double-nest.
     //
-    // Subagents get their own runtime stack seeded with the root agent handle. That keeps Phoenix
-    // parentage sibling-shaped while still allowing parallel workers to end out of order.
+    // Subagents get their own runtime stack seeded with the turn parent. That keeps Phoenix
+    // parentage sibling-shaped within a turn while still allowing parallel workers to end out of
+    // order.
     async fn start_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
+        self.ensure_turn_started(event.metadata.clone())?;
         if self.subagents.contains_key(&event.subagent_id) {
             return Ok(());
         }
         let has_parallel_sibling = !self.subagents.is_empty();
-        let agent_scope = self
-            .agent_scope
+        let parent_scope = self
+            .turn_scope
             .clone()
-            .expect("ensure_agent_started should initialize the agent scope");
+            .expect("ensure_turn_started should initialize the turn scope");
+        let agent_scope = self.agent_scope.clone();
         let subagent_id = event.subagent_id;
         let subagent_name = format!("subagent:{subagent_id}");
+        let metadata = merge_metadata(
+            event.metadata,
+            json!({ "nemo_flow_scope_role": "subagent" }),
+        );
         let subagent_stack = create_scope_stack();
         let scope = TASK_SCOPE_STACK
             .scope(subagent_stack.clone(), async {
-                task_scope_push(agent_scope.clone());
+                if let Some(agent_scope) = agent_scope {
+                    task_scope_push(agent_scope);
+                }
+                task_scope_push(parent_scope.clone());
                 push_scope(
                     PushScopeParams::builder()
                         .name(subagent_name.as_str())
                         .scope_type(ScopeType::Agent)
-                        .parent(&agent_scope)
-                        .metadata(event.metadata)
+                        .parent(&parent_scope)
+                        .metadata(metadata)
                         .input(event.payload)
                         .build(),
                 )
@@ -966,10 +1258,10 @@ impl Session {
     // subagent already closed by another provider-specific completion signal are ignored. Applies
     // to Claude Code Agent-tool completion today.
     async fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
         if self.completed_subagents.contains(&event.subagent_id) {
             return Ok(());
         }
+        self.ensure_turn_started(event.metadata.clone())?;
         if !self.subagents.contains_key(&event.subagent_id) {
             eprintln!(
                 "nemo-flow CLI gateway: received {} for subagent {} without a matching start",
@@ -1036,7 +1328,7 @@ impl Session {
     // Stores an LLM correlation hint from hook activity after pruning expired hints. Hints do not
     // emit runtime events themselves; they are consumed by the next matching gateway LLM call.
     fn add_llm_hint(&mut self, event: LlmHintEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
+        self.ensure_turn_started(event.metadata.clone())?;
         self.cleanup_correlation_state();
         let owner_subagent_id = event.subagent_id.clone().or_else(|| event.agent_id.clone());
         self.add_tool_hints_from_llm_response(event.payload.clone(), owner_subagent_id);
@@ -1052,7 +1344,7 @@ impl Session {
     // child-session LLMs carry their subagent owner in metadata and are resolved by
     // `hook_llm_owner`.
     fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
+        self.ensure_turn_started(event.metadata.clone())?;
         if self.llms.contains_key(&event.api_call_id) {
             return Ok(());
         }
@@ -1078,7 +1370,7 @@ impl Session {
     // alias metadata recovery used by `start_hook_llm` keeps post-only aliased child LLMs under the
     // subagent instead of falling back to the root agent.
     fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
+        self.ensure_turn_started(event.metadata.clone())?;
         let (parent, metadata) = self.hook_llm_owner(event.metadata);
         let handle = match self.llms.remove(&event.api_call_id) {
             Some(handle) => handle,
@@ -1096,10 +1388,16 @@ impl Session {
                     .build(),
             )?,
         };
+        let output = event.response;
+        let root_owned =
+            json_string_at(&metadata, &[&["llm_correlation_subagent_id"][..]]).is_none();
+        if root_owned {
+            self.record_turn_llm_output(output.clone());
+        }
         llm_call_end(
             LlmCallEndParams::builder()
                 .handle(&handle)
-                .response(event.response)
+                .response(output)
                 .metadata(metadata)
                 .build(),
         )?;
@@ -1113,10 +1411,10 @@ impl Session {
     fn hook_llm_owner(&mut self, metadata: Value) -> (Option<ScopeHandle>, Value) {
         let Some(subagent_id) = json_string_at(&metadata, &[&["llm_correlation_subagent_id"][..]])
         else {
-            return (self.agent_scope.clone(), metadata);
+            return (self.root_work_scope(), metadata);
         };
         let Some(scope) = self.subagents.get(&subagent_id).cloned() else {
-            return (self.agent_scope.clone(), metadata);
+            return (self.root_work_scope(), metadata);
         };
         self.set_last_llm_owner(Some(subagent_id.clone()));
         (
@@ -1125,11 +1423,11 @@ impl Session {
         )
     }
 
-    // Starts a tool call under an explicit subagent when available, otherwise under the agent
+    // Starts a tool call under an explicit subagent when available, otherwise under the turn
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
     fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
+        self.ensure_turn_started(event.metadata.clone())?;
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
         }
@@ -1167,7 +1465,7 @@ impl Session {
     // Ends a tool call, synthesizing a start if no matching handle exists. This keeps post-only
     // hooks observable and preserves the final result/status instead of dropping orphaned endings.
     async fn end_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event.metadata.clone())?;
+        self.ensure_turn_started(event.metadata.clone())?;
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
         let explicit_subagent_id = event
             .subagent_id
@@ -1223,10 +1521,10 @@ impl Session {
         Ok(())
     }
 
-    // Emits a mark event after ensuring the agent scope exists. Generic and unknown hooks use this
+    // Emits a mark event after ensuring the turn scope exists. Generic and unknown hooks use this
     // path so unsupported agent events remain visible without changing scope structure.
     fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
-        self.ensure_agent_started(event_payload.metadata.clone())?;
+        self.ensure_turn_started(event_payload.metadata.clone())?;
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)
@@ -1366,7 +1664,7 @@ impl Session {
     }
 
     // Assigns an unhinted gateway call to the only active subagent. Multiple active subagents are
-    // deliberately not guessed here; those cases fall back to the agent scope with ambiguity
+    // deliberately not guessed here; those cases fall back to the turn scope with ambiguity
     // metadata.
     fn sole_subagent_owner(&mut self) -> Option<LlmOwnerResolution> {
         if self.subagents.len() == 1
@@ -1392,7 +1690,7 @@ impl Session {
     // left intact in ambiguous cases so later calls with stronger identifiers can still match them.
     fn fallback_llm_owner(&self) -> LlmOwnerResolution {
         LlmOwnerResolution {
-            parent: self.agent_scope.clone(),
+            parent: self.root_work_scope(),
             subagent_id: None,
             status: if self.pending_llm_hints.is_empty() {
                 "agent_fallback"
@@ -1405,9 +1703,9 @@ impl Session {
         }
     }
 
-    // Converts a consumed hint into an ownership resolution. If the hinted subagent is not currently
-    // active, the LLM is attached to the agent scope but the hint metadata is still preserved for
-    // correlation diagnostics.
+    // Converts a consumed hint into an ownership resolution. If the hinted subagent is not
+    // currently active, the LLM is attached to the turn scope but the hint metadata is still
+    // preserved for correlation diagnostics.
     fn resolution_from_hint(
         &mut self,
         hint: LlmHintEvent,
@@ -1421,9 +1719,9 @@ impl Session {
                     Some(id.to_string()),
                     self.subagent_llm_metadata(id),
                 ),
-                None => (self.agent_scope.clone(), None, Value::Null),
+                None => (self.root_work_scope(), None, Value::Null),
             },
-            None => (self.agent_scope.clone(), None, Value::Null),
+            None => (self.root_work_scope(), None, Value::Null),
         };
         if parent.is_some() {
             self.set_last_llm_owner(subagent_id.clone());
@@ -1548,8 +1846,29 @@ impl Session {
             }));
     }
 
+    // Remembers the latest completed LLM response owned by the turn/root agent so the enclosing
+    // turn agent scope can export the final assistant output. Subagent-owned responses are
+    // deliberately excluded; otherwise a worker's last local answer can overwrite the parent
+    // agent's final synthesis.
+    fn record_completed_llm_response(
+        &mut self,
+        response: Value,
+        owner_subagent_id: Option<String>,
+    ) {
+        if owner_subagent_id.is_none() {
+            self.record_turn_llm_output(response.clone());
+        }
+        self.add_tool_hints_from_llm_response(response, owner_subagent_id);
+    }
+
+    fn record_turn_llm_output(&mut self, response: Value) {
+        if self.turn_scope.is_some() {
+            self.last_turn_llm_output = Some(response);
+        }
+    }
+
     // Resolves tool hook ownership from explicit subagent data first, then private tool hints
-    // extracted from LLM responses, and finally the agent scope.
+    // extracted from LLM responses, and finally the turn scope.
     fn resolve_tool_owner(&mut self, event: &ToolEvent) -> ToolOwnerResolution {
         self.cleanup_correlation_state();
 
@@ -1566,18 +1885,18 @@ impl Session {
             };
         }
 
-        if self.pending_tool_hints.len() == 1 {
-            let hint = self.pending_tool_hints.remove(0).hint;
-            return self.tool_resolution_from_hint(hint, "single_hint");
-        }
-
         if let Some(index) = self.matching_tool_hint_index(event) {
+            let status = if self.pending_tool_hints.len() == 1 {
+                "single_hint"
+            } else {
+                "matched_hint"
+            };
             let hint = self.pending_tool_hints.remove(index).hint;
-            return self.tool_resolution_from_hint(hint, "matched_hint");
+            return self.tool_resolution_from_hint(hint, status);
         }
 
         ToolOwnerResolution {
-            parent: self.agent_scope.clone(),
+            parent: self.root_work_scope(),
             subagent_id: None,
             status: if self.pending_tool_hints.is_empty() {
                 "agent_fallback"
@@ -1589,7 +1908,7 @@ impl Session {
         }
     }
 
-    // Converts a consumed tool hint into a live parent scope, falling back to the root agent if the
+    // Converts a consumed tool hint into a live parent scope, falling back to the turn scope if the
     // hinted subagent has already ended or never existed.
     fn tool_resolution_from_hint(
         &mut self,
@@ -1599,9 +1918,9 @@ impl Session {
         let (parent, subagent_id) = match hint.subagent_id.as_deref() {
             Some(id) => match self.subagents.get(id).cloned() {
                 Some(scope) => (Some(scope), Some(id.to_string())),
-                None => (self.agent_scope.clone(), None),
+                None => (self.root_work_scope(), None),
             },
-            None => (self.agent_scope.clone(), None),
+            None => (self.root_work_scope(), None),
         };
         ToolOwnerResolution {
             parent,
@@ -1619,8 +1938,9 @@ impl Session {
         }
     }
 
-    // Finds a unique best-scoring tool hint by call id, name, and argument equality. Ties remain
-    // ambiguous and are not consumed.
+    // Finds a unique best-scoring tool hint by call id or name-plus-argument equality. Ties remain
+    // ambiguous and are not consumed. Name-only matches are ignored because high-frequency
+    // coding-agent tools repeat across parallel workers and are too weak to prove ownership.
     fn matching_tool_hint_index(&self, event: &ToolEvent) -> Option<usize> {
         let matches: Vec<_> = self
             .pending_tool_hints
@@ -1775,8 +2095,9 @@ fn collect_anthropic_tool_hints(
     }
 }
 
-// Appends one provider tool hint when an object carries at least a tool-call id or tool name.
-// Argument-only hints are intentionally skipped because they over-match across unrelated tools.
+// Appends one provider tool hint when an object carries either a tool-call id or enough
+// name-plus-argument data to disambiguate common tool names. Name-only and argument-only hints are
+// skipped because they over-match across unrelated tools in parallel coding-agent sessions.
 fn push_tool_hint(
     hints: &mut Vec<ToolHint>,
     object: &Value,
@@ -1788,36 +2109,45 @@ fn push_tool_hint(
 ) {
     let tool_call_id = json_string_at(object, id_paths);
     let tool_name = json_string_at(object, name_paths);
-    if tool_call_id.is_none() && tool_name.is_none() {
+    let arguments = json_value_at(object, argument_paths)
+        .map(normalize_tool_arguments)
+        .unwrap_or(Value::Null);
+    if tool_call_id.is_none() && (tool_name.is_none() || arguments.is_null()) {
         return;
     }
     hints.push(ToolHint {
         tool_call_id,
         tool_name,
         subagent_id: owner_subagent_id.map(ToOwned::to_owned),
-        arguments: json_value_at(object, argument_paths)
-            .map(normalize_tool_arguments)
-            .unwrap_or(Value::Null),
+        arguments,
         source: source.to_string(),
     });
 }
 
-// Scores how strongly a pending provider tool hint matches an observed hook event. Tool-call id is
-// strongest, tool name is secondary, and exact argument equality is only a tie breaker.
+// Scores how strongly a pending provider tool hint matches an observed hook event. A shared
+// provider call id is strongest. Without an id match, require both tool name and exact arguments so
+// repeated coding-agent tool names cannot claim unrelated hooks.
 fn tool_hint_match_score(hint: &ToolHint, event: &ToolEvent) -> u8 {
     let mut score = 0;
-    if same_optional(
+    let id_matches = same_optional(
         hint.tool_call_id.as_deref(),
         Some(event.tool_call_id.as_str()),
-    ) {
+    );
+    let name_matches = same_optional(hint.tool_name.as_deref(), Some(event.tool_name.as_str()));
+    let arguments_match = !hint.arguments.is_null()
+        && !event.arguments.is_null()
+        && hint.arguments == event.arguments;
+    if id_matches {
         score += 12;
     }
-    if same_optional(hint.tool_name.as_deref(), Some(event.tool_name.as_str())) {
+    if id_matches && name_matches {
         score += 4;
     }
-    if !hint.arguments.is_null() && !event.arguments.is_null() && hint.arguments == event.arguments
-    {
+    if id_matches && arguments_match {
         score += 1;
+    }
+    if !id_matches && name_matches && arguments_match {
+        score += 5;
     }
     score
 }

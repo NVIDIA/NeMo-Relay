@@ -52,13 +52,60 @@ fn completed_subagent_from_agent_tool_accepts_known_result_keys() {
         ("subagentId", "subagent-id"),
         ("subagent_id", "subagent-id-snake"),
     ] {
-        let event = tool_event(AgentKind::ClaudeCode, "Agent", json!({ key: expected }));
+        let event = tool_event(
+            AgentKind::ClaudeCode,
+            "Agent",
+            json!({ key: expected, "status": "completed" }),
+        );
         assert_eq!(
             completed_subagent_from_agent_tool(&event).as_deref(),
             Some(expected),
             "key {key} should close the matching subagent"
         );
     }
+}
+
+#[test]
+fn completed_subagent_from_agent_tool_rejects_async_launch_results() {
+    for status in ["async_launched", "started", "running", "in-progress"] {
+        let event = tool_event(
+            AgentKind::ClaudeCode,
+            "Agent",
+            json!({
+                "agentId": "worker",
+                "status": status
+            }),
+        );
+        assert_eq!(
+            completed_subagent_from_agent_tool(&event),
+            None,
+            "status {status} is not a terminal worker result"
+        );
+    }
+}
+
+#[test]
+fn completed_subagent_from_agent_tool_requires_terminal_result_evidence() {
+    assert_eq!(
+        completed_subagent_from_agent_tool(&tool_event(
+            AgentKind::ClaudeCode,
+            "Agent",
+            json!({ "agentId": "worker" }),
+        )),
+        None
+    );
+    assert_eq!(
+        completed_subagent_from_agent_tool(&tool_event(
+            AgentKind::ClaudeCode,
+            "Agent",
+            json!({
+                "agentId": "worker",
+                "totalDurationMs": 123
+            }),
+        ))
+        .as_deref(),
+        Some("worker")
+    );
 }
 
 #[test]

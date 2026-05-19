@@ -380,8 +380,17 @@ fn classify(
     headers: &HeaderMap,
     rules: &ClassificationRules<'_>,
 ) -> Vec<NormalizedEvent> {
-    let primary = classify_primary(payload, headers, rules);
     let normalized = normalize_name(&event_name(payload));
+    if matches!(
+        normalized.as_str(),
+        "beforesubmitprompt" | "promptsubmitted" | "userpromptsubmit"
+    ) {
+        return vec![
+            NormalizedEvent::PromptSubmitted(common_session_event(payload, headers, rules.kind)),
+            NormalizedEvent::LlmHint(common_llm_hint_event(payload, headers, rules.kind)),
+        ];
+    }
+    let primary = classify_primary(payload, headers, rules);
     if normalized == "stop" && !primary.is_terminal() {
         return vec![
             primary,
@@ -439,9 +448,6 @@ fn classify_primary(
         NormalizedEvent::ToolEnded(common_tool_event(payload, headers, rules.kind))
     } else {
         match normalized.as_str() {
-            "beforesubmitprompt" | "promptsubmitted" | "userpromptsubmit" => {
-                NormalizedEvent::LlmHint(common_llm_hint_event(payload, headers, rules.kind))
-            }
             "afteragentresponse" | "agentresponse" | "assistantresponse" | "afteragentthought"
             | "prellmcall" | "postllmcall" | "stop" => {
                 NormalizedEvent::LlmHint(common_llm_hint_event(payload, headers, rules.kind))
