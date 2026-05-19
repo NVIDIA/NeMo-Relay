@@ -184,7 +184,7 @@ fn agent_kind_inference_covers_known_provider_names() {
 }
 
 #[test]
-fn llm_request_affinity_key_uses_stable_user_task_text() {
+fn request_affinity_key_reads_messages_content_blocks() {
     let request = LlmRequest {
         headers: Map::new(),
         content: json!({
@@ -201,19 +201,72 @@ fn llm_request_affinity_key_uses_stable_user_task_text() {
     };
 
     assert_eq!(
-        llm_request_affinity_key(&request).as_deref(),
+        request_affinity_key(&request).as_deref(),
         Some("Analyze the python binding with detail.")
     );
 }
 
 #[test]
-fn llm_request_affinity_key_ignores_count_token_style_payloads() {
+fn request_affinity_key_reads_chat_completion_string_messages() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                { "role": "system", "content": "You are a coding agent." },
+                { "role": "user", "content": "Review the Rust CLI gateway alignment code." }
+            ]
+        }),
+    };
+
+    assert_eq!(
+        request_affinity_key(&request).as_deref(),
+        Some("Review the Rust CLI gateway alignment code.")
+    );
+}
+
+#[test]
+fn request_affinity_key_reads_responses_input_items_and_prompt() {
+    let responses_request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Analyze the Node binding architecture."
+                        }
+                    ]
+                }
+            ]
+        }),
+    };
+    let prompt_request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "prompt": "Summarize the Go binding architecture."
+        }),
+    };
+
+    assert_eq!(
+        request_affinity_key(&responses_request).as_deref(),
+        Some("Analyze the Node binding architecture.")
+    );
+    assert_eq!(
+        request_affinity_key(&prompt_request).as_deref(),
+        Some("Summarize the Go binding architecture.")
+    );
+}
+
+#[test]
+fn request_affinity_key_ignores_count_token_style_payloads() {
     let request = LlmRequest {
         headers: Map::new(),
         content: json!("// source text without a chat user task"),
     };
 
-    assert_eq!(llm_request_affinity_key(&request), None);
+    assert_eq!(request_affinity_key(&request), None);
 }
 
 #[test]

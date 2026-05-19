@@ -2269,16 +2269,22 @@ async fn explicit_subagent_tool_owner_claims_next_unhinted_llm() {
 }
 
 #[tokio::test]
-async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
+async fn request_affinity_pairs_parallel_subagents_across_provider_formats() {
     let manager = SessionManager::new(session_test_config());
     manager
         .apply_events(
             &HeaderMap::new(),
             vec![
-                NormalizedEvent::AgentStarted(session_event("parallel-affinity", "SessionStart")),
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "parallel-affinity".into(),
+                    agent_kind: AgentKind::Codex,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
                 NormalizedEvent::SubagentStarted(SubagentEvent {
                     session_id: "parallel-affinity".into(),
-                    agent_kind: AgentKind::ClaudeCode,
+                    agent_kind: AgentKind::Codex,
                     event_name: "SubagentStart".into(),
                     subagent_id: "python-worker".into(),
                     payload: json!({}),
@@ -2286,7 +2292,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
                 }),
                 NormalizedEvent::SubagentStarted(SubagentEvent {
                     session_id: "parallel-affinity".into(),
-                    agent_kind: AgentKind::ClaudeCode,
+                    agent_kind: AgentKind::Codex,
                     event_name: "SubagentStart".into(),
                     subagent_id: "go-worker".into(),
                     payload: json!({}),
@@ -2302,7 +2308,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
             &HeaderMap::new(),
             LlmGatewayStart {
                 subagent_id: Some("python-worker".into()),
-                ..llm_start_with_user_task(
+                ..llm_start_with_responses_task(
                     "parallel-affinity",
                     "Very thorough analysis of the python/nemo_flow package.",
                 )
@@ -2320,7 +2326,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
             &HeaderMap::new(),
             LlmGatewayStart {
                 subagent_id: Some("go-worker".into()),
-                ..llm_start_with_user_task(
+                ..llm_start_with_messages_task(
                     "parallel-affinity",
                     "Very thorough analysis of the go/nemo_flow binding.",
                 )
@@ -2339,7 +2345,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
             vec![
                 NormalizedEvent::ToolStarted(ToolEvent {
                     session_id: "parallel-affinity".into(),
-                    agent_kind: AgentKind::ClaudeCode,
+                    agent_kind: AgentKind::Codex,
                     event_name: "PreToolUse".into(),
                     tool_call_id: "go-tool".into(),
                     tool_name: "Read".into(),
@@ -2352,7 +2358,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
                 }),
                 NormalizedEvent::ToolEnded(ToolEvent {
                     session_id: "parallel-affinity".into(),
-                    agent_kind: AgentKind::ClaudeCode,
+                    agent_kind: AgentKind::Codex,
                     event_name: "PostToolUse".into(),
                     tool_call_id: "go-tool".into(),
                     tool_name: "Read".into(),
@@ -2381,7 +2387,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
     let python_later = manager
         .start_llm(
             &HeaderMap::new(),
-            llm_start_with_user_task(
+            llm_start_with_chat_completion_task(
                 "parallel-affinity",
                 "Very thorough analysis of the python/nemo_flow package.",
             ),
@@ -2396,7 +2402,7 @@ async fn request_affinity_overrides_stale_tool_owner_for_parallel_subagents() {
     );
     assert_eq!(
         python_later.handle.metadata.as_ref().unwrap()["llm_correlation_source"],
-        json!("llm_request")
+        json!("request_payload")
     );
 }
 
@@ -3172,35 +3178,92 @@ fn llm_start() -> LlmGatewayStart {
     }
 }
 
-fn llm_start_with_user_task(session_id: &str, task: &str) -> LlmGatewayStart {
+fn llm_start_with_messages_task(session_id: &str, task: &str) -> LlmGatewayStart {
+    llm_start_with_content(
+        session_id,
+        "anthropic.messages",
+        "claude-test",
+        json!({
+            "model": "claude-test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "<system-reminder>\nToday is 2026-05-19.\n</system-reminder>"
+                        },
+                        {
+                            "type": "text",
+                            "text": task
+                        }
+                    ]
+                }
+            ]
+        }),
+    )
+}
+
+fn llm_start_with_responses_task(session_id: &str, task: &str) -> LlmGatewayStart {
+    llm_start_with_content(
+        session_id,
+        "openai.responses",
+        "gpt-test",
+        json!({
+            "model": "gpt-test",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": task
+                        }
+                    ]
+                }
+            ]
+        }),
+    )
+}
+
+fn llm_start_with_chat_completion_task(session_id: &str, task: &str) -> LlmGatewayStart {
+    llm_start_with_content(
+        session_id,
+        "openai.chat_completions",
+        "gpt-test",
+        json!({
+            "model": "gpt-test",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a coding agent."
+                },
+                {
+                    "role": "user",
+                    "content": task
+                }
+            ]
+        }),
+    )
+}
+
+fn llm_start_with_content(
+    session_id: &str,
+    provider: &str,
+    model_name: &str,
+    content: Value,
+) -> LlmGatewayStart {
     LlmGatewayStart {
         session_id: Some(session_id.into()),
-        provider: "anthropic.messages".into(),
-        model_name: Some("claude-test".into()),
+        provider: provider.into(),
+        model_name: Some(model_name.into()),
         subagent_id: None,
         conversation_id: None,
         generation_id: None,
         request_id: None,
         request: LlmRequest {
             headers: Map::new(),
-            content: json!({
-                "model": "claude-test",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "<system-reminder>\nToday is 2026-05-19.\n</system-reminder>"
-                            },
-                            {
-                                "type": "text",
-                                "text": task
-                            }
-                        ]
-                    }
-                ]
-            }),
+            content,
         },
         streaming: false,
         metadata: json!({}),

@@ -343,13 +343,13 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
     codex::llm_owner_metadata(scope_metadata)
 }
 
-// Builds a stable request affinity key from the user task text carried in common chat payloads.
-// Claude Code subagent calls repeat the original worker prompt on later model requests, which is a
-// stronger signal than the last tool owner when several subagents run in parallel. The extractor is
-// intentionally conservative: raw count-token/file payloads and system-reminder-only messages do
-// not produce keys, so they continue through the normal hint/sticky/fallback resolution path.
-pub(crate) fn llm_request_affinity_key(request: &LlmRequest) -> Option<String> {
-    let task_text = first_user_task_text(&request.content)?;
+// Builds a provider-neutral affinity key from the user task text inside common LLM request
+// formats. Coding agents often replay the same task prompt on later provider calls without a
+// worker id; this key lets session correlation pair those calls with the subagent that first owned
+// the task. The extractor understands Anthropic Messages, OpenAI Chat Completions, and OpenAI
+// Responses shapes, and deliberately ignores raw count-token/file payloads.
+pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
+    let task_text = request_user_task_text(&request.content)?;
     let normalized = normalize_affinity_text(task_text);
     (normalized.len() >= 24).then(|| truncate_affinity_text(&normalized, 512))
 }
@@ -490,12 +490,13 @@ fn route_tool_event(event: &mut ToolEvent, alias: &SessionAlias, metadata: Value
     event.metadata = merge_metadata(event.metadata.clone(), metadata);
 }
 
-fn first_user_task_text(payload: &Value) -> Option<&str> {
+fn request_user_task_text(payload: &Value) -> Option<&str> {
     payload
         .get("messages")
         .and_then(Value::as_array)
         .and_then(|messages| messages.iter().find_map(user_message_task_text))
-        .or_else(|| openai_responses_input_task_text(payload.get("input")?))
+        .or_else(|| responses_input_task_text(payload.get("input")?))
+        .or_else(|| prompt_task_text(payload.get("prompt")?))
 }
 
 fn user_message_task_text(message: &Value) -> Option<&str> {
@@ -505,12 +506,16 @@ fn user_message_task_text(message: &Value) -> Option<&str> {
     content_task_text(message.get("content")?)
 }
 
-fn openai_responses_input_task_text(input: &Value) -> Option<&str> {
+fn responses_input_task_text(input: &Value) -> Option<&str> {
     match input {
         Value::String(text) => Some(text.as_str()).filter(|text| is_affinity_candidate(text)),
         Value::Array(items) => items.iter().find_map(user_message_task_text),
         _ => None,
     }
+}
+
+fn prompt_task_text(prompt: &Value) -> Option<&str> {
+    prompt.as_str().filter(|text| is_affinity_candidate(text))
 }
 
 fn content_task_text(content: &Value) -> Option<&str> {

@@ -109,8 +109,8 @@ struct Session {
     pending_llm_hints: Vec<PendingLlmHint>,
     pending_tool_hints: Vec<PendingToolHint>,
     // Maps stable user-task text from confidently owned LLM requests to the subagent that owns
-    // that conversation. This gives parallel Claude Code workers a stronger fallback than a single
-    // global "last tool owner" when their Anthropic requests lack subagent headers.
+    // that conversation. This gives parallel coding-agent workers a stronger provider-format
+    // neutral fallback than a single global "last tool owner" when requests lack subagent headers.
     llm_request_affinity: HashMap<String, Option<String>>,
     last_llm_owner: Option<LastLlmOwner>,
     config: SessionConfig,
@@ -1323,11 +1323,11 @@ impl Session {
     }
 
     // Reuses a learned request affinity before falling back to the session-global sticky owner.
-    // This addresses Claude Code's parallel subagents: their provider requests often repeat the
-    // original worker prompt but omit an explicit worker id, so task-text affinity is safer than
-    // whichever subagent happened to emit the last tool hook.
+    // The key is derived from provider request payloads, not a harness-specific field, so it can
+    // pair unhinted Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses calls with
+    // the subagent that first owned the same coding task.
     fn request_affinity_owner(&mut self, start: &LlmGatewayStart) -> Option<LlmOwnerResolution> {
-        let key = alignment::llm_request_affinity_key(&start.request)?;
+        let key = alignment::request_affinity_key(&start.request)?;
         let subagent_id = self.llm_request_affinity.get(&key).cloned().flatten()?;
         let parent = match self.subagents.get(&subagent_id).cloned() {
             Some(parent) => parent,
@@ -1341,7 +1341,7 @@ impl Session {
             parent: Some(parent),
             subagent_id: Some(subagent_id.clone()),
             status: "request_affinity",
-            source: Some("llm_request".to_string()),
+            source: Some("request_payload".to_string()),
             hint: None,
             metadata: self.subagent_llm_metadata(&subagent_id),
         })
@@ -1503,20 +1503,20 @@ impl Session {
 
     // Learns a subagent owner from high-confidence LLM resolutions only. Tool-owned and sticky
     // resolutions are intentionally excluded because they are the ambiguous path this affinity map
-    // is meant to correct in parallel Claude Code traces.
+    // is meant to correct when multiple coding-agent workers share a root session.
     fn record_llm_request_affinity(
         &mut self,
         request: &LlmRequest,
         subagent_id: Option<&str>,
         status: &str,
     ) {
-        if !llm_status_teaches_request_affinity(status) {
+        if !owner_status_teaches_request_affinity(status) {
             return;
         }
         let Some(subagent_id) = subagent_id else {
             return;
         };
-        let Some(key) = alignment::llm_request_affinity_key(request) else {
+        let Some(key) = alignment::request_affinity_key(request) else {
             return;
         };
         match self.llm_request_affinity.get_mut(&key) {
@@ -1826,7 +1826,7 @@ fn same_optional(left: Option<&str>, right: Option<&str>) -> bool {
     matches!((left, right), (Some(left), Some(right)) if left == right)
 }
 
-fn llm_status_teaches_request_affinity(status: &str) -> bool {
+fn owner_status_teaches_request_affinity(status: &str) -> bool {
     matches!(
         status,
         "explicit"
