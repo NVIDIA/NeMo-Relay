@@ -13,23 +13,30 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use futures::StreamExt;
 use nemo_flow::api::event::{Event, ScopeCategory};
 use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::{LlmCallExecuteParams, llm_call_execute, llm_request_intercepts};
+use nemo_flow::api::llm::{
+    LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
+    llm_stream_call_execute,
+};
 use nemo_flow::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_tool_conditional_execution_guardrail,
+    deregister_llm_request_intercept, deregister_llm_stream_execution_intercept,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     scope_register_tool_execution_intercept, scope_register_tool_sanitize_request_guardrail,
 };
 use nemo_flow::api::runtime::NemoFlowContextState;
 use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, ToolExecutionNextFn};
+use nemo_flow::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_flow::api::scope::{ScopeHandle, ScopeType};
 use nemo_flow::api::scope::{pop_scope, push_scope};
@@ -1858,6 +1865,227 @@ async fn test_llm_execution_intercept_chain() {
 
     // Cleanup
     deregister_llm_execution_intercept("llm_exec_1").unwrap();
+}
+
+/// LLM start is emitted after request intercepts and before execution intercepts,
+/// even when an execution intercept replaces the callback.
+#[tokio::test]
+async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "llm_short_circuit_start_observer",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    register_llm_request_intercept(
+        "llm_short_circuit_request",
+        1,
+        false,
+        Box::new(|_name, mut req, annotated| {
+            req.content
+                .as_object_mut()
+                .unwrap()
+                .insert("phase".into(), json!("request"));
+            Ok((req, annotated))
+        }),
+    )
+    .unwrap();
+
+    let events_for_intercept = events.clone();
+    register_llm_execution_intercept(
+        "llm_short_circuit_exec",
+        1,
+        Arc::new(move |_name, mut req, _next| {
+            let events = events_for_intercept.clone();
+            Box::pin(async move {
+                req.content
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("phase".into(), json!("execution"));
+                let start_emitted = {
+                    let captured = events.lock().unwrap();
+                    captured
+                        .iter()
+                        .any(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::Start))
+                };
+                assert!(
+                    start_emitted,
+                    "LLM start should be emitted before execution intercepts run"
+                );
+                Ok(json!({"response": "short-circuited"}))
+            })
+        }),
+    )
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let oc = original_called.clone();
+    let func: LlmExecutionNextFn = Arc::new(move |_req| {
+        oc.store(true, Ordering::SeqCst);
+        Box::pin(async move { Ok(json!({"response": "original"})) })
+    });
+
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"prompt": "hello"}),
+    };
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("llm")
+            .request(request)
+            .func(func)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result["response"], "short-circuited");
+    assert!(
+        !original_called.load(Ordering::SeqCst),
+        "Original callable should not be invoked"
+    );
+
+    let captured = events.lock().unwrap();
+    let llm_events = captured
+        .iter()
+        .filter(|e| e.scope_type() == Some(ScopeType::Llm))
+        .collect::<Vec<_>>();
+    assert_eq!(llm_events.len(), 2);
+    assert_eq!(llm_events[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(
+        llm_events[0].input().unwrap()["content"]["phase"],
+        json!("request")
+    );
+    assert_eq!(llm_events[1].scope_category(), Some(ScopeCategory::End));
+    drop(captured);
+
+    deregister_llm_execution_intercept("llm_short_circuit_exec").unwrap();
+    deregister_llm_request_intercept("llm_short_circuit_request").unwrap();
+    deregister_subscriber("llm_short_circuit_start_observer").unwrap();
+}
+
+/// Streaming LLM start follows the same pre-execution ordering as non-streaming
+/// calls when a stream execution intercept replaces the callback.
+#[tokio::test]
+async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "llm_stream_short_circuit_start_observer",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    register_llm_request_intercept(
+        "llm_stream_short_circuit_request",
+        1,
+        false,
+        Box::new(|_name, mut req, annotated| {
+            req.content
+                .as_object_mut()
+                .unwrap()
+                .insert("phase".into(), json!("request"));
+            Ok((req, annotated))
+        }),
+    )
+    .unwrap();
+
+    let events_for_intercept = events.clone();
+    register_llm_stream_execution_intercept(
+        "llm_stream_short_circuit_exec",
+        1,
+        Arc::new(move |_name, mut req, _next| {
+            let events = events_for_intercept.clone();
+            Box::pin(async move {
+                req.content
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("phase".into(), json!("execution"));
+                let start_emitted = {
+                    let captured = events.lock().unwrap();
+                    captured
+                        .iter()
+                        .any(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::Start))
+                };
+                assert!(
+                    start_emitted,
+                    "LLM stream start should be emitted before execution intercepts run"
+                );
+                let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "short-circuited"}))]);
+                Ok(Box::pin(stream) as LlmJsonStream)
+            })
+        }),
+    )
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let oc = original_called.clone();
+    let func: LlmStreamExecutionNextFn = Arc::new(move |_req| {
+        oc.store(true, Ordering::SeqCst);
+        Box::pin(async move {
+            let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
+            Ok(Box::pin(stream) as LlmJsonStream)
+        })
+    });
+
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"prompt": "hello"}),
+    };
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("llm-stream")
+            .request(request)
+            .func(func)
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| json!({"response": "stream-complete"})))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    while let Some(chunk) = stream.next().await {
+        chunk.unwrap();
+    }
+
+    assert!(
+        !original_called.load(Ordering::SeqCst),
+        "Original stream callable should not be invoked"
+    );
+
+    let captured = events.lock().unwrap();
+    let llm_events = captured
+        .iter()
+        .filter(|e| e.scope_type() == Some(ScopeType::Llm))
+        .collect::<Vec<_>>();
+    assert_eq!(llm_events.len(), 2);
+    assert_eq!(llm_events[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(
+        llm_events[0].input().unwrap()["content"]["phase"],
+        json!("request")
+    );
+    assert_eq!(llm_events[1].scope_category(), Some(ScopeCategory::End));
+    drop(captured);
+
+    deregister_llm_stream_execution_intercept("llm_stream_short_circuit_exec").unwrap();
+    deregister_llm_request_intercept("llm_stream_short_circuit_request").unwrap();
+    deregister_subscriber("llm_stream_short_circuit_start_observer").unwrap();
 }
 
 // =========================================================================
