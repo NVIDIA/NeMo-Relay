@@ -5,31 +5,46 @@
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from deepagents import create_deep_agent
-from deepagents.backends import LocalShellBackend
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, ToolMessage
-from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
-from langgraph.types import Interrupt
+import pytest
 
 import nemo_flow
-from nemo_flow.integrations.deepagents import (
-    NemoFlowDeepAgentsCallbackHandler,
-    NemoFlowDeepAgentsMiddleware,
-    add_nemo_flow_integration,
-)
+
+if TYPE_CHECKING:
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+
+    import nemo_flow.integrations.deepagents as deepagents_integration
 
 
-class _MockDeepAgentsChatModel(FakeMessagesListChatModel):
-    model: str = "mock-model"
+@pytest.fixture(name="deepagents_integration_module", scope="session")
+def deepagents_integration_module_fixture() -> types.ModuleType:
+    import nemo_flow.integrations.deepagents as deepagents_integration
 
-    def bind_tools(self, _tools: Any, *_args: Any, **_kwargs: Any) -> _MockDeepAgentsChatModel:
-        return self
+    return deepagents_integration
+
+
+@pytest.fixture(name="callback_handler")
+def callback_handler_fixture(
+    deepagents_integration_module: types.ModuleType,
+) -> deepagents_integration.NemoFlowDeepAgentsCallbackHandler:
+    return deepagents_integration_module.NemoFlowDeepAgentsCallbackHandler()
+
+
+def _mock_deepagents_chat_model(responses: list[Any]) -> FakeMessagesListChatModel:
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+
+    class _MockDeepAgentsChatModel(FakeMessagesListChatModel):
+        model: str = "mock-model"
+
+        def bind_tools(self, _tools: Any, *_args: Any, **_kwargs: Any) -> _MockDeepAgentsChatModel:
+            return self
+
+    return _MockDeepAgentsChatModel(responses=responses)
 
 
 def _filter_mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEvent]:
@@ -46,8 +61,11 @@ def _mark_metadata(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
     return cast(dict[str, Any], mark.metadata)
 
 
-def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow.Event]):
-    middleware = NemoFlowDeepAgentsMiddleware(
+def test_before_agent_emits_configuration_mark(
+    subscribed_events: list[nemo_flow.Event],
+    deepagents_integration_module: types.ModuleType,
+):
+    middleware = deepagents_integration_module.NemoFlowDeepAgentsMiddleware(
         agent_name="main-agent",
         skills=["/skills/research/"],
         subagents=[{"name": "researcher"}],
@@ -65,8 +83,13 @@ def test_before_agent_emits_configuration_mark(subscribed_events: list[nemo_flow
     assert _mark_data(marks[0])["backend"] == "StateBackend"
 
 
-def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[nemo_flow.Event]):
-    handler = NemoFlowDeepAgentsCallbackHandler()
+def test_callback_handler_emits_human_in_the_loop_marks(
+    subscribed_events: list[nemo_flow.Event],
+    callback_handler: deepagents_integration.NemoFlowDeepAgentsCallbackHandler,
+):
+    from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
+    from langgraph.types import Interrupt
+
     run_id = uuid4()
     hitl_request = {
         "action_requests": [
@@ -80,7 +103,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
     }
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        handler.on_interrupt(
+        callback_handler.on_interrupt(
             GraphInterruptEvent(
                 run_id=run_id,
                 status="interrupt_after",
@@ -89,7 +112,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
                 interrupts=(Interrupt(hitl_request, id="interrupt-1"),),
             )
         )
-        handler.on_resume(
+        callback_handler.on_resume(
             GraphResumeEvent(
                 run_id=run_id,
                 status="pending",
@@ -108,12 +131,17 @@ def test_callback_handler_emits_human_in_the_loop_marks(subscribed_events: list[
     assert _mark_metadata(marks[1])["phase"] == "resume"
 
 
-def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: list[nemo_flow.Event]):
-    handler = NemoFlowDeepAgentsCallbackHandler()
+def test_callback_handler_falls_back_for_non_hitl_interrupt(
+    subscribed_events: list[nemo_flow.Event],
+    callback_handler: deepagents_integration.NemoFlowDeepAgentsCallbackHandler,
+):
+    from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
+    from langgraph.types import Interrupt
+
     run_id = uuid4()
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        handler.on_interrupt(
+        callback_handler.on_interrupt(
             GraphInterruptEvent(
                 run_id=run_id,
                 status="interrupt_after",
@@ -122,7 +150,7 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: l
                 interrupts=(Interrupt("custom pause", id="interrupt-1"),),
             )
         )
-        handler.on_resume(
+        callback_handler.on_resume(
             GraphResumeEvent(
                 run_id=run_id,
                 status="pending",
@@ -137,10 +165,10 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(subscribed_events: l
     assert "deepagents_kind" not in _mark_metadata(marks[0])
 
 
-def test_add_nemo_flow_integration_preserves_backend():
+def test_add_nemo_flow_integration_preserves_backend(deepagents_integration_module: types.ModuleType):
     mock_backend = MagicMock(name="mock_backend")
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
-    kwargs = add_nemo_flow_integration(
+    kwargs = deepagents_integration_module.add_nemo_flow_integration(
         model="mock-model",
         name="main-agent",
         skills=["/skills/main/"],
@@ -153,22 +181,32 @@ def test_add_nemo_flow_integration_preserves_backend():
     )
 
     assert kwargs["backend"] is mock_backend
-    assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["middleware"])
-    assert any(isinstance(item, NemoFlowDeepAgentsMiddleware) for item in kwargs["subagents"][0]["middleware"])
+    assert any(
+        isinstance(item, deepagents_integration_module.NemoFlowDeepAgentsMiddleware) for item in kwargs["middleware"]
+    )
+    assert any(
+        isinstance(item, deepagents_integration_module.NemoFlowDeepAgentsMiddleware)
+        for item in kwargs["subagents"][0]["middleware"]
+    )
     assert kwargs["subagents"][1] is mock_compiled_subagent
 
 
 def test_e2e_agent(
     tmp_path: Path,
     subscribed_events: list[nemo_flow.Event],
+    deepagents_integration_module: types.ModuleType,
 ):
+    from deepagents import create_deep_agent
+    from deepagents.backends import LocalShellBackend
+    from langchain_core.messages import AIMessage, ToolMessage
+
     reviewer_description = "Reviews filesystem work performed by the main agent."
-    reviewer_model = _MockDeepAgentsChatModel(
+    reviewer_model = _mock_deepagents_chat_model(
         responses=[
             AIMessage(content="reviewer verified turtle"),
         ]
     )
-    model = _MockDeepAgentsChatModel(
+    model = _mock_deepagents_chat_model(
         responses=[
             AIMessage(
                 content="",
@@ -196,7 +234,7 @@ def test_e2e_agent(
             AIMessage(content="created turtle after reviewer verified turtle"),
         ]
     )
-    kwargs = add_nemo_flow_integration(
+    kwargs = deepagents_integration_module.add_nemo_flow_integration(
         model=model,
         tools=[],
         name="main-agent",

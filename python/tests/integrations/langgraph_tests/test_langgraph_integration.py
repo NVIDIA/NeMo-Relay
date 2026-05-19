@@ -10,17 +10,14 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
-from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Interrupt
 from typing_extensions import TypedDict
 
 import nemo_flow
-from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler as LangChainCallbackHandler
-from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
 
 if TYPE_CHECKING:
     from langgraph.graph import CompiledStateGraph
+
+    from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
 
 
 class State(TypedDict):
@@ -37,6 +34,8 @@ async def aincrement(state: State) -> State:
 
 
 def _build_graph(use_async: bool = False) -> CompiledStateGraph:
+    from langgraph.graph import END, START, StateGraph
+
     # The cast here avoids a ty linting error
     builder = StateGraph(cast(Any, State))
     if use_async:
@@ -58,7 +57,14 @@ def async_graph_fixture() -> CompiledStateGraph:
     return _build_graph(use_async=True)
 
 
-def events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
+@pytest.fixture(name="callback_handler")
+def callback_handler_fixture() -> NemoFlowCallbackHandler:
+    from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
+
+    return NemoFlowCallbackHandler()
+
+
+def _events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
     event_strings: list[str] = []
 
     for event in events:
@@ -70,48 +76,57 @@ def events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
     return event_strings
 
 
-def test_handler_type():
-    handler = NemoFlowCallbackHandler()
-    assert isinstance(handler, LangChainCallbackHandler)
-    assert isinstance(handler, GraphCallbackHandler)
+def test_handler_type(callback_handler: NemoFlowCallbackHandler):
+    from langgraph.callbacks import GraphCallbackHandler
+
+    from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler as LangChainCallbackHandler
+
+    assert isinstance(callback_handler, LangChainCallbackHandler)
+    assert isinstance(callback_handler, GraphCallbackHandler)
 
 
 class TestGraphCallbacks:
-    def __init__(self):
-        self._expected_events = [
-            "scope.start.request",
-            "scope.start.LangGraph",
-            "scope.start.increment",
-            "scope.end.increment",
-            "scope.end.LangGraph",
-            "scope.end.request",
-        ]
+    _expected_events = [
+        "scope.start.request",
+        "scope.start.LangGraph",
+        "scope.start.increment",
+        "scope.end.increment",
+        "scope.end.LangGraph",
+        "scope.end.request",
+    ]
 
     def test_sync(
         self,
         sync_graph: CompiledStateGraph,
         subscribed_events: list[nemo_flow.Event],
+        callback_handler: NemoFlowCallbackHandler,
     ):
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            result = sync_graph.invoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
+            result = sync_graph.invoke({"value": 1}, config={"callbacks": [callback_handler]})
 
         assert result == {"value": 2}
-        assert events_to_strings(subscribed_events) == self._expected_events
+        assert _events_to_strings(subscribed_events) == self._expected_events
 
     async def test_async(
         self,
         async_graph: CompiledStateGraph,
         subscribed_events: list[nemo_flow.Event],
+        callback_handler: NemoFlowCallbackHandler,
     ):
         with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-            result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [NemoFlowCallbackHandler()]})
+            result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [callback_handler]})
 
         assert result == {"value": 2}
-        assert events_to_strings(subscribed_events) == self._expected_events
+        assert _events_to_strings(subscribed_events) == self._expected_events
 
 
-def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.Event]):
-    handler = NemoFlowCallbackHandler()
+def test_graph_lifecycle_callbacks_emit_marks(
+    subscribed_events: list[nemo_flow.Event],
+    callback_handler: NemoFlowCallbackHandler,
+):
+    from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
+    from langgraph.types import Interrupt
+
     run_id = uuid4()
 
     expected_event_strings = [
@@ -122,7 +137,7 @@ def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.
     ]
 
     with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-        handler.on_interrupt(
+        callback_handler.on_interrupt(
             GraphInterruptEvent(
                 run_id=run_id,
                 status="interrupt_after",
@@ -132,7 +147,7 @@ def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.
             )
         )
 
-        handler.on_resume(
+        callback_handler.on_resume(
             GraphResumeEvent(
                 run_id=run_id,
                 status="pending",
@@ -141,7 +156,7 @@ def test_graph_lifecycle_callbacks_emit_marks(subscribed_events: list[nemo_flow.
             )
         )
 
-    assert events_to_strings(subscribed_events) == expected_event_strings
+    assert _events_to_strings(subscribed_events) == expected_event_strings
 
     interrupt_event = subscribed_events[1]
     assert isinstance(interrupt_event, nemo_flow.MarkEvent)

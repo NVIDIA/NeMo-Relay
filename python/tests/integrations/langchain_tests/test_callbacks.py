@@ -5,26 +5,25 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import types
+import typing
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from langchain_core.messages import ToolMessage
-from langgraph.types import Command
 
-from nemo_flow.integrations.langchain import callbacks as callbacks_module
-from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+if typing.TYPE_CHECKING:
+    from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
 
 
 def _make_mock_nemo_flow() -> MagicMock:
     """Build a minimal mock of the ``nemo_flow`` module."""
     mock_nemo_flow = MagicMock(name="nemo_flow")
-    mock_nemo_flow.ScopeType = SimpleNamespace(Agent="Agent")
+    mock_nemo_flow.ScopeType = types.SimpleNamespace(Agent="Agent")
 
-    scope = SimpleNamespace()
+    scope = types.SimpleNamespace()
     scope.push = MagicMock(
-        side_effect=lambda name, scope_type, **kwargs: SimpleNamespace(
+        side_effect=lambda name, scope_type, **kwargs: types.SimpleNamespace(
             uuid=str(uuid4()),
             name=name,
             scope_type=scope_type,
@@ -36,8 +35,16 @@ def _make_mock_nemo_flow() -> MagicMock:
     return mock_nemo_flow
 
 
+@pytest.fixture(name="callbacks_module", scope="session")
+def callbacks_module_fixture() -> types.ModuleType:
+    """Fixture to provide the callbacks module."""
+    import nemo_flow.integrations.langchain.callbacks as callbacks_module
+
+    return callbacks_module
+
+
 @pytest.fixture()
-def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType) -> MagicMock:
     mock_nemo_flow = _make_mock_nemo_flow()
     monkeypatch.setattr(callbacks_module, "nemo_flow", mock_nemo_flow)
     return mock_nemo_flow
@@ -45,6 +52,8 @@ def mock_nemo_flow(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 @pytest.fixture()
 def handler(mock_nemo_flow: MagicMock) -> NemoFlowCallbackHandler:
+    from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
     return NemoFlowCallbackHandler()
 
 
@@ -121,6 +130,9 @@ class TestScopeLifecycle:
         assert run_id not in handler._scope_handles
 
     def test_on_chain_end_prepares_command_outputs(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
+        from langchain_core.messages import ToolMessage
+        from langgraph.types import Command
+
         run_id = uuid4()
         handler.on_chain_start(
             {"name": "MyChain"},
@@ -216,20 +228,26 @@ class TestScopeLifecycle:
 class TestGracefulNoOp:
     """Verify callbacks are silent if the module-level runtime is unavailable."""
 
-    def test_no_nemo_flow_on_chain_start(self, monkeypatch: pytest.MonkeyPatch):
+    def test_no_nemo_flow_on_chain_start(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
         monkeypatch.setattr(callbacks_module, "nemo_flow", None)
+        from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())
 
-    def test_no_nemo_flow_on_chain_end(self, monkeypatch: pytest.MonkeyPatch):
+    def test_no_nemo_flow_on_chain_end(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
         monkeypatch.setattr(callbacks_module, "nemo_flow", None)
+        from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_end({}, run_id=uuid4())
 
-    def test_no_nemo_flow_on_chain_error(self, monkeypatch: pytest.MonkeyPatch):
+    def test_no_nemo_flow_on_chain_error(self, monkeypatch: pytest.MonkeyPatch, callbacks_module: types.ModuleType):
         monkeypatch.setattr(callbacks_module, "nemo_flow", None)
+        from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler
+
         handler = NemoFlowCallbackHandler()
 
         handler.on_chain_error(RuntimeError("e"), run_id=uuid4())
@@ -238,9 +256,8 @@ class TestGracefulNoOp:
 class TestErrorSwallowing:
     """Ensure NeMo Flow errors never propagate."""
 
-    def test_scope_push_error_swallowed(self, mock_nemo_flow: MagicMock):
+    def test_scope_push_error_swallowed(self, handler: NemoFlowCallbackHandler, mock_nemo_flow: MagicMock):
         mock_nemo_flow.scope.push.side_effect = RuntimeError("nemo flow failure")
-        handler = NemoFlowCallbackHandler()
 
         handler.on_chain_start({"name": "x"}, {}, run_id=uuid4())
 
