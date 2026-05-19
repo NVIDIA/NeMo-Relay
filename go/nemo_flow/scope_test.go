@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 const pushScopeFailed = "PushScope failed: %v"
@@ -122,6 +123,7 @@ func assertJSONFieldNumber(t *testing.T, raw json.RawMessage, field string, want
 
 func TestEventJSONHelpers(t *testing.T) {
 	var captured Event
+	capturedCh := make(chan struct{}, 1)
 	var mu sync.Mutex
 	subscriberName := "go_event_json_sub"
 
@@ -131,6 +133,10 @@ func TestEventJSONHelpers(t *testing.T) {
 			mu.Lock()
 			captured = event
 			mu.Unlock()
+			select {
+			case capturedCh <- struct{}{}:
+			default:
+			}
 		}
 	}); err != nil {
 		t.Fatalf("RegisterSubscriber failed: %v", err)
@@ -139,6 +145,12 @@ func TestEventJSONHelpers(t *testing.T) {
 
 	if err := EmitEvent("go_json_mark", WithEventData(json.RawMessage(`{"ok":true}`))); err != nil {
 		t.Fatalf("EmitEvent failed: %v", err)
+	}
+
+	select {
+	case <-capturedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for subscriber to capture event")
 	}
 
 	mu.Lock()

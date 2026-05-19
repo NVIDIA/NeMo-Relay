@@ -419,9 +419,15 @@ impl LlmRequest {
 #[serde(transparent)]
 pub struct WasmEvent(Json);
 
+impl WasmEvent {
+    pub(crate) fn try_from_event(e: &Event) -> serde_json::Result<Self> {
+        Ok(Self(e.try_to_json_value()?))
+    }
+}
+
 impl From<&Event> for WasmEvent {
     fn from(e: &Event) -> Self {
-        Self(e.to_json_value())
+        Self::try_from_event(e).expect("serializing an ATOF event to JSON should not fail")
     }
 }
 

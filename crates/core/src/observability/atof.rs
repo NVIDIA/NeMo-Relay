@@ -252,8 +252,10 @@ fn open_file(path: &Path, mode: AtofExporterMode) -> Result<File> {
 }
 
 fn write_event(writer: &mut BufWriter<File>, event: &Event) -> std::result::Result<(), String> {
-    serde_json::to_writer(&mut *writer, &event.to_json_value())
+    let value = event
+        .try_to_json_value()
         .map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut *writer, &value).map_err(|error| error.to_string())?;
     writer.write_all(b"\n").map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())
 }

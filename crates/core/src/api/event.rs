@@ -338,30 +338,37 @@ impl Event {
         }
     }
 
-    /// Return this event as the canonical JSON object delivered by language
-    /// bindings to subscriber callbacks.
-    pub fn to_json_value(&self) -> Json {
-        let mut value = serde_json::to_value(self).unwrap_or(Json::Null);
+    /// Try to return this event as the canonical JSON object delivered by
+    /// language bindings to subscriber callbacks and ATOF exporters.
+    pub fn try_to_json_value(&self) -> serde_json::Result<Json> {
+        let mut value = serde_json::to_value(self)?;
         if let Json::Object(ref mut object) = value {
             if let Some(request) = self.annotated_request() {
                 object.insert(
                     "annotated_request".to_string(),
-                    serde_json::to_value(request.as_ref()).unwrap_or(Json::Null),
+                    serde_json::to_value(request.as_ref())?,
                 );
             }
             if let Some(response) = self.annotated_response() {
                 object.insert(
                     "annotated_response".to_string(),
-                    serde_json::to_value(response.as_ref()).unwrap_or(Json::Null),
+                    serde_json::to_value(response.as_ref())?,
                 );
             }
         }
-        value
+        Ok(value)
+    }
+
+    /// Return this event as the canonical JSON object delivered by language
+    /// bindings to subscriber callbacks.
+    pub fn to_json_value(&self) -> Json {
+        self.try_to_json_value()
+            .expect("serializing an ATOF event to JSON should not fail")
     }
 
     /// Return this event as canonical JSON.
     pub fn to_json_string(&self) -> serde_json::Result<String> {
-        serde_json::to_string(&self.to_json_value())
+        serde_json::to_string(&self.try_to_json_value()?)
     }
 
     /// Return the lifecycle phase for scope events.

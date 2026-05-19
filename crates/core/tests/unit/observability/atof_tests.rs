@@ -208,7 +208,7 @@ fn subscriber_writes_canonical_event_jsonl() {
 
     let lines = read_jsonl(exporter.path());
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0], event.to_json_value());
+    assert_eq!(lines[0], event.try_to_json_value().unwrap());
     assert_eq!(lines[0]["annotated_request"]["model"], "demo-model");
 }
 

@@ -15,7 +15,7 @@ def _subscriber_name(prefix: str) -> str:
     return f"{prefix}-{uuid4()}"
 
 
-def test_subscriber_events_expose_canonical_json_helpers() -> None:
+def test_subscriber_events_expose_canonical_json_helpers():
     events = []
     name = _subscriber_name("py-event-json")
     subscribers.register(name, events.append)

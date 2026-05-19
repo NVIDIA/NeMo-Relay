@@ -113,7 +113,10 @@ impl PyScopeEvent {
     /// Return this event as the canonical subscriber JSON dictionary.
     pub(crate) fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let event = nemo_flow::api::event::Event::Scope(self.inner.clone());
-        json_to_py(py, &event.to_json_value())
+        let value = event
+            .try_to_json_value()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        json_to_py(py, &value)
     }
 
     /// Return this event as canonical subscriber JSON.
@@ -198,7 +201,10 @@ impl PyMarkEvent {
     /// Return this event as the canonical subscriber JSON dictionary.
     pub(crate) fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let event = nemo_flow::api::event::Event::Mark(self.inner.clone());
-        json_to_py(py, &event.to_json_value())
+        let value = event
+            .try_to_json_value()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        json_to_py(py, &value)
     }
 
     /// Return this event as canonical subscriber JSON.

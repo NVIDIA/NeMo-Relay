@@ -304,9 +304,19 @@ impl LlmRequest {
 #[serde(transparent)]
 pub struct JsEvent(serde_json::Value);
 
+impl JsEvent {
+    pub(crate) fn try_from_event(e: &Event) -> serde_json::Result<Self> {
+        Ok(Self(e.try_to_json_value()?))
+    }
+
+    pub(crate) fn into_json(self) -> serde_json::Value {
+        self.0
+    }
+}
+
 impl From<&Event> for JsEvent {
     fn from(e: &Event) -> Self {
-        Self(e.to_json_value())
+        Self::try_from_event(e).expect("serializing an ATOF event to JSON should not fail")
     }
 }
 // ---------------------------------------------------------------------------

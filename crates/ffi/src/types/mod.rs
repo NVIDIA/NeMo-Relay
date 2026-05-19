@@ -28,6 +28,7 @@ use nemo_flow::api::tool::ToolHandle;
 use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_c_string, str_to_c_string};
+use crate::error::set_last_error;
 #[cfg(test)]
 use crate::{api, convert};
 
@@ -610,7 +611,13 @@ pub unsafe extern "C" fn nemo_flow_event_json(ptr: *const FfiEvent) -> *mut c_ch
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
-    json_to_c_string(&unsafe { &*ptr }.0.to_json_value())
+    match unsafe { &*ptr }.0.try_to_json_value() {
+        Ok(value) => json_to_c_string(&value),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Return the ATOF version as a C string.

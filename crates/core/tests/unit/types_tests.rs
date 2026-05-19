@@ -247,7 +247,7 @@ fn event_json_value_uses_canonical_subscriber_shape() {
         ),
     ));
 
-    let value = event.to_json_value();
+    let value = event.try_to_json_value().unwrap();
     assert_eq!(value["kind"], json!("scope"));
     assert_eq!(value["scope_category"], json!("end"));
     assert_eq!(value["category"], json!("llm"));

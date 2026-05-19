@@ -451,7 +451,15 @@ pub fn wrap_js_event_subscriber(
 ) -> EventSubscriberFn {
     let func = Arc::new(func);
     Arc::new(move |event: &Event| {
-        let event_json = serde_json::to_value(JsEvent::from(event)).unwrap_or(Json::Null);
+        let event_json = match JsEvent::try_from_event(event) {
+            Ok(event) => event.into_json(),
+            Err(error) => {
+                record_callback_error(format!(
+                    "nemo_flow: failed to serialize JS event subscriber payload: {error}"
+                ));
+                return;
+            }
+        };
         let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
         if status != napi::Status::Ok {
             record_callback_error(format!(
