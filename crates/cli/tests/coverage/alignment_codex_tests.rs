@@ -138,10 +138,10 @@ fn chatgpt_oauth_strip_preserves_provider_keys_and_non_openai_routes() {
     );
 }
 
-#[test]
-fn subagent_context_reads_payload_metadata_and_rejects_non_subagents() {
+#[tokio::test]
+async fn subagent_context_reads_payload_metadata_and_rejects_non_subagents() {
     let payload_event = codex_session_event("child", thread_spawn("parent"), json!({}));
-    let payload_context = subagent_context(&payload_event).unwrap();
+    let payload_context = subagent_context(&payload_event).await.unwrap();
     assert_eq!(payload_context.parent_session_id, "parent");
     assert_eq!(payload_context.nickname.as_deref(), Some("Curie"));
     assert_eq!(payload_context.role.as_deref(), Some("worker"));
@@ -149,20 +149,23 @@ fn subagent_context_reads_payload_metadata_and_rejects_non_subagents() {
 
     let metadata_event = codex_session_event("child", json!({}), thread_spawn("parent"));
     assert_eq!(
-        subagent_context(&metadata_event).unwrap().parent_session_id,
+        subagent_context(&metadata_event)
+            .await
+            .unwrap()
+            .parent_session_id,
         "parent"
     );
 
     let self_parent = codex_session_event("child", thread_spawn("child"), json!({}));
-    assert!(subagent_context(&self_parent).is_none());
+    assert!(subagent_context(&self_parent).await.is_none());
 
     let mut non_codex = codex_session_event("child", thread_spawn("parent"), json!({}));
     non_codex.agent_kind = AgentKind::ClaudeCode;
-    assert!(subagent_context(&non_codex).is_none());
+    assert!(subagent_context(&non_codex).await.is_none());
 }
 
-#[test]
-fn subagent_context_reads_first_transcript_line() {
+#[tokio::test]
+async fn subagent_context_reads_first_transcript_line() {
     let temp = tempfile::tempdir().unwrap();
     let transcript = temp.path().join("rollout.jsonl");
     std::fs::write(
@@ -189,16 +192,16 @@ fn subagent_context_reads_first_transcript_line() {
     .unwrap();
     let event = codex_session_event("child", json!({ "transcript_path": transcript }), json!({}));
 
-    let context = subagent_context(&event).unwrap();
+    let context = subagent_context(&event).await.unwrap();
     assert_eq!(context.parent_session_id, "parent-from-transcript");
     assert_eq!(context.nickname.as_deref(), Some("Noether"));
     assert_eq!(context.role.as_deref(), Some("explorer"));
 }
 
-#[test]
-fn subagent_metadata_start_event_and_alias_share_thread_fields() {
+#[tokio::test]
+async fn subagent_metadata_start_event_and_alias_share_thread_fields() {
     let event = codex_session_event("child", thread_spawn("parent"), json!({ "keep": true }));
-    let context = subagent_context(&event).unwrap();
+    let context = subagent_context(&event).await.unwrap();
 
     let metadata = augment_subagent_metadata(event.metadata.clone(), &context);
     assert_eq!(metadata["keep"], json!(true));

@@ -118,30 +118,38 @@ fn is_openai_route(route: GatewayRouteKind) -> bool {
 // Extracts Codex subagent thread-spawn context from a SessionStart. It looks first at the hook
 // payload, then hook metadata, then the first transcript line. Returning None keeps ordinary Codex
 // root sessions as root sessions and prevents self-parenting loops.
-pub(crate) fn subagent_context(event: &SessionEvent) -> Option<SubagentContext> {
+pub(crate) async fn subagent_context(event: &SessionEvent) -> Option<SubagentContext> {
     if event.agent_kind != AgentKind::Codex {
         return None;
     }
-    subagent_context_from_value(&event.payload)
+    let context = match subagent_context_from_value(&event.payload)
         .or_else(|| subagent_context_from_value(&event.metadata))
-        .or_else(|| subagent_context_from_transcript(event))
-        .filter(|context| context.parent_session_id != event.session_id)
+    {
+        Some(context) => Some(context),
+        None => subagent_context_from_transcript(event).await,
+    };
+    context.filter(|context| context.parent_session_id != event.session_id)
 }
 
 // Codex sometimes supplies only a transcript path in the hook payload. The first transcript line
 // is a `session_meta` object and carries the thread-spawn parent id that Phoenix needs for
 // parentage. Reading one line keeps this cheap and avoids treating the full transcript as input.
-fn subagent_context_from_transcript(event: &SessionEvent) -> Option<SubagentContext> {
+async fn subagent_context_from_transcript(event: &SessionEvent) -> Option<SubagentContext> {
     let transcript_path = json_string_at(&event.metadata, &[&["transcript_path"][..]])
         .or_else(|| json_string_at(&event.payload, &[&["transcript_path"][..]]))?;
-    let file = std::fs::File::open(transcript_path).ok()?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    if reader.read_line(&mut line).ok()? == 0 {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(&line).ok()?;
-    subagent_context_from_value(&value)
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(transcript_path).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        let value = serde_json::from_str::<Value>(&line).ok()?;
+        subagent_context_from_value(&value)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 // Searches the known Codex shapes for thread-spawn data. Recent traces have placed

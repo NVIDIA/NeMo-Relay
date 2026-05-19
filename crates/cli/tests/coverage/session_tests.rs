@@ -260,6 +260,26 @@ async fn codex_turn_is_agent_scope_with_turn_role_metadata() {
     );
 }
 
+#[test]
+fn apply_start_alias_overrides_conflicting_subagent_id() {
+    let mut start = llm_start();
+    start.session_id = Some("child-session".into());
+    start.subagent_id = Some("stale-subagent".into());
+    start.metadata = json!({ "request": "metadata" });
+    let alias = SessionAlias::new(
+        "parent-session".into(),
+        "child-session".into(),
+        json!({ "alias": "metadata" }),
+    );
+
+    apply_start_alias(&mut start, &alias);
+
+    assert_eq!(start.session_id.as_deref(), Some("parent-session"));
+    assert_eq!(start.subagent_id.as_deref(), Some("child-session"));
+    assert_eq!(start.metadata["request"], json!("metadata"));
+    assert_eq!(start.metadata["alias"], json!("metadata"));
+}
+
 #[tokio::test]
 async fn turn_output_uses_last_root_owned_llm_response() {
     let subscriber_name = "cli-turn-output-root-llm-test";

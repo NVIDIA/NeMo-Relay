@@ -394,9 +394,16 @@ fn request_affinity_key_ignores_tool_results_and_sidecar_json() {
             "input": "{\"parentUuid\":\"scope\",\"childUuid\":\"scope\"}"
         }),
     };
+    let sidecar_json_array = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "input": "  [{\"parentUuid\":\"scope\",\"childUuid\":\"scope\"}]"
+        }),
+    };
 
     assert_eq!(request_affinity_key(&tool_result), None);
     assert_eq!(request_affinity_key(&sidecar_json), None);
+    assert_eq!(request_affinity_key(&sidecar_json_array), None);
 }
 
 #[test]

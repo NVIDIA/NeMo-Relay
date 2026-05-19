@@ -19,6 +19,7 @@ use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentE
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 
+const REQUEST_AFFINITY_KEY_MIN_CHARS: usize = 24;
 const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
 
 #[derive(Debug, Clone)]
@@ -292,19 +293,23 @@ pub(crate) fn should_emit_session_agent_scope(agent_kind: AgentKind) -> bool {
 // session. Codex is the first such harness: it starts child threads with parent-thread metadata.
 // Future harness-specific detectors should plug in here so the session manager can stay provider
 // neutral.
-pub(crate) fn subagent_session_context(event: &SessionEvent) -> Option<SubagentSessionContext> {
-    codex::subagent_context(event).map(SubagentSessionContext::Codex)
+pub(crate) async fn subagent_session_context(
+    event: &SessionEvent,
+) -> Option<SubagentSessionContext> {
+    codex::subagent_context(event)
+        .await
+        .map(SubagentSessionContext::Codex)
 }
 
 // Converts an AgentStarted event into a pending child-session record when a harness explicitly
 // reports parentage. The caller still decides whether the child session is empty enough to promote.
-pub(crate) fn pending_subagent_start(
+pub(crate) async fn pending_subagent_start(
     event: &mut NormalizedEvent,
 ) -> Option<(String, PendingSubagentStart)> {
     let NormalizedEvent::AgentStarted(session_event) = event else {
         return None;
     };
-    let context = subagent_session_context(session_event)?;
+    let context = subagent_session_context(session_event).await?;
     let child_session_id = session_event.session_id.clone();
     if context.parent_session_id() == child_session_id {
         return None;
@@ -373,7 +378,7 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
 pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
     let task_text = request_user_task_text(&request.content)?;
     let normalized = normalize_affinity_text(&task_text);
-    (normalized.len() >= 24)
+    (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
         .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
 }
 
@@ -582,8 +587,12 @@ fn affinity_candidate_text(text: &str) -> Option<String> {
 }
 
 fn looks_like_json_payload(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    if !matches!(trimmed.chars().next(), Some('{' | '[')) {
+        return false;
+    }
     matches!(
-        serde_json::from_str::<Value>(text),
+        serde_json::from_str::<Value>(trimmed),
         Ok(Value::Object(_) | Value::Array(_))
     )
 }

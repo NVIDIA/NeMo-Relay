@@ -537,9 +537,7 @@ impl SessionManager {
 // thread as the LLM owner.
 fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlias) {
     start.session_id = Some(alias.parent_session_id.clone());
-    if start.subagent_id.is_none() {
-        start.subagent_id = Some(alias.subagent_id.clone());
-    }
+    start.subagent_id = Some(alias.subagent_id.clone());
     start.metadata = merge_metadata(start.metadata.clone(), alias.metadata());
 }
 
@@ -552,7 +550,7 @@ async fn queue_or_promote_child_start(
     alignment_state: &mut SessionAlignmentState,
     config: SessionConfig,
 ) -> Result<bool, CliError> {
-    let Some((child_session_id, pending)) = alignment::pending_subagent_start(event) else {
+    let Some((child_session_id, pending)) = alignment::pending_subagent_start(event).await else {
         return Ok(false);
     };
     if sessions
