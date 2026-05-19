@@ -77,14 +77,17 @@ ATOF uses one `data` field. For scope events, `data` is the semantic input on
 
 Category-specific fields live under `category_profile`. NeMo Flow uses
 `model_name` for LLM events, `tool_call_id` for tool events, and `subtype` for
-custom-category events. Unknown profile fields are preserved so newer
-producers can interoperate with older consumers.
+custom-category events. LLM codec annotations, when present, are serialized
+under `category_profile.annotated_request` on LLM start events and
+`category_profile.annotated_response` on LLM end events. Unknown profile fields
+are preserved so newer producers can interoperate with older consumers.
 
 ### Annotated Request and Response Data
 
-LLM codecs can enrich LLM events with runtime-only annotated request and
-response data. These annotations are available to in-process subscribers and
-exporters, but they are not serialized into the ATOF wire event.
+LLM codecs can enrich LLM events with annotated request and response data. These
+annotations are part of the canonical event JSON under `category_profile` when
+they are present, so ATOF JSONL export and in-process subscriber JSON expose the
+same payload shape.
 
 ## How Events Are Produced
 

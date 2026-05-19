@@ -552,9 +552,18 @@ describe('typedLlmExecute', () => {
           event.scope_category === 'end' &&
           event.name === 'typed_anthropic_codec_llm',
       );
-      assert.equal(endEvent.annotated_response.model, 'claude-3-5-sonnet');
-      assert.equal(endEvent.annotated_response.message, 'Anthropic hello');
-      assert.equal(endEvent.annotated_response.finish_reason, 'complete');
+      assert.equal(
+        endEvent.category_profile.annotated_response.model,
+        'claude-3-5-sonnet',
+      );
+      assert.equal(
+        endEvent.category_profile.annotated_response.message,
+        'Anthropic hello',
+      );
+      assert.equal(
+        endEvent.category_profile.annotated_response.finish_reason,
+        'complete',
+      );
     } finally {
       deregisterSubscriber('typed_anthropic_codec_sub');
       popScope(scope);
@@ -786,9 +795,18 @@ describe('typedLlmStreamExecute', () => {
           event.scope_category === 'end' &&
           event.name === 'typed_responses_stream_llm',
       );
-      assert.equal(endEvent.annotated_response.model, 'gpt-4.1-mini');
-      assert.equal(endEvent.annotated_response.message, 'hello world');
-      assert.equal(endEvent.annotated_response.finish_reason, 'complete');
+      assert.equal(
+        endEvent.category_profile.annotated_response.model,
+        'gpt-4.1-mini',
+      );
+      assert.equal(
+        endEvent.category_profile.annotated_response.message,
+        'hello world',
+      );
+      assert.equal(
+        endEvent.category_profile.annotated_response.finish_reason,
+        'complete',
+      );
     } finally {
       deregisterSubscriber('typed_responses_stream_sub');
       deregisterLlmRequestIntercept('typed_responses_stream_req');
@@ -850,7 +868,7 @@ describe('typedLlmStreamExecute', () => {
           event.scope_category === 'end' &&
           event.name === 'typed_stream_bad_response_codec_llm',
       );
-      assert.equal(endEvent.annotated_response, undefined);
+      assert.equal(endEvent.category_profile?.annotated_response, undefined);
     } finally {
       deregisterSubscriber('typed_stream_bad_response_codec_sub');
       popScope(scope);

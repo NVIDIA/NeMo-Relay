@@ -253,8 +253,16 @@ fn event_json_value_uses_canonical_subscriber_shape() {
     assert_eq!(value["category"], json!("llm"));
     assert_eq!(value["data"], json!({"input": true}));
     assert_eq!(value["metadata"], json!({"trace": "abc"}));
-    assert_eq!(value["annotated_request"]["model"], json!("demo-model"));
-    assert_eq!(value["annotated_response"]["id"], json!("resp-1"));
+    assert!(value.get("annotated_request").is_none());
+    assert!(value.get("annotated_response").is_none());
+    assert_eq!(
+        value["category_profile"]["annotated_request"]["model"],
+        json!("demo-model")
+    );
+    assert_eq!(
+        value["category_profile"]["annotated_response"]["id"],
+        json!("resp-1")
+    );
 
     let encoded = event.to_json_string().unwrap();
     let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();

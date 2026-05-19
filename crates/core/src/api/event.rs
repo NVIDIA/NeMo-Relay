@@ -172,9 +172,8 @@ pub enum ScopeCategory {
 
 /// Category-specific profile data.
 ///
-/// Unknown wire keys are preserved in `extra`. LLM annotations are runtime-only
-/// enrichment used by internal adaptive and Agent Trajectory Interchange Format
-/// (ATIF) logic and are never serialized.
+/// Unknown wire keys are preserved in `extra`. LLM annotations are serialized
+/// under `category_profile` when a codec captures them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(setter(into, strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CategoryProfile {
@@ -215,6 +214,8 @@ impl CategoryProfile {
         self.model_name.is_none()
             && self.tool_call_id.is_none()
             && self.subtype.is_none()
+            && self.annotated_request.is_none()
+            && self.annotated_response.is_none()
             && self.extra.is_empty()
     }
 }
@@ -341,22 +342,7 @@ impl Event {
     /// Try to return this event as the canonical JSON object delivered by
     /// language bindings to subscriber callbacks and ATOF exporters.
     pub fn try_to_json_value(&self) -> serde_json::Result<Json> {
-        let mut value = serde_json::to_value(self)?;
-        if let Json::Object(ref mut object) = value {
-            if let Some(request) = self.annotated_request() {
-                object.insert(
-                    "annotated_request".to_string(),
-                    serde_json::to_value(request.as_ref())?,
-                );
-            }
-            if let Some(response) = self.annotated_response() {
-                object.insert(
-                    "annotated_response".to_string(),
-                    serde_json::to_value(response.as_ref())?,
-                );
-            }
-        }
-        Ok(value)
+        serde_json::to_value(self)
     }
 
     /// Return this event as the canonical JSON object delivered by language

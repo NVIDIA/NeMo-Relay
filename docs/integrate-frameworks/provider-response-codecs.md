@@ -211,7 +211,7 @@ nemo_flow.subscribers.register("response-debugger", on_event)
 import { registerSubscriber } from 'nemo-flow-node';
 
 registerSubscriber('response-debugger', (event) => {
-  const annotated = event.annotated_response;
+  const annotated = event.category_profile?.annotated_response;
   if (!annotated) {
     return;
   }
