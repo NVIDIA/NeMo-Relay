@@ -16,6 +16,8 @@ The main entry points are:
 - ``nemo_flow.plugin`` for global plugin configuration and custom plugin registration
 - ``nemo_flow.adaptive`` for adaptive component configuration helpers
 - ``nemo_flow.observability`` for observability component configuration helpers
+- ``nemo_flow.telemetry_v1`` for stable host-facing telemetry serialization
+  and safe observer registration
 
 Top-level exports also include:
 
@@ -187,6 +189,7 @@ from nemo_flow import (  # noqa: E402
     scope,
     scope_local,
     subscribers,
+    telemetry_v1,
     tools,
     typed,
 )
@@ -420,6 +423,7 @@ __all__ = [
     "intercepts",
     "subscribers",
     "scope_local",
+    "telemetry_v1",
     "codecs",
     "typed",
     "plugin",

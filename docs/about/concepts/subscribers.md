@@ -61,6 +61,12 @@ exporter handoff.
 Some subscribers stay inside the process and power custom logging, analytics, or
 debugging logic.
 
+For host integrations that need a semver-stable serialized event payload, use
+the Python `nemo_flow.telemetry_v1` facade instead of reading native event
+attributes directly. It converts runtime events into dictionaries with an
+explicit `schema_version` and can isolate observer callback failures from the
+runtime lifecycle call.
+
 ### Forwarding and Export
 
 Some subscribers translate the event stream into external formats or transport
@@ -115,6 +121,8 @@ plugin component.
 Use these practices when applying the concept in application or integration code.
 
 - Use a plain subscriber when you want in-process custom behavior.
+- Use `nemo_flow.telemetry_v1.observer(...)` when a host runtime or exporter
+  needs a stable dictionary event shape and fail-open callback handling.
 - Use a scope-local subscriber when the observation should disappear with the
   owning scope.
 - Use a plugin-installed subscriber when the behavior should be reusable and

@@ -145,6 +145,22 @@ with nemo_flow.scope.scope("demo-agent", nemo_flow.ScopeType.Agent) as handle:
 nemo_flow.subscribers.deregister("printer")
 ```
 
+For host integrations that need a semver-stable serialized event shape and
+fail-open observer callbacks, use `telemetry_v1`:
+
+```python
+import nemo_flow
+
+
+def on_event(event: dict) -> None:
+    print(event["schema_version"], event["kind"], event["name"])
+
+
+with nemo_flow.telemetry_v1.observer("host-exporter", on_event):
+    with nemo_flow.scope.scope("demo-agent", nemo_flow.ScopeType.Agent):
+        nemo_flow.scope.event("initialized", data={"binding": "python"})
+```
+
 ## Package Surface
 
 The public package modules are:
@@ -158,6 +174,7 @@ The public package modules are:
 - `nemo_flow.plugin`
 - `nemo_flow.adaptive`
 - `nemo_flow.observability`
+- `nemo_flow.telemetry_v1`
 - `nemo_flow.typed`
 - `nemo_flow.codecs`
 

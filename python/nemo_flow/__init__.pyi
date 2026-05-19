@@ -35,6 +35,7 @@ from nemo_flow import plugin as plugin
 from nemo_flow import scope as scope
 from nemo_flow import scope_local as scope_local
 from nemo_flow import subscribers as subscribers
+from nemo_flow import telemetry_v1 as telemetry_v1
 from nemo_flow import tools as tools
 from nemo_flow import typed as typed
 from nemo_flow._native import (
