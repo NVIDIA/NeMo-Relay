@@ -82,6 +82,22 @@ fn editor_schema_tracks_nemoguardrails_config_types() {
     let remote_schema = remote.schema().expect("remote editor schema");
     let headers = remote_schema.field("headers").expect("headers field");
     assert_eq!(headers.kind, EditorFieldKind::StringMap);
+
+    let request_defaults = schema
+        .field("request_defaults")
+        .expect("request_defaults section");
+    assert_eq!(request_defaults.kind, EditorFieldKind::Section);
+    assert!(request_defaults.optional);
+
+    let request_defaults_schema = request_defaults
+        .schema()
+        .expect("request_defaults editor schema");
+    let rails = request_defaults_schema.field("rails").expect("rails field");
+    assert_eq!(rails.kind, EditorFieldKind::Section);
+
+    let rails_schema = rails.schema().expect("request rails editor schema");
+    let retrieval = rails_schema.field("retrieval").expect("retrieval field");
+    assert_eq!(retrieval.kind, EditorFieldKind::Json);
 }
 
 #[test]
@@ -101,6 +117,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(defaults.priority, 100);
     assert!(defaults.remote.is_none());
     assert!(defaults.local.is_none());
+    assert!(defaults.request_defaults.is_none());
 
     let remote = RemoteBackendConfig::default();
     assert_eq!(remote.timeout_millis, 3_000);
@@ -184,6 +201,7 @@ fn schema_contains_every_supported_nemoguardrails_option() {
         "priority",
         "remote",
         "local",
+        "request_defaults",
         "policy",
         "endpoint",
         "config_id",
@@ -191,6 +209,14 @@ fn schema_contains_every_supported_nemoguardrails_option() {
         "headers",
         "timeout_millis",
         "python_module",
+        "context",
+        "rails",
+        "llm_params",
+        "llm_output",
+        "output_vars",
+        "log",
+        "retrieval",
+        "dialog",
         "unknown_component",
         "unknown_field",
         "unsupported_value",
@@ -491,6 +517,55 @@ fn invalid_shapes_and_values_are_reported() {
             .iter()
             .any(|diag| diag.field.as_deref() == Some("local.python_module"))
     );
+
+    let invalid_request_defaults = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        },
+        "request_defaults": {
+            "context": true,
+            "llm_params": [],
+            "log": "verbose",
+            "output_vars": 7,
+            "rails": {
+                "retrieval": [""]
+            }
+        }
+    })));
+    assert!(invalid_request_defaults.has_errors());
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.context"))
+    );
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.llm_params"))
+    );
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.log"))
+    );
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.output_vars"))
+    );
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.rails.retrieval[0]"))
+    );
 }
 
 #[test]
@@ -512,6 +587,23 @@ fn unknown_fields_follow_policy() {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "nemoguardrails.unknown_field")
+    );
+
+    let nested_warn_report = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {"endpoint": "http://localhost:8000", "config_id": "default"},
+        "request_defaults": {
+            "rails": {
+                "bogus": true
+            }
+        }
+    })));
+    assert!(
+        nested_warn_report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.component.as_deref() == Some("request_defaults.rails"))
     );
 
     let ignored = validate_plugin_config(&plugin_config(json!({

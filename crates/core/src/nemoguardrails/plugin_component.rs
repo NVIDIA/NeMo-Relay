@@ -100,6 +100,12 @@ pub struct NeMoGuardrailsConfig {
     /// Local-backend settings used when `mode = "local"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<LocalBackendConfig>,
+    /// Default request semantics passed through to the selected Guardrails backend.
+    ///
+    /// This models request-time concepts such as rail selection and generation
+    /// options without claiming backend parity for every Guardrails feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_defaults: Option<RequestDefaultsConfig>,
     /// Component-local unsupported-config policy.
     #[serde(default)]
     pub policy: ConfigPolicy,
@@ -121,6 +127,7 @@ impl Default for NeMoGuardrailsConfig {
             priority: default_priority(),
             remote: None,
             local: None,
+            request_defaults: None,
             policy: ConfigPolicy::default(),
         }
     }
@@ -168,6 +175,68 @@ pub struct LocalBackendConfig {
     pub python_module: Option<String>,
 }
 
+/// Default request semantics applied by the selected Guardrails backend.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RequestDefaultsConfig {
+    /// Default context object passed into Guardrails requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Json>,
+    /// Default request-time rail selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rails: Option<RequestRailsConfig>,
+    /// Default model parameters applied to Guardrails-backed LLM calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_params: Option<Json>,
+    /// Whether to include raw LLM output in Guardrails responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_output: Option<bool>,
+    /// Default output variables selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_vars: Option<Json>,
+    /// Default generation-log selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<Json>,
+}
+
+/// Request-time rail selection for Guardrails generation.
+///
+/// These are backend request options, not top-level NeMo Flow interception
+/// surfaces.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RequestRailsConfig {
+    /// Input rails selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<RailSelector>,
+    /// Output rails selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<RailSelector>,
+    /// Retrieval rails selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<RailSelector>,
+    /// Dialog rails selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog: Option<bool>,
+    /// Tool-output rails selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_output: Option<RailSelector>,
+    /// Tool-input rails selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_input: Option<RailSelector>,
+}
+
+/// Rail-selection shape used by Guardrails generation options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum RailSelector {
+    /// Enable or disable the whole rail family.
+    Enabled(bool),
+    /// Enable only named rails within a family.
+    Named(Vec<String>),
+}
+
 crate::editor_config! {
     impl NeMoGuardrailsConfig {
         mode => {
@@ -203,6 +272,13 @@ crate::editor_config! {
             nested: LocalBackendConfig,
             default: LocalBackendConfig,
         },
+        request_defaults => {
+            label: "request_defaults",
+            kind: Section,
+            optional: true,
+            nested: RequestDefaultsConfig,
+            default: RequestDefaultsConfig,
+        },
         policy => {
             label: "policy",
             kind: Section,
@@ -225,6 +301,34 @@ crate::editor_config! {
 crate::editor_config! {
     impl LocalBackendConfig {
         python_module => { label: "python_module", kind: String, optional: true },
+    }
+}
+
+crate::editor_config! {
+    impl RequestDefaultsConfig {
+        context => { label: "context", kind: Json, optional: true },
+        rails => {
+            label: "rails",
+            kind: Section,
+            optional: true,
+            nested: RequestRailsConfig,
+            default: RequestRailsConfig,
+        },
+        llm_params => { label: "llm_params", kind: Json, optional: true },
+        llm_output => { label: "llm_output", kind: Boolean, optional: true },
+        output_vars => { label: "output_vars", kind: Json, optional: true },
+        log => { label: "log", kind: Json, optional: true },
+    }
+}
+
+crate::editor_config! {
+    impl RequestRailsConfig {
+        input => { label: "input", kind: Json, optional: true },
+        output => { label: "output", kind: Json, optional: true },
+        retrieval => { label: "retrieval", kind: Json, optional: true },
+        dialog => { label: "dialog", kind: Boolean, optional: true },
+        tool_output => { label: "tool_output", kind: Json, optional: true },
+        tool_input => { label: "tool_input", kind: Json, optional: true },
     }
 }
 
@@ -361,6 +465,7 @@ fn validate_nemoguardrails_plugin_config(
             "priority",
             "remote",
             "local",
+            "request_defaults",
             "policy",
         ],
     );
@@ -386,6 +491,35 @@ fn validate_nemoguardrails_plugin_config(
         "local",
         &["python_module"],
     );
+    validate_section_fields(
+        &mut diagnostics,
+        &config.policy,
+        plugin_config,
+        "request_defaults",
+        &[
+            "context",
+            "rails",
+            "llm_params",
+            "llm_output",
+            "output_vars",
+            "log",
+        ],
+    );
+    validate_nested_section_fields(
+        &mut diagnostics,
+        &config.policy,
+        plugin_config,
+        "request_defaults",
+        "rails",
+        &[
+            "input",
+            "output",
+            "retrieval",
+            "dialog",
+            "tool_output",
+            "tool_input",
+        ],
+    );
 
     validate_version(&mut diagnostics, &config.policy, config.version);
     validate_mode(&mut diagnostics, &config.policy, &config.mode);
@@ -393,6 +527,7 @@ fn validate_nemoguardrails_plugin_config(
     validate_config_shape(&mut diagnostics, &config.policy, &config);
     validate_codec_requirements(&mut diagnostics, &config.policy, &config);
     validate_surface_selection(&mut diagnostics, &config.policy, &config);
+    validate_request_defaults(&mut diagnostics, &config.policy, &config);
 
     diagnostics
 }
@@ -697,6 +832,151 @@ fn validate_surface_selection(
     );
 }
 
+fn validate_request_defaults(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    config: &NeMoGuardrailsConfig,
+) {
+    let Some(request_defaults) = &config.request_defaults else {
+        return;
+    };
+
+    validate_json_object_field(
+        diagnostics,
+        policy,
+        request_defaults.context.as_ref(),
+        "request_defaults.context",
+        "request_defaults.context must be a JSON object",
+    );
+    validate_json_object_field(
+        diagnostics,
+        policy,
+        request_defaults.llm_params.as_ref(),
+        "request_defaults.llm_params",
+        "request_defaults.llm_params must be a JSON object",
+    );
+    validate_json_object_field(
+        diagnostics,
+        policy,
+        request_defaults.log.as_ref(),
+        "request_defaults.log",
+        "request_defaults.log must be a JSON object",
+    );
+
+    if let Some(output_vars) = &request_defaults.output_vars {
+        match output_vars {
+            Json::Bool(_) => {}
+            Json::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    if !value.is_string()
+                        || value.as_str().is_some_and(|entry| entry.trim().is_empty())
+                    {
+                        push_policy_diag(
+                            diagnostics,
+                            policy.unsupported_value,
+                            "nemoguardrails.unsupported_value",
+                            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                            Some(format!("request_defaults.output_vars[{index}]")),
+                            "request_defaults.output_vars array entries must be non-empty strings"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            _ => push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "nemoguardrails.unsupported_value",
+                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                Some("request_defaults.output_vars".to_string()),
+                "request_defaults.output_vars must be a boolean or an array of strings".to_string(),
+            ),
+        }
+    }
+
+    if let Some(rails) = &request_defaults.rails {
+        validate_rail_selector(
+            diagnostics,
+            policy,
+            rails.input.as_ref(),
+            "request_defaults.rails.input",
+        );
+        validate_rail_selector(
+            diagnostics,
+            policy,
+            rails.output.as_ref(),
+            "request_defaults.rails.output",
+        );
+        validate_rail_selector(
+            diagnostics,
+            policy,
+            rails.retrieval.as_ref(),
+            "request_defaults.rails.retrieval",
+        );
+        validate_rail_selector(
+            diagnostics,
+            policy,
+            rails.tool_output.as_ref(),
+            "request_defaults.rails.tool_output",
+        );
+        validate_rail_selector(
+            diagnostics,
+            policy,
+            rails.tool_input.as_ref(),
+            "request_defaults.rails.tool_input",
+        );
+    }
+}
+
+fn validate_json_object_field(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    value: Option<&Json>,
+    field: &str,
+    message: &str,
+) {
+    let Some(value) = value else {
+        return;
+    };
+
+    if !value.is_object() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemoguardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some(field.to_string()),
+            message.to_string(),
+        );
+    }
+}
+
+fn validate_rail_selector(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    value: Option<&RailSelector>,
+    field: &str,
+) {
+    let Some(value) = value else {
+        return;
+    };
+
+    if let RailSelector::Named(names) = value {
+        for (index, name) in names.iter().enumerate() {
+            if name.trim().is_empty() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "nemoguardrails.unsupported_value",
+                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                    Some(format!("{field}[{index}]")),
+                    "named rail selections must not contain empty strings".to_string(),
+                );
+            }
+        }
+    }
+}
+
 fn validate_policy_fields(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
@@ -726,6 +1006,27 @@ fn validate_section_fields(
             policy,
             Some(section.to_string()),
             section_json,
+            known_fields,
+        );
+    }
+}
+
+fn validate_nested_section_fields(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+    section: &str,
+    nested_section: &str,
+    known_fields: &[&str],
+) {
+    if let Some(section_json) = plugin_config.get(section).and_then(Json::as_object)
+        && let Some(nested_json) = section_json.get(nested_section).and_then(Json::as_object)
+    {
+        validate_unknown_fields(
+            diagnostics,
+            policy,
+            Some(format!("{section}.{nested_section}")),
+            nested_json,
             known_fields,
         );
     }
