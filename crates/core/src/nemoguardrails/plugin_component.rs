@@ -2,12 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! NeMo Guardrails plugin component contract.
-//!
-//! This module defines the typed Rust-side configuration contract for the
-//! planned first-party `nemoguardrails` plugin component. The runtime backend
-//! is intentionally not implemented here yet; this surface exists so current
-//! NeMo Flow plugin validation, schema generation, and editor metadata can
-//! target one canonical config shape before backend activation lands.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -31,7 +25,7 @@ pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemoguardrails";
 pub struct ComponentSpec {
     /// Whether the component should be activated.
     pub enabled: bool,
-    /// NeMo Guardrails component config for this top-level component.
+    /// Component-local NeMo Guardrails config.
     pub config: NeMoGuardrailsConfig,
 }
 
