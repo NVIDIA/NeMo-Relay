@@ -34,8 +34,13 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(code) => code,
         Err(error) => {
+            let exit_code = if error.guardrail_rejection_reason().is_some() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            };
             eprintln!("{error}");
-            ExitCode::FAILURE
+            exit_code
         }
     }
 }

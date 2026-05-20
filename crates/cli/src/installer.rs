@@ -158,6 +158,9 @@ async fn handle_hook_forward_response(
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             if !status.is_success() {
+                if let Some(reason) = guardrail_rejection_reason(&body) {
+                    return Err(CliError::GuardrailRejected(reason));
+                }
                 eprintln!("nemo-flow hook forward failed with HTTP {status}");
                 if fail_closed {
                     return Err(CliError::Install(format!(
@@ -180,6 +183,20 @@ async fn handle_hook_forward_response(
             }
         }
     }
+}
+
+fn guardrail_rejection_reason(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    let error = value.get("error")?;
+    (error.get("type").and_then(Value::as_str) == Some("nemo_flow_guardrail_rejected"))
+        .then(|| {
+            error
+                .get("reason")
+                .and_then(Value::as_str)
+                .or_else(|| error.get("message").and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+        })
+        .flatten()
 }
 
 // Chooses the gateway URL for hook-forward. Hermes prefers the runtime environment URL because

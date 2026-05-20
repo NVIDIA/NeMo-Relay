@@ -409,6 +409,28 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
 }
 
 #[test]
+fn cli_hook_forward_exits_two_for_guardrail_rejection() {
+    let (server_url, received) = spawn_single_request_server(
+        403,
+        r#"{"error":{"message":"guardrail rejected: blocked by policy","type":"nemo_flow_guardrail_rejected","reason":"blocked by policy"}}"#,
+    );
+    let mut child = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--gateway-url", &server_url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"{}").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let request = received.recv().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(request.contains("POST /hooks/codex HTTP/1.1"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("blocked by policy"));
+}
+
+#[test]
 fn cli_hook_forward_reports_transport_failure_when_fail_closed() {
     let mut child = Command::new(gateway_bin())
         .args([

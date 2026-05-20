@@ -5,6 +5,11 @@
   "activation": {
     "onStartup": true
   },
+  "contracts": {
+    "agentToolCallMiddleware": [
+      "pi"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -76,6 +76,7 @@ function createThrowingLlmRuntime(): NemoFlowRuntimeModule {
     llmCallEnd: () => {},
     toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
+    toolConditionalExecution: async () => {},
   };
 }
 

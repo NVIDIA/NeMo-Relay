@@ -766,7 +766,7 @@ fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot)
         return CliError::Upstream(upstream);
     }
     match error {
-        FlowError::GuardrailRejected(reason) => CliError::InvalidPayload(reason),
+        FlowError::GuardrailRejected(reason) => CliError::GuardrailRejected(reason),
         other => CliError::InvalidPayload(other.to_string()),
     }
 }

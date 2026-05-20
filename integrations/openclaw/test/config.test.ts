@@ -23,6 +23,7 @@ import {
   type NemoFlowRuntimeModule,
 } from "../src/modules.js";
 import { registerNemoFlowPlugin } from "../src/runtime-state.js";
+import type { PluginAgentToolCallMiddlewareContext } from "../src/openclaw-hook-types.js";
 import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { callGatewayStatus, type TestGatewayMethodHandler } from "./gateway-status.js";
 
@@ -120,6 +121,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.lifecycle.length, 0);
     assert.equal(api.calls.gatewayMethods.length, 0);
     assert.equal(api.calls.hooks.length, 0);
+    assert.equal(api.calls.toolMiddlewares.length, 0);
   });
 
   it("returns without side effects when disabled", () => {
@@ -131,6 +133,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.lifecycle.length, 0);
     assert.equal(api.calls.gatewayMethods.length, 0);
     assert.equal(api.calls.hooks.length, 0);
+    assert.equal(api.calls.toolMiddlewares.length, 0);
     assert.deepEqual(api.messages.info, ["nemo-flow observability disabled by plugin config"]);
   });
 
@@ -143,6 +146,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.lifecycle.length, 0);
     assert.equal(api.calls.gatewayMethods.length, 0);
     assert.equal(api.calls.hooks.length, 0);
+    assert.equal(api.calls.toolMiddlewares.length, 0);
     assert.match(
       api.messages.warn[0] ?? "",
       /nemo-flow observability disabled because plugin config is invalid/,
@@ -157,6 +161,9 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.deepEqual(api.calls.services.map((service) => service.id), ["nemo-flow-observability"]);
     assert.deepEqual(api.calls.lifecycle.map((lifecycle) => lifecycle.id), ["nemo-flow-observability-cleanup"]);
     assert.deepEqual(api.calls.gatewayMethods.map((method) => method.method), ["nemoFlow.status"]);
+    assert.deepEqual(api.calls.toolMiddlewares.map((middleware) => middleware.options), [
+      { runtimes: ["pi"], priority: 100 },
+    ]);
     assert.deepEqual(
       api.calls.hooks.map((hook) => hook.hookName),
       [
@@ -176,6 +183,58 @@ describe("nemo-flow OpenClaw plugin shell", () => {
         "subagent_ended",
       ],
     );
+  });
+
+  it("runs tool conditional guardrails before OpenClaw tool middleware execution", async () => {
+    const modules = createModules();
+    const api = createApi();
+
+    registerPlugin(api, async () => modules);
+    const middleware = api.calls.toolMiddlewares[0];
+    assert.ok(middleware);
+
+    const result = await middleware.handler({
+      toolName: "shell",
+      params: { command: "pwd" },
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      agentId: "agent-1",
+      execute: async (params) => ({ ok: true, params }),
+    });
+
+    assert.deepEqual(result, { ok: true, params: { command: "pwd" } });
+    assert.deepEqual(modules.nf.calls.toolConditionalExecution, [
+      { name: "shell", args: { command: "pwd" } },
+    ]);
+  });
+
+  it("does not execute OpenClaw tools when conditional guardrails reject", async () => {
+    const modules = createModules();
+    modules.nf.toolConditionalExecution = async () => {
+      throw new Error("guardrail rejected: blocked by policy");
+    };
+    const api = createApi();
+    let executed = false;
+
+    registerPlugin(api, async () => modules);
+    const middleware = api.calls.toolMiddlewares[0];
+    assert.ok(middleware);
+
+    await assert.rejects(
+      () =>
+        middleware.handler({
+          toolName: "shell",
+          params: { command: "rm -rf /tmp/demo" },
+          sessionId: "session-1",
+          execute: async () => {
+            executed = true;
+            return { ok: true };
+          },
+        }),
+      /blocked by policy/,
+    );
+    assert.equal(executed, false);
   });
 
   it("uses config parsed during registration when service starts", async () => {
@@ -551,6 +610,7 @@ function readBuiltJavaScriptFiles(directory: URL): string {
 }
 
 type HookHandler = (event: unknown, ctx: unknown) => void | Promise<void>;
+type ToolMiddlewareHandler = (ctx: PluginAgentToolCallMiddlewareContext) => Promise<unknown>;
 
 type TestApi = {
   id: string;
@@ -563,6 +623,10 @@ type TestApi = {
   registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) => void;
   registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0]) => void;
   on: (hookName: string, handler: HookHandler) => void;
+  registerAgentToolCallMiddleware: (
+    handler: ToolMiddlewareHandler,
+    options?: { runtimes?: string[]; priority?: number },
+  ) => void;
   registerGatewayMethod: (
     method: string,
     handler: TestGatewayMethodHandler,
@@ -576,6 +640,10 @@ type TestApi = {
       handler: TestGatewayMethodHandler;
     }>;
     hooks: Array<{ hookName: string; handler: HookHandler }>;
+    toolMiddlewares: Array<{
+      handler: ToolMiddlewareHandler;
+      options?: { runtimes?: string[]; priority?: number };
+    }>;
   };
   messages: {
     info: string[];
@@ -593,6 +661,7 @@ function createApi(params: {
     lifecycle: [],
     gatewayMethods: [],
     hooks: [],
+    toolMiddlewares: [],
   };
   const logger: PluginLogger = {
     info: (message) => messages.info.push(message),
@@ -614,6 +683,8 @@ function createApi(params: {
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
     on: (hookName: string, handler: HookHandler) => calls.hooks.push({ hookName, handler }),
+    registerAgentToolCallMiddleware: (handler, options) =>
+      calls.toolMiddlewares.push(options === undefined ? { handler } : { handler, options }),
     registerGatewayMethod: (method, handler) => calls.gatewayMethods.push({ method, handler }),
     calls,
     messages,
@@ -641,6 +712,7 @@ type TestPluginHost = NemoFlowModules["pluginHost"] & {
 type TestNemoFlowRuntime = NemoFlowModules["nf"] & {
   calls: {
     event: Array<{ name: string; handle: unknown; data: unknown }>;
+    toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
 };
 
@@ -682,6 +754,7 @@ function createModules(params: {
 function createNemoFlowRuntime(): TestNemoFlowRuntime {
   const calls: TestNemoFlowRuntime["calls"] = {
     event: [],
+    toolConditionalExecution: [],
   };
 
   return {
@@ -697,5 +770,8 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     llmCallEnd: () => {},
     toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
+    toolConditionalExecution: async (name, args) => {
+      calls.toolConditionalExecution.push({ name, args });
+    },
   };
 }

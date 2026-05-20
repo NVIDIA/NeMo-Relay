@@ -20,6 +20,7 @@ import type { NemoFlowHookBackendConfig } from "./config.js";
 import { createHealthSnapshot, type HookReplayBackendStatus } from "./health.js";
 import type { HookReplayCounters } from "./hook-replay/session.js";
 import { HookReplayBackend } from "./hooks-backend.js";
+import type { PluginAgentToolCallMiddlewareContext } from "./openclaw-hook-types.js";
 import {
   defaultNemoFlowModuleLoader,
   type ConfigDiagnostic,
@@ -32,6 +33,16 @@ const SERVICE_ID = "nemo-flow-observability";
 const LIFECYCLE_ID = "nemo-flow-observability-cleanup";
 const STATUS_METHOD = "nemoFlow.status";
 type RuntimeCleanupContext = Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0];
+type ToolCallMiddlewareOptions = {
+  runtimes?: string[];
+  priority?: number;
+};
+type ToolCallMiddlewareApi = {
+  registerAgentToolCallMiddleware?: (
+    handler: (ctx: PluginAgentToolCallMiddlewareContext) => Promise<unknown>,
+    options?: ToolCallMiddlewareOptions,
+  ) => void;
+};
 
 /** Owns one plugin runtime instance across OpenClaw service start/stop cycles. */
 export class NemoFlowRuntimeState {
@@ -171,6 +182,23 @@ export class NemoFlowRuntimeState {
   /** Stop the runtime because OpenClaw service or gateway shutdown is happening. */
   async stop(reason: string, logger?: PluginLogger): Promise<void> {
     await this.stopWithStatus(reason, logger, { state: "stopped", reason });
+  }
+
+  /** Apply conditional-execution guardrails before an OpenClaw tool call proceeds. */
+  async guardToolCall(ctx: PluginAgentToolCallMiddlewareContext): Promise<void> {
+    const backend = await this.backendForHook(ctx.workspaceDir);
+    if (!backend) {
+      return;
+    }
+    await backend.onBeforeToolCall(
+      {
+        toolName: ctx.toolName,
+        params: ctx.params,
+        runId: ctx.runId,
+        toolCallId: ctx.toolCallId,
+      },
+      ctx,
+    );
   }
 
   /** Shared stop implementation that controls the final health status. */
@@ -468,6 +496,23 @@ export function registerNemoFlowPlugin(
   );
 
   runtime.registerHooks();
+  registerToolCallMiddleware(api, runtime);
+}
+
+function registerToolCallMiddleware(api: OpenClawPluginApi, runtime: NemoFlowRuntimeState): void {
+  const register = (api as OpenClawPluginApi & ToolCallMiddlewareApi).registerAgentToolCallMiddleware;
+  if (typeof register !== "function") {
+    return;
+  }
+
+  register.call(
+    api,
+    async (ctx: PluginAgentToolCallMiddlewareContext) => {
+      await runtime.guardToolCall(ctx);
+      return await ctx.execute(ctx.params);
+    },
+    { runtimes: ["pi"], priority: 100 },
+  );
 }
 
 /** Validate the NeMo Flow plugin-host config and log diagnostics. */

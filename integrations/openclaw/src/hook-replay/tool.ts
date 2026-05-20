@@ -7,10 +7,41 @@
  * Tool payloads can be large or sensitive, so this module applies capture policy
  * before exporting arguments/results while keeping enough metadata for debugging.
  */
-import type { PluginHookAfterToolCallEvent, PluginHookToolContext } from "../openclaw-hook-types.js";
+import type {
+  PluginHookAfterToolCallEvent,
+  PluginHookBeforeToolCallEvent,
+  PluginHookToolContext,
+} from "../openclaw-hook-types.js";
 import { blockedToolDetails, emitMark, errorToJson, toJsonRecord, toJsonValue } from "./marks.js";
 import { ensureSession, type SessionManager } from "./session.js";
 import { nowMicros, startMicrosFromDuration } from "./correlation.js";
+
+/** Run NeMo Flow tool conditional-execution guardrails before OpenClaw executes a tool. */
+export async function guardBeforeToolCall(
+  manager: SessionManager,
+  event: PluginHookBeforeToolCallEvent,
+  ctx: PluginHookToolContext,
+): Promise<void> {
+  const session = ensureSession(manager, {
+    sessionId: ctx.sessionId,
+    sessionKey: ctx.sessionKey,
+    runId: event.runId ?? ctx.runId,
+    agentId: ctx.agentId,
+    source: "lazy_session",
+  });
+
+  if (!session) {
+    return;
+  }
+
+  const previousStack = manager.nf.currentScopeStack();
+  try {
+    manager.nf.setThreadScopeStack(session.stack);
+    await manager.nf.toolConditionalExecution(event.toolName, toJsonValue(event.params ?? {}));
+  } finally {
+    manager.nf.setThreadScopeStack(previousStack);
+  }
+}
 
 /** Convert one OpenClaw after_tool_call event into a NeMo Flow tool span or blocked-tool mark. */
 export function replayAfterToolCall(

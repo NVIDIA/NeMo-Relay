@@ -150,6 +150,7 @@ type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
     llmCallEnd: Array<{ handle: unknown; response: unknown }>;
     toolCall: Array<{ name: string; args: unknown; data: unknown }>;
     toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown }>;
+    toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
 };
 
@@ -189,6 +190,7 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     llmCallEnd: [],
     toolCall: [],
     toolCallEnd: [],
+    toolConditionalExecution: [],
   };
 
   return {
@@ -216,5 +218,8 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
       return handle as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>;
     },
     toolCallEnd: (handle, result, data) => calls.toolCallEnd.push({ handle, result, data }),
+    toolConditionalExecution: async (name, args) => {
+      calls.toolConditionalExecution.push({ name, args });
+    },
   };
 }

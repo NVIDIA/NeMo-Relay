@@ -21,7 +21,7 @@ import {
   replayAgentEndMessages,
   replayPendingLlmOutputsForSession,
 } from "./hook-replay/llm.js";
-import { replayAfterToolCall } from "./hook-replay/tool.js";
+import { guardBeforeToolCall, replayAfterToolCall } from "./hook-replay/tool.js";
 import {
   createHookReplayState,
   drainSession,
@@ -41,6 +41,7 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeMessageWriteContext,
   PluginHookBeforeMessageWriteEvent,
+  PluginHookBeforeToolCallEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookLlmInputEvent,
@@ -144,6 +145,11 @@ export class HookReplayBackend {
   /** Replay a finished OpenClaw tool call as a NeMo Flow tool span or blocked mark. */
   onAfterToolCall(event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext): void {
     replayAfterToolCall(this.sessionManager(), event, ctx);
+  }
+
+  /** Run conditional-execution guardrails before OpenClaw invokes a tool. */
+  async onBeforeToolCall(event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext): Promise<void> {
+    await guardBeforeToolCall(this.sessionManager(), event, ctx);
   }
 
   /** Capture assistant message writes that may contain the clearest provider output. */

@@ -18,6 +18,7 @@ use nemo_flow::api::scope::{
 };
 use nemo_flow::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
+    tool_conditional_execution,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
@@ -1439,6 +1440,7 @@ impl Session {
         } else {
             event.arguments
         };
+        tool_conditional_execution(event.tool_name.as_str(), &arguments)?;
         let metadata = tool_correlation_metadata(
             event.metadata,
             owner.status,

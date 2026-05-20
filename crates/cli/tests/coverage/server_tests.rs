@@ -12,6 +12,9 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
+use nemo_flow::api::registry::{
+    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+};
 use nemo_flow::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
     register_plugin,
@@ -29,6 +32,14 @@ static PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+
+struct ToolGuardrailCleanup(&'static str);
+
+impl Drop for ToolGuardrailCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
 
 fn test_http_client() -> reqwest::Client {
     crate::tls::install_rustls_crypto_provider();
@@ -468,6 +479,50 @@ async fn cursor_hook_returns_cursor_permission_fields() {
     assert_eq!(body["permission"], json!("allow"));
     assert!(body.get("user_message").is_none());
     assert!(body.get("agent_message").is_none());
+}
+
+#[tokio::test]
+async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");
+    const BLOCKED_TEST_TOOL: &str = "Nmf137BlockedTool";
+    register_tool_conditional_execution_guardrail(
+        "cli-pre-tool-blocker",
+        1,
+        Box::new(|name, _args| {
+            Ok((name == BLOCKED_TEST_TOOL).then(|| "blocked by policy".to_string()))
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolGuardrailCleanup("cli-pre-tool-blocker");
+
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "guardrail-session",
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": "tool-1",
+                        "tool_name": BLOCKED_TEST_TOOL,
+                        "tool_input": { "command": "rm -rf /tmp/demo" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["type"], json!("nemo_flow_guardrail_rejected"));
+    assert_eq!(body["error"]["reason"], json!("blocked by policy"));
 }
 
 #[tokio::test]

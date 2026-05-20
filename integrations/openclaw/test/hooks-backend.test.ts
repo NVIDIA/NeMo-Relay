@@ -338,6 +338,7 @@ type TestNemoFlowRuntime = NemoFlowRuntimeModule & {
     popScope: Array<{ handle: unknown; output: unknown }>;
     event: Array<{ name: string; handle: unknown; data: unknown }>;
     setThreadScopeStack: unknown[];
+    toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
 };
 
@@ -380,6 +381,7 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     popScope: [],
     event: [],
     setThreadScopeStack: [],
+    toolConditionalExecution: [],
   };
 
   return {
@@ -400,5 +402,8 @@ function createNemoFlowRuntime(): TestNemoFlowRuntime {
     llmCallEnd: () => {},
     toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
     toolCallEnd: () => {},
+    toolConditionalExecution: async (name, args) => {
+      calls.toolConditionalExecution.push({ name, args });
+    },
   };
 }
