@@ -541,6 +541,13 @@ fn test_ffi_error_paths_and_scope_stack() {
 }
 
 #[test]
+fn test_ffi_event_json_null_pointer_returns_null() {
+    unsafe {
+        assert!(types::nemo_flow_event_json(ptr::null::<FfiEvent>()).is_null());
+    }
+}
+
+#[test]
 fn test_ffi_tool_lifecycle_execute_and_helpers() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

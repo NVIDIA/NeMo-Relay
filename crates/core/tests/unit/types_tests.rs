@@ -18,6 +18,46 @@ use crate::api::tool::{ToolAttributes, ToolHandle};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::response::AnnotatedLlmResponse;
 
+fn annotated_request(model: &str, text: &str) -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: MessageContent::Text(text.into()),
+            name: None,
+        }],
+        model: Some(model.into()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: Map::new(),
+    }
+}
+
+fn annotated_response(id: &str, model: &str, text: &str) -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        id: Some(id.into()),
+        model: Some(model.into()),
+        message: Some(MessageContent::Text(text.into())),
+        tool_calls: None,
+        finish_reason: None,
+        usage: None,
+        api_specific: None,
+        extra: Map::new(),
+    }
+}
+
 #[test]
 fn handle_constructors_preserve_supplied_metadata() {
     let parent_uuid = Some(Uuid::now_v7());
@@ -195,40 +235,8 @@ fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
 
 #[test]
 fn event_json_value_uses_canonical_subscriber_shape() {
-    let request = AnnotatedLlmRequest {
-        messages: vec![Message::User {
-            content: MessageContent::Text("hi".into()),
-            name: None,
-        }],
-        model: Some("demo-model".into()),
-        params: None,
-        tools: None,
-        tool_choice: None,
-        store: None,
-        previous_response_id: None,
-        truncation: None,
-        reasoning: None,
-        include: None,
-        user: None,
-        metadata: None,
-        service_tier: None,
-        parallel_tool_calls: None,
-        max_output_tokens: None,
-        max_tool_calls: None,
-        top_logprobs: None,
-        stream: None,
-        extra: Map::new(),
-    };
-    let response = AnnotatedLlmResponse {
-        id: Some("resp-1".into()),
-        model: Some("demo-model".into()),
-        message: Some(MessageContent::Text("hello".into())),
-        tool_calls: None,
-        finish_reason: None,
-        usage: None,
-        api_specific: None,
-        extra: Map::new(),
-    };
+    let request = annotated_request("demo-model", "hi");
+    let response = annotated_response("resp-1", "demo-model", "hello");
     let event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("llm")
@@ -248,6 +256,7 @@ fn event_json_value_uses_canonical_subscriber_shape() {
     ));
 
     let value = event.try_to_json_value().unwrap();
+    assert_eq!(event.to_json_value(), value);
     assert_eq!(value["kind"], json!("scope"));
     assert_eq!(value["scope_category"], json!("end"));
     assert_eq!(value["category"], json!("llm"));
@@ -267,6 +276,25 @@ fn event_json_value_uses_canonical_subscriber_shape() {
     let encoded = event.to_json_string().unwrap();
     let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
     assert_eq!(decoded, value);
+}
+
+#[test]
+fn category_profile_wire_empty_accounts_for_annotations() {
+    assert!(CategoryProfile::default().is_wire_empty());
+
+    let request_profile = CategoryProfile::builder()
+        .annotated_request(Arc::new(annotated_request("demo-model", "hi")))
+        .build();
+    assert!(!request_profile.is_wire_empty());
+
+    let response_profile = CategoryProfile::builder()
+        .annotated_response(Arc::new(annotated_response(
+            "resp-1",
+            "demo-model",
+            "hello",
+        )))
+        .build();
+    assert!(!response_profile.is_wire_empty());
 }
 
 #[test]

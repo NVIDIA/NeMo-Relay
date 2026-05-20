@@ -181,6 +181,22 @@ func TestEventJSONHelpers(t *testing.T) {
 	}
 }
 
+func TestEventBaseJSONHandlesNilPointer(t *testing.T) {
+	var base eventBase
+
+	if raw := base.JSON(); raw != nil {
+		t.Fatalf("expected nil JSON for nil event pointer, got %s", raw)
+	}
+
+	marshaled, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("json.Marshal(eventBase) failed: %v", err)
+	}
+	if string(marshaled) != "null" {
+		t.Fatalf("expected nil event base to marshal as null, got %s", marshaled)
+	}
+}
+
 func runConcurrentScopePushPopWorker(errCh chan<- error) {
 	stack, err := NewScopeStack()
 	if err != nil {
