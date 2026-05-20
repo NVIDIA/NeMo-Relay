@@ -32,10 +32,7 @@ pub struct ExecutionIntercept<F> {
 }
 
 /// A priority-ordered guardrail registration entry.
-#[derive(Clone)]
 pub struct GuardrailEntry<F> {
-    /// Caller-provided guardrail registration name.
-    pub name: String,
     /// Lower values run earlier in the chain.
     pub priority: i32,
     /// The caller-provided guardrail callback.
@@ -75,7 +72,6 @@ macro_rules! global_guardrail_registry_api {
                 .register(
                     name.to_string(),
                     GuardrailEntry {
-                        name: name.to_string(),
                         priority,
                         guardrail: guardrail.into(),
                     },
@@ -272,7 +268,6 @@ macro_rules! scope_guardrail_registry_api {
                 .register(
                     name.to_string(),
                     GuardrailEntry {
-                        name: name.to_string(),
                         priority,
                         guardrail: guardrail.into(),
                     },

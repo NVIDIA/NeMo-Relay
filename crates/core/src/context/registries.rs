@@ -10,10 +10,10 @@
 use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
+use crate::api::runtime::callbacks::{LlmConditionalSharedFn, ToolConditionalSharedFn};
 use crate::api::runtime::{
-    EventSubscriberFn, LlmConditionalSharedFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalSharedFn,
-    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
 
@@ -104,6 +104,20 @@ pub fn merge_guardrail_entries<'a, F>(
         all.extend(registry.sorted_values());
     }
     all.sort_by_key(|entry| entry.priority);
+    all
+}
+
+/// Merge named global and scope-local guardrail entries in priority order.
+pub(crate) fn merge_named_guardrail_entries<'a, F>(
+    global: &'a SortedRegistry<GuardrailEntry<F>>,
+    scope_locals: &'a [&'a SortedRegistry<GuardrailEntry<F>>],
+) -> Vec<(&'a str, &'a GuardrailEntry<F>)> {
+    let mut all = Vec::new();
+    all.extend(global.sorted_entries());
+    for registry in scope_locals {
+        all.extend(registry.sorted_entries());
+    }
+    all.sort_by_key(|(_, entry)| entry.priority);
     all
 }
 

@@ -32,12 +32,18 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
     merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
+    merge_named_guardrail_entries,
 };
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
+
+pub(crate) struct ConditionalGuardrailSnapshot<F> {
+    name: String,
+    guardrail: F,
+}
 
 /// Process-global runtime state backing middleware and event emission.
 ///
@@ -640,28 +646,31 @@ impl NemoFlowContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// Cloned guardrail entries that can be evaluated after registry locks are
-    /// released.
-    pub fn tool_conditional_execution_entries(
+    /// Owned guardrail snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn tool_conditional_execution_entries(
         &self,
         scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>],
-    ) -> Vec<GuardrailEntry<ToolConditionalSharedFn>> {
-        merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
+    ) -> Vec<ConditionalGuardrailSnapshot<ToolConditionalSharedFn>> {
+        merge_named_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
             .into_iter()
-            .cloned()
+            .map(|(name, entry)| ConditionalGuardrailSnapshot {
+                name: name.to_string(),
+                guardrail: entry.guardrail.clone(),
+            })
             .collect()
     }
 
     /// Evaluate a snapshot of tool conditional-execution guardrails in priority order.
     ///
     /// This function emits guardrail scope start/end events while evaluating
-    /// the provided entries. Callers should pass entries cloned from the
+    /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
     /// registry locks held.
-    pub fn tool_conditional_execution_chain(
+    pub(crate) fn tool_conditional_execution_chain(
         name: &str,
         args: &Json,
-        entries: Vec<GuardrailEntry<ToolConditionalSharedFn>>,
+        entries: Vec<ConditionalGuardrailSnapshot<ToolConditionalSharedFn>>,
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
@@ -816,27 +825,30 @@ impl NemoFlowContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// Cloned guardrail entries that can be evaluated after registry locks are
-    /// released.
-    pub fn llm_conditional_execution_entries(
+    /// Owned guardrail snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn llm_conditional_execution_entries(
         &self,
         scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>],
-    ) -> Vec<GuardrailEntry<LlmConditionalSharedFn>> {
-        merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
+    ) -> Vec<ConditionalGuardrailSnapshot<LlmConditionalSharedFn>> {
+        merge_named_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
             .into_iter()
-            .cloned()
+            .map(|(name, entry)| ConditionalGuardrailSnapshot {
+                name: name.to_string(),
+                guardrail: entry.guardrail.clone(),
+            })
             .collect()
     }
 
     /// Evaluate a snapshot of LLM conditional-execution guardrails in priority order.
     ///
     /// This function emits guardrail scope start/end events while evaluating
-    /// the provided entries. Callers should pass entries cloned from the
+    /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
     /// registry locks held.
-    pub fn llm_conditional_execution_chain(
+    pub(crate) fn llm_conditional_execution_chain(
         request: &LlmRequest,
-        entries: Vec<GuardrailEntry<LlmConditionalSharedFn>>,
+        entries: Vec<ConditionalGuardrailSnapshot<LlmConditionalSharedFn>>,
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,

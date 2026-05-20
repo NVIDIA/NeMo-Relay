@@ -9,11 +9,11 @@ pub mod scope_stack;
 pub mod state;
 
 pub use callbacks::{
-    EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmConditionalSharedFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
     LlmStreamExecutionRegistryRef, LlmStreamExecutionRegistryRefs, ToolConditionalFn,
-    ToolConditionalSharedFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 pub use global::global_context;
 pub use scope_stack::{

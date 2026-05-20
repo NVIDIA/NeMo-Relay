@@ -106,7 +106,6 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
         .register(
             "global".to_string(),
             GuardrailEntry {
-                name: "global".to_string(),
                 priority: 20,
                 guardrail: "global",
             },
@@ -119,7 +118,6 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
         .register(
             "local".to_string(),
             GuardrailEntry {
-                name: "local".to_string(),
                 priority: 5,
                 guardrail: "local",
             },

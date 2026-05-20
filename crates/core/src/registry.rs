@@ -120,6 +120,18 @@ impl<T> SortedRegistry<T> {
             .collect()
     }
 
+    /// Return named entries sorted by priority (ascending).
+    ///
+    /// # Returns
+    /// A newly allocated [`Vec`] of `(name, entry)` pairs ordered from lowest
+    /// priority to highest priority.
+    pub(crate) fn sorted_entries(&self) -> Vec<(&str, &T)> {
+        self.sorted_keys
+            .iter()
+            .filter_map(|key| self.entries.get(key).map(|entry| (key.as_str(), entry)))
+            .collect()
+    }
+
     /// Return a shared reference to an entry by name.
     ///
     /// # Parameters
