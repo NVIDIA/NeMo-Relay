@@ -522,7 +522,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             let scope_stack = current_scope_stack();
             let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
             let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                &registries.llm_conditional_execution_guardrails
+                &registries.llm_conditional_execution_shared_guardrails
             });
             let scope_subscribers = scope_guard.collect_scope_local_subscribers();
             let context = global_context();
@@ -694,7 +694,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             let scope_stack = current_scope_stack();
             let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
             let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                &registries.llm_conditional_execution_guardrails
+                &registries.llm_conditional_execution_shared_guardrails
             });
             let scope_subscribers = scope_guard.collect_scope_local_subscribers();
             let context = global_context();
@@ -867,7 +867,7 @@ pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_conditional_execution_guardrails
+            &registries.llm_conditional_execution_shared_guardrails
         });
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let context = global_context();

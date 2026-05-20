@@ -367,7 +367,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
             let scope_stack = current_scope_stack();
             let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
             let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                &registries.tool_conditional_execution_guardrails
+                &registries.tool_conditional_execution_shared_guardrails
             });
             let scope_subscribers = scope_guard.collect_scope_local_subscribers();
             let context = global_context();
@@ -519,7 +519,7 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_conditional_execution_guardrails
+            &registries.tool_conditional_execution_shared_guardrails
         });
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let context = global_context();

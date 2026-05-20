@@ -20,10 +20,11 @@ use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
 use crate::api::runtime::callbacks::{
-    EventSubscriberFn, LlmConditionalSharedFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalSharedFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSubscriberFn, LlmConditionalFn, LlmConditionalSharedFn, LlmExecutionFn,
+    LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs,
+    ToolConditionalFn, ToolConditionalSharedFn, ToolExecutionFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::tool::ToolHandle;
@@ -39,6 +40,11 @@ use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
+
+pub(crate) const TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION: &str =
+    "__nemo_flow_tool_conditional_shared_guardrails";
+pub(crate) const LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION: &str =
+    "__nemo_flow_llm_conditional_shared_guardrails";
 
 pub(crate) struct ConditionalGuardrailSnapshot<F> {
     name: String,
@@ -56,8 +62,7 @@ pub struct NemoFlowContextState {
     /// Global tool response sanitizers applied to emitted tool-end payloads.
     pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Global tool guardrails that can reject execution before the callback runs.
-    pub tool_conditional_execution_guardrails:
-        SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>,
+    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
     /// Global tool request intercepts that can rewrite arguments before execution.
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Global tool execution intercepts that wrap or replace callback execution.
@@ -67,8 +72,7 @@ pub struct NemoFlowContextState {
     /// Global LLM response sanitizers applied to emitted LLM-end payloads.
     pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
     /// Global LLM guardrails that can reject execution before the provider callback runs.
-    pub llm_conditional_execution_guardrails:
-        SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>,
+    pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
     /// Global LLM request intercepts that can rewrite or annotate requests.
     pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Global non-streaming LLM execution intercepts that wrap callback execution.
@@ -88,7 +92,7 @@ impl NemoFlowContextState {
     /// A [`NemoFlowContextState`] with empty registries, no subscribers, and no
     /// extensions.
     pub fn new() -> Self {
-        Self {
+        let mut state = Self {
             tool_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
@@ -102,7 +106,96 @@ impl NemoFlowContextState {
             llm_stream_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
             event_subscribers: HashMap::new(),
             extensions: HashMap::new(),
+        };
+        state.install_conditional_shared_registries();
+        state
+    }
+
+    fn install_conditional_shared_registries(&mut self) {
+        self.extensions.insert(
+            TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
+            Box::new(
+                SortedRegistry::<GuardrailEntry<ToolConditionalSharedFn>>::new(|entry| {
+                    entry.priority
+                }),
+            ),
+        );
+        self.extensions.insert(
+            LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
+            Box::new(
+                SortedRegistry::<GuardrailEntry<LlmConditionalSharedFn>>::new(|entry| {
+                    entry.priority
+                }),
+            ),
+        );
+    }
+
+    pub(crate) fn tool_conditional_shared_guardrails(
+        &self,
+    ) -> Option<&SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>> {
+        self.extensions
+            .get(TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
+            .and_then(|value| {
+                value.downcast_ref::<SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>>()
+            })
+    }
+
+    pub(crate) fn tool_conditional_shared_guardrails_mut(
+        &mut self,
+    ) -> &mut SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>> {
+        if !self
+            .extensions
+            .contains_key(TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
+        {
+            self.extensions.insert(
+                TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
+                Box::new(
+                    SortedRegistry::<GuardrailEntry<ToolConditionalSharedFn>>::new(|entry| {
+                        entry.priority
+                    }),
+                ),
+            );
         }
+        self.extensions
+            .get_mut(TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
+            .and_then(|value| {
+                value.downcast_mut::<SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>>()
+            })
+            .expect("tool conditional shared guardrail registry has invalid type")
+    }
+
+    pub(crate) fn llm_conditional_shared_guardrails(
+        &self,
+    ) -> Option<&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>> {
+        self.extensions
+            .get(LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
+            .and_then(|value| {
+                value.downcast_ref::<SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>>()
+            })
+    }
+
+    pub(crate) fn llm_conditional_shared_guardrails_mut(
+        &mut self,
+    ) -> &mut SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>> {
+        if !self
+            .extensions
+            .contains_key(LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
+        {
+            self.extensions.insert(
+                LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
+                Box::new(
+                    SortedRegistry::<GuardrailEntry<LlmConditionalSharedFn>>::new(|entry| {
+                        entry.priority
+                    }),
+                ),
+            );
+        }
+        self.extensions
+            .get_mut(LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
+            .and_then(|value| {
+                value.downcast_mut::<SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>>()
+            })
+            .expect("llm conditional shared guardrail registry has invalid type")
     }
 
     /// Store an arbitrary runtime extension under `key`.
@@ -652,7 +745,12 @@ impl NemoFlowContextState {
         &self,
         scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>],
     ) -> Vec<ConditionalGuardrailSnapshot<ToolConditionalSharedFn>> {
-        merge_named_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
+        let empty_global =
+            SortedRegistry::new(|entry: &GuardrailEntry<ToolConditionalSharedFn>| entry.priority);
+        let global = self
+            .tool_conditional_shared_guardrails()
+            .unwrap_or(&empty_global);
+        merge_named_guardrail_entries(global, scope_locals)
             .into_iter()
             .map(|(name, entry)| ConditionalGuardrailSnapshot {
                 name: name.to_string(),
@@ -831,7 +929,12 @@ impl NemoFlowContextState {
         &self,
         scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>],
     ) -> Vec<ConditionalGuardrailSnapshot<LlmConditionalSharedFn>> {
-        merge_named_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
+        let empty_global =
+            SortedRegistry::new(|entry: &GuardrailEntry<LlmConditionalSharedFn>| entry.priority);
+        let global = self
+            .llm_conditional_shared_guardrails()
+            .unwrap_or(&empty_global);
+        merge_named_guardrail_entries(global, scope_locals)
             .into_iter()
             .map(|(name, entry)| ConditionalGuardrailSnapshot {
                 name: name.to_string(),
@@ -856,7 +959,7 @@ impl NemoFlowContextState {
     pub fn llm_conditional_execution_chain(
         &self,
         request: &LlmRequest,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>],
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
     ) -> crate::error::Result<Option<String>> {
         let entries =
             merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);

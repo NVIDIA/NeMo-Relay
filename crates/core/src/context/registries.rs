@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
-use crate::api::runtime::callbacks::{LlmConditionalSharedFn, ToolConditionalSharedFn};
+use crate::api::runtime::callbacks::{
+    LlmConditionalFn, LlmConditionalSharedFn, ToolConditionalFn, ToolConditionalSharedFn,
+};
 use crate::api::runtime::{
     EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
@@ -29,7 +31,9 @@ pub struct ScopeLocalRegistries {
     /// Tool response sanitizers applied to emitted tool-end payloads.
     pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Tool guardrails that can reject execution before the callback runs.
-    pub tool_conditional_execution_guardrails:
+    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
+    /// Cloneable tool guardrails used by lock-free event-emitting evaluation.
+    pub(crate) tool_conditional_execution_shared_guardrails:
         SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>,
     /// Tool request intercepts that can rewrite arguments before execution.
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
@@ -40,7 +44,9 @@ pub struct ScopeLocalRegistries {
     /// LLM response sanitizers applied to emitted LLM-end payloads.
     pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
     /// LLM guardrails that can reject execution before the provider callback runs.
-    pub llm_conditional_execution_guardrails:
+    pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
+    /// Cloneable LLM guardrails used by lock-free event-emitting evaluation.
+    pub(crate) llm_conditional_execution_shared_guardrails:
         SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>,
     /// LLM request intercepts that can rewrite or annotate requests.
     pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
@@ -63,11 +69,17 @@ impl ScopeLocalRegistries {
             tool_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
+            tool_conditional_execution_shared_guardrails: SortedRegistry::new(|entry| {
+                entry.priority
+            }),
             tool_request_intercepts: SortedRegistry::new(|entry| entry.priority),
             tool_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
             llm_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
             llm_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
             llm_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
+            llm_conditional_execution_shared_guardrails: SortedRegistry::new(|entry| {
+                entry.priority
+            }),
             llm_request_intercepts: SortedRegistry::new(|entry| entry.priority),
             llm_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
             llm_stream_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
