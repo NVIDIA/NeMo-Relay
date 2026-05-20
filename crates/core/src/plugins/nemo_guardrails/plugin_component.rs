@@ -362,16 +362,11 @@ impl Plugin for NeMoGuardrailsPlugin {
 
 /// Registers the `nemo_guardrails` component kind in the plugin registry.
 pub fn register_nemo_guardrails_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(NeMoGuardrailsPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message))
-            if message.contains("already registered")
-                && lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some() =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(err),
+    if lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some() {
+        return Ok(());
     }
+
+    register_plugin(Arc::new(NeMoGuardrailsPlugin))
 }
 
 /// Deregisters the `nemo_guardrails` component kind from the plugin registry.
