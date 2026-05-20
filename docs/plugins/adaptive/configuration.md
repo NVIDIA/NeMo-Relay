@@ -23,7 +23,7 @@ The top-level adaptive object contains:
 | Field | Purpose |
 |---|---|
 | `version` | Adaptive config schema version. Defaults to `1`. |
-| `agent_id` | Stable logical agent or workflow identifier for learned state. |
+| `agent_id` | Fallback agent identifier used only when no Agent scope is active, such as gateway-mode requests. Scoped runtime calls use the active Agent scope name instead. |
 | `state` | Adaptive state backend. |
 | `telemetry` | Adaptive subscriber and learner settings. |
 | `adaptive_hints` | Request hint-injection behavior. |

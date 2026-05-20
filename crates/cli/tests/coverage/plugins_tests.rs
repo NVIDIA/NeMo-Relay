@@ -89,7 +89,8 @@ fn typed_editor_model_contains_observability_sections() {
 fn typed_editor_model_contains_adaptive_options() {
     let schema = AdaptiveConfig::editor_schema();
     assert!(!schema.fields.iter().any(|field| field.name == "version"));
-    assert!(schema.fields.iter().any(|field| field.name == "agent_id"));
+    let agent_id = schema.field("agent_id").unwrap();
+    assert_eq!(agent_id.label, "fallback_agent_id");
 
     let state = schema.field("state").unwrap().schema().unwrap();
     let backend = state.field("backend").unwrap().schema().unwrap();
@@ -405,6 +406,67 @@ fn adaptive_config_field_reset_handles_optional_and_default_fields() {
     assert!(adaptive.acg.is_none());
 }
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct OptionalSectionHarness {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    optional: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<Value>,
+}
+
+fn optional_section_without_default(name: &'static str) -> EditorFieldSpec {
+    EditorFieldSpec {
+        name,
+        label: name,
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: true,
+        nested_schema: None,
+        nested_default: None,
+    }
+}
+
+#[test]
+fn reset_section_clears_optional_section_without_default() {
+    let section = optional_section_without_default("optional");
+    let mut config = OptionalSectionHarness {
+        optional: Some(json!({})),
+        parent: None,
+    };
+
+    reset_section(&mut config, section);
+
+    assert!(config.optional.is_none());
+}
+
+#[test]
+fn nested_edit_empty_optional_section_without_default_clears_field() {
+    let optional = optional_section_without_default("optional");
+    let parent = optional_section_without_default("parent");
+    let child = optional_section_without_default("child");
+    let mut config = OptionalSectionHarness {
+        optional: Some(json!({ "old": true })),
+        parent: Some(json!({
+            "child": {},
+            "kept": true
+        })),
+    };
+
+    store_edited_config_section(&mut config, optional, json!({})).unwrap();
+    assert!(config.optional.is_none());
+
+    store_edited_section_field(&mut config, parent, child, json!({})).unwrap();
+    let parent = config.parent.as_ref().unwrap().as_object().unwrap();
+    assert!(!parent.contains_key("child"));
+    assert_eq!(parent.get("kept"), Some(&json!(true)));
+
+    let mut value = json!({ "child": {}, "kept": true });
+    store_edited_value_section(&mut value, child, json!({}));
+    let value = value.as_object().unwrap();
+    assert!(!value.contains_key("child"));
+    assert_eq!(value.get("kept"), Some(&json!(true)));
+}
+
 #[test]
 fn observability_config_field_reset_clears_optional_section() {
     let mut observability = ObservabilityConfig::default();
@@ -436,7 +498,7 @@ fn adaptive_summary_tracks_component_and_configured_fields() {
 
     assert_eq!(
         adaptive_summary(&config, &adaptive),
-        "component enabled, fields agent_id, adaptive_hints"
+        "component enabled, fields fallback_agent_id, adaptive_hints"
     );
 }
 

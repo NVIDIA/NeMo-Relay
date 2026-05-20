@@ -13,7 +13,8 @@ pub struct AdaptiveConfig {
     /// Adaptive config schema version.
     #[serde(default = "default_adaptive_config_version")]
     pub version: u32,
-    /// Optional explicit agent identifier used by adaptive state.
+    /// Fallback agent identifier used when no Agent scope is active.
+    /// Scoped runtime calls use the active Agent scope name instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     /// Shared state backend configuration.
@@ -217,7 +218,7 @@ fn default_acg_priority() -> i32 {
 
 nemo_flow::editor_config! {
     impl AdaptiveConfig {
-        agent_id => { label: "agent_id", kind: String, optional: true },
+        agent_id => { label: "fallback_agent_id", kind: String, optional: true },
         state => {
             label: "state",
             kind: Section,

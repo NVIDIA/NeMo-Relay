@@ -148,8 +148,20 @@ pub(super) fn reset_section<T>(config: &mut T, section: EditorFieldSpec)
 where
     T: Serialize + DeserializeOwned,
 {
-    let value = section.default_value().unwrap_or_else(|| json!({}));
-    let _ = set_struct_field(config, section.name, value);
+    if let Some(value) = section.default_value() {
+        let _ = set_struct_field(config, section.name, value);
+    } else if section.optional {
+        let _ = remove_struct_field(config, section.name);
+    } else {
+        let _ = set_struct_field(config, section.name, json!({}));
+    }
+}
+
+pub(super) fn should_clear_empty_section(field: EditorFieldSpec, value: &Value) -> bool {
+    field.kind == EditorFieldKind::Section
+        && field.optional
+        && field.default_value().is_none()
+        && value.as_object().is_some_and(|object| object.is_empty())
 }
 
 pub(super) fn reset_selected_field<T>(
@@ -422,7 +434,7 @@ pub(super) fn adaptive_config_map(config: &AdaptiveConfig) -> Result<Map<String,
     let value = serde_json::to_value(config).map_err(serde_error)?;
     match value {
         Value::Object(mut map) => {
-            if map.get("version") == Some(&json!(1)) {
+            if is_version_one(map.get("version")) {
                 map.remove("version");
             }
             Ok(map)
@@ -449,7 +461,7 @@ pub(super) fn merge_adaptive_editor_config(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
 ) {
-    if existing.get("version") == Some(&json!(1)) {
+    if is_version_one(existing.get("version")) {
         existing.remove("version");
     }
     merge_known_editor_object(
@@ -458,6 +470,10 @@ pub(super) fn merge_adaptive_editor_config(
         &nested_editor_keys(AdaptiveConfig::editor_schema()),
         AdaptiveConfig::editor_schema(),
     );
+}
+
+fn is_version_one(value: Option<&Value>) -> bool {
+    value.and_then(Value::as_u64) == Some(1)
 }
 
 pub(super) fn merge_known_editor_object(

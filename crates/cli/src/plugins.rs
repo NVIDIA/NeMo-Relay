@@ -624,7 +624,7 @@ where
             CliError::Config(format!("{} is not an editable section", field.name))
         })?;
         if edit_value_section(theme, field.name, &mut value, schema, field.default_value())? {
-            set_struct_field(config, field.name, value)?;
+            store_edited_config_section(config, field, value)?;
         }
         return Ok(());
     }
@@ -642,7 +642,7 @@ where
         theme,
         &format!(
             "{}, current {}",
-            field.name,
+            field.label,
             current
                 .as_ref()
                 .map(display_value)
@@ -693,9 +693,40 @@ where
         schema,
         field.default_value(),
     )? {
-        set_section_field(config, section, field.name, value)?;
+        store_edited_section_field(config, section, field, value)?;
     }
     Ok(())
+}
+
+fn store_edited_config_section<T>(
+    config: &mut T,
+    field: EditorFieldSpec,
+    value: Value,
+) -> Result<(), CliError>
+where
+    T: SerializeConfig,
+{
+    if should_clear_empty_section(field, &value) {
+        remove_struct_field(config, field.name)
+    } else {
+        set_struct_field(config, field.name, value)
+    }
+}
+
+fn store_edited_section_field<T>(
+    config: &mut T,
+    section: EditorFieldSpec,
+    field: EditorFieldSpec,
+    value: Value,
+) -> Result<(), CliError>
+where
+    T: SerializeConfig,
+{
+    if should_clear_empty_section(field, &value) {
+        remove_section_field(config, section, field.name)
+    } else {
+        set_section_field(config, section, field.name, value)
+    }
 }
 
 fn edit_value_section(
@@ -819,7 +850,7 @@ fn edit_value_field(
             nested_schema,
             field.default_value(),
         )? {
-            set_value_field(value, field.name, nested_value);
+            store_edited_value_section(value, field, nested_value);
         }
         return Ok(());
     }
@@ -928,6 +959,14 @@ fn set_value_field(target: &mut Value, field: &str, field_value: Value) {
     ensure_object(target).insert(field.to_string(), field_value);
 }
 
+fn store_edited_value_section(target: &mut Value, field: EditorFieldSpec, field_value: Value) {
+    if should_clear_empty_section(field, &field_value) {
+        remove_value_field(target, field.name);
+    } else {
+        set_value_field(target, field.name, field_value);
+    }
+}
+
 fn remove_value_field(target: &mut Value, field: &str) {
     if let Some(object) = target.as_object_mut() {
         object.remove(field);
@@ -967,7 +1006,7 @@ fn prompt_value(
                 .map(usize::from)
                 .unwrap_or(0);
             let idx = Select::with_theme(theme)
-                .with_prompt(field.name)
+                .with_prompt(field.label)
                 .items(&values)
                 .default(default_idx)
                 .interact()
@@ -977,7 +1016,7 @@ fn prompt_value(
         EditorFieldKind::Integer => {
             let initial = current.map(display_value).unwrap_or_default();
             let value: String = Input::with_theme(theme)
-                .with_prompt(field.name)
+                .with_prompt(field.label)
                 .with_initial_text(initial)
                 .interact_text()
                 .map_err(editor_error)?;
@@ -989,7 +1028,7 @@ fn prompt_value(
         EditorFieldKind::Float => {
             let initial = current.map(display_value).unwrap_or_default();
             let value: String = Input::with_theme(theme)
-                .with_prompt(field.name)
+                .with_prompt(field.label)
                 .with_initial_text(initial)
                 .interact_text()
                 .map_err(editor_error)?;
@@ -1004,7 +1043,7 @@ fn prompt_value(
                 }
             });
             let value: String = Input::with_theme(theme)
-                .with_prompt(format!("{} as JSON", field.name))
+                .with_prompt(format!("{} as JSON", field.label))
                 .with_initial_text(initial)
                 .interact_text()
                 .map_err(editor_error)?;
@@ -1019,7 +1058,7 @@ fn prompt_value(
                 .and_then(|value| values.iter().position(|candidate| *candidate == value))
                 .unwrap_or(0);
             let idx = Select::with_theme(theme)
-                .with_prompt(field.name)
+                .with_prompt(field.label)
                 .items(values)
                 .default(default_idx)
                 .interact()
@@ -1029,7 +1068,7 @@ fn prompt_value(
         EditorFieldKind::String => {
             let initial = current.and_then(Value::as_str).unwrap_or_default();
             let value: String = Input::with_theme(theme)
-                .with_prompt(field.name)
+                .with_prompt(field.label)
                 .with_initial_text(initial)
                 .interact_text()
                 .map_err(editor_error)?;
