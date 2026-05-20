@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalSharedFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalSharedFn,
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
@@ -29,7 +29,8 @@ pub struct ScopeLocalRegistries {
     /// Tool response sanitizers applied to emitted tool-end payloads.
     pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Tool guardrails that can reject execution before the callback runs.
-    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
+    pub tool_conditional_execution_guardrails:
+        SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>,
     /// Tool request intercepts that can rewrite arguments before execution.
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Tool execution intercepts that wrap or replace callback execution.

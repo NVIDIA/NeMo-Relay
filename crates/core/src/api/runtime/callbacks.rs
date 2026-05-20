@@ -32,6 +32,8 @@ pub type ToolSanitizeFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// return `Ok(None)` to allow execution, `Ok(Some(reason))` to reject the call
 /// with a guardrail message, or an error to abort evaluation entirely.
 pub type ToolConditionalFn = Box<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
+/// Shared tool conditional guardrail callback stored in registries.
+pub type ToolConditionalSharedFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
 /// Rewrite tool arguments before execution.
 ///
 /// Tool request intercepts run in priority order and can transform the JSON

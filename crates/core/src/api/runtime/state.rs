@@ -22,8 +22,8 @@ use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
 use crate::api::runtime::callbacks::{
     EventSubscriberFn, LlmConditionalSharedFn, LlmExecutionFn, LlmExecutionNextFn,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalSharedFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::tool::ToolHandle;
@@ -50,7 +50,8 @@ pub struct NemoFlowContextState {
     /// Global tool response sanitizers applied to emitted tool-end payloads.
     pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Global tool guardrails that can reject execution before the callback runs.
-    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
+    pub tool_conditional_execution_guardrails:
+        SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>,
     /// Global tool request intercepts that can rewrite arguments before execution.
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Global tool execution intercepts that wrap or replace callback execution.
@@ -632,31 +633,39 @@ impl NemoFlowContextState {
         value
     }
 
-    /// Evaluate tool conditional-execution guardrails in priority order.
+    /// Snapshot tool conditional-execution guardrails in priority order.
     ///
     /// # Parameters
-    /// - `name`: Tool name associated with the request.
-    /// - `args`: Tool arguments to validate.
     /// - `scope_locals`: Scope-local conditional guardrail registries collected
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// A [`Result`] containing `Ok(None)` when execution is allowed or
-    /// `Ok(Some(reason))` when a guardrail rejects the call.
-    ///
-    /// # Errors
-    /// Propagates any error returned by a guardrail callback.
-    pub fn tool_conditional_execution_chain(
+    /// Cloned guardrail entries that can be evaluated after registry locks are
+    /// released.
+    pub fn tool_conditional_execution_entries(
         &self,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>],
+    ) -> Vec<GuardrailEntry<ToolConditionalSharedFn>> {
+        merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Evaluate a snapshot of tool conditional-execution guardrails in priority order.
+    ///
+    /// This function emits guardrail scope start/end events while evaluating
+    /// the provided entries. Callers should pass entries cloned from the
+    /// global and scope-local registries so subscriber callbacks run without
+    /// registry locks held.
+    pub fn tool_conditional_execution_chain(
         name: &str,
         args: &Json,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
+        entries: Vec<GuardrailEntry<ToolConditionalSharedFn>>,
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
-        let entries =
-            merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals);
         for entry in entries {
             let handle = Self::emit_guardrail_scope_start(
                 &entry.name,

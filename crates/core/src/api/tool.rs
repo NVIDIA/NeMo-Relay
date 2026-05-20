@@ -363,27 +363,34 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
     } = params;
     ensure_runtime_owner()?;
     {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_conditional_execution_guardrails
-        });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let context = global_context();
-        let state = context
-            .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let subscribers = state.collect_event_subscribers(&scope_subscribers);
-        if let Some(error) = state.tool_conditional_execution_chain(
+        let (entries, subscribers, parent_uuid, guardrail_metadata) = {
+            let scope_stack = current_scope_stack();
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+                &registries.tool_conditional_execution_guardrails
+            });
+            let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+            let context = global_context();
+            let state = context
+                .read()
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            let entries = state.tool_conditional_execution_entries(&scope_locals);
+            let subscribers = state.collect_event_subscribers(&scope_subscribers);
+            (
+                entries,
+                subscribers,
+                resolve_parent_uuid(parent.as_ref()),
+                metadata.clone(),
+            )
+        };
+        if let Some(error) = NemoFlowContextState::tool_conditional_execution_chain(
             &name,
             &args,
-            &scope_locals,
+            entries,
             &subscribers,
-            resolve_parent_uuid(parent.as_ref()),
-            metadata.clone(),
+            parent_uuid,
+            guardrail_metadata,
         )? {
-            drop(state);
-            drop(scope_guard);
             let mut rejection_data = json!({});
             if let Some(object) = rejection_data.as_object_mut() {
                 object.insert("rejected".into(), json!(true));
@@ -508,23 +515,27 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// emitted for the conditional checks themselves.
 pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-    let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-        &registries.tool_conditional_execution_guardrails
-    });
-    let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-    let context = global_context();
-    let state = context
-        .read()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let subscribers = state.collect_event_subscribers(&scope_subscribers);
-    if let Some(error) = state.tool_conditional_execution_chain(
+    let (entries, subscribers, parent_uuid) = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+            &registries.tool_conditional_execution_guardrails
+        });
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        let entries = state.tool_conditional_execution_entries(&scope_locals);
+        let subscribers = state.collect_event_subscribers(&scope_subscribers);
+        (entries, subscribers, resolve_parent_uuid(None))
+    };
+    if let Some(error) = NemoFlowContextState::tool_conditional_execution_chain(
         name,
         args,
-        &scope_locals,
+        entries,
         &subscribers,
-        resolve_parent_uuid(None),
+        parent_uuid,
         None,
     )? {
         return Err(FlowError::GuardrailRejected(error));
