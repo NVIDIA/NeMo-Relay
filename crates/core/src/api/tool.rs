@@ -383,7 +383,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
                 metadata.clone(),
             )
         };
-        if let Some(error) = NemoFlowContextState::tool_conditional_execution_chain(
+        if let Some(error) = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
             &name,
             &args,
             entries,
@@ -530,7 +530,7 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))
     };
-    if let Some(error) = NemoFlowContextState::tool_conditional_execution_chain(
+    if let Some(error) = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
         name,
         args,
         entries,
