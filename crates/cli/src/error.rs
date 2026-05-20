@@ -48,21 +48,21 @@ impl IntoResponse for CliError {
     fn into_response(self) -> Response {
         let message = self.to_string();
         let guardrail_reason = self.guardrail_rejection_reason().map(ToOwned::to_owned);
-        let status = if guardrail_reason.is_some() {
-            StatusCode::FORBIDDEN
-        } else {
-            match &self {
-                Self::InvalidPayload(_) => StatusCode::BAD_REQUEST,
-                Self::Upstream(_) => StatusCode::BAD_GATEWAY,
-                Self::GuardrailRejected(_)
-                | Self::Http(_)
+        let status = match (guardrail_reason.is_some(), self) {
+            (true, _) => StatusCode::FORBIDDEN,
+            (false, Self::InvalidPayload(_)) => StatusCode::BAD_REQUEST,
+            (false, Self::Upstream(_)) => StatusCode::BAD_GATEWAY,
+            (
+                false,
+                Self::Http(_)
                 | Self::Io(_)
                 | Self::Install(_)
                 | Self::Config(_)
                 | Self::Launch(_)
                 | Self::Flow(_)
-                | Self::OpenInference(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            }
+                | Self::OpenInference(_),
+            ) => StatusCode::INTERNAL_SERVER_ERROR,
+            (false, _) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let error_type = if guardrail_reason.is_some() {
             "nemo_flow_guardrail_rejected"
