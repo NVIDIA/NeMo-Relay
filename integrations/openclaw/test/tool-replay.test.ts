@@ -138,6 +138,18 @@ describe("Tool replay", () => {
     assert.equal(nf.calls.toolCall.length, 0);
     assert.ok(nf.calls.event.some((event) => event.name === "openclaw.tool_blocked"));
   });
+
+  it("runs tool guardrails even when no session key is available", async () => {
+    const nf = createNemoFlowRuntime();
+    const backend = createBackend(nf);
+
+    await backend.onBeforeToolCall({ toolName: "shell", params: { command: "pwd" } }, {});
+
+    assert.deepEqual(nf.calls.toolConditionalExecution, [
+      { name: "shell", args: { command: "pwd" } },
+    ]);
+    assert.equal(nf.calls.setThreadScopeStack.length, 0);
+  });
 });
 
 type TestNemoFlowRuntime = NemoFlowRuntimeModule & {

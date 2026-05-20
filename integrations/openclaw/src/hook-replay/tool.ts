@@ -29,17 +29,18 @@ export async function guardBeforeToolCall(
     agentId: ctx.agentId,
     source: "lazy_session",
   });
+  const args = toJsonValue(event.params ?? {});
 
-  if (!session) {
-    return;
-  }
-
-  const previousStack = manager.nf.currentScopeStack();
-  try {
-    manager.nf.setThreadScopeStack(session.stack);
-    await manager.nf.toolConditionalExecution(event.toolName, toJsonValue(event.params ?? {}));
-  } finally {
-    manager.nf.setThreadScopeStack(previousStack);
+  if (session) {
+    const previousStack = manager.nf.currentScopeStack();
+    try {
+      manager.nf.setThreadScopeStack(session.stack);
+      await manager.nf.toolConditionalExecution(event.toolName, args);
+    } finally {
+      manager.nf.setThreadScopeStack(previousStack);
+    }
+  } else {
+    await manager.nf.toolConditionalExecution(event.toolName, args);
   }
 }
 
