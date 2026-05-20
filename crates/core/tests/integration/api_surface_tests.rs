@@ -318,6 +318,18 @@ fn noop_llm_stream_exec() -> LlmStreamExecutionNextFn {
     })
 }
 
+fn fixed_llm_stream_exec(chunks: Vec<Json>) -> LlmStreamExecutionNextFn {
+    let chunks = Arc::new(chunks);
+    Arc::new(move |_request| {
+        let chunks = chunks.clone();
+        Box::pin(async move {
+            let items = chunks.iter().cloned().map(Ok).collect::<Vec<_>>();
+            Ok(Box::pin(tokio_stream::iter(items))
+                as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+        })
+    })
+}
+
 fn failing_llm_stream_exec() -> LlmStreamExecutionNextFn {
     Arc::new(|_request| {
         Box::pin(async { Err(FlowError::Internal("llm stream execution failed".into())) })
@@ -968,6 +980,144 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     drop(failed_events);
 
     deregister_subscriber("llm-api-events").unwrap();
+}
+
+#[tokio::test]
+async fn test_llm_stream_chunk_marks_track_successful_chunks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("llm-stream-chunk-mark-events");
+    let raw_chunks = vec![
+        json!({
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "hello"}, "finish_reason": null}]
+        }),
+        json!({"unexpected": true}),
+    ];
+    let collected = Arc::new(Mutex::new(Vec::<Json>::new()));
+
+    let collector_state = collected.clone();
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |chunk| {
+        collector_state.lock().unwrap().push(chunk);
+        Ok(())
+    });
+    let finalizer_state = collected.clone();
+    let finalizer: Box<dyn FnOnce() -> Json + Send> =
+        Box::new(move || Json::Array(finalizer_state.lock().unwrap().clone()));
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("llm-stream")
+            .request(make_llm_request(json!({"messages": []})))
+            .func(fixed_llm_stream_exec(raw_chunks.clone()))
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .data(json!({"request": "stream"}))
+            .model_name("stream-model")
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let mut yielded = Vec::new();
+    while let Some(item) = stream.next().await {
+        yielded.push(item.unwrap());
+    }
+    assert_eq!(yielded, raw_chunks);
+
+    let captured = events.lock().unwrap().clone();
+    assert_eq!(captured.len(), 4);
+    assert_eq!(captured[0].kind(), "scope");
+    assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(captured[0].category().unwrap().as_str(), "llm");
+    assert_eq!(captured[1].kind(), "mark");
+    assert_eq!(captured[1].name(), "llm.chunk");
+    assert_eq!(captured[2].kind(), "mark");
+    assert_eq!(captured[2].name(), "llm.chunk");
+    assert_eq!(captured[3].kind(), "scope");
+    assert_eq!(captured[3].scope_category(), Some(ScopeCategory::End));
+    assert_eq!(captured[3].output().unwrap(), &Json::Array(raw_chunks));
+
+    let llm_uuid = captured[0].uuid();
+    for mark in [&captured[1], &captured[2]] {
+        assert_eq!(mark.parent_uuid(), Some(llm_uuid));
+        assert_eq!(mark.category(), None);
+        assert_eq!(mark.scope_type(), None);
+    }
+    assert_eq!(
+        captured[1].data().unwrap(),
+        &json!({
+            "chunk_index": 0,
+            "provider": "openai_chat_completions",
+            "event_type": "chat.completion.chunk",
+            "choice_indices": [0]
+        })
+    );
+    assert_eq!(
+        captured[2].data().unwrap(),
+        &json!({"chunk_index": 1, "provider": "unknown"})
+    );
+
+    deregister_subscriber("llm-stream-chunk-mark-events").unwrap();
+}
+
+#[tokio::test]
+async fn test_llm_stream_chunk_mark_survives_collector_failure() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("llm-stream-collector-failure-events");
+    let raw_chunk = json!({"object": "chat.completion.chunk", "choices": []});
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> =
+        Box::new(|_chunk| Err(FlowError::Internal("collector failed".into())));
+    let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!({"finalized": true}));
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("llm-stream")
+            .request(make_llm_request(json!({"messages": []})))
+            .func(fixed_llm_stream_exec(vec![raw_chunk]))
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .data(json!({"request": "stream"}))
+            .model_name("stream-model")
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let item = stream.next().await.unwrap();
+    assert!(matches!(
+        item,
+        Err(FlowError::Internal(message)) if message == "collector failed"
+    ));
+    assert!(stream.next().await.is_none());
+
+    let captured = events.lock().unwrap().clone();
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[0].kind(), "scope");
+    assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(captured[1].kind(), "mark");
+    assert_eq!(captured[1].name(), "llm.chunk");
+    assert_eq!(captured[1].parent_uuid(), Some(captured[0].uuid()));
+    assert_eq!(
+        captured[1].data().unwrap(),
+        &json!({
+            "chunk_index": 0,
+            "provider": "openai_chat_completions",
+            "event_type": "chat.completion.chunk"
+        })
+    );
+    assert_eq!(captured[2].kind(), "scope");
+    assert_eq!(captured[2].scope_category(), Some(ScopeCategory::End));
+    assert_eq!(captured[2].output().unwrap(), &json!({"finalized": true}));
+
+    deregister_subscriber("llm-stream-collector-failure-events").unwrap();
 }
 
 #[tokio::test]
