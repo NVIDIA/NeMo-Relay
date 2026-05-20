@@ -33,6 +33,8 @@ pub struct ExecutionIntercept<F> {
 
 /// A priority-ordered guardrail registration entry.
 pub struct GuardrailEntry<F> {
+    /// Caller-provided guardrail registration name.
+    pub name: String,
     /// Lower values run earlier in the chain.
     pub priority: i32,
     /// The caller-provided guardrail callback.
@@ -69,7 +71,14 @@ macro_rules! global_guardrail_registry_api {
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             state
                 .$field
-                .register(name.to_string(), GuardrailEntry { priority, guardrail })
+                .register(
+                    name.to_string(),
+                    GuardrailEntry {
+                        name: name.to_string(),
+                        priority,
+                        guardrail,
+                    },
+                )
                 .map_err(FlowError::AlreadyExists)
         }
 
@@ -259,7 +268,14 @@ macro_rules! scope_guardrail_registry_api {
                 .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             registries
                 .$field
-                .register(name.to_string(), GuardrailEntry { priority, guardrail })
+                .register(
+                    name.to_string(),
+                    GuardrailEntry {
+                        name: name.to_string(),
+                        priority,
+                        guardrail,
+                    },
+                )
                 .map_err(FlowError::AlreadyExists)
         }
 

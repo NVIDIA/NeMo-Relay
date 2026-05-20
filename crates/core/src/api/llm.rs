@@ -523,11 +523,19 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_conditional_execution_guardrails
         });
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        if let Some(error) = state.llm_conditional_execution_chain(&request, &scope_locals)? {
+        let subscribers = state.collect_event_subscribers(&scope_subscribers);
+        if let Some(error) = state.llm_conditional_execution_chain(
+            &request,
+            &scope_locals,
+            &subscribers,
+            resolve_parent_uuid(parent.as_ref()),
+            metadata.clone(),
+        )? {
             drop(state);
             drop(scope_guard);
             let mut rejection_data = json!({});
@@ -680,11 +688,19 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_conditional_execution_guardrails
         });
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        if let Some(error) = state.llm_conditional_execution_chain(&request, &scope_locals)? {
+        let subscribers = state.collect_event_subscribers(&scope_subscribers);
+        if let Some(error) = state.llm_conditional_execution_chain(
+            &request,
+            &scope_locals,
+            &subscribers,
+            resolve_parent_uuid(parent.as_ref()),
+            metadata.clone(),
+        )? {
             drop(state);
             drop(scope_guard);
             let mut rejection_data = json!({});
@@ -814,7 +830,8 @@ pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequ
 /// Run only the LLM conditional-execution guardrail chain.
 ///
 /// This evaluates whether an LLM call should be allowed to proceed without
-/// emitting lifecycle events or invoking request intercepts or execution.
+/// invoking request intercepts or execution. Each evaluated guardrail emits an
+/// automatic guardrail scope start/end pair for observability.
 ///
 /// # Parameters
 /// - `request`: Raw [`LlmRequest`] to validate.
@@ -828,7 +845,8 @@ pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequ
 ///
 /// # Notes
 /// This helper is useful for preflight checks when the caller needs the
-/// rejection result without starting an LLM span.
+/// rejection result without starting an LLM span. Guardrail scopes are still
+/// emitted for the conditional checks themselves.
 pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
@@ -836,11 +854,19 @@ pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
     let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
         &registries.llm_conditional_execution_guardrails
     });
+    let scope_subscribers = scope_guard.collect_scope_local_subscribers();
     let context = global_context();
     let state = context
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
-    if let Some(error) = state.llm_conditional_execution_chain(request, &scope_locals)? {
+    let subscribers = state.collect_event_subscribers(&scope_subscribers);
+    if let Some(error) = state.llm_conditional_execution_chain(
+        request,
+        &scope_locals,
+        &subscribers,
+        resolve_parent_uuid(None),
+        None,
+    )? {
         return Err(FlowError::GuardrailRejected(error));
     }
     Ok(())

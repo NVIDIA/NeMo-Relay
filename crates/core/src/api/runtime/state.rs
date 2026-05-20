@@ -25,7 +25,7 @@ use crate::api::runtime::callbacks::{
     LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
-use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle};
+use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{CreateToolHandleParams, EndToolHandleParams};
 use crate::codec::request::AnnotatedLlmRequest;
@@ -36,6 +36,8 @@ use crate::context::registries::{
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
+use serde_json::json;
+use uuid::Uuid;
 
 /// Process-global runtime state backing middleware and event emission.
 ///
@@ -527,6 +529,42 @@ impl NemoFlowContextState {
         ))
     }
 
+    fn emit_guardrail_scope_start(
+        &self,
+        name: &str,
+        parent_uuid: Option<Uuid>,
+        metadata: Option<Json>,
+        input: Json,
+        subscribers: &[EventSubscriberFn],
+    ) -> ScopeHandle {
+        let handle = self.create_scope_handle(
+            CreateScopeHandleParams::builder()
+                .name(name)
+                .parent_uuid_opt(parent_uuid)
+                .scope_type(ScopeType::Guardrail)
+                .metadata_opt(metadata)
+                .build(),
+        );
+        let event = self.build_scope_start_event(&handle, Some(input));
+        Self::emit_event(&event, subscribers);
+        handle
+    }
+
+    fn emit_guardrail_scope_end(
+        &self,
+        handle: &ScopeHandle,
+        output: Json,
+        subscribers: &[EventSubscriberFn],
+    ) {
+        let event = self.build_scope_end_event(
+            EndScopeHandleParams::builder()
+                .handle(handle)
+                .data(output)
+                .build(),
+        );
+        Self::emit_event(&event, subscribers);
+    }
+
     /// Run tool request sanitizers across global and scope-local registries.
     ///
     /// # Parameters
@@ -595,11 +633,42 @@ impl NemoFlowContextState {
         name: &str,
         args: &Json,
         scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
+        subscribers: &[EventSubscriberFn],
+        parent_uuid: Option<Uuid>,
+        metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
         let entries =
             merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals);
         for entry in entries {
-            if let Some(error) = (entry.guardrail)(name, args)? {
+            let handle = self.emit_guardrail_scope_start(
+                &entry.name,
+                parent_uuid,
+                metadata.clone(),
+                json!({
+                    "kind": "tool_conditional_execution",
+                    "target_name": name,
+                    "input": args,
+                }),
+                subscribers,
+            );
+            let result = (entry.guardrail)(name, args);
+            let output = match &result {
+                Ok(Some(reason)) => json!({
+                    "allowed": false,
+                    "rejected": true,
+                    "rejection_reason": reason,
+                }),
+                Ok(None) => json!({
+                    "allowed": true,
+                    "rejected": false,
+                }),
+                Err(error) => json!({
+                    "allowed": false,
+                    "error": error.to_string(),
+                }),
+            };
+            self.emit_guardrail_scope_end(&handle, output, subscribers);
+            if let Some(error) = result? {
                 return Ok(Some(error));
             }
         }
@@ -730,11 +799,41 @@ impl NemoFlowContextState {
         &self,
         request: &LlmRequest,
         scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
+        subscribers: &[EventSubscriberFn],
+        parent_uuid: Option<Uuid>,
+        metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
         let entries =
             merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);
         for entry in entries {
-            if let Some(error) = (entry.guardrail)(request)? {
+            let handle = self.emit_guardrail_scope_start(
+                &entry.name,
+                parent_uuid,
+                metadata.clone(),
+                json!({
+                    "kind": "llm_conditional_execution",
+                    "input": request,
+                }),
+                subscribers,
+            );
+            let result = (entry.guardrail)(request);
+            let output = match &result {
+                Ok(Some(reason)) => json!({
+                    "allowed": false,
+                    "rejected": true,
+                    "rejection_reason": reason,
+                }),
+                Ok(None) => json!({
+                    "allowed": true,
+                    "rejected": false,
+                }),
+                Err(error) => json!({
+                    "allowed": false,
+                    "error": error.to_string(),
+                }),
+            };
+            self.emit_guardrail_scope_end(&handle, output, subscribers);
+            if let Some(error) = result? {
                 return Ok(Some(error));
             }
         }

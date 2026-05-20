@@ -368,11 +368,20 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_conditional_execution_guardrails
         });
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        if let Some(error) = state.tool_conditional_execution_chain(&name, &args, &scope_locals)? {
+        let subscribers = state.collect_event_subscribers(&scope_subscribers);
+        if let Some(error) = state.tool_conditional_execution_chain(
+            &name,
+            &args,
+            &scope_locals,
+            &subscribers,
+            resolve_parent_uuid(parent.as_ref()),
+            metadata.clone(),
+        )? {
             drop(state);
             drop(scope_guard);
             let mut rejection_data = json!({});
@@ -479,7 +488,8 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// Run only the tool conditional-execution guardrail chain.
 ///
 /// This evaluates whether a tool call should be allowed to proceed without
-/// emitting lifecycle events or invoking request intercepts or execution.
+/// invoking request intercepts or execution. Each evaluated guardrail emits an
+/// automatic guardrail scope start/end pair for observability.
 ///
 /// # Parameters
 /// - `name`: Tool name used when resolving the guardrail chain.
@@ -494,7 +504,8 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 ///
 /// # Notes
 /// This helper is useful for preflight checks when the caller needs the
-/// rejection result without starting a tool span.
+/// rejection result without starting a tool span. Guardrail scopes are still
+/// emitted for the conditional checks themselves.
 pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
@@ -502,11 +513,20 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
         &registries.tool_conditional_execution_guardrails
     });
+    let scope_subscribers = scope_guard.collect_scope_local_subscribers();
     let context = global_context();
     let state = context
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
-    if let Some(error) = state.tool_conditional_execution_chain(name, args, &scope_locals)? {
+    let subscribers = state.collect_event_subscribers(&scope_subscribers);
+    if let Some(error) = state.tool_conditional_execution_chain(
+        name,
+        args,
+        &scope_locals,
+        &subscribers,
+        resolve_parent_uuid(None),
+        None,
+    )? {
         return Err(FlowError::GuardrailRejected(error));
     }
     Ok(())
