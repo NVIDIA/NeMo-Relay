@@ -172,9 +172,8 @@ pub enum ScopeCategory {
 
 /// Category-specific profile data.
 ///
-/// Unknown wire keys are preserved in `extra`. LLM annotations are runtime-only
-/// enrichment used by internal adaptive and Agent Trajectory Interchange Format
-/// (ATIF) logic and are never serialized.
+/// Unknown wire keys are preserved in `extra`. LLM annotations are serialized
+/// under `category_profile` when a codec captures them.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(setter(into, strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CategoryProfile {
@@ -215,6 +214,8 @@ impl CategoryProfile {
         self.model_name.is_none()
             && self.tool_call_id.is_none()
             && self.subtype.is_none()
+            && self.annotated_request.is_none()
+            && self.annotated_response.is_none()
             && self.extra.is_empty()
     }
 }
@@ -336,6 +337,24 @@ impl Event {
             Self::Scope(_) => "scope",
             Self::Mark(_) => "mark",
         }
+    }
+
+    /// Try to return this event as the canonical JSON object delivered by
+    /// language bindings to subscriber callbacks and ATOF exporters.
+    pub fn try_to_json_value(&self) -> serde_json::Result<Json> {
+        serde_json::to_value(self)
+    }
+
+    /// Return this event as the canonical JSON object delivered by language
+    /// bindings to subscriber callbacks.
+    pub fn to_json_value(&self) -> Json {
+        self.try_to_json_value()
+            .expect("serializing an ATOF event to JSON should not fail")
+    }
+
+    /// Return this event as canonical JSON.
+    pub fn to_json_string(&self) -> serde_json::Result<String> {
+        serde_json::to_string(&self.try_to_json_value()?)
     }
 
     /// Return the lifecycle phase for scope events.

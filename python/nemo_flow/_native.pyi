@@ -603,6 +603,12 @@ class ScopeEvent:
     def annotated_response(self) -> Optional[AnnotatedLLMResponse]:
         """Return the normalized LLM response annotation, if present."""
         ...
+    def to_dict(self) -> _JsonObject:
+        """Return this event as the canonical subscriber JSON dictionary."""
+        ...
+    def to_json(self) -> str:
+        """Return this event as canonical subscriber JSON."""
+        ...
 
 class MarkEvent:
     """ATOF point-in-time mark event emitted to subscribers.
@@ -658,6 +664,12 @@ class MarkEvent:
     @property
     def data_schema(self) -> Optional[_JsonObject]:
         """Return a schema descriptor for ``data``, if one is present."""
+        ...
+    def to_dict(self) -> _JsonObject:
+        """Return this event as the canonical subscriber JSON dictionary."""
+        ...
+    def to_json(self) -> str:
+        """Return this event as canonical subscriber JSON."""
         ...
 
 class AtifExporter:

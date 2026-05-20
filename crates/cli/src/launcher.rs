@@ -492,15 +492,13 @@ impl PreparedRun {
                 })?;
                 let _ = std::fs::remove_file(backup);
             }
-            (_, false) => {
-                if cursor.path.exists() {
-                    std::fs::remove_file(&cursor.path).map_err(|error| {
-                        CliError::Launch(format!(
-                            "failed to remove temporary Cursor hooks {}: {error}",
-                            cursor.path.display()
-                        ))
-                    })?;
-                }
+            (_, false) if cursor.path.exists() => {
+                std::fs::remove_file(&cursor.path).map_err(|error| {
+                    CliError::Launch(format!(
+                        "failed to remove temporary Cursor hooks {}: {error}",
+                        cursor.path.display()
+                    ))
+                })?;
             }
             _ => {}
         }

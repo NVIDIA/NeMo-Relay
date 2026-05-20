@@ -443,7 +443,7 @@ fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    let sanitized = gateway_forward_headers_with_openai_key_state(
+    let sanitized = strip_replaceable_agent_auth_headers_with_openai_key_state(
         &inbound,
         ProviderRoute::OpenAiResponses,
         true,
@@ -460,7 +460,7 @@ fn preserves_real_bearer_keys_on_openai_route() {
         "authorization",
         HeaderValue::from_static("Bearer sk-real-provider-key"),
     );
-    let sanitized = gateway_forward_headers_with_openai_key_state(
+    let sanitized = strip_replaceable_agent_auth_headers_with_openai_key_state(
         &inbound,
         ProviderRoute::OpenAiResponses,
         true,
@@ -481,7 +481,7 @@ fn does_not_touch_anthropic_route_authorization() {
         "authorization",
         HeaderValue::from_static("Bearer eyJ.anthropic.case"),
     );
-    let sanitized = gateway_forward_headers_with_openai_key_state(
+    let sanitized = strip_replaceable_agent_auth_headers_with_openai_key_state(
         &inbound,
         ProviderRoute::AnthropicMessages,
         true,
@@ -499,7 +499,7 @@ fn preserves_jwt_when_no_replacement_key_available() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    let sanitized = gateway_forward_headers_with_openai_key_state(
+    let sanitized = strip_replaceable_agent_auth_headers_with_openai_key_state(
         &inbound,
         ProviderRoute::OpenAiResponses,
         false,

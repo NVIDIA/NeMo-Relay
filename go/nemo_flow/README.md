@@ -95,6 +95,7 @@ import (
 func main() {
 	if err := nemo.RegisterSubscriber("printer", func(event nemo.Event) {
 		fmt.Printf("%s %s\n", event.Kind(), event.Name())
+		fmt.Println(string(event.JSON()))
 	}); err != nil {
 		log.Fatal(err)
 	}

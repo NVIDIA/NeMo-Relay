@@ -2284,7 +2284,7 @@ pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
 
 /// Register a named event subscriber that receives all lifecycle events.
 ///
-/// The `callback` receives each event as a JSON-serialized `JsEvent` object. Events are
+/// The `callback` receives each event as the canonical JSON event object. Events are
 /// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
 /// already exists.
 #[napi]
@@ -2777,7 +2777,7 @@ pub fn scope_deregister_llm_stream_execution_intercept(
 /// Register a scope-local named event subscriber that receives lifecycle events
 /// for the specified scope.
 ///
-/// The `callback` receives each event as a JSON-serialized `JsEvent` object. Events are
+/// The `callback` receives each event as the canonical JSON event object. Events are
 /// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
 /// already exists on the specified scope.
 #[napi]

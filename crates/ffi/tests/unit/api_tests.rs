@@ -237,6 +237,8 @@ unsafe extern "C" fn subscriber_cb(_user_data: *mut libc::c_void, event: *const 
         "uuid": unsafe { take_string(nemo_flow_event_uuid(event)) }.unwrap_or_default(),
         "name": unsafe { take_string(nemo_flow_event_name(event)) }.unwrap_or_default(),
         "kind": unsafe { take_string(crate::types::nemo_flow_event_kind(event)) }.unwrap_or_default(),
+        "json": unsafe { take_string(crate::types::nemo_flow_event_json(event)) }
+            .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
         "data": unsafe { take_string(nemo_flow_event_data(event)) }
             .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
         "metadata": unsafe { take_string(nemo_flow_event_metadata(event)) }

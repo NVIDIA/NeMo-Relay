@@ -675,7 +675,7 @@ async fn forward_upstream_request(
     route: ProviderRoute,
 ) -> Result<reqwest::Response, reqwest::Error> {
     let (body_bytes, headers) = effective_upstream_request(body_bytes, headers, effective_request);
-    let sanitized = gateway_forward_headers(&headers, route);
+    let sanitized = strip_replaceable_agent_auth_headers(&headers, route);
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
@@ -698,9 +698,15 @@ fn effective_upstream_request(
     let body_bytes = if request.content.is_null() {
         body_bytes.clone()
     } else {
-        serde_json::to_vec(&request.content)
-            .map(Bytes::from)
-            .unwrap_or_else(|_| body_bytes.clone())
+        match serde_json::to_vec(&request.content) {
+            Ok(serialized) => Bytes::from(serialized),
+            Err(error) => {
+                eprintln!(
+                    "nemo-flow CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
+                );
+                return (body_bytes.clone(), headers.clone());
+            }
+        }
     };
     let mut headers = headers.clone();
     for (name, value) in &request.headers {
@@ -849,7 +855,7 @@ pub(crate) async fn models(
         .unwrap_or(parts.uri.path());
     let upstream_url = gateway_upstream_url_override(provider, &parts.headers, path_and_query)
         .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
-    let sanitized = gateway_forward_headers(&parts.headers, provider);
+    let sanitized = strip_replaceable_agent_auth_headers(&parts.headers, provider);
     let mut upstream = state.http.get(upstream_url);
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
@@ -985,18 +991,18 @@ fn gateway_upstream_url_override_with_openai_key_state(
     )
 }
 
-// Lets alignment adapters normalize agent-native credentials before the gateway injects standard
-// provider API keys. Whitespace-only env vars are treated as missing because forwarding an empty
-// bearer value only replaces one authentication failure with another.
-fn gateway_forward_headers(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
-    gateway_forward_headers_with_openai_key_state(
+// Lets alignment adapters strip agent-native credentials only when the gateway can replace them
+// with standard provider API keys. Whitespace-only env vars are treated as missing because
+// forwarding an empty bearer value only replaces one authentication failure with another.
+fn strip_replaceable_agent_auth_headers(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
+    strip_replaceable_agent_auth_headers_with_openai_key_state(
         headers,
         route,
         env_var_is_nonempty("OPENAI_API_KEY"),
     )
 }
 
-fn gateway_forward_headers_with_openai_key_state(
+fn strip_replaceable_agent_auth_headers_with_openai_key_state(
     headers: &HeaderMap,
     route: ProviderRoute,
     has_openai_replacement_key: bool,

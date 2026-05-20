@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 const pushScopeFailed = "PushScope failed: %v"
@@ -117,6 +118,82 @@ func assertJSONFieldNumber(t *testing.T, raw json.RawMessage, field string, want
 	}
 	if num != want {
 		t.Fatalf("expected %s=%v, got %v", field, want, num)
+	}
+}
+
+func TestEventJSONHelpers(t *testing.T) {
+	var captured Event
+	capturedCh := make(chan struct{}, 1)
+	var mu sync.Mutex
+	subscriberName := "go_event_json_sub"
+
+	_ = DeregisterSubscriber(subscriberName)
+	if err := RegisterSubscriber(subscriberName, func(event Event) {
+		if event.Name() == "go_json_mark" {
+			mu.Lock()
+			captured = event
+			mu.Unlock()
+			select {
+			case capturedCh <- struct{}{}:
+			default:
+			}
+		}
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber(subscriberName)
+
+	if err := EmitEvent("go_json_mark", WithEventData(json.RawMessage(`{"ok":true}`))); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+
+	select {
+	case <-capturedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for subscriber to capture event")
+	}
+
+	mu.Lock()
+	event := captured
+	mu.Unlock()
+	if event == nil {
+		t.Fatal("expected subscriber to capture event")
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(event.JSON(), &payload); err != nil {
+		t.Fatalf("event.JSON returned invalid JSON: %v", err)
+	}
+	if payload["kind"] != "mark" || payload["name"] != "go_json_mark" {
+		t.Fatalf("unexpected event JSON payload: %#v", payload)
+	}
+
+	marshaled, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("json.Marshal(event) failed: %v", err)
+	}
+	var marshaledPayload map[string]interface{}
+	if err := json.Unmarshal(marshaled, &marshaledPayload); err != nil {
+		t.Fatalf("json.Marshal(event) returned invalid JSON: %v", err)
+	}
+	if marshaledPayload["kind"] != payload["kind"] || marshaledPayload["name"] != payload["name"] {
+		t.Fatalf("MarshalJSON payload mismatch: raw=%#v marshaled=%#v", payload, marshaledPayload)
+	}
+}
+
+func TestEventBaseJSONHandlesNilPointer(t *testing.T) {
+	var base eventBase
+
+	if raw := base.JSON(); raw != nil {
+		t.Fatalf("expected nil JSON for nil event pointer, got %s", raw)
+	}
+
+	marshaled, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("json.Marshal(eventBase) failed: %v", err)
+	}
+	if string(marshaled) != "null" {
+		t.Fatalf("expected nil event base to marshal as null, got %s", marshaled)
 	}
 }
 
