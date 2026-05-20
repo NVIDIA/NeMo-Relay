@@ -61,10 +61,51 @@ exporter handoff.
 Some subscribers stay inside the process and power custom logging, analytics, or
 debugging logic.
 
+#### Host Integration Event JSON
+
 For host integrations that need a serialized event payload, use the event
 object's canonical JSON helpers instead of reconstructing payloads from native
 attributes. Python subscribers can call `event.to_dict()` or `event.to_json()`
 from the callback while still using the normal subscriber registration API.
+
+This pattern is useful when an agent runtime, framework adapter, or plugin host
+already has its own lifecycle hooks but wants NeMo Flow to be the shared
+telemetry representation. The host integration maps those hooks into NeMo Flow
+scopes, LLM calls, tool calls, or marks. NeMo Flow emits the canonical ATOF event
+stream, and each subscriber chooses whether to consume the native event object,
+the canonical JSON helper, or an exporter-specific translation.
+
+```{mermaid}
+flowchart
+    Host[Host Integration]
+
+    subgraph NeMoFlow[NeMo Flow]
+        direction TB
+        Binding[Binding API]
+        Core[Rust Core Runtime]
+        Events[Canonical ATOF Event Stream]
+        Observer[In-Process Subscriber]
+        Json[Canonical Event JSON]
+        Exporters[Exporter Subscribers]
+        Backends[JSONL / ATIF / OTLP]
+
+        Binding -->|emits scopes, tools, LLMs, marks| Core
+        Core --> Events
+        Events --> Observer
+        Observer -->|to_dict / to_json / JSON| Json
+        Events --> Exporters
+        Exporters --> Backends
+    end
+
+    Host -->|maps lifecycle hooks| Binding
+    Json -. host consumes canonical telemetry .-> Host
+```
+
+The important boundary is that subscribers do not define the event schema. They
+receive the runtime event and may serialize it through the binding helper when
+they need a stable JSON payload. Exporter subscribers, such as the ATOF JSONL
+exporter, consume the same event stream and serialize the same canonical event
+shape for their target backend.
 
 ### Forwarding and Export
 
