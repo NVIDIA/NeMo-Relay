@@ -134,7 +134,9 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
         println!();
         println!("Observability: {summary}");
         println!("Adaptive: {adaptive_summary}");
-        let adaptive_toggle_index = observability_fields.len() + 1;
+        let observability_start_index = 1;
+        let observability_end_index = observability_start_index + observability_fields.len();
+        let adaptive_toggle_index = observability_end_index;
         let adaptive_start_index = adaptive_toggle_index + 1;
         let preview_index = adaptive_start_index + adaptive_fields.len();
         let save_index = preview_index + 1;
@@ -149,12 +151,12 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
                 set_component_enabled(&mut config, enabled);
             }
             MenuResponse::Selected(selection)
-                if (1..=observability_fields.len()).contains(&selection) =>
+                if (observability_start_index..observability_end_index).contains(&selection) =>
             {
                 edit_section(
                     &theme,
                     &mut observability,
-                    observability_fields[selection - 1],
+                    observability_fields[selection - observability_start_index],
                 )?
             }
             MenuResponse::Selected(selection) if selection == adaptive_toggle_index => {
@@ -201,13 +203,20 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
             }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
             MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, selected) => {
-                if (adaptive_start_index..preview_index).contains(&selected) {
+                if (observability_start_index..observability_end_index).contains(&selected) {
+                    reset_config_field(
+                        &mut observability,
+                        observability_fields[selected - observability_start_index],
+                    )?;
+                } else if (adaptive_start_index..preview_index).contains(&selected) {
                     reset_config_field(
                         &mut adaptive,
                         adaptive_fields[selected - adaptive_start_index],
                     )?;
                 } else {
-                    println!("  Select an Adaptive field or a section field to reset or clear.");
+                    println!(
+                        "  Select an Observability or Adaptive field, or a section field, to reset or clear."
+                    );
                 }
             }
             MenuResponse::Cancel | MenuResponse::Selected(_) => {
@@ -406,7 +415,6 @@ fn edit_section<T>(
 where
     T: SerializeConfig,
 {
-    ensure_section(config, section);
     let fields = section
         .schema()
         .ok_or_else(|| CliError::Config(format!("{} is not an editable section", section.name)))?
@@ -615,8 +623,9 @@ where
         let schema = field.schema().ok_or_else(|| {
             CliError::Config(format!("{} is not an editable section", field.name))
         })?;
-        edit_value_section(theme, field.name, &mut value, schema, field.default_value())?;
-        set_struct_field(config, field.name, value)?;
+        if edit_value_section(theme, field.name, &mut value, schema, field.default_value())? {
+            set_struct_field(config, field.name, value)?;
+        }
         return Ok(());
     }
 
@@ -677,14 +686,16 @@ where
     let schema = field
         .schema()
         .ok_or_else(|| CliError::Config(format!("{} is not an editable section", field.name)))?;
-    edit_value_section(
+    if edit_value_section(
         theme,
         &format!("{}.{}", section.name, field.name),
         &mut value,
         schema,
         field.default_value(),
-    )?;
-    set_section_field(config, section, field.name, value)
+    )? {
+        set_section_field(config, section, field.name, value)?;
+    }
+    Ok(())
 }
 
 fn edit_value_section(
@@ -693,8 +704,9 @@ fn edit_value_section(
     value: &mut Value,
     schema: &nemo_flow::config_editor::EditorSchema,
     default: Option<Value>,
-) -> Result<(), CliError> {
+) -> Result<bool, CliError> {
     ensure_object(value);
+    let original = value.clone();
     let mut selected_index = 0;
     loop {
         let items = value_section_menu_items(value, schema, default.as_ref())?;
@@ -723,10 +735,10 @@ fn edit_value_section(
                 println!("  Preview and save are available from the main plugins.toml menu.");
                 continue;
             }
-            MenuResponse::Cancel => return Ok(()),
+            MenuResponse::Cancel => return Ok(*value != original),
         };
         if !edit_selected_value_item(theme, prompt, value, schema, default.as_ref(), selection)? {
-            return Ok(());
+            return Ok(*value != original);
         }
     }
 }
@@ -800,14 +812,15 @@ fn edit_value_field(
         let nested_schema = field.schema().ok_or_else(|| {
             CliError::Config(format!("{} is not an editable section", field.name))
         })?;
-        edit_value_section(
+        if edit_value_section(
             theme,
             &format!("{prompt}.{}", field.name),
             &mut nested_value,
             nested_schema,
             field.default_value(),
-        )?;
-        set_value_field(value, field.name, nested_value);
+        )? {
+            set_value_field(value, field.name, nested_value);
+        }
         return Ok(());
     }
 
@@ -980,10 +993,7 @@ fn prompt_value(
                 .with_initial_text(initial)
                 .interact_text()
                 .map_err(editor_error)?;
-            let parsed = value.trim().parse::<f64>().map_err(|error| {
-                CliError::Config(format!("{} must be a number: {error}", field.name))
-            })?;
-            Ok(json!(parsed))
+            parse_float_value(field, &value)
         }
         EditorFieldKind::StringMap | EditorFieldKind::Json => {
             let initial = current.map(display_value).unwrap_or_else(|| {
@@ -1030,6 +1040,20 @@ fn prompt_value(
             field.name
         ))),
     }
+}
+
+fn parse_float_value(field: &EditorFieldSpec, value: &str) -> Result<Value, CliError> {
+    let value = value.trim();
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|error| CliError::Config(format!("{} must be a number: {error}", field.name)))?;
+    if !parsed.is_finite() {
+        return Err(CliError::Config(format!(
+            "{} must be a finite number: {value}",
+            field.name
+        )));
+    }
+    Ok(json!(parsed))
 }
 
 fn editor_error(err: dialoguer::Error) -> CliError {

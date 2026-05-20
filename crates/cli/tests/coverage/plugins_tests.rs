@@ -406,6 +406,17 @@ fn adaptive_config_field_reset_handles_optional_and_default_fields() {
 }
 
 #[test]
+fn observability_config_field_reset_clears_optional_section() {
+    let mut observability = ObservabilityConfig::default();
+    let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
+    toggle_section(&mut observability, atof);
+
+    reset_config_field(&mut observability, atof).unwrap();
+
+    assert!(observability.atof.is_none());
+}
+
+#[test]
 fn adaptive_summary_tracks_component_and_configured_fields() {
     let mut config = PluginConfig::default();
     ensure_adaptive_component(&mut config).unwrap();
@@ -613,6 +624,30 @@ fn display_helpers_render_scalars_json_and_defaults() {
         display_field_value(atof, mode, &json!("overwrite")),
         "overwrite"
     );
+}
+
+#[test]
+fn parse_float_value_rejects_non_finite_numbers() {
+    let field = EditorFieldSpec {
+        name: "stable_threshold",
+        label: "Stable threshold",
+        kind: EditorFieldKind::Float,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+    };
+
+    assert_eq!(parse_float_value(&field, "0.75").unwrap(), json!(0.75));
+
+    for value in ["inf", "-inf", "NaN"] {
+        let error = parse_float_value(&field, value).unwrap_err().to_string();
+        assert!(
+            error.contains("stable_threshold must be a finite number"),
+            "error was: {error}"
+        );
+        assert!(error.contains(value), "error was: {error}");
+    }
 }
 
 #[test]
