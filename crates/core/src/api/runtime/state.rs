@@ -20,10 +20,10 @@ use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
 use crate::api::runtime::callbacks::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventSubscriberFn, LlmConditionalSharedFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::tool::ToolHandle;
@@ -60,7 +60,8 @@ pub struct NemoFlowContextState {
     /// Global LLM response sanitizers applied to emitted LLM-end payloads.
     pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
     /// Global LLM guardrails that can reject execution before the provider callback runs.
-    pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
+    pub llm_conditional_execution_guardrails:
+        SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>,
     /// Global LLM request intercepts that can rewrite or annotate requests.
     pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Global non-streaming LLM execution intercepts that wrap callback execution.
@@ -530,38 +531,55 @@ impl NemoFlowContextState {
     }
 
     fn emit_guardrail_scope_start(
-        &self,
         name: &str,
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
         input: Json,
         subscribers: &[EventSubscriberFn],
     ) -> ScopeHandle {
-        let handle = self.create_scope_handle(
-            CreateScopeHandleParams::builder()
-                .name(name)
-                .parent_uuid_opt(parent_uuid)
-                .scope_type(ScopeType::Guardrail)
-                .metadata_opt(metadata)
+        let handle = ScopeHandle::builder()
+            .name(name)
+            .scope_type(ScopeType::Guardrail)
+            .parent_uuid_opt(parent_uuid)
+            .metadata_opt(metadata)
+            .build();
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .parent_uuid_opt(handle.parent_uuid)
+                .uuid(handle.uuid)
+                .timestamp(handle.started_at)
+                .name(handle.name.as_str())
+                .data(input)
+                .metadata_opt(handle.metadata.clone())
                 .build(),
-        );
-        let event = self.build_scope_start_event(&handle, Some(input));
+            ScopeCategory::Start,
+            scope_attributes_to_strings(handle.attributes),
+            EventCategory::from(handle.scope_type),
+            None,
+        ));
         Self::emit_event(&event, subscribers);
         handle
     }
 
     fn emit_guardrail_scope_end(
-        &self,
         handle: &ScopeHandle,
         output: Json,
         subscribers: &[EventSubscriberFn],
     ) {
-        let event = self.build_scope_end_event(
-            EndScopeHandleParams::builder()
-                .handle(handle)
+        let event = Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .parent_uuid_opt(handle.parent_uuid)
+                .uuid(handle.uuid)
+                .timestamp(end_timestamp_after(handle.started_at))
+                .name(handle.name.as_str())
                 .data(output)
+                .metadata_opt(handle.metadata.clone())
                 .build(),
-        );
+            ScopeCategory::End,
+            scope_attributes_to_strings(handle.attributes),
+            EventCategory::from(handle.scope_type),
+            None,
+        ));
         Self::emit_event(&event, subscribers);
     }
 
@@ -640,7 +658,7 @@ impl NemoFlowContextState {
         let entries =
             merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals);
         for entry in entries {
-            let handle = self.emit_guardrail_scope_start(
+            let handle = Self::emit_guardrail_scope_start(
                 &entry.name,
                 parent_uuid,
                 metadata.clone(),
@@ -667,7 +685,7 @@ impl NemoFlowContextState {
                     "error": error.to_string(),
                 }),
             };
-            self.emit_guardrail_scope_end(&handle, output, subscribers);
+            Self::emit_guardrail_scope_end(&handle, output, subscribers);
             if let Some(error) = result? {
                 return Ok(Some(error));
             }
@@ -782,31 +800,40 @@ impl NemoFlowContextState {
         value
     }
 
-    /// Evaluate LLM conditional-execution guardrails in priority order.
+    /// Snapshot LLM conditional-execution guardrails in priority order.
     ///
     /// # Parameters
-    /// - `request`: LLM request to validate.
     /// - `scope_locals`: Scope-local conditional guardrail registries collected
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// A [`Result`] containing `Ok(None)` when execution is allowed or
-    /// `Ok(Some(reason))` when a guardrail rejects the call.
-    ///
-    /// # Errors
-    /// Propagates any error returned by a guardrail callback.
-    pub fn llm_conditional_execution_chain(
+    /// Cloned guardrail entries that can be evaluated after registry locks are
+    /// released.
+    pub fn llm_conditional_execution_entries(
         &self,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>],
+    ) -> Vec<GuardrailEntry<LlmConditionalSharedFn>> {
+        merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Evaluate a snapshot of LLM conditional-execution guardrails in priority order.
+    ///
+    /// This function emits guardrail scope start/end events while evaluating
+    /// the provided entries. Callers should pass entries cloned from the
+    /// global and scope-local registries so subscriber callbacks run without
+    /// registry locks held.
+    pub fn llm_conditional_execution_chain(
         request: &LlmRequest,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
+        entries: Vec<GuardrailEntry<LlmConditionalSharedFn>>,
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
-        let entries =
-            merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);
         for entry in entries {
-            let handle = self.emit_guardrail_scope_start(
+            let handle = Self::emit_guardrail_scope_start(
                 &entry.name,
                 parent_uuid,
                 metadata.clone(),
@@ -832,7 +859,7 @@ impl NemoFlowContextState {
                     "error": error.to_string(),
                 }),
             };
-            self.emit_guardrail_scope_end(&handle, output, subscribers);
+            Self::emit_guardrail_scope_end(&handle, output, subscribers);
             if let Some(error) = result? {
                 return Ok(Some(error));
             }

@@ -32,6 +32,7 @@ pub struct ExecutionIntercept<F> {
 }
 
 /// A priority-ordered guardrail registration entry.
+#[derive(Clone)]
 pub struct GuardrailEntry<F> {
     /// Caller-provided guardrail registration name.
     pub name: String,
@@ -76,7 +77,7 @@ macro_rules! global_guardrail_registry_api {
                     GuardrailEntry {
                         name: name.to_string(),
                         priority,
-                        guardrail,
+                        guardrail: guardrail.into(),
                     },
                 )
                 .map_err(FlowError::AlreadyExists)
@@ -273,7 +274,7 @@ macro_rules! scope_guardrail_registry_api {
                     GuardrailEntry {
                         name: name.to_string(),
                         priority,
-                        guardrail,
+                        guardrail: guardrail.into(),
                     },
                 )
                 .map_err(FlowError::AlreadyExists)

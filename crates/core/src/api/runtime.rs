@@ -9,8 +9,8 @@ pub mod scope_stack;
 pub mod state;
 
 pub use callbacks::{
-    EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmConditionalSharedFn, LlmExecutionFn,
+    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
     LlmStreamExecutionRegistryRef, LlmStreamExecutionRegistryRefs, ToolConditionalFn,
     ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,

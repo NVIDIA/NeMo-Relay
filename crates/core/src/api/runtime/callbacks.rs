@@ -69,6 +69,8 @@ pub type LlmSanitizeResponseFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
 /// The callback receives the current [`LlmRequest`] and can allow execution,
 /// reject it with a guardrail reason, or return an error.
 pub type LlmConditionalFn = Box<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
+/// Shared LLM conditional guardrail callback stored in registries.
+pub type LlmConditionalSharedFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
 /// Rewrite or annotate an LLM request before execution.
 ///
 /// Request intercepts can transform the wire request, attach or replace a
