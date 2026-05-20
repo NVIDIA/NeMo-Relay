@@ -840,13 +840,41 @@ impl NemoFlowContextState {
             .collect()
     }
 
+    /// Evaluate LLM conditional-execution guardrails in priority order.
+    ///
+    /// # Parameters
+    /// - `request`: LLM request to validate.
+    /// - `scope_locals`: Scope-local conditional guardrail registries collected
+    ///   from the active scope stack.
+    ///
+    /// # Returns
+    /// A [`Result`] containing `Ok(None)` when execution is allowed or
+    /// `Ok(Some(reason))` when a guardrail rejects the call.
+    ///
+    /// # Errors
+    /// Propagates any error returned by a guardrail callback.
+    pub fn llm_conditional_execution_chain(
+        &self,
+        request: &LlmRequest,
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>],
+    ) -> crate::error::Result<Option<String>> {
+        let entries =
+            merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);
+        for entry in entries {
+            if let Some(error) = (entry.guardrail)(request)? {
+                return Ok(Some(error));
+            }
+        }
+        Ok(None)
+    }
+
     /// Evaluate a snapshot of LLM conditional-execution guardrails in priority order.
     ///
     /// This function emits guardrail scope start/end events while evaluating
     /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
     /// registry locks held.
-    pub(crate) fn llm_conditional_execution_chain(
+    pub(crate) fn llm_conditional_execution_snapshot_chain(
         request: &LlmRequest,
         entries: Vec<ConditionalGuardrailSnapshot<LlmConditionalSharedFn>>,
         subscribers: &[EventSubscriberFn],

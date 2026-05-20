@@ -538,7 +538,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 metadata.clone(),
             )
         };
-        if let Some(error) = NemoFlowContextState::llm_conditional_execution_chain(
+        if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
             &request,
             entries,
             &subscribers,
@@ -710,7 +710,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 metadata.clone(),
             )
         };
-        if let Some(error) = NemoFlowContextState::llm_conditional_execution_chain(
+        if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
             &request,
             entries,
             &subscribers,
@@ -878,7 +878,7 @@ pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))
     };
-    if let Some(error) = NemoFlowContextState::llm_conditional_execution_chain(
+    if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
         request,
         entries,
         &subscribers,
