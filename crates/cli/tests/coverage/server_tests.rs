@@ -273,7 +273,8 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
             "SessionEnd",
         ),
     ] {
-        for hook_event_name in [start_event, end_event] {
+        let hook_events = vec![start_event, "UserPromptSubmit", end_event];
+        for hook_event_name in hook_events {
             let response = client
                 .post(format!("{url}{path}"))
                 .json(&json!({
@@ -302,8 +303,9 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
         })
         .filter_map(|event| event["name"].as_str().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
-    assert!(agent_starts.contains(&"codex".to_string()));
-    assert!(agent_starts.contains(&"claude-code".to_string()));
+    assert!(agent_starts.contains(&"codex-turn".to_string()));
+    assert!(agent_starts.contains(&"claude-code-turn".to_string()));
+    assert!(!agent_starts.contains(&"claude-code".to_string()));
 }
 
 #[tokio::test]

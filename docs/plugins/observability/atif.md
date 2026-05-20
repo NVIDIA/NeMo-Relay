@@ -60,6 +60,12 @@ The plugin writes each trajectory when the top-level agent scope closes. If the
 plugin is cleared while an agent is still open, teardown flushes the partial
 trajectory.
 
+To correlate ATIF with OpenTelemetry or OpenInference traces from the same run,
+join on NeMo Flow UUIDs. The plugin-managed ATIF `session_id` is the top-level
+agent scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
+and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
+same values as `nemo_flow.uuid` and `nemo_flow.parent_uuid` attributes.
+
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Flow own the ATIF
