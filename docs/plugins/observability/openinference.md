@@ -66,8 +66,14 @@ OpenInference uses the same OTLP section shape as
 ## Expected Output
 
 The backend should show OpenInference-oriented spans for scopes, tools, and LLM
-calls from the same `root_uuid`. LLM usage metadata appears as token counters
-when provider responses include usage information.
+calls grouped by root scope. LLM usage metadata appears as token counters when
+provider responses include usage information.
+
+Each lifecycle span includes `nemo_flow.uuid` and `nemo_flow.parent_uuid`
+attributes. These values match ATIF `step.extra.ancestry.function_id` and
+`step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
+the root agent span's `nemo_flow.uuid` also matches the ATIF `session_id`.
+Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
 Redact sensitive event payloads with sanitize guardrails before production
 export.

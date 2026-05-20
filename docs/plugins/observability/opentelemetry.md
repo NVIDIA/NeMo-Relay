@@ -65,6 +65,12 @@ The collector should receive OTLP trace export requests. The tracing backend
 should show spans for NeMo Flow scopes, tools, LLM calls, and marks grouped by
 root scope.
 
+Each lifecycle span includes `nemo_flow.uuid` and `nemo_flow.parent_uuid`
+attributes. These values match ATIF `step.extra.ancestry.function_id` and
+`step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
+the root agent span's `nemo_flow.uuid` also matches the ATIF `session_id`.
+Backend-native `trace_id` and `span_id` values are not written into ATIF.
+
 Register the plugin before the first instrumented request, use stable service
 identity fields, keep credentials outside source code, and flush during
 graceful shutdown.

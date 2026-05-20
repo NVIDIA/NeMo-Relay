@@ -218,7 +218,8 @@ Check both behavior and instrumentation:
 - The provider result matches what the application returned before the wrapper was added.
 - The subscriber prints an agent or request scope event.
 - The subscriber prints LLM start and LLM end events for `demo-provider`.
-- LLM start input contains the request after request intercepts.
+- LLM start input contains the request after request intercepts and
+  sanitize-request guardrails.
 - LLM end output contains the provider response after response guardrails.
 - The LLM event includes the normalized `model_name` when you provide one.
 

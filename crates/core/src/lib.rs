@@ -63,6 +63,7 @@ pub mod error;
 pub mod json;
 pub mod observability;
 pub mod plugin;
+pub mod plugins;
 pub mod registry;
 #[doc(hidden)]
 pub mod shared_runtime;

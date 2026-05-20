@@ -459,9 +459,10 @@ fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Re
 
 /// Execute an LLM call through the managed middleware pipeline.
 ///
-/// This runs conditional-execution guardrails, request intercepts,
-/// sanitize-request guardrails, execution intercepts, the provider callback,
-/// and sanitize-response guardrails in the runtime-defined order.
+/// This runs conditional-execution guardrails, request intercepts, and
+/// sanitize-request guardrails, emits the LLM-start event, then runs execution
+/// intercepts, the provider callback when it is not replaced, and
+/// sanitize-response guardrails in the runtime-defined order.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -488,6 +489,10 @@ fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Re
 /// execution intercepts, codecs, or the callback itself.
 ///
 /// # Notes
+/// The LLM-start event is emitted before execution intercepts run. When
+/// execution fails after that point, the runtime still emits an LLM-end event
+/// without an output payload.
+///
 /// Response codecs enrich observability output only and do not change the
 /// value returned to the caller.
 pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
@@ -587,9 +592,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 
 /// Execute a streaming LLM call through the managed middleware pipeline.
 ///
-/// This runs the same pre-execution middleware as [`llm_call_execute`] and
-/// then wraps the provider stream so chunk callbacks and finalization can emit
-/// a single LLM-end event when streaming completes.
+/// This runs the same pre-execution middleware as [`llm_call_execute`], emits
+/// the LLM-start event, and then wraps the provider stream so chunk callbacks
+/// and finalization can emit a single LLM-end event when streaming completes.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -617,6 +622,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 /// execution intercepts, stream callbacks, codecs, or the provider callback.
 ///
 /// # Notes
+/// The LLM-start event is emitted before stream execution intercepts run.
+///
 /// The returned stream emits chunk-level results while the runtime defers the
 /// LLM-end event until the collector and finalizer complete.
 pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Result<LlmJsonStream> {
