@@ -108,7 +108,8 @@ arguments passed to the callback or the real value returned to the caller.
 
 ## Managed Execution Order
 
-For managed execution, NeMo Flow applies middleware in this order:
+For managed execution, NeMo Flow applies middleware and emits lifecycle events
+in this order:
 
 ```{mermaid}
 sequenceDiagram
@@ -130,7 +131,7 @@ sequenceDiagram
     else allowed
         Runtime->>Req: rewrite the real request
         Runtime->>San: sanitize emitted start payload
-        Runtime->>Subs: emit start event
+        Runtime->>Subs: emit start event before execution
         Runtime->>Exec: wrap execution
         Exec->>Callback: invoke callback
         Callback-->>Exec: return real result
@@ -143,17 +144,17 @@ sequenceDiagram
 
 1. Conditional-execution guardrails
 2. Request intercepts
-3. Sanitize-request guardrails for emitted start events
+3. Sanitize-request guardrails and emit the start event
 4. Execution intercepts
-5. The real callback
-6. Sanitize-response guardrails for emitted end events
+5. The real callback, unless an execution intercept replaces it
+6. Sanitize-response guardrails and emit the end event
 
-For streaming LLM flows, **stream execution intercepts** sit inside the
-execution path between items 4 and 6. `sanitize-request` guardrails still apply
-at item 3 to the emitted start payload, execution intercepts still wrap the
-call boundary at item 4, and stream execution intercepts then run on emitted
-streaming start/chunk/end activity before `sanitize-response` guardrails rewrite
-the emitted response-side payloads at item 6.
+For streaming LLM flows, the same pre-execution order applies: the runtime
+applies `sanitize-request` guardrails and emits the LLM start event before the
+stream execution intercept chain runs. Stream execution intercepts are the
+execution family for streaming provider callbacks. The runtime then collects
+chunks and finalizes the stream before `sanitize-response` guardrails rewrite
+the emitted end-event payload at item 6.
 
 This ordering is what makes the semantic split between intercepts and
 guardrails important:
@@ -180,8 +181,9 @@ flowchart TB
         subgraph Invocation
             direction TB
             HasExecutionIntercept{{Has Valid Execution Intercept}}
-            ExecutionIntercepts[/Execution Intercept/]
+            ExecutionIntercepts[/Execution Intercepts/]
             DefaultCallable[Default Callable]
+            InterceptResult[Execution Result]
         end
 
         subgraph Streaming
@@ -194,6 +196,8 @@ flowchart TB
             direction TB
             SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
             SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
+            StartEvent[Emit Start Event]
+            EndEvent[Emit End Event]
             EventSubscribers[["Event Subscribers"]]
         end
     end
@@ -201,34 +205,39 @@ flowchart TB
     Response([Response])
 
     Request --> ConditionalExecutionGuardrails
-    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails & Invocation
+    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
     ConditionalExecutionGuardrails -->|"(rejected)"| EventSubscribers
     ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
     ConditionalExecutionGuardrails -->|"(passed)"| RequestIntercepts
+    SanitizeRequestGuardrails -->|Sanitized Start Payload| StartEvent
+    StartEvent --> EventSubscribers
+    StartEvent -->|Before Execution Intercepts| HasExecutionIntercept
+    RequestIntercepts -.->|Real Request| HasExecutionIntercept
 
     HasExecutionIntercept -->|No| DefaultCallable
     HasExecutionIntercept -->|Yes| ExecutionIntercepts
-    ExecutionIntercepts -.->|chain=yes| HasExecutionIntercept
-    ExecutionIntercepts -.->|chain=no| DefaultCallable
+    ExecutionIntercepts -.->|calls next| HasExecutionIntercept
+    ExecutionIntercepts -->|returns or replaces| InterceptResult
+    DefaultCallable -->|returns| InterceptResult
 
-    Invocation -->|Response| SanitizeResponseGuardrails
-    Invocation -->|Response| Response
+    InterceptResult -->|Response| SanitizeResponseGuardrails
+    InterceptResult -->|Response| Response
 
-    Invocation -.->|stream chunks| Collector
+    InterceptResult -.->|stream chunks| Collector
     Collector -..->|stream chunks| Response
-    Invocation -.->|"(stream ends)"| Finalizer
+    InterceptResult -.->|"(stream ends)"| Finalizer
     Finalizer -.->|Aggregated Response| SanitizeResponseGuardrails
     Finalizer o--o|shared state| Collector
 
-    SanitizeRequestGuardrails -->|Sanitized Request| EventSubscribers
-    SanitizeResponseGuardrails -->|Sanitized Response| EventSubscribers
+    SanitizeResponseGuardrails -->|Sanitized End Payload| EndEvent
+    EndEvent --> EventSubscribers
 
     class Execution,Invocation,Streaming,Observability,Request,Response grey-lightest;
-    class EventSubscribers teal-lightest;
+    class EventSubscribers,StartEvent,EndEvent teal-lightest;
     class RequestIntercepts,HasExecutionIntercept,ExecutionIntercepts yellow-lightest;
     class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails green-lightest;
     class RaiseException red-lightest;
-    class DefaultCallable,Collector,Finalizer magenta-lightest;
+    class DefaultCallable,InterceptResult,Collector,Finalizer magenta-lightest;
 ```
 
 ## Choosing the Right Surface

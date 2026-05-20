@@ -2296,6 +2296,15 @@ char *nemo_flow_event_name(const struct FfiEvent *ptr);
 char *nemo_flow_event_kind(const struct FfiEvent *ptr);
 
 /**
+ * Return the canonical subscriber event JSON as a C string.
+ * Caller must free the result with `nemo_flow_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid `FfiEvent` pointer or null.
+ */
+char *nemo_flow_event_json(const struct FfiEvent *ptr);
+
+/**
  * Return the ATOF version as a C string.
  *
  * # Safety

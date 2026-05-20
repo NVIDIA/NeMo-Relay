@@ -8,6 +8,7 @@
  * when the native binding is unavailable, then degrade only at runtime start.
  */
 import type * as NemoFlowRuntime from "nemo-flow-node";
+import type * as NemoFlowAdaptive from "nemo-flow-node/adaptive";
 import type * as NemoFlowPluginHost from "nemo-flow-node/plugin";
 
 type NemoFlowRuntimeKeys =
@@ -24,6 +25,7 @@ type NemoFlowRuntimeKeys =
   | "toolCallEnd";
 
 type NemoFlowPluginHostKeys = "defaultConfig" | "validate" | "initialize" | "clear";
+type NemoFlowAdaptiveKeys = "ADAPTIVE_PLUGIN_KIND" | "ComponentSpec";
 
 export type ConfigDiagnostic = NemoFlowPluginHost.ConfigDiagnostic;
 export type ConfigReport = NemoFlowPluginHost.ConfigReport;
@@ -44,22 +46,31 @@ export type NemoFlowRuntimeModule = Omit<Pick<typeof NemoFlowRuntime, NemoFlowRu
  */
 export type NemoFlowPluginHostModule = Pick<typeof NemoFlowPluginHost, NemoFlowPluginHostKeys>;
 
+/**
+ * @internal Adaptive helper subset loaded so the package verifies the built-in
+ * adaptive plugin path is available alongside the generic plugin host.
+ */
+export type NemoFlowAdaptiveModule = Pick<typeof NemoFlowAdaptive, NemoFlowAdaptiveKeys>;
+
 export type NemoFlowModules = {
   nf: NemoFlowRuntimeModule;
   pluginHost: NemoFlowPluginHostModule;
+  adaptive: NemoFlowAdaptiveModule;
 };
 
 export type NemoFlowModuleLoader = () => Promise<NemoFlowModules>;
 
 /** Load the runtime and plugin-host modules used by the OpenClaw integration. */
 export const defaultNemoFlowModuleLoader: NemoFlowModuleLoader = async () => {
-  const [nf, pluginHost] = await Promise.all([
+  const [nf, pluginHost, adaptive] = await Promise.all([
     import("nemo-flow-node"),
     import("nemo-flow-node/plugin"),
+    import("nemo-flow-node/adaptive"),
   ]);
 
   return {
     nf: nf as NemoFlowRuntimeModule,
     pluginHost: pluginHost as NemoFlowPluginHostModule,
+    adaptive: adaptive as NemoFlowAdaptiveModule,
   };
 };

@@ -13,11 +13,16 @@ description = "Coding-agent gateway CLI for NeMo Flow observability."
 name = "nemo-flow"
 path = "src/main.rs"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }-{ version }{ binary-ext }"
+pkg-fmt = "bin"
+
 [lints]
 workspace = true
 
 [dependencies]
 nemo-flow = { workspace = true, features = ["openinference"] }
+nemo-flow-adaptive = { workspace = true, features = ["redis-backend"] }
 async-stream = "0.3"
 axum = "0.8"
 bytes = "1"

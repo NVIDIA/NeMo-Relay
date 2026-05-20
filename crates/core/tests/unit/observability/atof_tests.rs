@@ -4,12 +4,16 @@
 //! Unit tests for the ATOF JSONL exporter.
 
 use super::*;
-use crate::api::event::{BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
+use crate::api::event::{
+    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
+};
 use crate::api::runtime::NemoFlowContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType};
-use serde_json::json;
+use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use serde_json::{Map, json};
 use std::fs;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -52,6 +56,50 @@ fn make_scope_start_event(name: &str) -> Event {
         Vec::new(),
         EventCategory::agent(),
         None,
+    ))
+}
+
+fn make_annotated_llm_event(name: &str) -> Event {
+    let request = AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: MessageContent::Text("hello".into()),
+            name: None,
+        }],
+        model: Some("demo-model".into()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: Map::new(),
+    };
+
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name(name)
+            .data(json!({"input": true}))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("demo-model")
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
     ))
 }
 
@@ -142,6 +190,30 @@ fn subscriber_writes_scope_and_mark_events_as_raw_jsonl() {
     assert_eq!(lines[0]["category"], "agent");
     assert_eq!(lines[1]["kind"], "mark");
     assert_eq!(lines[1]["data"], json!({"step": 1}));
+}
+
+#[test]
+fn subscriber_writes_canonical_event_jsonl() {
+    let dir = temp_dir("atof-canonical");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let event = make_annotated_llm_event("llm-start");
+
+    (exporter.subscriber())(&event);
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0], event.try_to_json_value().unwrap());
+    assert!(lines[0].get("annotated_request").is_none());
+    assert_eq!(
+        lines[0]["category_profile"]["annotated_request"]["model"],
+        "demo-model"
+    );
 }
 
 #[test]

@@ -145,6 +145,28 @@ with nemo_flow.scope.scope("demo-agent", nemo_flow.ScopeType.Agent) as handle:
 nemo_flow.subscribers.deregister("printer")
 ```
 
+For host integrations that need a serialized event shape, consume the
+canonical JSON payload from the subscriber event object:
+
+```python
+import json
+import nemo_flow
+
+
+def on_event(event) -> None:
+    payload = event.to_dict()
+    print(payload["kind"], payload["name"])
+    assert json.loads(event.to_json()) == payload
+
+
+nemo_flow.subscribers.register("host-exporter", on_event)
+try:
+    with nemo_flow.scope.scope("demo-agent", nemo_flow.ScopeType.Agent):
+        nemo_flow.scope.event("initialized", data={"binding": "python"})
+finally:
+    nemo_flow.subscribers.deregister("host-exporter")
+```
+
 ## Package Surface
 
 The public package modules are:

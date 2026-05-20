@@ -273,7 +273,8 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
             "SessionEnd",
         ),
     ] {
-        for hook_event_name in [start_event, end_event] {
+        let hook_events = vec![start_event, "UserPromptSubmit", end_event];
+        for hook_event_name in hook_events {
             let response = client
                 .post(format!("{url}{path}"))
                 .json(&json!({
@@ -302,8 +303,9 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
         })
         .filter_map(|event| event["name"].as_str().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
-    assert!(agent_starts.contains(&"codex".to_string()));
-    assert!(agent_starts.contains(&"claude-code".to_string()));
+    assert!(agent_starts.contains(&"codex-turn".to_string()));
+    assert!(agent_starts.contains(&"claude-code-turn".to_string()));
+    assert!(!agent_starts.contains(&"claude-code".to_string()));
 }
 
 #[tokio::test]
@@ -356,6 +358,48 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
     );
     assert!(nemo_flow::plugin::active_plugin_report().is_none());
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+}
+
+#[tokio::test]
+async fn serve_listener_activates_adaptive_plugin_config() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_flow::plugin::clear_plugin_configuration();
+
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "adaptive",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "agent_id": "cli-test",
+                    "state": {
+                        "backend": {
+                            "kind": "in_memory",
+                            "config": {}
+                        }
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let report = nemo_flow::plugin::active_plugin_report().unwrap();
+    assert!(report.diagnostics.is_empty());
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_flow::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
@@ -751,8 +795,12 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         Json(json!({
             "model": payload["model"],
+            "input": payload["input"],
             "authorization": headers
                 .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            "x_test_intercept": headers
+                .get("x-test-intercept")
                 .and_then(|value| value.to_str().ok()),
             "connection": headers
                 .get(header::CONNECTION)

@@ -127,6 +127,7 @@ jobs:
     with:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
+      run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
 
   ci_license_diff:
     name: License Diff
@@ -203,7 +204,7 @@ jobs:
     name: Python
     needs: [prepare, ci_changes, ci_check]
     uses: ./.github/workflows/ci_python.yml
-    if: ${{ needs.ci_check.result == 'success' && needs.ci_changes.outputs.run_python == 'true' }}
+    if: ${{ needs.ci_check.result == 'success' && ( needs.ci_changes.outputs.run_python == 'true' || needs.ci_changes.outputs.run_python_integration_langchain == 'true' ) }}
     permissions:
       contents: read
     secrets:
@@ -211,7 +212,8 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
-      run_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
+      run_package: ${{ ( needs.ci_changes.outputs.run_python == 'true' || needs.ci_changes.outputs.run_python_integration_langchain == 'true' ) }}
+      run_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
 
   ci_wasm:
     name: WebAssembly
@@ -320,6 +322,49 @@ jobs:
       - name: Deploy GitHub Pages Site
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+
+  release-cli-artifacts:
+    name: Release CLI Artifacts
+    needs: [prepare, ci_required]
+    if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download CLI binary artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release-assets/
+
+      - name: Generate CLI release checksums
+        run: |
+          set -euo pipefail
+
+          (
+            cd release-assets
+            cli_assets=(nemo-flow-cli-*)
+            sha256sum "${cli_assets[@]}" > SHA256SUMS
+            sha256sum --check SHA256SUMS
+
+            while read -r digest filename; do
+              printf '%s  %s\n' "$digest" "$filename" > "${filename}.sha256"
+            done < SHA256SUMS
+
+            printf 'CLI release assets:\n'
+            printf '  release-assets/%s\n' *
+          )
+
+      - name: Upload CLI assets and checksums to draft GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: release-assets/*
 
   publish-rust:
     name: Publish (crates.io)

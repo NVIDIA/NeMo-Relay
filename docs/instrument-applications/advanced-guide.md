@@ -207,13 +207,14 @@ Run one allowed request and one rejected request:
 
 ## Debug Middleware Order
 
-Middleware runs by ascending priority inside each middleware family. Families run in this order for managed tool calls:
+Middleware runs by ascending priority inside each middleware family. Families
+and lifecycle emission run in this order for managed tool calls:
 
 1. Conditional-execution guardrails.
 2. Request intercepts.
-3. Sanitize-request guardrails for emitted start events.
-4. Execution intercepts and the real callback.
-5. Sanitize-response guardrails for emitted end events.
+3. Sanitize-request guardrails and start-event emission.
+4. Execution intercepts and the real callback or replacement.
+5. Sanitize-response guardrails and end-event emission.
 
 If a later middleware does not run, check whether an earlier conditional-execution guardrail rejected the call or a request intercept raised an error.
 

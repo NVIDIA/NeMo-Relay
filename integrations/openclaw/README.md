@@ -9,12 +9,13 @@ SPDX-License-Identifier: Apache-2.0
 OpenClaw. It converts supported OpenClaw hook events into NeMo Flow sessions,
 LLM spans, tool spans, and lifecycle marks that the generic NeMo Flow
 observability component can export as ATIF JSON, OpenTelemetry spans, and
-OpenInference/Phoenix spans.
+OpenInference/Phoenix spans. The same generic plugin config path can initialize
+Adaptive components for hook-backed telemetry learning.
 
-This public OpenClaw plugin package provides observability support only. It
-does not add NeMo Flow security middleware or adaptive optimization behavior to
-OpenClaw execution. For middleware-backed behavior, use the patch-based
-OpenClaw integration from the NeMo Flow repository.
+This public OpenClaw plugin package uses OpenClaw public hooks. It does not
+rewrite OpenClaw tool execution, provider routing, policy decisions, or model
+requests. For middleware-backed behavior that changes execution, use the
+patch-based OpenClaw integration from the NeMo Flow repository.
 
 ## Why Use It?
 
@@ -30,6 +31,7 @@ OpenClaw integration from the NeMo Flow repository.
 - OpenClaw plugin ID `nemo-flow`.
 - Generic NeMo Flow plugin initialization through `config.plugins`.
 - ATIF JSON export through the built-in `observability` component.
+- Adaptive plugin initialization through `config.plugins`.
 - Optional OpenTelemetry OTLP export.
 - Optional OpenInference/Phoenix OTLP export.
 - Bounded LLM replay correlation across supported OpenClaw hooks.
@@ -98,6 +100,23 @@ OpenClaw plugin configuration under `plugins.entries["nemo-flow"].config`:
                     "service_name": "openclaw-nemo-flow"
                   }
                 }
+              },
+              {
+                "kind": "adaptive",
+                "enabled": true,
+                "config": {
+                  "version": 1,
+                  "agent_id": "openclaw",
+                  "state": {
+                    "backend": {
+                      "kind": "in_memory",
+                      "config": {}
+                    }
+                  },
+                  "telemetry": {
+                    "learners": ["tool_parallelism"]
+                  }
+                }
               }
             ]
           },
@@ -132,7 +151,8 @@ do not use, or set their `enabled` fields to `false`.
 - `config.enabled` disables or enables the NeMo Flow OpenClaw wrapper without
   removing the plugin entry. `config.backend` currently supports only `hooks`.
 - `config.plugins` is the generic NeMo Flow plugin configuration document. Use
-  this object to configure built-in components such as `observability`.
+  this object to configure built-in components such as `observability` and
+  `adaptive`.
 - `config.plugins.components[].config.atif` writes ATIF trajectory JSON files.
   Set `output_directory` to the directory where OpenClaw should write files.
 - `config.plugins.components[].config.opentelemetry` sends generic OTLP spans to
@@ -140,6 +160,10 @@ do not use, or set their `enabled` fields to `false`.
 - `config.plugins.components[].config.openinference` sends OpenInference OTLP
   spans to Phoenix or another OpenInference-compatible collector when `enabled`
   is `true`.
+- `config.plugins.components[]` entries with `kind: "adaptive"` initialize the
+  Adaptive plugin. In hook-backed OpenClaw mode, adaptive telemetry can consume
+  replayed NeMo Flow events, while request-rewrite features such as adaptive
+  hints require a managed execution path.
 - `config.capture` controls prompt, response, tool argument, and tool result
   capture. Tool arguments and tool results are stripped by default because they
   often contain user data, local paths, tokens, or large payloads.
@@ -184,7 +208,7 @@ The plugin maps supported OpenClaw hook events into NeMo Flow telemetry without
 changing OpenClaw execution behavior.
 
 It does not change OpenClaw tool execution, provider routing, policy decisions,
-or adaptive behavior.
+or provider request payloads.
 
 Current OpenClaw public hooks expose request, response, message-write, and
 provider timing details through separate event streams. The plugin correlates

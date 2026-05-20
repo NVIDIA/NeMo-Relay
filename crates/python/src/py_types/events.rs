@@ -109,6 +109,23 @@ impl PyScopeEvent {
                 inner: (**response).clone(),
             })
     }
+
+    /// Return this event as the canonical subscriber JSON dictionary.
+    pub(crate) fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let event = nemo_flow::api::event::Event::Scope(self.inner.clone());
+        let value = event
+            .try_to_json_value()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        json_to_py(py, &value)
+    }
+
+    /// Return this event as canonical subscriber JSON.
+    pub(crate) fn to_json(&self) -> PyResult<String> {
+        let event = nemo_flow::api::event::Event::Scope(self.inner.clone());
+        event
+            .to_json_string()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
 }
 
 #[pyclass(name = "MarkEvent", skip_from_py_object)]
@@ -179,5 +196,22 @@ impl PyMarkEvent {
     #[getter]
     pub(crate) fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         opt_json_to_py(py, &self.inner.base.metadata)
+    }
+
+    /// Return this event as the canonical subscriber JSON dictionary.
+    pub(crate) fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let event = nemo_flow::api::event::Event::Mark(self.inner.clone());
+        let value = event
+            .try_to_json_value()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        json_to_py(py, &value)
+    }
+
+    /// Return this event as canonical subscriber JSON.
+    pub(crate) fn to_json(&self) -> PyResult<String> {
+        let event = nemo_flow::api::event::Event::Mark(self.inner.clone());
+        event
+            .to_json_string()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 }

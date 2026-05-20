@@ -48,6 +48,9 @@ on:
       run_python:
         description: 'Whether Python jobs should run'
         value: ${{ jobs.changes.outputs.run_python }}
+      run_python_integration_langchain:
+        description: 'Whether LangChain, LangGraph, and DeepAgents Python integration jobs should run'
+        value: ${{ jobs.changes.outputs.run_python_integration_langchain }}
       run_python_package:
         description: 'Whether Python packaging jobs should run'
         value: ${{ jobs.changes.outputs.run_python_package }}
@@ -80,6 +83,7 @@ jobs:
       run_node_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.node_package == 'true' }}
       run_openclaw: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' || steps.filter.outputs.openclaw == 'true' }}
       run_python: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python == 'true' }}
+      run_python_integration_langchain: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.python_integration_langchain == 'true' }}
       run_python_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.python_package == 'true' }}
       run_rust: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.rust == 'true' }}
       run_rust_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.rust_package == 'true' }}

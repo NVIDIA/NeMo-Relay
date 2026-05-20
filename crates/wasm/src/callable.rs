@@ -502,7 +502,15 @@ pub fn wrap_js_event_subscriber(_func: Function) -> EventSubscriberFn {
 pub fn wrap_js_event_subscriber(func: Function) -> EventSubscriberFn {
     let func = SendWrapper::new(func);
     std::sync::Arc::new(move |event: &Event| {
-        let wasm_event = WasmEvent::from(event);
+        let wasm_event = match WasmEvent::try_from_event(event) {
+            Ok(event) => event,
+            Err(error) => {
+                record_callback_error(format!(
+                    "nemo_flow: failed to serialize JS event subscriber payload: {error}"
+                ));
+                return;
+            }
+        };
         let js_event = wasm_event
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
             .unwrap_or(JsValue::NULL);

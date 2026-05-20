@@ -69,6 +69,41 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.deepEqual(config.plugins, pluginConfig);
   });
 
+  it("keeps adaptive components in the generic plugin config path", () => {
+    const pluginConfig = {
+      version: 1,
+      components: [
+        {
+          kind: "adaptive",
+          enabled: true,
+          config: {
+            version: 1,
+            agent_id: "openclaw",
+            state: {
+              backend: {
+                kind: "in_memory",
+                config: {},
+              },
+            },
+            telemetry: {
+              learners: ["tool_parallelism"],
+            },
+            adaptive_hints: {
+              priority: 100,
+              break_chain: false,
+              inject_header: true,
+              inject_body_path: "nvext.agent_hints",
+            },
+          },
+        },
+      ],
+    };
+
+    const config = parseConfig({ plugins: pluginConfig });
+
+    assert.deepEqual(config.plugins, pluginConfig);
+  });
+
   it("rejects unsupported backends and invalid correlation values", () => {
     assert.throws(
       () => parseConfig({ backend: "managed_execution" }),
@@ -209,6 +244,23 @@ describe("nemo-flow OpenClaw plugin shell", () => {
             openinference: { enabled: true, endpoint: "http://phoenix.example" },
           },
         },
+        {
+          kind: "adaptive",
+          enabled: true,
+          config: {
+            version: 1,
+            agent_id: "openclaw",
+            state: {
+              backend: {
+                kind: "in_memory",
+                config: {},
+              },
+            },
+            telemetry: {
+              learners: ["tool_parallelism"],
+            },
+          },
+        },
       ],
     };
     const modules = createModules();
@@ -229,6 +281,46 @@ describe("nemo-flow OpenClaw plugin shell", () => {
         otel: "enabled",
         openInference: "enabled",
       });
+    } finally {
+      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    }
+  });
+
+  it("passes adaptive helper components through plugin host initialization", async () => {
+    const modules = createModules();
+    const configuredPlugins = {
+      version: 1,
+      components: [
+        modules.adaptive.ComponentSpec({
+          version: 1,
+          agent_id: "openclaw-helper",
+          state: {
+            backend: {
+              kind: "in_memory",
+              config: {},
+            },
+          },
+          adaptive_hints: {
+            priority: 100,
+            break_chain: false,
+            inject_header: true,
+            inject_body_path: "nvext.agent_hints",
+          },
+        }),
+      ],
+    };
+    const api = createApi({ pluginConfig: { plugins: configuredPlugins } });
+
+    registerPlugin(api, async () => modules);
+    const service = api.calls.services[0];
+    assert.ok(service);
+    try {
+      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+
+      assert.deepEqual(modules.pluginHost.calls.validate, [configuredPlugins]);
+      assert.deepEqual(modules.pluginHost.calls.initialize, [configuredPlugins]);
+      assert.equal(configuredPlugins.components[0]?.kind, modules.adaptive.ADAPTIVE_PLUGIN_KIND);
+      assert.equal(configuredPlugins.components[0]?.enabled, true);
     } finally {
       await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
     }
@@ -656,8 +748,20 @@ function createModules(params: {
 } = {}): TestModules {
   const nf = createNemoFlowRuntime();
   const calls: TestPluginHost["calls"] = { validate: [], initialize: [], clear: 0 };
+  const adaptive: TestModules["adaptive"] = {
+    ADAPTIVE_PLUGIN_KIND: "adaptive",
+    ComponentSpec: (
+      config: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[0],
+      options?: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[1],
+    ) => ({
+      kind: adaptive.ADAPTIVE_PLUGIN_KIND,
+      enabled: options?.enabled ?? true,
+      config,
+    }),
+  };
   return {
     nf,
+    adaptive,
     pluginHost: {
       calls,
       defaultConfig: () => ({ version: 1, components: [] }),

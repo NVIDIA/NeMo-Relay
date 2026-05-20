@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use bitflags::bitflags;
 use chrono::{DateTime, Utc};
@@ -301,18 +300,6 @@ fn emit_llm_start(
     Ok(())
 }
 
-fn emit_llm_start_once(
-    start_emitted: &Arc<AtomicBool>,
-    handle: &LlmHandle,
-    request: &LlmRequest,
-    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
-) -> Result<()> {
-    if start_emitted.swap(true, Ordering::SeqCst) {
-        return Ok(());
-    }
-    emit_llm_start(handle, request, annotated_request)
-}
-
 /// Start a manual LLM lifecycle span.
 ///
 /// This emits an LLM-start event after applying sanitize-request guardrails to
@@ -472,9 +459,10 @@ fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Re
 
 /// Execute an LLM call through the managed middleware pipeline.
 ///
-/// This runs conditional-execution guardrails, request intercepts,
-/// sanitize-request guardrails, execution intercepts, the provider callback,
-/// and sanitize-response guardrails in the runtime-defined order.
+/// This runs conditional-execution guardrails, request intercepts, and
+/// sanitize-request guardrails, emits the LLM-start event, then runs execution
+/// intercepts, the provider callback when it is not replaced, and
+/// sanitize-response guardrails in the runtime-defined order.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -501,6 +489,10 @@ fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Re
 /// execution intercepts, codecs, or the callback itself.
 ///
 /// # Notes
+/// The LLM-start event is emitted before execution intercepts run. When
+/// execution fails after that point, the runtime still emits an LLM-end event
+/// without an output payload.
+///
 /// Response codecs enrich observability output only and do not change the
 /// value returned to the caller.
 pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
@@ -560,21 +552,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .model_name_opt(model_name)
             .build(),
     )?;
-    let start_emitted = Arc::new(AtomicBool::new(false));
-    let fallback_request = intercepted_request.clone();
-    let execution_handle = handle.clone();
-    let execution_annotated_request = annotated_request.clone();
-    let execution_start_emitted = start_emitted.clone();
-    let instrumented_func: LlmExecutionNextFn = Arc::new(move |request| {
-        let next = func.clone();
-        let handle = execution_handle.clone();
-        let annotated_request = execution_annotated_request.clone();
-        let start_emitted = execution_start_emitted.clone();
-        Box::pin(async move {
-            emit_llm_start_once(&start_emitted, &handle, &request, annotated_request)?;
-            next(request).await
-        })
-    });
+    emit_llm_start(&handle, &intercepted_request, annotated_request.clone())?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -585,17 +563,11 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.llm_build_execution_chain(&name, instrumented_func, &scope_locals)
+        state.llm_build_execution_chain(&name, func, &scope_locals)
     };
 
     match execution(intercepted_request).await {
         Ok(response) => {
-            emit_llm_start_once(
-                &start_emitted,
-                &handle,
-                &fallback_request,
-                annotated_request.clone(),
-            )?;
             let annotated_response = response_codec
                 .as_ref()
                 .and_then(|codec| codec.decode_response(&response).ok())
@@ -612,12 +584,6 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             Ok(response)
         }
         Err(error) => {
-            let _ = emit_llm_start_once(
-                &start_emitted,
-                &handle,
-                &fallback_request,
-                annotated_request,
-            );
             let _ = emit_llm_end_without_output(&handle, metadata);
             Err(error)
         }
@@ -626,9 +592,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 
 /// Execute a streaming LLM call through the managed middleware pipeline.
 ///
-/// This runs the same pre-execution middleware as [`llm_call_execute`] and
-/// then wraps the provider stream so chunk callbacks and finalization can emit
-/// a single LLM-end event when streaming completes.
+/// This runs the same pre-execution middleware as [`llm_call_execute`], emits
+/// the LLM-start event, and then wraps the provider stream so chunk callbacks
+/// and finalization can emit a single LLM-end event when streaming completes.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -656,6 +622,8 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 /// execution intercepts, stream callbacks, codecs, or the provider callback.
 ///
 /// # Notes
+/// The LLM-start event is emitted before stream execution intercepts run.
+///
 /// The returned stream emits chunk-level results while the runtime defers the
 /// LLM-end event until the collector and finalizer complete.
 pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Result<LlmJsonStream> {
@@ -717,21 +685,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             .model_name_opt(model_name)
             .build(),
     )?;
-    let start_emitted = Arc::new(AtomicBool::new(false));
-    let fallback_request = intercepted_request.clone();
-    let execution_handle = handle.clone();
-    let execution_annotated_request = annotated_request.clone();
-    let execution_start_emitted = start_emitted.clone();
-    let instrumented_func: LlmStreamExecutionNextFn = Arc::new(move |request| {
-        let next = func.clone();
-        let handle = execution_handle.clone();
-        let annotated_request = execution_annotated_request.clone();
-        let start_emitted = execution_start_emitted.clone();
-        Box::pin(async move {
-            emit_llm_start_once(&start_emitted, &handle, &request, annotated_request)?;
-            next(request).await
-        })
-    });
+    emit_llm_start(&handle, &intercepted_request, annotated_request)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -743,17 +697,11 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.llm_stream_build_execution_chain(&name, instrumented_func, &scope_locals)
+        state.llm_stream_build_execution_chain(&name, func, &scope_locals)
     };
 
     match execution(intercepted_request).await {
         Ok(raw_stream) => {
-            emit_llm_start_once(
-                &start_emitted,
-                &handle,
-                &fallback_request,
-                annotated_request.clone(),
-            )?;
             let wrapper = LlmStreamWrapper::new(
                 raw_stream,
                 handle,
@@ -766,12 +714,6 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             Ok(Box::pin(wrapper) as LlmJsonStream)
         }
         Err(error) => {
-            let _ = emit_llm_start_once(
-                &start_emitted,
-                &handle,
-                &fallback_request,
-                annotated_request,
-            );
             let _ = emit_llm_end_without_output(&handle, metadata);
             Err(error)
         }
