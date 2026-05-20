@@ -252,10 +252,10 @@ sanitization without moving that logic into every call site.
 For managed execution, the pipeline runs:
 - Conditional guardrails
 - Request intercepts
-- Request sanitization for emitted start events
+- Request sanitization and start-event emission
 - Execution intercepts
-- The original callback
-- Response sanitization for emitted end events
+- The original callback, unless an execution intercept replaces it
+- Response sanitization and end-event emission
 
 ### What Is The Difference Between Guardrails And Intercepts?
 
@@ -282,8 +282,10 @@ and [Middleware Registration Families](../instrument-applications/advanced-guide
 ### How Does Middleware Ordering Work?
 
 Managed execution applies conditional guardrails first, then request intercepts,
-then request sanitization for emitted start events, then execution intercepts
-and the real callback, then response sanitization for emitted end events.
+then request sanitization and start-event emission, then execution intercepts
+and the real callback, then response sanitization and end-event emission.
+The start event is emitted before execution intercepts run, so subscribers see
+a lifecycle start even when an execution intercept replaces the callback.
 
 Registries are priority ordered. When scope-local behavior is present, NeMo Flow
 combines applicable global and ancestor scope-local entries into the execution

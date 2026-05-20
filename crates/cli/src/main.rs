@@ -4,6 +4,7 @@
 //! NeMo Flow coding-agent gateway CLI.
 
 mod adapters;
+mod alignment;
 mod banner;
 mod completions_install;
 mod config;

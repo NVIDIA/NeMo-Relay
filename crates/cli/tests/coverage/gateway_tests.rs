@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::alignment::GatewayRouteKind;
 use crate::config::GatewayConfig;
 use crate::server::AppState;
-use crate::session::SessionManager;
+use crate::session::{LlmGatewayStart, SessionManager};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
@@ -77,6 +78,26 @@ fn selects_provider_routes() {
     assert_eq!(
         ProviderRoute::AnthropicCountTokens.name(),
         "anthropic.count_tokens"
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiResponses.alignment_route(),
+        GatewayRouteKind::OpenAiResponses
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiChatCompletions.alignment_route(),
+        GatewayRouteKind::OpenAiChatCompletions
+    );
+    assert_eq!(
+        ProviderRoute::OpenAiModels.alignment_route(),
+        GatewayRouteKind::OpenAiModels
+    );
+    assert_eq!(
+        ProviderRoute::AnthropicMessages.alignment_route(),
+        GatewayRouteKind::AnthropicMessages
+    );
+    assert_eq!(
+        ProviderRoute::AnthropicCountTokens.alignment_route(),
+        GatewayRouteKind::AnthropicCountTokens
     );
     assert_eq!(ProviderRoute::from_path("/unsupported"), None);
 }
@@ -242,18 +263,25 @@ fn effective_upstream_request_skips_invalid_runtime_headers() {
 #[test]
 fn gateway_session_id_prefers_headers_and_has_fallbacks() {
     let mut headers = HeaderMap::new();
+    let codex_body = json!({
+        "prompt_cache_key": "codex-session",
+        "client_metadata": { "x-codex-installation-id": "install-1" }
+    });
     headers.insert(
         "anthropic-beta",
         HeaderValue::from_static("prompt-caching-2024-07-31"),
     );
-    assert_eq!(gateway_session_id(&headers), None);
+    assert_eq!(
+        gateway_session_id(&headers, &Value::Null, ProviderRoute::AnthropicMessages),
+        None
+    );
 
     headers.insert(
         "x-claude-code-session-id",
         HeaderValue::from_static("claude-session"),
     );
     assert_eq!(
-        gateway_session_id(&headers).as_deref(),
+        gateway_session_id(&headers, &codex_body, ProviderRoute::OpenAiResponses).as_deref(),
         Some("claude-session")
     );
 
@@ -262,11 +290,35 @@ fn gateway_session_id_prefers_headers_and_has_fallbacks() {
         HeaderValue::from_static("explicit-session"),
     );
     assert_eq!(
-        gateway_session_id(&headers).as_deref(),
+        gateway_session_id(&headers, &codex_body, ProviderRoute::OpenAiResponses).as_deref(),
         Some("explicit-session")
     );
 
-    assert_eq!(gateway_session_id(&HeaderMap::new()), None);
+    assert_eq!(
+        gateway_session_id(
+            &HeaderMap::new(),
+            &codex_body,
+            ProviderRoute::OpenAiResponses
+        )
+        .as_deref(),
+        Some("codex-session")
+    );
+    assert_eq!(
+        gateway_session_id(
+            &HeaderMap::new(),
+            &json!({ "prompt_cache_key": "plain-cache-key" }),
+            ProviderRoute::OpenAiResponses,
+        ),
+        None
+    );
+    assert_eq!(
+        gateway_session_id(
+            &HeaderMap::new(),
+            &codex_body,
+            ProviderRoute::OpenAiChatCompletions,
+        ),
+        None
+    );
 }
 
 #[test]
@@ -320,6 +372,52 @@ fn gateway_identifiers_accept_headers_and_scalar_body_values() {
 }
 
 #[test]
+fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-nemo-flow-subagent-id",
+        HeaderValue::from_static("worker-1"),
+    );
+    headers.insert("x-request-id", HeaderValue::from_static("transport-req"));
+    headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
+    let request_json = json!({
+        "model": "gpt-test",
+        "stream": true,
+        "prompt_cache_key": "codex-thread",
+        "client_metadata": { "x-codex-installation-id": "install-1" },
+        "conversation_id": "conversation-1",
+        "generation": { "id": "generation-1" }
+    });
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers,
+        path: "/responses".into(),
+        provider: ProviderRoute::OpenAiResponses,
+        upstream_url: "http://openai/v1/responses".into(),
+        body_bytes: axum::body::Bytes::new(),
+        request_json: request_json.clone(),
+        streaming: true,
+    };
+
+    let start = build_llm_gateway_start(&prepared);
+
+    assert_eq!(start.session_id.as_deref(), Some("codex-thread"));
+    assert_eq!(start.provider, "openai.responses");
+    assert_eq!(start.model_name.as_deref(), Some("gpt-test"));
+    assert_eq!(start.subagent_id.as_deref(), Some("worker-1"));
+    assert_eq!(start.conversation_id.as_deref(), Some("conversation-1"));
+    assert_eq!(start.generation_id.as_deref(), Some("generation-1"));
+    assert_eq!(start.request_id.as_deref(), Some("transport-req"));
+    assert!(start.streaming);
+    assert_eq!(start.metadata["gateway_path"], json!("/responses"));
+    assert_eq!(start.request.content, request_json);
+    assert!(
+        !start.request.headers.contains_key("authorization"),
+        "observable headers should not leak auth secrets"
+    );
+}
+
+#[test]
 fn observable_headers_omit_secrets_and_transport_headers() {
     let mut headers = HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
@@ -345,8 +443,11 @@ fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    let sanitized =
-        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, true);
+    let sanitized = gateway_forward_headers_with_openai_key_state(
+        &inbound,
+        ProviderRoute::OpenAiResponses,
+        true,
+    );
     assert!(sanitized.get("authorization").is_none());
 }
 
@@ -359,8 +460,11 @@ fn preserves_real_bearer_keys_on_openai_route() {
         "authorization",
         HeaderValue::from_static("Bearer sk-real-provider-key"),
     );
-    let sanitized =
-        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, true);
+    let sanitized = gateway_forward_headers_with_openai_key_state(
+        &inbound,
+        ProviderRoute::OpenAiResponses,
+        true,
+    );
     assert_eq!(
         sanitized.get("authorization").unwrap(),
         "Bearer sk-real-provider-key"
@@ -377,8 +481,11 @@ fn does_not_touch_anthropic_route_authorization() {
         "authorization",
         HeaderValue::from_static("Bearer eyJ.anthropic.case"),
     );
-    let sanitized =
-        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::AnthropicMessages, true);
+    let sanitized = gateway_forward_headers_with_openai_key_state(
+        &inbound,
+        ProviderRoute::AnthropicMessages,
+        true,
+    );
     assert!(sanitized.get("authorization").is_some());
 }
 
@@ -392,8 +499,11 @@ fn preserves_jwt_when_no_replacement_key_available() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    let sanitized =
-        strip_chatgpt_oauth_for_openai_route(&inbound, ProviderRoute::OpenAiResponses, false);
+    let sanitized = gateway_forward_headers_with_openai_key_state(
+        &inbound,
+        ProviderRoute::OpenAiResponses,
+        false,
+    );
     assert!(sanitized.get("authorization").is_some());
 }
 
@@ -482,14 +592,17 @@ fn chatgpt_jwt_routes_to_chatgpt_backend_when_no_api_key() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    // With no OPENAI_API_KEY and a JWT, should_use_chatgpt_backend returns true and the URL is
-    // built against the ChatGPT backend (no /v1 prefix — ChatGPT backend doesn't use it).
-    let result = chatgpt_upstream_url("/responses");
-    assert_eq!(result, "https://chatgpt.com/backend-api/codex/responses");
-
-    // has_chatgpt_jwt should detect the JWT
-    assert!(has_chatgpt_jwt(&headers));
-    assert!(ProviderRoute::OpenAiResponses.is_openai());
+    // With no OPENAI_API_KEY and a JWT, alignment returns the ChatGPT backend override.
+    assert_eq!(
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/responses",
+            false,
+        )
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/responses")
+    );
 }
 
 #[test]
@@ -499,10 +612,26 @@ fn no_jwt_does_not_trigger_chatgpt_backend() {
         "authorization",
         HeaderValue::from_static("Bearer sk-real-api-key"),
     );
-    assert!(!has_chatgpt_jwt(&headers));
+    assert_eq!(
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/responses",
+            false,
+        ),
+        None
+    );
 
-    // Empty headers also should not trigger
-    assert!(!has_chatgpt_jwt(&HeaderMap::new()));
+    // Empty headers also should not trigger.
+    assert_eq!(
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiResponses,
+            &HeaderMap::new(),
+            "/responses",
+            false,
+        ),
+        None
+    );
 }
 
 #[test]
@@ -512,24 +641,55 @@ fn anthropic_route_never_triggers_chatgpt_backend() {
         "authorization",
         HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
-    assert!(!ProviderRoute::AnthropicMessages.is_openai());
+    assert_eq!(
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::AnthropicMessages,
+            &headers,
+            "/v1/messages",
+            false,
+        ),
+        None
+    );
 }
 
 #[test]
 fn chatgpt_backend_url_omits_v1_prefix() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
     // The ChatGPT backend expects paths directly under the base, not /v1-prefixed.
     assert_eq!(
-        chatgpt_upstream_url("/responses"),
-        "https://chatgpt.com/backend-api/codex/responses"
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/responses",
+            false,
+        )
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/responses")
     );
     assert_eq!(
-        chatgpt_upstream_url("/models"),
-        "https://chatgpt.com/backend-api/codex/models"
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiModels,
+            &headers,
+            "/models",
+            false,
+        )
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/models")
     );
     // /v1-prefixed inbound paths are stripped
     assert_eq!(
-        chatgpt_upstream_url("/v1/responses"),
-        "https://chatgpt.com/backend-api/codex/responses"
+        gateway_upstream_url_override_with_openai_key_state(
+            ProviderRoute::OpenAiResponses,
+            &headers,
+            "/v1/responses",
+            false,
+        )
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/responses")
     );
 }
 
@@ -605,7 +765,136 @@ fn response_headers_preserve_duplicates() {
     assert_eq!(copied.get_all("set-cookie").iter().count(), 2);
 }
 
-// `stream_response_records_preview_and_truncation` and `streaming_llm_guard_closes_on_drop` were
-// removed when the gateway moved to `llm_stream_call_execute`. The runtime now owns stream-end
-// lifecycle (start/end events emitted by `LlmStreamWrapper`); core tests cover that contract,
-// and the gateway no longer carries a stream preview/truncation helper or a separate guard struct.
+#[tokio::test]
+async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("stream-drop".into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "input": "Analyze enough text to create a stable idle-timeout test."
+                    }),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+        std::result::Result<Value, FlowError>,
+    >());
+    let body = client_sse_body(
+        stream,
+        ProviderRoute::OpenAiResponses,
+        manager.clone(),
+        prep.session_id,
+        prep.owner_subagent_id,
+        Arc::new(Mutex::new(None)),
+    );
+
+    drop(body);
+    tokio::task::yield_now().await;
+
+    let closed = manager
+        .close_idle_sessions_at(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed, 1);
+}
+
+#[tokio::test]
+async fn streaming_body_records_final_response_for_turn_output() {
+    let subscriber_name = "gateway-stream-final-response-turn-output-test";
+    let _ = nemo_flow::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_output = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_output.clone();
+    nemo_flow::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(nemo_flow::api::event::ScopeCategory::End)
+                && event.name() == "codex-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("stream-final")
+            {
+                *captured.lock().unwrap() = event.output().cloned();
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(GatewayConfig::default());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("stream-final".into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-test".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: None,
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "input": "Stream enough text to create a final response."
+                    }),
+                },
+                streaming: true,
+                metadata: json!({}),
+            },
+        )
+        .await
+        .unwrap();
+    let session_id = prep.session_id.clone();
+    let owner_subagent_id = prep.owner_subagent_id.clone();
+    let final_response = json!({ "output_text": "streamed final" });
+    let stream: LlmJsonStream = Box::pin(futures_util::stream::empty::<
+        std::result::Result<Value, FlowError>,
+    >());
+    let body = client_sse_body(
+        stream,
+        ProviderRoute::OpenAiResponses,
+        manager.clone(),
+        session_id,
+        owner_subagent_id,
+        Arc::new(Mutex::new(Some(final_response.clone()))),
+    );
+    let _ = body.collect().await.unwrap();
+
+    manager
+        .close_idle_sessions_at(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
+    nemo_flow::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+}
+
+// `stream_response_records_preview_and_truncation` was removed when the gateway moved to
+// `llm_stream_call_execute`. The runtime now owns stream-end lifecycle (start/end events emitted
+// by `LlmStreamWrapper`); core tests cover that contract, and the gateway no longer carries a
+// stream preview/truncation helper.

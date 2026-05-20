@@ -198,7 +198,8 @@ Check both behavior and instrumentation:
 - The tool result matches what the application returned before the wrapper was added.
 - The subscriber prints an agent or request scope event.
 - The subscriber prints tool start and tool end events for `search`.
-- Tool start input contains the request arguments after request intercepts.
+- Tool start input contains the request arguments after request intercepts and
+  sanitize-request guardrails.
 - Tool end output contains the tool result after response guardrails.
 
 If only the business result appears, the callback ran but instrumentation did not run. Confirm that the call goes through `tools.execute`, `toolCallExecute`, or `tool_call_execute`.
