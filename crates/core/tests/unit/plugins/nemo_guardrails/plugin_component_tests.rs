@@ -17,14 +17,14 @@ use serde_json::json;
 
 fn reset_runtime() {
     let _ = clear_plugin_configuration();
-    let _ = deregister_nemoguardrails_component();
+    let _ = deregister_nemo_guardrails_component();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoFlowContextState::new();
 }
 
 fn ensure_registered() {
-    register_nemoguardrails_component().unwrap();
+    register_nemo_guardrails_component().unwrap();
 }
 
 fn component(config: Json) -> PluginComponentSpec {
@@ -69,7 +69,7 @@ fn remote_valid_config() -> Json {
 }
 
 #[test]
-fn editor_schema_tracks_nemoguardrails_config_types() {
+fn editor_schema_tracks_nemo_guardrails_config_types() {
     let schema = NeMoGuardrailsConfig::editor_schema();
     let mode = schema.field("mode").expect("mode field");
     assert_eq!(mode.kind, EditorFieldKind::Enum);
@@ -102,7 +102,7 @@ fn editor_schema_tracks_nemoguardrails_config_types() {
 
 #[test]
 fn default_config_and_component_conversion_cover_public_shape() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
@@ -185,8 +185,8 @@ fn schema_property<'a>(schema: &'a Json, name: &str) -> Option<&'a Json> {
 
 #[cfg(feature = "schema")]
 #[test]
-fn schema_contains_every_supported_nemoguardrails_option() {
-    let schema = nemoguardrails_config_schema();
+fn schema_contains_every_supported_nemo_guardrails_option() {
+    let schema = nemo_guardrails_config_schema();
     for field in [
         "version",
         "mode",
@@ -265,7 +265,7 @@ fn plugin_schema_contains_generic_plugin_surface() {
 
 #[test]
 fn registration_is_explicit_not_automatic() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
@@ -279,13 +279,13 @@ fn registration_is_explicit_not_automatic() {
 
     ensure_registered();
     assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some());
-    assert!(deregister_nemoguardrails_component());
-    assert!(!deregister_nemoguardrails_component());
+    assert!(deregister_nemo_guardrails_component());
+    assert!(!deregister_nemo_guardrails_component());
 }
 
 #[test]
 fn disabled_component_validates_and_initializes_without_runtime_work() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
@@ -302,7 +302,7 @@ fn disabled_component_validates_and_initializes_without_runtime_work() {
 
 #[test]
 fn duplicate_component_is_rejected_as_singleton() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
@@ -328,7 +328,7 @@ fn duplicate_component_is_rejected_as_singleton() {
 
 #[test]
 fn invalid_shapes_and_values_are_reported() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
@@ -342,7 +342,7 @@ fn invalid_shapes_and_values_are_reported() {
         invalid_shape
             .diagnostics
             .iter()
-            .any(|diag| diag.code == "nemoguardrails.invalid_plugin_config")
+            .any(|diag| diag.code == "nemo_guardrails.invalid_plugin_config")
     );
 
     let local_missing_source = validate_plugin_config(&plugin_config(json!({
@@ -570,7 +570,7 @@ fn invalid_shapes_and_values_are_reported() {
 
 #[test]
 fn unknown_fields_follow_policy() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
@@ -586,7 +586,7 @@ fn unknown_fields_follow_policy() {
         warn_report
             .diagnostics
             .iter()
-            .any(|diag| diag.code == "nemoguardrails.unknown_field")
+            .any(|diag| diag.code == "nemo_guardrails.unknown_field")
     );
 
     let nested_warn_report = validate_plugin_config(&plugin_config(json!({
@@ -619,7 +619,7 @@ fn unknown_fields_follow_policy() {
 
 #[test]
 fn enabled_initialization_fails_fast_until_backend_exists() {
-    let _guard = crate::nemoguardrails::test_mutex()
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();

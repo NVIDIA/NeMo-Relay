@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Planned NeMo Guardrails integrations for NeMo Flow Core.
+//! Planned NeMo Guardrails plugin integrations for NeMo Flow Core.
 
 #[cfg(test)]
 use std::sync::Mutex;

@@ -18,7 +18,7 @@ use crate::plugin::{
 };
 
 /// The plugin kind reserved for the planned first-party component.
-pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemoguardrails";
+pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemo_guardrails";
 
 /// Top-level NeMo Guardrails component wrapper.
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ impl From<ComponentSpec> for PluginComponentSpec {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NeMoGuardrailsConfig {
     /// NeMo Guardrails config schema version.
-    #[serde(default = "default_nemoguardrails_config_version")]
+    #[serde(default = "default_nemo_guardrails_config_version")]
     pub version: u32,
     /// Backend mode: `remote` or `local`.
     #[serde(default = "default_mode")]
@@ -114,7 +114,7 @@ pub struct NeMoGuardrailsConfig {
 impl Default for NeMoGuardrailsConfig {
     fn default() -> Self {
         Self {
-            version: default_nemoguardrails_config_version(),
+            version: default_nemo_guardrails_config_version(),
             mode: default_mode(),
             config_path: None,
             config_yaml: None,
@@ -344,7 +344,7 @@ impl Plugin for NeMoGuardrailsPlugin {
     }
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        validate_nemoguardrails_plugin_config(plugin_config)
+        validate_nemo_guardrails_plugin_config(plugin_config)
     }
 
     fn register<'a>(
@@ -360,8 +360,8 @@ impl Plugin for NeMoGuardrailsPlugin {
     }
 }
 
-/// Registers the `nemoguardrails` component kind in the plugin registry.
-pub fn register_nemoguardrails_component() -> PluginResult<()> {
+/// Registers the `nemo_guardrails` component kind in the plugin registry.
+pub fn register_nemo_guardrails_component() -> PluginResult<()> {
     match register_plugin(Arc::new(NeMoGuardrailsPlugin)) {
         Ok(()) => Ok(()),
         Err(PluginError::RegistrationFailed(message))
@@ -374,14 +374,14 @@ pub fn register_nemoguardrails_component() -> PluginResult<()> {
     }
 }
 
-/// Deregisters the `nemoguardrails` component kind from the plugin registry.
-pub fn deregister_nemoguardrails_component() -> bool {
+/// Deregisters the `nemo_guardrails` component kind from the plugin registry.
+pub fn deregister_nemo_guardrails_component() -> bool {
     deregister_plugin(NEMO_GUARDRAILS_PLUGIN_KIND)
 }
 
 /// Returns the JSON Schema for the NeMo Guardrails component configuration.
 #[cfg(feature = "schema")]
-pub fn nemoguardrails_config_schema() -> serde_json::Value {
+pub fn nemo_guardrails_config_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(NeMoGuardrailsConfig))
         .expect("NeMo Guardrails config schema should serialize")
 }
@@ -420,7 +420,7 @@ fn string_enum_schema(
     schema.into()
 }
 
-fn parse_nemoguardrails_config(
+fn parse_nemo_guardrails_config(
     plugin_config: &Map<String, Json>,
 ) -> PluginResult<NeMoGuardrailsConfig> {
     serde_json::from_value(Json::Object(plugin_config.clone())).map_err(|err| {
@@ -428,15 +428,15 @@ fn parse_nemoguardrails_config(
     })
 }
 
-fn validate_nemoguardrails_plugin_config(
+fn validate_nemo_guardrails_plugin_config(
     plugin_config: &Map<String, Json>,
 ) -> Vec<ConfigDiagnostic> {
-    let config = match parse_nemoguardrails_config(plugin_config) {
+    let config = match parse_nemo_guardrails_config(plugin_config) {
         Ok(config) => config,
         Err(err) => {
             return vec![ConfigDiagnostic {
                 level: DiagnosticLevel::Error,
-                code: "nemoguardrails.invalid_plugin_config".to_string(),
+                code: "nemo_guardrails.invalid_plugin_config".to_string(),
                 component: Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                 field: None,
                 message: err.to_string(),
@@ -537,7 +537,7 @@ fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPoli
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_config_version",
+            "nemo_guardrails.unsupported_config_version",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("version".to_string()),
             format!("NeMo Guardrails config version {version} is unsupported"),
@@ -550,7 +550,7 @@ fn validate_mode(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy,
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("mode".to_string()),
             "mode must be 'remote' or 'local'".to_string(),
@@ -569,7 +569,7 @@ fn validate_non_empty_strings(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("config_path".to_string()),
             "config_path must not be empty".to_string(),
@@ -582,7 +582,7 @@ fn validate_non_empty_strings(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("config_yaml".to_string()),
             "config_yaml must not be empty".to_string(),
@@ -595,7 +595,7 @@ fn validate_non_empty_strings(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("colang_content".to_string()),
             "colang_content must not be empty".to_string(),
@@ -609,7 +609,7 @@ fn validate_non_empty_strings(
             push_policy_diag(
                 diagnostics,
                 policy.unsupported_value,
-                "nemoguardrails.unsupported_value",
+                "nemo_guardrails.unsupported_value",
                 Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                 Some("remote.endpoint".to_string()),
                 "remote.endpoint must not be empty".to_string(),
@@ -621,7 +621,7 @@ fn validate_non_empty_strings(
             push_policy_diag(
                 diagnostics,
                 policy.unsupported_value,
-                "nemoguardrails.unsupported_value",
+                "nemo_guardrails.unsupported_value",
                 Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                 Some("remote.config_id".to_string()),
                 "remote.config_id must not be empty".to_string(),
@@ -632,7 +632,7 @@ fn validate_non_empty_strings(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some(format!("remote.config_ids[{index}]")),
                     "remote.config_ids entries must not be empty".to_string(),
@@ -648,7 +648,7 @@ fn validate_non_empty_strings(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("local.python_module".to_string()),
             "local.python_module must not be empty".to_string(),
@@ -681,7 +681,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.invalid_config_source",
+                    "nemo_guardrails.invalid_config_source",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     None,
                     "exactly one of config_path or config_yaml is required in local mode"
@@ -693,7 +693,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some("colang_content".to_string()),
                     "colang_content can only be used with config_yaml".to_string(),
@@ -704,7 +704,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some("remote".to_string()),
                     "remote backend settings cannot be used when mode is 'local'".to_string(),
@@ -716,7 +716,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.invalid_config_source",
+                    "nemo_guardrails.invalid_config_source",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     None,
                     "remote mode uses remote config identity and cannot include config_path, config_yaml, or colang_content".to_string(),
@@ -727,7 +727,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some("local".to_string()),
                     "local backend settings cannot be used when mode is 'remote'".to_string(),
@@ -743,7 +743,7 @@ fn validate_config_shape(
                 _ => push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some("remote.endpoint".to_string()),
                     "remote.endpoint is required when mode is 'remote'".to_string(),
@@ -754,7 +754,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some("remote".to_string()),
                     "remote.config_id and remote.config_ids cannot be used together".to_string(),
@@ -765,7 +765,7 @@ fn validate_config_shape(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.invalid_config_source",
+                    "nemo_guardrails.invalid_config_source",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     None,
                     "remote mode requires remote.config_id or remote.config_ids".to_string(),
@@ -790,7 +790,7 @@ fn validate_codec_requirements(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("codec".to_string()),
             "codec is required when any LLM surface is enabled".to_string(),
@@ -805,7 +805,7 @@ fn validate_codec_requirements(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("codec".to_string()),
             "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'".to_string(),
@@ -825,7 +825,7 @@ fn validate_surface_selection(
     push_policy_diag(
         diagnostics,
         policy.unsupported_value,
-        "nemoguardrails.unsupported_value",
+        "nemo_guardrails.unsupported_value",
         Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
         None,
         "at least one Guardrails surface must be enabled".to_string(),
@@ -874,7 +874,7 @@ fn validate_request_defaults(
                         push_policy_diag(
                             diagnostics,
                             policy.unsupported_value,
-                            "nemoguardrails.unsupported_value",
+                            "nemo_guardrails.unsupported_value",
                             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                             Some(format!("request_defaults.output_vars[{index}]")),
                             "request_defaults.output_vars array entries must be non-empty strings"
@@ -886,7 +886,7 @@ fn validate_request_defaults(
             _ => push_policy_diag(
                 diagnostics,
                 policy.unsupported_value,
-                "nemoguardrails.unsupported_value",
+                "nemo_guardrails.unsupported_value",
                 Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                 Some("request_defaults.output_vars".to_string()),
                 "request_defaults.output_vars must be a boolean or an array of strings".to_string(),
@@ -943,7 +943,7 @@ fn validate_json_object_field(
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
-            "nemoguardrails.unsupported_value",
+            "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some(field.to_string()),
             message.to_string(),
@@ -967,7 +967,7 @@ fn validate_rail_selector(
                 push_policy_diag(
                     diagnostics,
                     policy.unsupported_value,
-                    "nemoguardrails.unsupported_value",
+                    "nemo_guardrails.unsupported_value",
                     Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
                     Some(format!("{field}[{index}]")),
                     "named rail selections must not contain empty strings".to_string(),
@@ -1044,7 +1044,7 @@ fn validate_unknown_fields(
             push_policy_diag(
                 diagnostics,
                 policy.unknown_field,
-                "nemoguardrails.unknown_field",
+                "nemo_guardrails.unknown_field",
                 component.clone(),
                 Some(field.clone()),
                 format!(
@@ -1080,7 +1080,7 @@ fn push_policy_diag(
     });
 }
 
-fn default_nemoguardrails_config_version() -> u32 {
+fn default_nemo_guardrails_config_version() -> u32 {
     1
 }
 
@@ -1101,5 +1101,5 @@ fn default_timeout_millis() -> u64 {
 }
 
 #[cfg(test)]
-#[path = "../../tests/unit/nemoguardrails/plugin_component_tests.rs"]
+#[path = "../../../tests/unit/plugins/nemo_guardrails/plugin_component_tests.rs"]
 mod tests;
