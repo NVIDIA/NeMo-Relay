@@ -366,7 +366,15 @@ pub fn register_nemo_guardrails_component() -> PluginResult<()> {
         return Ok(());
     }
 
-    register_plugin(Arc::new(NeMoGuardrailsPlugin))
+    match register_plugin(Arc::new(NeMoGuardrailsPlugin)) {
+        Ok(()) => Ok(()),
+        Err(PluginError::RegistrationFailed(_))
+            if lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some() =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Deregisters the `nemo_guardrails` component kind from the plugin registry.
