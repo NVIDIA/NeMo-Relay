@@ -602,9 +602,13 @@ fn effective_upstream_request(
         return (body_bytes.clone(), headers.clone());
     };
 
-    let body_bytes = serde_json::to_vec(&request.content)
-        .map(Bytes::from)
-        .unwrap_or_else(|_| body_bytes.clone());
+    let body_bytes = if request.content.is_null() {
+        body_bytes.clone()
+    } else {
+        serde_json::to_vec(&request.content)
+            .map(Bytes::from)
+            .unwrap_or_else(|_| body_bytes.clone())
+    };
     let mut headers = headers.clone();
     for (name, value) in &request.headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {

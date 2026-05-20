@@ -748,19 +748,20 @@ function createModules(params: {
 } = {}): TestModules {
   const nf = createNemoFlowRuntime();
   const calls: TestPluginHost["calls"] = { validate: [], initialize: [], clear: 0 };
+  const adaptive: TestModules["adaptive"] = {
+    ADAPTIVE_PLUGIN_KIND: "adaptive",
+    ComponentSpec: (
+      config: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[0],
+      options?: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[1],
+    ) => ({
+      kind: adaptive.ADAPTIVE_PLUGIN_KIND,
+      enabled: options?.enabled ?? true,
+      config,
+    }),
+  };
   return {
     nf,
-    adaptive: {
-      ADAPTIVE_PLUGIN_KIND: "adaptive",
-      ComponentSpec: (
-        config: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[0],
-        options?: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[1],
-      ) => ({
-        kind: "adaptive",
-        enabled: options?.enabled ?? true,
-        config,
-      }),
-    },
+    adaptive,
     pluginHost: {
       calls,
       defaultConfig: () => ({ version: 1, components: [] }),

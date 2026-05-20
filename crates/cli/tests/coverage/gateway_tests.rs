@@ -197,6 +197,24 @@ fn effective_upstream_request_returns_original_without_runtime_request() {
 }
 
 #[test]
+fn effective_upstream_request_preserves_original_body_for_null_runtime_content() {
+    let original_body = Bytes::from_static(b"not-json-but-still-upstream-body");
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert("x-original", HeaderValue::from_static("kept"));
+    let request = LlmRequest {
+        headers: Map::from_iter([("x-runtime".to_string(), json!("enabled"))]),
+        content: Value::Null,
+    };
+
+    let (body, headers) =
+        effective_upstream_request(&original_body, &original_headers, Some(&request));
+
+    assert_eq!(body, original_body);
+    assert_eq!(headers.get("x-original").unwrap(), "kept");
+    assert_eq!(headers.get("x-runtime").unwrap(), "enabled");
+}
+
+#[test]
 fn effective_upstream_request_skips_invalid_runtime_headers() {
     let original_body = Bytes::from_static(br#"{"model":"original"}"#);
     let mut original_headers = HeaderMap::new();
