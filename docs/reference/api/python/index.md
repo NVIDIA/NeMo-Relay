@@ -69,7 +69,7 @@ Use these links to continue from the API reference into task-focused guides.
 - [Middleware](../../../about/concepts/middleware.md)
 - [Subscribers](../../../about/concepts/subscribers.md)
 - [Plugins](../../../about/concepts/plugins.md)
-- [Adaptive Optimization](../../../plugins/adaptive/about.md)
+- [Adaptive Tuning](../../../plugins/adaptive/about.md)
 - [Observability Configuration](../../../plugins/observability/configuration.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)

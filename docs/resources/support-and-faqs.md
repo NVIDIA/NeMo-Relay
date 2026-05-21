@@ -17,7 +17,7 @@ fits into the agent and NVIDIA NeMo ecosystem.
 
 NeMo Flow provides shared runtime instrumentation for scopes, tool calls, LLM
 calls, middleware, lifecycle events, subscribers, plugins, and adaptive
-optimization. It gives applications and framework integrations a consistent
+tuning. It gives applications and framework integrations a consistent
 execution model across supported bindings.
 
 NeMo Flow sits inside an application, framework, or integration and makes
@@ -338,9 +338,9 @@ Refer to [Exporter Selection](../plugins/observability/about.md#exporter-selecti
 [OpenInference](../plugins/observability/openinference.md), and
 [Agent Trajectory Interchange Format (ATIF)](../plugins/observability/atif.md).
 
-### Can I Use NeMo Flow Just For Observability Without Adaptive Optimization Or Middleware?
+### Can I Use NeMo Flow Just For Observability Without Adaptive Tuning Or Middleware?
 
-Yes. Adaptive optimization and custom middleware are optional. You can start by
+Yes. Adaptive tuning and custom middleware are optional. You can start by
 adding scopes, routing tool or LLM calls through managed execution helpers or
 manual lifecycle APIs, and registering subscribers or exporters.
 
@@ -375,9 +375,9 @@ reported through structured activation diagnostics.
 Refer to [Define a Plugin](../build-plugins/basic-guide.md) and
 [Register Plugin Behavior](../build-plugins/register-behavior.md).
 
-### How Is Adaptive Optimization Enabled?
+### How Is Adaptive Tuning Enabled?
 
-Adaptive optimization is activated through the plugin system. Start with
+Adaptive tuning is activated through the plugin system. Start with
 telemetry and in-memory state so the runtime can observe representative
 workflows before changing behavior. Enable active behavior one area at a time,
 such as adaptive hints, tool parallelism, or cache-governor behavior.

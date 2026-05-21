@@ -67,7 +67,7 @@ Use the reading path that matches your task:
 | Observe a local coding-agent CLI | [NeMo Flow CLI](nemo-flow-cli/about.md) |
 | Package reusable behavior | [Build Plugins](build-plugins/about.md) |
 | Export traces or trajectories | [Observability](plugins/observability/about.md) |
-| Configure adaptive behavior | [Adaptive](plugins/adaptive/about.md) |
+| Tune performance with adaptive behavior | [Adaptive](plugins/adaptive/about.md) |
 | Look up symbols | [APIs](reference/api/index.md) |
 
 ## Conceptual Diagram

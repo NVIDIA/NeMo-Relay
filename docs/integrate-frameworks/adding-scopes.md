@@ -18,7 +18,7 @@ Scopes are the framework integration's trace boundary. Without them, a tool or L
 Scopes help with:
 
 - **Observability**: Scopes group tool calls, LLM calls, marks, middleware decisions, and exporter output under one root scope UUID.
-- **Optimization**: Adaptive optimization needs request-level context to compare choices, correlate outcomes, and avoid treating unrelated calls as one trajectory.
+- **Adaptive tuning**: Adaptive behavior needs request-level context to compare choices, correlate outcomes, and avoid treating unrelated calls as one trajectory.
 - **Middleware isolation**: Scope-local middleware and subscribers can apply to one request, tenant, or experiment and disappear when the scope closes.
 - **Concurrency**: Framework request scopes keep concurrent runs from sharing the wrong parent-child event hierarchy.
 - **Debugging**: Mark events inside a scope make retries, routing decisions, queue waits, and scheduler transitions visible without pretending they are full tool or LLM calls.

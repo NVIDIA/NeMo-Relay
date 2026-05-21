@@ -101,6 +101,6 @@ Lock these before implementing:
 - Typed wrappers and codecs: `docs/integrate-frameworks/using-codecs.md`,
   `docs/integrate-frameworks/provider-codecs.md`
 - Adaptive config/plugins: `docs/about/concepts/plugins.md`,
-  `docs/build-plugins/about.md`, `docs/use-adaptive-optimization/configure.md`
+  `docs/build-plugins/about.md`, `docs/plugins/adaptive/configuration.md`
 - Existing pattern: follow a surface already implemented across core, FFI,
   Python, Go, Node.js, and WebAssembly rather than inventing a new shape

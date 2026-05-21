@@ -21,7 +21,7 @@ Use these skills for tasks such as:
 - Getting started with a binding
 - Instrumenting tool and LLM calls
 - Choosing the current primary documentation track: Rust, Python, or Node.js
-- Configuring adaptive features
+- Tuning performance with adaptive features
 - Setting up observability and trace export
 - Debugging application-side NeMo Flow integrations
 

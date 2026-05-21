@@ -1,64 +1,37 @@
 ---
 name: nemo-flow-start-optimizer
-description: Help application developers decide whether and how to start using the NeMo Flow adaptive layer; also handle legacy optimizer wording
+description: Deprecated compatibility alias for nemo-flow-tune-performance; retained through v0.3 for users who still ask for optimizer guidance
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
 
 
-# Get Started With Adaptive Layer
+# Deprecated Compatibility Alias For `nemo-flow-tune-performance`
 
-Use this skill when a user wants the shortest explanation of what the adaptive
-layer does and how to take a first step with it. If they say "optimizer",
-translate that to the current adaptive/plugin model.
+This legacy skill name is retained through v0.3 for compatibility. NeMo Flow
+now describes this area as adaptive tuning or performance tuning, not a
+separate optimizer object.
 
-## Default Guidance
+If this alias is selected, continue with the current Phase 2 workflow rather
+than looking for a separate optimizer API.
 
-- Treat adaptive as a config-driven top-level plugin component layered on top of
-  NeMo Flow instrumentation.
-- Start with the in-memory backend and one built-in section at a time.
-- Validate the full plugin config before initialization.
-- Add custom plugins only after the baseline adaptive path works.
+## Compatibility Workflow
 
-## Embedded Adaptive Model
+1. Translate "optimizer" to adaptive tuning through the first-party plugin
+   component with kind `adaptive`.
+2. Confirm the app already has scopes, managed tool or LLM calls, and
+   observability working.
+3. Start with in-memory state and telemetry-only behavior.
+4. Run representative traffic and inspect runtime events or reports.
+5. Enable only one active tuning surface at a time: adaptive hints, tool
+   parallelism, or Adaptive Cache Governor.
+6. Compare against a baseline and keep a rollback path.
 
-- Adaptive is the current name for functionality that users may still call the
-  optimizer. Translate optimizer wording to adaptive/plugin wording.
-- Adaptive requires existing NeMo Flow instrumentation because it learns from
-  emitted scope, tool, and LLM lifecycle events.
-- Adaptive can register subscribers for telemetry, LLM request intercepts for
-  hints, tool-related behaviors for parallelism guidance or scheduling, LLM
-  execution intercepts for cache-governor planning, and state backends for those
-  features.
-- Main config areas are state, telemetry, adaptive hints, tool parallelism, the
-  adaptive cache governor, and rollout policy.
-- State backends are `in_memory` and `redis`.
-- Tool-parallelism modes are `observe_only`, `inject_hints`, and `schedule`.
-- Adaptive cache-governor providers are `passthrough`, `anthropic`, and
-  `openai`; omit the cache-governor section until cache planning is needed.
-- Helper APIs exist in Python `nemo_flow.adaptive`, Node.js
-  `nemo-flow-node/adaptive`, Go `go/nemo_flow/adaptive`, and Rust
-  `nemo_flow_adaptive`.
-- A safe first rollout is in-memory state plus telemetry, followed by
-  representative workflows, report review, optional persistent state, then hints
-  or scheduling only after consumers can interpret them.
+## Avoid
 
-## First Questions To Answer
+- Do not introduce a separate optimizer object.
+- Do not enable scheduling before tool idempotency and race behavior are known.
+- Do not tune from a single run or unrepresentative traffic.
 
-- Does the app already emit NeMo Flow events?
-- Does it need telemetry-driven learning, LLM hints, tool parallelism, or a
-  custom plugin?
-- Does it need an in-memory or persistent state backend?
-
-## Use Another Skill When
-
-- You already know the configuration shape you need ->
-  `nemo-flow-configure-optimizer`
-- You need to consume the hints/predictions in app logic ->
-  `nemo-flow-use-optimizer-hints`
-
-## Related Skills
-
-- `nemo-flow-instrument-calls`
-- `nemo-flow-configure-optimizer`
-- `nemo-flow-use-optimizer-hints`
+If the user says "optimizer," translate that to current adaptive/plugin
+terminology and continue with `nemo-flow-tune-performance`.

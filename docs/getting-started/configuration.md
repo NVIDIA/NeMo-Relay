@@ -55,4 +55,4 @@ deployment manifests.
 
 ## Adaptive Setup
 
-Adaptive optimization is enabled through the adaptive plugin component and binding helper APIs. See [Adaptive Configuration](../plugins/adaptive/configuration.md).
+Adaptive tuning is enabled through the adaptive plugin component and binding helper APIs. See [Adaptive Configuration](../plugins/adaptive/configuration.md).

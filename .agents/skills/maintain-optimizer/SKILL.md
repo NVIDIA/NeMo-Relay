@@ -31,7 +31,7 @@ lifecycle:
 
 There is no separate public adaptive runtime handle.
 
-See `docs/use-adaptive-optimization/configure.md` and
+See `docs/plugins/adaptive/configuration.md` and
 `docs/about/concepts/plugins.md`.
 
 ## Keep In Sync
@@ -62,8 +62,10 @@ See `docs/use-adaptive-optimization/configure.md` and
 
 ## References
 
-- `docs/use-adaptive-optimization/configure.md`
-- `docs/use-adaptive-optimization/adaptive-components.md`
+- `docs/plugins/adaptive/configuration.md`
+- `docs/plugins/adaptive/about.md`
+- `docs/plugins/adaptive/acg.md`
+- `docs/plugins/adaptive/adaptive-hints.md`
 - `docs/build-plugins/basic-guide.md`
 - `docs/build-plugins/validate-configuration.md`
 - `docs/about/concepts/plugins.md`

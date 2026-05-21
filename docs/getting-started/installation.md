@@ -55,7 +55,7 @@ cargo add nemo-flow-adaptive@0.3.0
 ```
 
 - `nemo-flow` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
-- `nemo-flow-adaptive` provides adaptive runtime primitives and Redis-backed learning components when you want adaptive optimization behavior in Rust.
+- `nemo-flow-adaptive` provides adaptive runtime primitives and Redis-backed learning components when you want adaptive tuning behavior in Rust.
 
 ## Integrations
 

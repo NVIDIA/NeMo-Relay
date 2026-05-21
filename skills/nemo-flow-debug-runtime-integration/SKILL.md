@@ -77,4 +77,4 @@ working.
 
 - `nemo-flow-start`
 - `nemo-flow-use-context-isolation`
-- `nemo-flow-configure-optimizer`
+- `nemo-flow-tune-adaptive-config`

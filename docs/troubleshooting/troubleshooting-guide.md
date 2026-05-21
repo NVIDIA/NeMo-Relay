@@ -151,9 +151,12 @@ If a plugin fails before runtime execution, validate configuration separately fr
 
 Use [Validate Configuration](../build-plugins/validate-configuration.md), [Advanced Configuration](../build-plugins/advanced-configuration.md), and [Register Behavior](../build-plugins/register-behavior.md) to isolate configuration problems from runtime behavior problems.
 
-## Adaptive Optimization Does Not Change Behavior
+## Adaptive Tuning Does Not Change Behavior
 
-Confirm that adaptive optimization is configured for the component you expect and that the runtime path actually reaches that component. If behavior does not change, check whether the configured policy is disabled, scoped too narrowly, or not connected to the call path under test.
+Confirm that adaptive tuning is configured for the component you expect and that
+the runtime path actually reaches that component. If behavior does not change,
+check whether the configured policy is disabled, scoped too narrowly, or not
+connected to the call path under test.
 
 Use [Adaptive Configuration](../plugins/adaptive/configuration.md),
 [Adaptive Cache Governor (ACG)](../plugins/adaptive/acg.md), and

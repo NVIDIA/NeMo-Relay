@@ -33,8 +33,8 @@ Adaptive Hint
   adaptive request intercept. Downstream code or provider adapters can use the
   hint to adjust behavior when explicitly configured to do so.
 
-Adaptive Optimization
-  **Adaptive optimization** is the NeMo Flow runtime capability that observes
+Adaptive Tuning
+  **Adaptive tuning** is the NeMo Flow runtime capability that observes
   instrumented work and enables controlled behavior changes through the plugin
   system.
 
