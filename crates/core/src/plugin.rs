@@ -762,9 +762,11 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
-    match BUILTIN_PLUGIN_REGISTRATION
-        .get_or_init(crate::observability::plugin_component::register_observability_component)
-    {
+    let register_builtins = || {
+        crate::observability::plugin_component::register_observability_component()?;
+        crate::plugins::nemo_guardrails::plugin_component::register_nemo_guardrails_component()
+    };
+    match BUILTIN_PLUGIN_REGISTRATION.get_or_init(register_builtins) {
         Ok(()) => Ok(()),
         Err(err) => Err(clone_cached_plugin_error(err)),
     }

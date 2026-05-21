@@ -14,8 +14,12 @@ readme = "README.md"
 workspace = true
 
 [features]
-default = ["otel", "openinference"]
+default = ["otel", "openinference", "guardrails-remote"]
 schema = ["dep:schemars"]
+guardrails-remote = [
+    "dep:reqwest",
+    "dep:rustls",
+]
 otel = [
     "dep:async-trait",
     "dep:getrandom",
@@ -24,7 +28,6 @@ otel = [
     "dep:opentelemetry-http",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
-    "dep:reqwest",
     "dep:rustls",
     "dep:tonic",
     "dep:web-sys",
@@ -40,7 +43,6 @@ openinference = [
     "dep:opentelemetry-http",
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
-    "dep:reqwest",
     "dep:rustls",
     "dep:tonic",
     "dep:web-sys",

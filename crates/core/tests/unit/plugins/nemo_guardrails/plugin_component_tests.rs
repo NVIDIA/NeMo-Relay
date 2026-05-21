@@ -2,10 +2,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Unit tests for the planned NeMo Guardrails plugin component contract.
+#![allow(clippy::await_holding_lock)]
 
 use super::*;
 use crate::api::runtime::NemoRelayContextState;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+
+use crate::api::event::Event;
+use crate::api::llm::{
+    LlmAttributes, LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
 use crate::api::runtime::global_context;
+use crate::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, create_scope_stack,
+    set_thread_scope_stack,
+};
+use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use crate::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
+use crate::codec::streaming::StreamingCodec;
+use crate::codec::traits::LlmResponseCodec;
 use crate::config_editor::{EditorConfig, EditorFieldKind};
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
@@ -13,18 +34,19 @@ use crate::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
     list_plugin_kinds, lookup_plugin, validate_plugin_config,
 };
+use futures::StreamExt;
 use serde_json::json;
 
 fn reset_runtime() {
     let _ = clear_plugin_configuration();
-    let _ = deregister_nemo_guardrails_component();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
 }
 
-fn ensure_registered() {
-    register_nemo_guardrails_component().unwrap();
+fn setup_isolated_thread() {
+    let stack = create_scope_stack();
+    set_thread_scope_stack(stack);
 }
 
 fn component(config: Json) -> PluginComponentSpec {
@@ -66,6 +88,137 @@ fn remote_valid_config() -> Json {
             "config_id": "safety-default"
         }
     })
+}
+
+#[derive(Debug)]
+struct CapturedHttpRequest {
+    path: String,
+    content_type: String,
+    body: Vec<u8>,
+}
+
+fn spawn_http_responder(
+    listener: TcpListener,
+    response: Vec<u8>,
+    request_tx: mpsc::Sender<CapturedHttpRequest>,
+) {
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        stream.write_all(&response).unwrap();
+        request_tx.send(request).unwrap();
+    });
+}
+
+fn spawn_http_responder_sequence(
+    listener: TcpListener,
+    responses: Vec<Vec<u8>>,
+    request_tx: mpsc::Sender<CapturedHttpRequest>,
+) {
+    thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            stream.write_all(&response).unwrap();
+            request_tx.send(request).unwrap();
+        }
+    });
+}
+
+fn read_http_request(stream: &mut impl Read) -> CapturedHttpRequest {
+    let mut bytes = Vec::new();
+    let mut buf = [0_u8; 4096];
+    let (header_end, content_length) = read_http_headers(stream, &mut bytes, &mut buf);
+    read_http_body(stream, &mut bytes, &mut buf, header_end + content_length);
+
+    let headers_text = String::from_utf8_lossy(&bytes[..header_end]);
+    let request_line = headers_text.lines().next().unwrap();
+    CapturedHttpRequest {
+        path: request_line.split_whitespace().nth(1).unwrap().to_string(),
+        content_type: header_value(&headers_text, "content-type")
+            .unwrap_or_default()
+            .to_string(),
+        body: bytes[header_end..header_end + content_length].to_vec(),
+    }
+}
+
+fn read_http_headers(
+    stream: &mut impl Read,
+    bytes: &mut Vec<u8>,
+    buf: &mut [u8; 4096],
+) -> (usize, usize) {
+    loop {
+        let read = stream.read(buf).unwrap();
+        if read == 0 {
+            panic!("remote responder closed before receiving request");
+        }
+        bytes.extend_from_slice(&buf[..read]);
+
+        if let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            let header_end = header_end + 4;
+            let headers_text = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = header_value(&headers_text, "content-length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            return (header_end, content_length);
+        }
+    }
+}
+
+fn read_http_body(
+    stream: &mut impl Read,
+    bytes: &mut Vec<u8>,
+    buf: &mut [u8; 4096],
+    expected_total: usize,
+) {
+    while bytes.len() < expected_total {
+        let read = stream.read(buf).unwrap();
+        if read == 0 {
+            panic!("remote responder closed before full request body");
+        }
+        bytes.extend_from_slice(&buf[..read]);
+    }
+}
+
+fn header_value<'a>(headers_text: &'a str, header_name: &str) -> Option<&'a str> {
+    headers_text.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.eq_ignore_ascii_case(header_name) {
+            Some(value.trim())
+        } else {
+            None
+        }
+    })
+}
+
+fn make_chat_request(stream: bool) -> LlmRequest {
+    LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "temperature": 0.2,
+            "stream": stream
+        }),
+    }
+}
+
+fn capture_events(name: &str) -> Arc<Mutex<Vec<Event>>> {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    register_subscriber(
+        name,
+        Arc::new(move |event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    events
+}
+
+fn unused_local_endpoint() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    format!("http://{address}")
 }
 
 #[test]
@@ -210,6 +363,8 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
         "timeout_millis",
         "python_module",
         "context",
+        "thread_id",
+        "state",
         "rails",
         "llm_params",
         "llm_output",
@@ -264,23 +419,14 @@ fn plugin_schema_contains_generic_plugin_surface() {
 }
 
 #[test]
-fn registration_is_explicit_not_automatic() {
+fn builtin_registration_is_automatic() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
 
-    assert!(!list_plugin_kinds().contains(&NEMO_GUARDRAILS_PLUGIN_KIND.to_string()));
-    assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_none());
-
-    ensure_registered();
     assert!(list_plugin_kinds().contains(&NEMO_GUARDRAILS_PLUGIN_KIND.to_string()));
     assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some());
-
-    ensure_registered();
-    assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some());
-    assert!(deregister_nemo_guardrails_component());
-    assert!(!deregister_nemo_guardrails_component());
 }
 
 #[test]
@@ -289,7 +435,6 @@ fn disabled_component_validates_and_initializes_without_runtime_work() {
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
-    ensure_registered();
 
     let config = PluginConfig {
         version: 1,
@@ -306,7 +451,6 @@ fn duplicate_component_is_rejected_as_singleton() {
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
-    ensure_registered();
 
     let config = PluginConfig {
         version: 1,
@@ -332,7 +476,6 @@ fn invalid_shapes_and_values_are_reported() {
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
-    ensure_registered();
 
     let invalid_shape = validate_plugin_config(&plugin_config(json!({
         "version": "one",
@@ -423,6 +566,50 @@ fn invalid_shapes_and_values_are_reported() {
         diag.message
             .contains("codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'")
     }));
+
+    let unsupported_remote_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_responses",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(unsupported_remote_codec.has_errors());
+    assert!(unsupported_remote_codec.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("remote mode currently supports only codec = 'openai_chat'")
+    }));
+
+    let unsupported_remote_anthropic_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "anthropic_messages",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(unsupported_remote_anthropic_codec.has_errors());
+    assert!(
+        unsupported_remote_anthropic_codec
+            .diagnostics
+            .iter()
+            .any(|diag| {
+                diag.message
+                    .contains("remote mode currently supports only codec = 'openai_chat'")
+            })
+    );
+
+    let supported_remote_tool_surface = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "tool_input": true,
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(!supported_remote_tool_surface.has_errors());
 
     let remote_empty_fields = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
@@ -527,6 +714,8 @@ fn invalid_shapes_and_values_are_reported() {
         },
         "request_defaults": {
             "context": true,
+            "thread_id": "short",
+            "state": {"foo": "bar"},
             "llm_params": [],
             "log": "verbose",
             "output_vars": 7,
@@ -542,6 +731,26 @@ fn invalid_shapes_and_values_are_reported() {
             .iter()
             .any(|diag| diag.field.as_deref() == Some("request_defaults.context"))
     );
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.thread_id"))
+    );
+    assert!(invalid_request_defaults.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("request_defaults.thread_id must be at least 16 characters long")
+    }));
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.state"))
+    );
+    assert!(invalid_request_defaults.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("request_defaults.state must be empty or contain 'events' or 'state'")
+    }));
     assert!(
         invalid_request_defaults
             .diagnostics
@@ -574,7 +783,6 @@ fn unknown_fields_follow_policy() {
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
-    ensure_registered();
 
     let warn_report = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
@@ -618,21 +826,1639 @@ fn unknown_fields_follow_policy() {
 }
 
 #[test]
-fn enabled_initialization_fails_fast_until_backend_exists() {
+fn enabled_local_initialization_fails_fast_until_backend_exists() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
-    ensure_registered();
 
-    let error =
-        futures::executor::block_on(initialize_plugins(plugin_config(remote_valid_config())))
-            .unwrap_err();
+    let error = futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "local",
+        "codec": "openai_chat",
+        "config_path": "./rails"
+    }))))
+    .unwrap_err();
 
     match error {
         crate::plugin::PluginError::RegistrationFailed(message) => {
-            assert!(message.contains("not implemented yet"));
+            assert!(message.contains("local backend"));
         }
         other => panic!("unexpected error: {other}"),
     }
+}
+
+#[tokio::test]
+async fn remote_initialization_installs_non_streaming_execution_intercept() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-execution-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-remote",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "guarded"},
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "state": {"state": {"conversation": "server-state"}},
+            "output_data": {"decision": "allow"}
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default",
+            "headers": {"x-guardrails-auth": "token"},
+            "timeout_millis": 5_000
+        },
+        "request_defaults": {
+            "context": {"tenant": "acme"},
+            "thread_id": "thread-1234567890",
+            "state": {"state": {"conversation": "client-state"}},
+            "rails": {"input": true, "retrieval": ["kb"]},
+            "llm_params": {"temperature": 0.1},
+            "llm_output": true,
+            "output_vars": ["answer"],
+            "log": {"activated_rails": true}
+        }
+    })))
+    .await
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&original_called);
+    let func: LlmExecutionNextFn = Arc::new(move |_req| {
+        called.store(true, Ordering::SeqCst);
+        Box::pin(async move { Ok(json!({"response": "original"})) })
+    });
+
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert!(!original_called.load(Ordering::SeqCst));
+    assert_eq!(response["id"], json!("chatcmpl-remote"));
+    assert_eq!(response["object"], json!("chat.completion"));
+    assert_eq!(response["model"], json!("gpt-4o-mini"));
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        json!("guarded")
+    );
+    assert_eq!(
+        response["guardrails"]["output_data"]["decision"],
+        json!("allow")
+    );
+    assert_eq!(
+        response["guardrails"]["state"]["state"]["conversation"],
+        json!("server-state")
+    );
+
+    let captured = request_rx.recv().unwrap();
+    assert_eq!(captured.path, "/v1/chat/completions");
+    assert!(captured.content_type.starts_with("application/json"));
+
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(request_json["messages"][0]["content"], json!("hello"));
+    assert_eq!(request_json["stream"], json!(false));
+    assert_eq!(
+        request_json["guardrails"]["config_id"],
+        json!("safety-default")
+    );
+    assert_eq!(
+        request_json["guardrails"]["context"]["tenant"],
+        json!("acme")
+    );
+    assert_eq!(
+        request_json["guardrails"]["thread_id"],
+        json!("thread-1234567890")
+    );
+    assert_eq!(
+        request_json["guardrails"]["state"]["state"]["conversation"],
+        json!("client-state")
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["retrieval"],
+        json!(["kb"])
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["llm_output"],
+        json!(true)
+    );
+
+    let captured_events = events.lock().unwrap().clone();
+    let mark_names: Vec<_> = captured_events
+        .iter()
+        .filter(|event| event.kind() == "mark")
+        .map(|event| event.name().to_string())
+        .collect();
+    assert!(mark_names.contains(&"nemo_guardrails.remote.start".to_string()));
+    assert!(mark_names.contains(&"nemo_guardrails.remote.end".to_string()));
+
+    let start_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.start")
+        .unwrap();
+    assert_eq!(
+        start_mark.data().unwrap()["config_id"],
+        json!("safety-default")
+    );
+    assert_eq!(start_mark.data().unwrap()["stream"], json!(false));
+
+    let end_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.end")
+        .unwrap();
+    assert_eq!(end_mark.data().unwrap()["http_status"], json!(200));
+    assert_eq!(end_mark.data().unwrap()["stream"], json!(false));
+
+    deregister_subscriber("nemo-guardrails-remote-execution-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_request_uses_config_ids_when_config_id_is_not_set() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-remote",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "guarded"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_ids": ["safety-a", "safety-b"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+
+    let _ = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = request_rx.recv().unwrap();
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["config_ids"],
+        json!(["safety-a", "safety-b"])
+    );
+    assert!(request_json["guardrails"].get("config_id").is_none());
+}
+
+#[tokio::test]
+async fn remote_initialization_installs_stream_execution_intercept() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-stream-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let sse_body = concat!(
+        "data: {\"id\":\"chatcmpl-remote\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"guard\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-remote\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ed\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&original_called);
+    let func: LlmStreamExecutionNextFn = Arc::new(move |_req| {
+        called.store(true, Ordering::SeqCst);
+        Box::pin(async move {
+            let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
+            Ok(Box::pin(stream) as LlmJsonStream)
+        })
+    });
+
+    let streaming_codec = OpenAIChatStreamingCodec::new();
+    let collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(true))
+            .func(func)
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let mut chunks = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        chunks.push(chunk.unwrap());
+    }
+
+    assert!(!original_called.load(Ordering::SeqCst));
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0]["choices"][0]["delta"]["content"], json!("guard"));
+    assert_eq!(chunks[1]["choices"][0]["delta"]["content"], json!("ed"));
+
+    let captured = request_rx.recv().unwrap();
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(request_json["stream"], json!(true));
+    assert_eq!(
+        request_json["guardrails"]["config_id"],
+        json!("safety-default")
+    );
+
+    let captured_events = events.lock().unwrap().clone();
+    let start_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.start")
+        .unwrap();
+    assert_eq!(start_mark.data().unwrap()["stream"], json!(true));
+
+    let end_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.end")
+        .unwrap();
+    assert_eq!(end_mark.data().unwrap()["http_status"], json!(200));
+    assert_eq!(end_mark.data().unwrap()["stream"], json!(true));
+
+    deregister_subscriber("nemo-guardrails-remote-stream-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_non_streaming_http_errors_are_reported_and_marked() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-error-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = r#"{"error":"backend unavailable"}"#;
+    let http_response = format!(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&original_called);
+    let func: LlmExecutionNextFn = Arc::new(move |_req| {
+        called.store(true, Ordering::SeqCst);
+        Box::pin(async move { Ok(json!({"response": "original"})) })
+    });
+
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(!original_called.load(Ordering::SeqCst));
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("status 502"));
+            assert!(message.contains("backend unavailable"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured_events = events.lock().unwrap().clone();
+    assert!(
+        captured_events
+            .iter()
+            .any(|event| event.name() == "nemo_guardrails.remote.start")
+    );
+    let error_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.error")
+        .unwrap();
+    assert_eq!(error_mark.data().unwrap()["http_status"], json!(502));
+    assert_eq!(error_mark.data().unwrap()["stream"], json!(false));
+    assert!(
+        error_mark.data().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("backend unavailable")
+    );
+
+    deregister_subscriber("nemo-guardrails-remote-error-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_streaming_http_errors_are_reported_and_marked() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-stream-error-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = r#"{"error":"stream backend unavailable"}"#;
+    let http_response = format!(
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&original_called);
+    let func: LlmStreamExecutionNextFn = Arc::new(move |_req| {
+        called.store(true, Ordering::SeqCst);
+        Box::pin(async move {
+            let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
+            Ok(Box::pin(stream) as LlmJsonStream)
+        })
+    });
+
+    let streaming_codec = OpenAIChatStreamingCodec::new();
+    let collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let error = match llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(true))
+            .func(func)
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    {
+        Ok(_) => panic!("expected remote streaming request to fail"),
+        Err(error) => error,
+    };
+
+    assert!(!original_called.load(Ordering::SeqCst));
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("status 503"));
+            assert!(message.contains("stream backend unavailable"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured_events = events.lock().unwrap().clone();
+    assert!(
+        captured_events
+            .iter()
+            .any(|event| event.name() == "nemo_guardrails.remote.start")
+    );
+    let error_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.error")
+        .unwrap();
+    assert_eq!(error_mark.data().unwrap()["http_status"], json!(503));
+    assert_eq!(error_mark.data().unwrap()["stream"], json!(true));
+    assert!(
+        error_mark.data().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("stream backend unavailable")
+    );
+
+    deregister_subscriber("nemo-guardrails-remote-stream-error-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_non_streaming_invalid_json_is_reported_and_marked() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-invalid-json-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = "{not-json}";
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("failed to parse remote response JSON"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured_events = events.lock().unwrap().clone();
+    let error_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.error")
+        .unwrap();
+    assert_eq!(error_mark.data().unwrap()["http_status"], json!(200));
+    assert_eq!(error_mark.data().unwrap()["stream"], json!(false));
+
+    deregister_subscriber("nemo-guardrails-remote-invalid-json-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_streaming_malformed_chunk_is_reported_and_marked() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-malformed-stream-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let sse_body = "data: {not-json}\n\n";
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmStreamExecutionNextFn = Arc::new(move |_req| {
+        Box::pin(async move {
+            let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "original"}))]);
+            Ok(Box::pin(stream) as LlmJsonStream)
+        })
+    });
+
+    let streaming_codec = OpenAIChatStreamingCodec::new();
+    let collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(true))
+            .func(func)
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let error = stream.next().await.unwrap().unwrap_err();
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(!message.is_empty());
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured_events = events.lock().unwrap().clone();
+    let error_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.error")
+        .unwrap();
+    assert_eq!(error_mark.data().unwrap()["http_status"], json!(200));
+    assert_eq!(error_mark.data().unwrap()["stream"], json!(true));
+
+    deregister_subscriber("nemo-guardrails-remote-malformed-stream-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_preflight_tool_choice_failure_is_reported_and_marked() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-preflight-error-events");
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": unused_local_endpoint(),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup data",
+                    "parameters": {"type": "object"}
+                }
+            }]
+        }),
+    };
+
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(request)
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("does not support OpenAI tool definitions or tool_choice"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured_events = events.lock().unwrap().clone();
+    assert!(
+        captured_events
+            .iter()
+            .any(|event| event.name() == "nemo_guardrails.remote.start")
+    );
+    let error_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.error")
+        .unwrap();
+    assert_eq!(error_mark.data().unwrap()["stream"], json!(false));
+    assert!(
+        error_mark.data().unwrap()["error"]
+            .as_str()
+            .unwrap()
+            .contains("does not support OpenAI tool definitions or tool_choice")
+    );
+
+    deregister_subscriber("nemo-guardrails-remote-preflight-error-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_transport_failure_is_reported_and_marked() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-transport-error-events");
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": unused_local_endpoint(),
+            "config_id": "safety-default",
+            "timeout_millis": 50
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("remote request failed"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured_events = events.lock().unwrap().clone();
+    let error_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.error")
+        .unwrap();
+    assert_eq!(error_mark.data().unwrap()["stream"], json!(false));
+    assert!(error_mark.data().unwrap().get("http_status").is_none());
+
+    deregister_subscriber("nemo-guardrails-remote-transport-error-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_success_without_guardrails_payload_is_allowed() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-remote",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "guarded"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response["id"], json!("chatcmpl-remote"));
+    assert!(response.get("guardrails").is_none());
+}
+
+#[tokio::test]
+async fn remote_tool_input_block_rejects_before_tool_execution() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+    let events = capture_events("nemo-guardrails-remote-tool-input-events");
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-blocked",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "blocked"},
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": [{
+                    "name": "tool_input_block",
+                    "stop": true
+                }]
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let original_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&original_called);
+    let error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(!original_called.load(Ordering::SeqCst));
+    match error {
+        crate::error::FlowError::GuardrailRejected(message) => {
+            assert!(message.contains("tool_input"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+
+    let captured = request_rx.recv().unwrap();
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["input"],
+        json!(true)
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["output"],
+        json!(false)
+    );
+
+    let captured_events = events.lock().unwrap().clone();
+    let start_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.start")
+        .unwrap();
+    assert_eq!(start_mark.data().unwrap()["surface"], json!("tool_input"));
+    assert_eq!(
+        start_mark.data().unwrap()["tool_name"],
+        json!("weather_lookup")
+    );
+    let end_mark = captured_events
+        .iter()
+        .find(|event| event.name() == "nemo_guardrails.remote.end")
+        .unwrap();
+    assert_eq!(end_mark.data().unwrap()["surface"], json!("tool_input"));
+
+    deregister_subscriber("nemo-guardrails-remote-tool-input-events").unwrap();
+}
+
+#[tokio::test]
+async fn remote_tool_input_can_rewrite_tool_arguments() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-modified",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let seen_args = Arc::new(Mutex::new(None::<Json>));
+    let seen_args_for_call = Arc::clone(&seen_args);
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |args| {
+                *seen_args_for_call.lock().unwrap() = Some(args.clone());
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, json!({"forecast": "sunny"}));
+    assert_eq!(*seen_args.lock().unwrap(), Some(json!({"city": "Boston"})));
+
+    let captured = request_rx.recv().unwrap();
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(request_json["messages"][0]["role"], json!("user"));
+}
+
+#[tokio::test]
+async fn remote_tool_output_can_rewrite_tool_result() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-output-modified",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"},\"result\":{\"forecast\":\"cloudy\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, json!({"forecast": "cloudy"}));
+
+    let captured = request_rx.recv().unwrap();
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["input"],
+        json!(false)
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["output"],
+        json!(true)
+    );
+}
+
+#[tokio::test]
+async fn remote_tool_input_invalid_modified_arguments_are_reported() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-invalid",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{not-json}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("modified tool arguments content that is not valid JSON"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn remote_tool_output_missing_result_field_is_reported() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-output-missing-result",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("without a 'result' field"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn remote_tool_output_does_not_run_when_tool_callback_errors() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "remote": {
+            "endpoint": unused_local_endpoint(),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move {
+                    Err(crate::error::FlowError::Internal(
+                        "tool callback failed".to_string(),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert_eq!(message, "tool callback failed");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn remote_tool_input_rewrite_with_mismatched_tool_name_is_rejected() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-mismatch",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"different_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    match error {
+        crate::error::FlowError::Internal(message) => {
+            assert!(message.contains("unexpected tool 'different_lookup'"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn remote_tool_input_and_output_run_in_order() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let input_response_body = json!({
+        "id": "chatcmpl-tool-input-modified",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let output_response_body = json!({
+        "id": "chatcmpl-tool-output-modified",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"},\"result\":{\"forecast\":\"cloudy\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let input_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        input_response_body.len(),
+        input_response_body
+    )
+    .into_bytes();
+    let output_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        output_response_body.len(),
+        output_response_body
+    )
+    .into_bytes();
+    spawn_http_responder_sequence(listener, vec![input_response, output_response], request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let seen_args = Arc::new(Mutex::new(None::<Json>));
+    let seen_args_for_call = Arc::clone(&seen_args);
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |args| {
+                *seen_args_for_call.lock().unwrap() = Some(args.clone());
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(*seen_args.lock().unwrap(), Some(json!({"city": "Boston"})));
+    assert_eq!(result, json!({"forecast": "cloudy"}));
+
+    let first_request = request_rx.recv().unwrap();
+    let first_request_json: Json = serde_json::from_slice(&first_request.body).unwrap();
+    assert_eq!(first_request_json["messages"][0]["role"], json!("user"));
+    assert_eq!(
+        first_request_json["guardrails"]["options"]["rails"]["input"],
+        json!(true)
+    );
+    assert_eq!(
+        first_request_json["guardrails"]["options"]["rails"]["output"],
+        json!(false)
+    );
+
+    let second_request = request_rx.recv().unwrap();
+    let second_request_json: Json = serde_json::from_slice(&second_request.body).unwrap();
+    assert_eq!(second_request_json["messages"][0]["role"], json!("user"));
+    assert_eq!(
+        second_request_json["messages"][1]["role"],
+        json!("assistant")
+    );
+    assert_eq!(
+        second_request_json["guardrails"]["options"]["rails"]["input"],
+        json!(false)
+    );
+    assert_eq!(
+        second_request_json["guardrails"]["options"]["rails"]["output"],
+        json!(true)
+    );
+}
+
+#[tokio::test]
+async fn remote_tool_checks_forward_context_state_and_thread_id() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-context",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        },
+        "request_defaults": {
+            "context": {"tenant": "smoke"},
+            "thread_id": "1234567890abcdef",
+            "state": {"events": []}
+        }
+    })))
+    .await
+    .unwrap();
+
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, json!({"forecast": "sunny"}));
+
+    let captured = request_rx.recv().unwrap();
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["context"],
+        json!({"tenant": "smoke"})
+    );
+    assert_eq!(
+        request_json["guardrails"]["thread_id"],
+        json!("1234567890abcdef")
+    );
+    assert_eq!(request_json["guardrails"]["state"], json!({"events": []}));
+}
+
+#[tokio::test]
+async fn remote_tool_only_configuration_does_not_intercept_llm_calls() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": unused_local_endpoint(),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let expected = json!({"response": "original"});
+    let func: LlmExecutionNextFn = Arc::new(move |_req| {
+        let expected = expected.clone();
+        Box::pin(async move { Ok(expected) })
+    });
+
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response, json!({"response": "original"}));
 }
