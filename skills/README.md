@@ -19,6 +19,7 @@ documentation, embed those details directly in the skill.
 Use these skills for tasks such as:
 
 - Getting started with a binding
+- Migrating NeMo Flow codebases to NeMo Relay
 - Instrumenting tool and LLM calls
 - Choosing the current primary documentation track: Rust, Python, or Node.js
 - Tuning performance with adaptive features

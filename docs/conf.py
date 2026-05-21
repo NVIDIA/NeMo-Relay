@@ -10,11 +10,38 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import sphinx_js
 from packaging.version import InvalidVersion, Version
 
-project = "NVIDIA NeMo Relay"
+
+class _RuntimeDocsProfile(NamedTuple):
+    project_title: str
+    github_url: str
+    python_module: str
+    rust_core_crate: str
+    rust_adaptive_crate: str
+
+
+_RELAY_RUNTIME_DOCS_PROFILE = _RuntimeDocsProfile(
+    project_title="NVIDIA NeMo Relay",
+    github_url="https://github.com/NVIDIA/NeMo-Relay",
+    python_module="nemo_relay",
+    rust_core_crate="nemo-relay",
+    rust_adaptive_crate="nemo-relay-adaptive",
+)
+_FLOW_RUNTIME_DOCS_PROFILE = _RuntimeDocsProfile(
+    project_title="NVIDIA NeMo Flow",
+    github_url="https://github.com/NVIDIA/NeMo-Flow",
+    python_module="nemo_flow",
+    rust_core_crate="nemo-flow",
+    rust_adaptive_crate="nemo-flow-adaptive",
+)
+_DEFAULT_RUNTIME_DOCS_PROFILE = _RELAY_RUNTIME_DOCS_PROFILE
+
+
+project = _DEFAULT_RUNTIME_DOCS_PROFILE.project_title
 copyright = "Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved."
 author = "NVIDIA CORPORATION & AFFILIATES"
 
@@ -112,7 +139,7 @@ rust_visibility = "pub"
 rust_generate_mode = "always"
 
 html_theme = "nvidia_sphinx_theme"
-html_title = "NVIDIA NeMo Relay"
+html_title = _DEFAULT_RUNTIME_DOCS_PROFILE.project_title
 html_static_path = ["_static"]
 html_css_files = ["extra.css"]
 html_js_files = ["version-switcher.js"]
@@ -129,7 +156,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/NVIDIA/NeMo-Relay",
+            "url": _DEFAULT_RUNTIME_DOCS_PROFILE.github_url,
             "icon": "fa-brands fa-github",
         }
     ],
@@ -363,11 +390,41 @@ def _resolve_runtime_paths(source_docs_dir: Path) -> None:
     SPHINX_JS_WORK_DIR = DOCS_DIR / "_build" / ".tooling" / "sphinx-js"
 
 
+def _detect_runtime_docs_profile(repo_root: Path) -> _RuntimeDocsProfile:
+    # sphinx-multiversion runs the current conf.py against historical source
+    # trees, so API package names must come from the source tree being built.
+    if (repo_root / "python" / _RELAY_RUNTIME_DOCS_PROFILE.python_module).is_dir():
+        return _RELAY_RUNTIME_DOCS_PROFILE
+    if (repo_root / "python" / _FLOW_RUNTIME_DOCS_PROFILE.python_module).is_dir():
+        return _FLOW_RUNTIME_DOCS_PROFILE
+
+    raise RuntimeError(
+        "Unable to locate a Python package for docs generation. "
+        f"Expected {repo_root / 'python' / _RELAY_RUNTIME_DOCS_PROFILE.python_module} "
+        f"or {repo_root / 'python' / _FLOW_RUNTIME_DOCS_PROFILE.python_module}."
+    )
+
+
+def _with_runtime_github_url(theme_options, github_url: str):
+    updated_options = dict(theme_options)
+    icon_links = [dict(link) for link in updated_options.get("icon_links", [])]
+    for link in icon_links:
+        if link.get("name") == "GitHub":
+            link["url"] = github_url
+            break
+    updated_options["icon_links"] = icon_links
+    return updated_options
+
+
 def _wire_runtime_config(config) -> None:
-    config.autoapi_dirs = [str(REPO_ROOT / "python" / "nemo_relay")]
+    profile = _detect_runtime_docs_profile(REPO_ROOT)
+    config.project = profile.project_title
+    config.html_title = profile.project_title
+    config.html_theme_options = _with_runtime_github_url(config.html_theme_options, profile.github_url)
+    config.autoapi_dirs = [str(REPO_ROOT / "python" / profile.python_module)]
     config.rust_crates = {
-        "nemo-relay": str(RUST_API_SOURCE_DIR / "core"),
-        "nemo-relay-adaptive": str(RUST_API_SOURCE_DIR / "adaptive"),
+        profile.rust_core_crate: str(RUST_API_SOURCE_DIR / "core"),
+        profile.rust_adaptive_crate: str(RUST_API_SOURCE_DIR / "adaptive"),
     }
     config.rust_doc_dir = str(RUST_API_GENERATED_DIR)
 
@@ -465,7 +522,7 @@ def _patch_autoapi_summary_signature_normalization() -> None:
 
 
 def _skip_imported_type_aliases(_app, what, _name, obj, skip, _options):
-    if what == "module" and getattr(obj, "id", None) == "nemo_relay._native":
+    if what == "module" and getattr(obj, "id", None) in {"nemo_relay._native", "nemo_flow._native"}:
         return False
 
     if skip:
