@@ -59,6 +59,7 @@ Use the reading path that matches your task:
 |---|---|
 | Run a minimal example | [Quick Start](getting-started/quick-start.md) |
 | Install packages | [Installation](getting-started/installation.md) |
+| Adopt from existing callbacks, traces, or custom harnesses | [Migration Paths](getting-started/migration.md) |
 | Develop from source | [Development Setup](contribute/development-setup.md) |
 | Understand the runtime model | [Concepts](about/concepts/index.md) |
 | Instrument an application | [Instrument Applications](instrument-applications/about.md) |
@@ -146,6 +147,7 @@ about/release-notes/index
 getting-started/prerequisites
 getting-started/installation
 Configuration / Setup <getting-started/configuration>
+Migration Paths <getting-started/migration>
 Quick Start <getting-started/quick-start>
 ```
 
