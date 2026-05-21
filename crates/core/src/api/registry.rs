@@ -464,65 +464,16 @@ global_guardrail_registry_api!(
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
-/// Register a global tool conditional-execution guardrail.
-/// The guardrail can block tool execution before intercepts or the tool
-/// callback run.
-///
-/// # Parameters
-/// - `name`: Unique middleware name in the global registry.
-/// - `priority`: Lower values run earlier in the chain.
-/// - `guardrail`: [`Arc`](std::sync::Arc)-backed guardrail callback stored
-///   under `name`.
-///
-/// # Returns
-/// A [`Result`] that is `Ok(())` when the guardrail was registered.
-///
-/// # Errors
-/// Returns [`FlowError::AlreadyExists`] when the name is already in use or an
-/// internal error if the runtime state cannot be updated.
-pub fn register_tool_conditional_execution_guardrail(
-    name: &str,
-    priority: i32,
-    guardrail: ToolConditionalFn,
-) -> Result<()> {
-    ensure_runtime_owner()?;
-    let context = global_context();
-    let mut state = context
-        .write()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    state
-        .tool_conditional_execution_guardrails
-        .register(
-            name.to_string(),
-            GuardrailEntry {
-                priority,
-                guardrail,
-            },
-        )
-        .map_err(FlowError::AlreadyExists)?;
-    Ok(())
-}
-
-/// Deregister a global tool conditional-execution guardrail.
-///
-/// # Parameters
-/// - `name`: Global middleware name to remove.
-///
-/// # Returns
-/// A [`Result`] containing `true` when a guardrail was removed and `false`
-/// when the name was not registered.
-///
-/// # Errors
-/// Returns an internal error if the runtime state cannot be updated.
-pub fn deregister_tool_conditional_execution_guardrail(name: &str) -> Result<bool> {
-    ensure_runtime_owner()?;
-    let context = global_context();
-    let mut state = context
-        .write()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let removed = state.tool_conditional_execution_guardrails.deregister(name);
-    Ok(removed)
-}
+global_guardrail_registry_api!(
+    /// Register a global tool conditional-execution guardrail.
+    /// The guardrail can block tool execution before intercepts or the tool
+    /// callback run.
+    register_tool_conditional_execution_guardrail,
+    /// Deregister a global tool conditional-execution guardrail.
+    deregister_tool_conditional_execution_guardrail,
+    tool_conditional_execution_guardrails,
+    ToolConditionalFn
+);
 global_intercept_registry_api!(
     /// Register a global tool request intercept.
     /// Request intercepts can rewrite tool arguments before execution.
@@ -562,65 +513,16 @@ global_guardrail_registry_api!(
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
-/// Register a global LLM conditional-execution guardrail.
-/// The guardrail can block LLM execution before intercepts or the provider
-/// callback run.
-///
-/// # Parameters
-/// - `name`: Unique middleware name in the global registry.
-/// - `priority`: Lower values run earlier in the chain.
-/// - `guardrail`: [`Arc`](std::sync::Arc)-backed guardrail callback stored
-///   under `name`.
-///
-/// # Returns
-/// A [`Result`] that is `Ok(())` when the guardrail was registered.
-///
-/// # Errors
-/// Returns [`FlowError::AlreadyExists`] when the name is already in use or an
-/// internal error if the runtime state cannot be updated.
-pub fn register_llm_conditional_execution_guardrail(
-    name: &str,
-    priority: i32,
-    guardrail: LlmConditionalFn,
-) -> Result<()> {
-    ensure_runtime_owner()?;
-    let context = global_context();
-    let mut state = context
-        .write()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    state
-        .llm_conditional_execution_guardrails
-        .register(
-            name.to_string(),
-            GuardrailEntry {
-                priority,
-                guardrail,
-            },
-        )
-        .map_err(FlowError::AlreadyExists)?;
-    Ok(())
-}
-
-/// Deregister a global LLM conditional-execution guardrail.
-///
-/// # Parameters
-/// - `name`: Global middleware name to remove.
-///
-/// # Returns
-/// A [`Result`] containing `true` when a guardrail was removed and `false`
-/// when the name was not registered.
-///
-/// # Errors
-/// Returns an internal error if the runtime state cannot be updated.
-pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool> {
-    ensure_runtime_owner()?;
-    let context = global_context();
-    let mut state = context
-        .write()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    let removed = state.llm_conditional_execution_guardrails.deregister(name);
-    Ok(removed)
-}
+global_guardrail_registry_api!(
+    /// Register a global LLM conditional-execution guardrail.
+    /// The guardrail can block LLM execution before intercepts or the provider
+    /// callback run.
+    register_llm_conditional_execution_guardrail,
+    /// Deregister a global LLM conditional-execution guardrail.
+    deregister_llm_conditional_execution_guardrail,
+    llm_conditional_execution_guardrails,
+    LlmConditionalFn
+);
 global_intercept_registry_api!(
     /// Register a global LLM request intercept.
     /// Request intercepts can rewrite or annotate the outgoing LLM request.
@@ -669,76 +571,15 @@ scope_guardrail_registry_api!(
     tool_sanitize_response_guardrails,
     ToolSanitizeFn
 );
-/// Register a scope-local tool conditional-execution guardrail.
-/// The guardrail can block tool execution inside the owning scope.
-///
-/// # Parameters
-/// - `scope_uuid`: UUID of the active scope that owns the middleware.
-/// - `name`: Unique middleware name on the scope-local registry.
-/// - `priority`: Lower values run earlier in the chain.
-/// - `guardrail`: [`Arc`](std::sync::Arc)-backed guardrail callback stored
-///   under `name`.
-///
-/// # Returns
-/// A [`Result`] that is `Ok(())` when the guardrail was registered.
-///
-/// # Errors
-/// Returns [`FlowError::NotFound`] when the scope is not active,
-/// [`FlowError::AlreadyExists`] when the name is already in use on that scope,
-/// or an internal error if the runtime owner check fails.
-pub fn scope_register_tool_conditional_execution_guardrail(
-    scope_uuid: &uuid::Uuid,
-    name: &str,
-    priority: i32,
-    guardrail: ToolConditionalFn,
-) -> Result<()> {
-    ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
-    let registries = guard
-        .local_registries_mut(scope_uuid)
-        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
-    registries
-        .tool_conditional_execution_guardrails
-        .register(
-            name.to_string(),
-            GuardrailEntry {
-                priority,
-                guardrail,
-            },
-        )
-        .map_err(FlowError::AlreadyExists)?;
-    Ok(())
-}
-
-/// Deregister a scope-local tool conditional-execution guardrail.
-///
-/// # Parameters
-/// - `scope_uuid`: UUID of the active scope that owns the middleware.
-/// - `name`: Scope-local middleware name to remove.
-///
-/// # Returns
-/// A [`Result`] containing `true` when a guardrail was removed and `false`
-/// when the name was not registered on that scope.
-///
-/// # Errors
-/// Returns [`FlowError::NotFound`] when the scope is not active or an internal
-/// error if the runtime owner check fails.
-pub fn scope_deregister_tool_conditional_execution_guardrail(
-    scope_uuid: &uuid::Uuid,
-    name: &str,
-) -> Result<bool> {
-    ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
-    let registries = guard
-        .local_registries_mut(scope_uuid)
-        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
-    let removed = registries
-        .tool_conditional_execution_guardrails
-        .deregister(name);
-    Ok(removed)
-}
+scope_guardrail_registry_api!(
+    /// Register a scope-local tool conditional-execution guardrail.
+    /// The guardrail can block tool execution inside the owning scope.
+    scope_register_tool_conditional_execution_guardrail,
+    /// Deregister a scope-local tool conditional-execution guardrail.
+    scope_deregister_tool_conditional_execution_guardrail,
+    tool_conditional_execution_guardrails,
+    ToolConditionalFn
+);
 scope_intercept_registry_api!(
     /// Register a scope-local tool request intercept.
     /// Request intercepts can rewrite tool arguments inside the owning scope.
@@ -779,76 +620,15 @@ scope_guardrail_registry_api!(
     llm_sanitize_response_guardrails,
     LlmSanitizeResponseFn
 );
-/// Register a scope-local LLM conditional-execution guardrail.
-/// The guardrail can block LLM execution inside the owning scope.
-///
-/// # Parameters
-/// - `scope_uuid`: UUID of the active scope that owns the middleware.
-/// - `name`: Unique middleware name on the scope-local registry.
-/// - `priority`: Lower values run earlier in the chain.
-/// - `guardrail`: [`Arc`](std::sync::Arc)-backed guardrail callback stored
-///   under `name`.
-///
-/// # Returns
-/// A [`Result`] that is `Ok(())` when the guardrail was registered.
-///
-/// # Errors
-/// Returns [`FlowError::NotFound`] when the scope is not active,
-/// [`FlowError::AlreadyExists`] when the name is already in use on that scope,
-/// or an internal error if the runtime owner check fails.
-pub fn scope_register_llm_conditional_execution_guardrail(
-    scope_uuid: &uuid::Uuid,
-    name: &str,
-    priority: i32,
-    guardrail: LlmConditionalFn,
-) -> Result<()> {
-    ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
-    let registries = guard
-        .local_registries_mut(scope_uuid)
-        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
-    registries
-        .llm_conditional_execution_guardrails
-        .register(
-            name.to_string(),
-            GuardrailEntry {
-                priority,
-                guardrail,
-            },
-        )
-        .map_err(FlowError::AlreadyExists)?;
-    Ok(())
-}
-
-/// Deregister a scope-local LLM conditional-execution guardrail.
-///
-/// # Parameters
-/// - `scope_uuid`: UUID of the active scope that owns the middleware.
-/// - `name`: Scope-local middleware name to remove.
-///
-/// # Returns
-/// A [`Result`] containing `true` when a guardrail was removed and `false`
-/// when the name was not registered on that scope.
-///
-/// # Errors
-/// Returns [`FlowError::NotFound`] when the scope is not active or an internal
-/// error if the runtime owner check fails.
-pub fn scope_deregister_llm_conditional_execution_guardrail(
-    scope_uuid: &uuid::Uuid,
-    name: &str,
-) -> Result<bool> {
-    ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
-    let registries = guard
-        .local_registries_mut(scope_uuid)
-        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
-    let removed = registries
-        .llm_conditional_execution_guardrails
-        .deregister(name);
-    Ok(removed)
-}
+scope_guardrail_registry_api!(
+    /// Register a scope-local LLM conditional-execution guardrail.
+    /// The guardrail can block LLM execution inside the owning scope.
+    scope_register_llm_conditional_execution_guardrail,
+    /// Deregister a scope-local LLM conditional-execution guardrail.
+    scope_deregister_llm_conditional_execution_guardrail,
+    llm_conditional_execution_guardrails,
+    LlmConditionalFn
+);
 scope_intercept_registry_api!(
     /// Register a scope-local LLM request intercept.
     /// Request intercepts can rewrite or annotate LLM requests inside the
