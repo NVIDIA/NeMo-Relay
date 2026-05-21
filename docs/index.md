@@ -57,11 +57,12 @@ Use the reading path that matches your task:
 
 | Task | Start With |
 |---|---|
+| Learn the runtime model before coding | [Agent Runtime Primer](getting-started/agent-runtime-primer.md) |
 | Run a minimal example | [Quick Start](getting-started/quick-start.md) |
 | Install packages | [Installation](getting-started/installation.md) |
 | Adopt from existing callbacks, traces, or custom harnesses | [Migration Paths](getting-started/migration.md) |
 | Develop from source | [Development Setup](contribute/development-setup.md) |
-| Understand the runtime model | [Concepts](about/concepts/index.md) |
+| Study runtime concepts in depth | [Concepts](about/concepts/index.md) |
 | Instrument an application | [Instrument Applications](instrument-applications/about.md) |
 | Use a maintained integration | [Supported Integrations](integrations/about.md) |
 | Integrate a framework | [Integrate into Frameworks](integrate-frameworks/about.md) |
@@ -147,6 +148,7 @@ about/release-notes/index
 getting-started/prerequisites
 getting-started/installation
 Configuration / Setup <getting-started/configuration>
+Agent Runtime Primer <getting-started/agent-runtime-primer>
 Migration Paths <getting-started/migration>
 Quick Start <getting-started/quick-start>
 ```
