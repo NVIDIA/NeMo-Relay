@@ -52,7 +52,7 @@ Install the tools needed for the surfaces you touch. For a full repository valid
 |---|---|---|
 | Rust | Docs minimum is 1.86 or newer; the repo pins the active toolchain in `rust-toolchain.toml` | Rust core, native bindings, FFI, WebAssembly |
 | Python | 3.11 or newer | Python package, PyO3 builds, docs tooling |
-| Node.js | 20 or newer, with npm | Node.js binding, WebAssembly JS tests, generated API docs |
+| Node.js | 24 or newer, with npm | Node.js binding, WebAssembly JS tests, generated API docs |
 | Go | 1.21 or newer | Experimental Go binding |
 | `uv` | Current project workflow tool | Python environments, docs dependencies, pre-commit |
 | `just` | 1.40 or newer | Canonical build, test, docs, package task runner |
