@@ -218,4 +218,4 @@ The following roadmap outlines planned features and integrations for upcoming re
 
 ## License
 
-NVIDIA NeMo Relay is licensed under the [Apache License 2.0](LICENSE).
+NeMo Relay is licensed under the [Apache License 2.0](LICENSE).
