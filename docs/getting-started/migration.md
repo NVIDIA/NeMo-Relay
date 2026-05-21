@@ -30,7 +30,7 @@ with the [Quick Start](quick-start.md) instead.
 Use the table below to choose the first NeMo Flow path. Pick one path first,
 validate it, then add additional exporters or middleware.
 
-| Starting point | First NeMo Flow path |
+| Starting Point | First NeMo Flow Path |
 |---|---|
 | You own the direct tool or LLM call site | Use [Instrument Applications](../instrument-applications/about.md). |
 | A framework owns the tool or LLM call site | Use [Supported Integrations](../integrations/about.md) if one exists; otherwise use [Integrate into Frameworks](../integrate-frameworks/about.md). |
@@ -59,7 +59,7 @@ stream.
 Use this mapping to translate current instrumentation concepts into NeMo Flow
 terms before changing code.
 
-| Existing concept | NeMo Flow concept |
+| Existing Concept | NeMo Flow Concept |
 |---|---|
 | LangChain callback run | Scope plus lifecycle event stream. |
 | OpenInference span | OpenInference subscriber output from NeMo Flow events. |
