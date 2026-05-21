@@ -782,6 +782,7 @@ clean:
     rm -rf \
         .coverage \
         .pytest_cache \
+        *.profraw \
         crates/**/*.profraw \
         crates/node/*.node \
         crates/node/coverage \
@@ -792,6 +793,7 @@ clean:
         crates/wasm/node_modules \
         crates/wasm/pkg-test/ \
         crates/wasm/pkg/ \
+        integrations/openclaw/*.profraw \
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
         integrations/openclaw/node_modules \
