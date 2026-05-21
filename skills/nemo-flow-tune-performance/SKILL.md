@@ -1,6 +1,6 @@
 ---
 name: nemo-flow-tune-performance
-description: Plan a Phase 2 NeMo Flow adaptive tuning rollout after baseline scopes, tool calls, LLM calls, and observability are working; use when users want to improve latency, tool parallelism, prompt-cache behavior, or model-request behavior from observed runtime signals
+description: Plan a Phase 2 NeMo Flow adaptive tuning rollout after baseline scopes, tool calls, LLM calls, and observability are working; use this skill to improve latency, tool parallelism, prompt-cache behavior, or model-request behavior from runtime signals
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -12,7 +12,7 @@ license: Apache-2.0
 
 Use this skill when a user has baseline NeMo Flow instrumentation and wants to
 improve latency, parallelism, prompt-cache behavior, or model-request behavior
-from observed runtime signals.
+from runtime signals.
 
 ## Do Not Use This When
 

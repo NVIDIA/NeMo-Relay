@@ -1,6 +1,6 @@
 ---
 name: nemo-flow-tune-adaptive-config
-description: Configure the NeMo Flow adaptive plugin component through the shared plugin system; use when users need state, telemetry, adaptive_hints, tool_parallelism, ACG, or policy settings with validation and measured rollout
+description: Configure the NeMo Flow adaptive plugin component through the shared plugin system; use this skill for state, telemetry, adaptive_hints, tool_parallelism, ACG, or policy settings with validation and measured rollout
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
