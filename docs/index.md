@@ -57,6 +57,7 @@ Use the reading path that matches your task:
 
 | Task | Start With |
 |---|---|
+| Understand what NeMo Relay adds | [Agent Runtime Primer](getting-started/agent-runtime-primer.md) |
 | Run a minimal example | [Quick Start](getting-started/quick-start.md) |
 | Install packages | [Installation](getting-started/installation.md) |
 | Develop from source | [Development Setup](contribute/development-setup.md) |
@@ -143,6 +144,7 @@ about/release-notes/index
 :caption: Getting Started
 :maxdepth: 2
 
+Agent Runtime Primer <getting-started/agent-runtime-primer>
 getting-started/prerequisites
 getting-started/installation
 Configuration / Setup <getting-started/configuration>
