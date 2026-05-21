@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 NeMo Relay is a portable runtime layer for agent systems that already have an
 application, framework, or model provider. Use this primer when you need to
-understand what NeMo Relay adds before running the quick start.
+understand what NeMo Relay adds before running [Quick Start](quick-start.md).
 
 Agent applications usually cross several boundaries in one request: an entry
 point starts work, the agent calls a model, the model asks for tools, tools call
@@ -86,7 +86,9 @@ subscribers, exporters, and adaptive components.
 
 ## Read Next
 
-- Run [Quick Start](quick-start.md) for the smallest binding-specific example.
+The following pages help you choose the next step for your integration.
+
+- Use [Quick Start](quick-start.md) for the smallest binding-specific example.
 - Use [Instrument Applications](../instrument-applications/about.md) when you
   own the tool or LLM call site.
 - Use [Integrate into Frameworks](../integrate-frameworks/about.md) when a
