@@ -660,119 +660,157 @@ fn validate_config_shape(
     policy: &ConfigPolicy,
     config: &NeMoGuardrailsConfig,
 ) {
-    let has_config_path = config.config_path.is_some();
-    let has_config_yaml = config.config_yaml.is_some();
-    let has_colang_content = config.colang_content.is_some();
-    let has_remote_config_id = config
-        .remote
-        .as_ref()
-        .and_then(|remote| remote.config_id.as_ref())
-        .is_some();
-    let has_remote_config_ids = config
-        .remote
-        .as_ref()
-        .map(|remote| !remote.config_ids.is_empty())
-        .unwrap_or(false);
+    let flags = ConfigShapeFlags::from(config);
 
     match config.mode.as_str() {
-        "local" => {
-            if has_config_path == has_config_yaml {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.invalid_config_source",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    None,
-                    "exactly one of config_path or config_yaml is required in local mode"
-                        .to_string(),
-                );
-            }
-
-            if has_colang_content && !has_config_yaml {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.unsupported_value",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    Some("colang_content".to_string()),
-                    "colang_content can only be used with config_yaml".to_string(),
-                );
-            }
-
-            if config.remote.is_some() {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.unsupported_value",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    Some("remote".to_string()),
-                    "remote backend settings cannot be used when mode is 'local'".to_string(),
-                );
-            }
-        }
-        "remote" => {
-            if has_config_path || has_config_yaml || has_colang_content {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.invalid_config_source",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    None,
-                    "remote mode uses remote config identity and cannot include config_path, config_yaml, or colang_content".to_string(),
-                );
-            }
-
-            if config.local.is_some() {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.unsupported_value",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    Some("local".to_string()),
-                    "local backend settings cannot be used when mode is 'remote'".to_string(),
-                );
-            }
-
-            match &config.remote {
-                Some(remote)
-                    if remote
-                        .endpoint
-                        .as_ref()
-                        .is_some_and(|value| !value.trim().is_empty()) => {}
-                _ => push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.unsupported_value",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    Some("remote.endpoint".to_string()),
-                    "remote.endpoint is required when mode is 'remote'".to_string(),
-                ),
-            }
-
-            if has_remote_config_id && has_remote_config_ids {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.unsupported_value",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    Some("remote".to_string()),
-                    "remote.config_id and remote.config_ids cannot be used together".to_string(),
-                );
-            }
-
-            if !(has_remote_config_id || has_remote_config_ids) {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.invalid_config_source",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    None,
-                    "remote mode requires remote.config_id or remote.config_ids".to_string(),
-                );
-            }
-        }
+        "local" => validate_local_config_shape(diagnostics, policy, config, &flags),
+        "remote" => validate_remote_config_shape(diagnostics, policy, config, &flags),
         _ => {}
     }
+}
+
+struct ConfigShapeFlags {
+    has_config_path: bool,
+    has_config_yaml: bool,
+    has_colang_content: bool,
+    has_remote_config_id: bool,
+    has_remote_config_ids: bool,
+}
+
+impl From<&NeMoGuardrailsConfig> for ConfigShapeFlags {
+    fn from(config: &NeMoGuardrailsConfig) -> Self {
+        Self {
+            has_config_path: config.config_path.is_some(),
+            has_config_yaml: config.config_yaml.is_some(),
+            has_colang_content: config.colang_content.is_some(),
+            has_remote_config_id: config
+                .remote
+                .as_ref()
+                .and_then(|remote| remote.config_id.as_ref())
+                .is_some(),
+            has_remote_config_ids: config
+                .remote
+                .as_ref()
+                .map(|remote| !remote.config_ids.is_empty())
+                .unwrap_or(false),
+        }
+    }
+}
+
+fn validate_local_config_shape(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    config: &NeMoGuardrailsConfig,
+    flags: &ConfigShapeFlags,
+) {
+    if flags.has_config_path == flags.has_config_yaml {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.invalid_config_source",
+            None,
+            "exactly one of config_path or config_yaml is required in local mode",
+        );
+    }
+
+    if flags.has_colang_content && !flags.has_config_yaml {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some("colang_content"),
+            "colang_content can only be used with config_yaml",
+        );
+    }
+
+    if config.remote.is_some() {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some("remote"),
+            "remote backend settings cannot be used when mode is 'local'",
+        );
+    }
+}
+
+fn validate_remote_config_shape(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    config: &NeMoGuardrailsConfig,
+    flags: &ConfigShapeFlags,
+) {
+    if flags.has_config_path || flags.has_config_yaml || flags.has_colang_content {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.invalid_config_source",
+            None,
+            "remote mode uses remote config identity and cannot include config_path, config_yaml, or colang_content",
+        );
+    }
+
+    if config.local.is_some() {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some("local"),
+            "local backend settings cannot be used when mode is 'remote'",
+        );
+    }
+
+    match &config.remote {
+        Some(remote)
+            if remote
+                .endpoint
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty()) => {}
+        _ => push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some("remote.endpoint"),
+            "remote.endpoint is required when mode is 'remote'",
+        ),
+    }
+
+    if flags.has_remote_config_id && flags.has_remote_config_ids {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some("remote"),
+            "remote.config_id and remote.config_ids cannot be used together",
+        );
+    }
+
+    if !(flags.has_remote_config_id || flags.has_remote_config_ids) {
+        push_config_shape_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.invalid_config_source",
+            None,
+            "remote mode requires remote.config_id or remote.config_ids",
+        );
+    }
+}
+
+fn push_config_shape_diag(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    behavior: UnsupportedBehavior,
+    code: &str,
+    field: Option<&str>,
+    message: &str,
+) {
+    push_policy_diag(
+        diagnostics,
+        behavior,
+        code,
+        Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+        field.map(str::to_string),
+        message.to_string(),
+    );
 }
 
 fn validate_codec_requirements(

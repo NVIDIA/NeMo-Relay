@@ -259,7 +259,7 @@ describe('Subscribers', () => {
       assert.ok(typeof captured.uuid === 'string');
       assert.ok(typeof captured.timestamp === 'string');
       assert.ok(typeof captured.kind === 'string');
-      assert.equal(JSON.parse(JSON.stringify(captured)).kind, captured.kind);
+      assert.equal(structuredClone(captured).kind, captured.kind);
     } finally {
       deregisterSubscriber('node_prop_collector');
     }

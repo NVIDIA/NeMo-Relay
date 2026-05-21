@@ -531,7 +531,7 @@ async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     register_tool_conditional_execution_guardrail(
         "cli-pre-tool-blocker",
         1,
-        Box::new(|name, _args| {
+        Arc::new(|name, _args| {
             Ok((name == BLOCKED_TEST_TOOL).then(|| "blocked by policy".to_string()))
         }),
     )

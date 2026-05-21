@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const pushScopeFailed = "PushScope failed: %v"
+const (
+	pushScopeFailed = "PushScope failed: %v"
+	emitEventFailed = "EmitEvent failed: %v"
+)
 
 type scopeTypeContract struct {
 	seenScope bool
@@ -144,7 +147,7 @@ func TestEventJSONHelpers(t *testing.T) {
 	defer DeregisterSubscriber(subscriberName)
 
 	if err := EmitEvent("go_json_mark", WithEventData(json.RawMessage(`{"ok":true}`))); err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
+		t.Fatalf(emitEventFailed, err)
 	}
 
 	select {
@@ -357,7 +360,7 @@ func TestAllScopeTypes(t *testing.T) {
 func TestEmitEvent(t *testing.T) {
 	err := EmitEvent("my_mark")
 	if err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
+		t.Fatalf(emitEventFailed, err)
 	}
 }
 
@@ -531,7 +534,7 @@ func TestEventScopeTypeMatchesEventFamily(t *testing.T) {
 	}
 
 	if err := EmitEvent("scope_type_mark"); err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
+		t.Fatalf(emitEventFailed, err)
 	}
 
 	if err := PopScope(child); err != nil {
