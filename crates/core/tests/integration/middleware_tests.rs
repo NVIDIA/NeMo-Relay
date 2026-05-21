@@ -748,6 +748,10 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
             .count(),
         3
     );
+    assert!(guardrail_events.iter().all(|event| {
+        event.scope_category() != Some(ScopeCategory::Start)
+            || event.data().and_then(|data| data.get("input")).is_none()
+    }));
     assert!(guardrail_events.iter().any(|event| {
         event.name() == "tool_scope_allow"
             && event.scope_category() == Some(ScopeCategory::End)
@@ -1942,6 +1946,10 @@ async fn test_llm_conditional_guardrail_emits_guardrail_scope() {
             .count(),
         3
     );
+    assert!(guardrail_events.iter().all(|event| {
+        event.scope_category() != Some(ScopeCategory::Start)
+            || event.data().and_then(|data| data.get("input")).is_none()
+    }));
     assert!(guardrail_events.iter().any(|event| {
         event.name() == "llm_scope_allow"
             && event.scope_category() == Some(ScopeCategory::End)

@@ -695,7 +695,8 @@ impl NemoFlowContextState {
     /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
     /// registry locks held. If `entries` is empty, no guardrail scopes are
-    /// emitted.
+    /// emitted. Guardrail start events identify the guardrail and target but
+    /// intentionally omit raw tool arguments from their event data.
     ///
     /// # Parameters
     /// - `name`: Tool name associated with the request.
@@ -730,7 +731,6 @@ impl NemoFlowContextState {
                 json!({
                     "kind": "tool_conditional_execution",
                     "target_name": name,
-                    "input": args,
                 }),
                 subscribers,
             );
@@ -921,7 +921,8 @@ impl NemoFlowContextState {
     /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
     /// registry locks held. If `entries` is empty, no guardrail scopes are
-    /// emitted.
+    /// emitted. Guardrail start events identify the guardrail but intentionally
+    /// omit raw LLM requests from their event data.
     ///
     /// # Parameters
     /// - `request`: LLM request to validate.
@@ -953,7 +954,6 @@ impl NemoFlowContextState {
                 metadata.clone(),
                 json!({
                     "kind": "llm_conditional_execution",
-                    "input": request,
                 }),
                 subscribers,
             );
