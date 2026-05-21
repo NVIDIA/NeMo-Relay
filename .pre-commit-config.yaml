@@ -97,7 +97,7 @@ repos:
 
       - id: node-lockfile-check
         name: package-lock.json is up to date
-        entry: bash -c 'npm install --package-lock-only --ignore-scripts --audit=false --fund=false'
+        entry: bash -c 'npm ci --ignore-scripts --audit=false --fund=false --dry-run'
         language: system
         files: 'package(?:-lock)?\.json$'
         pass_filenames: false
