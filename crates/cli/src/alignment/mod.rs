@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use axum::http::HeaderMap;
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
@@ -209,7 +209,7 @@ impl SessionAlignmentState {
 }
 
 // Resolves the session id for a gateway request in precedence order:
-// explicit NeMo Flow header, agent-native headers, then agent-specific body fallbacks. Keeping the
+// explicit NeMo Relay header, agent-native headers, then agent-specific body fallbacks. Keeping the
 // provider fallbacks behind one function makes a new agent integration add one small alignment
 // adapter instead of threading bespoke checks through gateway request construction.
 pub(crate) fn gateway_session_id(
@@ -217,7 +217,7 @@ pub(crate) fn gateway_session_id(
     body: &Value,
     route: GatewayRouteKind,
 ) -> Option<String> {
-    header_string(headers, "x-nemo-flow-session-id")
+    header_string(headers, "x-nemo-relay-session-id")
         .or_else(|| claude_code::session_id_from_headers(headers))
         .or_else(|| codex::prompt_cache_session_id(body, route))
 }
@@ -254,7 +254,7 @@ pub(crate) fn gateway_forward_headers(
 // the target worker scope. Unlike session ids, there is intentionally no body fallback here:
 // subagent body fields are provider-specific and easy to confuse with tool-call payload content.
 pub(crate) fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, "x-nemo-flow-subagent-id")
+    header_string(headers, "x-nemo-relay-subagent-id")
 }
 
 // Resolves a correlation identifier from a dedicated header before trying known JSON body paths.

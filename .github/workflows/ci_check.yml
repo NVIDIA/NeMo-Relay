@@ -28,8 +28,8 @@ defaults:
 env:
   GH_TOKEN: "${{ github.token }}"
   GIT_COMMIT: "${{ github.sha }}"
-  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
-  NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -54,7 +54,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+          cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
@@ -78,7 +78,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -99,12 +99,12 @@ jobs:
         with:
           path: ${{ runner.temp }}/.cache/pre-commit
           key: >-
-            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+            nemo-relay-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-${{ hashFiles('.pre-commit-config.yaml') }}
           restore-keys: |
-            nemo-flow-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-
+            nemo-relay-pre-commit-${{ runner.os }}-${{ runner.arch }}-py${{ steps.ci-config.outputs.default_python_version }}-node${{ steps.ci-config.outputs.node_version }}-rust${{ steps.ci-config.outputs.rust_version }}-pc${{ steps.ci-config.outputs.pre_commit_version }}-
 
       - name: pre-commit
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
           FULL_CI: ${{ inputs.full_ci }}
           PRE_COMMIT_BASE: ${{ inputs.base }}
@@ -120,7 +120,7 @@ jobs:
             FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langgraph --extra deepagents)
           fi
 
-          uv sync --inexact --no-install-project --no-install-package nemo-flow "${FLOW_CI_UV_SYNC_EXTRA_ARGS[@]}"
+          uv sync --inexact --no-install-project --no-install-package nemo-relay "${FLOW_CI_UV_SYNC_EXTRA_ARGS[@]}"
           if [[ "$FULL_CI" == "true" || -z "$PRE_COMMIT_BASE" ]]; then
             pre-commit run --all-files --show-diff-on-failure
           else

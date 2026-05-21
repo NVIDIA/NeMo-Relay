@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the LangChain NeMo Flow middleware."""
+"""Tests for the LangChain NeMo Relay middleware."""
 
 from __future__ import annotations
 
@@ -13,16 +13,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import nemo_flow
-from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+import nemo_relay
+from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
     from langchain_core.messages import AIMessage, ToolMessage
 
-    from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
 
-_DEFAULT_MOCK_RESPONSE_MSG = "nemo_flow unittest result"
+_DEFAULT_MOCK_RESPONSE_MSG = "nemo_relay unittest result"
 
 
 @pytest.fixture(name="model_request_handler")
@@ -109,11 +109,11 @@ def _mk_mock_model(returned_message: str | list[AIMessage] = _DEFAULT_MOCK_RESPO
     return mock_model
 
 
-@pytest.fixture(name="nemo_flow_middleware")
-def nemo_flow_middleware_fixture() -> NemoFlowMiddleware:
-    from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
+@pytest.fixture(name="nemo_relay_middleware")
+def nemo_relay_middleware_fixture() -> NemoRelayMiddleware:
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
 
-    return NemoFlowMiddleware()
+    return NemoRelayMiddleware()
 
 
 class RecordingMiddleware(Protocol):
@@ -124,9 +124,9 @@ class RecordingMiddleware(Protocol):
 
 @pytest.fixture(name="recording_middleware")
 def recording_middleware_fixture() -> RecordingMiddleware:
-    from nemo_flow.integrations.langchain.middleware import NemoFlowMiddleware
+    from nemo_relay.integrations.langchain.middleware import NemoRelayMiddleware
 
-    class _RecordingMiddleware(NemoFlowMiddleware, RecordingMiddleware):
+    class _RecordingMiddleware(NemoRelayMiddleware, RecordingMiddleware):
         def __init__(self):
             super().__init__()
             self.calls: list[dict[str, Any]] = []
@@ -134,7 +134,7 @@ def recording_middleware_fixture() -> RecordingMiddleware:
         async def _llm_execute(
             self,
             model_name: str,
-            request: nemo_flow.LLMRequest,
+            request: nemo_relay.LLMRequest,
             codec: Any,
             response_codec: Any,
             func: Any,
@@ -147,7 +147,7 @@ def recording_middleware_fixture() -> RecordingMiddleware:
                     "response_codec": response_codec,
                 }
             )
-            intercepted = nemo_flow.LLMRequest(
+            intercepted = nemo_relay.LLMRequest(
                 request.headers,
                 {
                     **request.content,
@@ -223,7 +223,7 @@ def test_awrap_model_call_routes_through_llm_execute(
 
 def test_wrap_tool_call_routes_through_tool_execute(
     monkeypatch: pytest.MonkeyPatch,
-    nemo_flow_middleware: NemoFlowMiddleware,
+    nemo_relay_middleware: NemoRelayMiddleware,
     mock_tool_execute: AsyncMock,
     tool_call_request: ToolCallRequest,
     tool_request_handler: tuple[Callable[[ToolCallRequest], ToolMessage], dict[str, ToolCallRequest]],
@@ -231,10 +231,10 @@ def test_wrap_tool_call_routes_through_tool_execute(
     (handler, seen_request) = tool_request_handler
     parent_handle = MagicMock()
 
-    monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
-    monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
+    monkeypatch.setattr(nemo_relay.scope, "get_handle", lambda: parent_handle)
+    monkeypatch.setattr(nemo_relay.typed, "tool_execute", mock_tool_execute)
 
-    response = nemo_flow_middleware.wrap_tool_call(tool_call_request, handler)
+    response = nemo_relay_middleware.wrap_tool_call(tool_call_request, handler)
 
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
@@ -244,13 +244,13 @@ def test_wrap_tool_call_routes_through_tool_execute(
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
-    assert isinstance(kwargs["args_codec"], nemo_flow.typed.BestEffortAnyCodec)
-    assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
 
 
 def test_awrap_tool_call_routes_through_tool_execute(
     monkeypatch: pytest.MonkeyPatch,
-    nemo_flow_middleware: NemoFlowMiddleware,
+    nemo_relay_middleware: NemoRelayMiddleware,
     mock_tool_execute: AsyncMock,
     tool_call_request: ToolCallRequest,
     async_tool_request_handler: tuple[Callable[[ToolCallRequest], Awaitable[ToolMessage]], dict[str, ToolCallRequest]],
@@ -258,10 +258,10 @@ def test_awrap_tool_call_routes_through_tool_execute(
     parent_handle = MagicMock()
     (handler, seen_request) = async_tool_request_handler
 
-    monkeypatch.setattr(nemo_flow.scope, "get_handle", lambda: parent_handle)
-    monkeypatch.setattr(nemo_flow.typed, "tool_execute", mock_tool_execute)
+    monkeypatch.setattr(nemo_relay.scope, "get_handle", lambda: parent_handle)
+    monkeypatch.setattr(nemo_relay.typed, "tool_execute", mock_tool_execute)
 
-    response = asyncio.run(nemo_flow_middleware.awrap_tool_call(tool_call_request, handler))
+    response = asyncio.run(nemo_relay_middleware.awrap_tool_call(tool_call_request, handler))
 
     assert response.content == "done"
     assert seen_request["request"].tool_call["args"] == {"query": "intercepted"}
@@ -271,12 +271,12 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
-    assert isinstance(kwargs["args_codec"], nemo_flow.typed.BestEffortAnyCodec)
-    assert isinstance(kwargs["result_codec"], nemo_flow.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
+    assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
 
 
 def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch):
-    from nemo_flow.integrations.langchain import _serialization
+    from nemo_relay.integrations.langchain import _serialization
 
     MockChatAnthropic = MagicMock(spec=type("MockChatAnthropic", (), {}))
     MockChatOpenAI = MagicMock(spec=type("MockChatOpenAI", (), {}))
@@ -302,7 +302,7 @@ def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddleware):
+def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMiddleware):
     """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
     from langchain.agents import create_agent
     from langchain_core.messages import AIMessage
@@ -329,7 +329,7 @@ def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddle
         """Get the current weather for a location."""
         return f"The weather in {location} is sunny and 72 degrees."
 
-    agent = create_agent(model=mock_model, tools=[get_weather], middleware=[nemo_flow_middleware])
+    agent = create_agent(model=mock_model, tools=[get_weather], middleware=[nemo_relay_middleware])
 
     input_payload = {
         "messages": [
@@ -355,16 +355,16 @@ def test_agent_integration(use_async: bool, nemo_flow_middleware: NemoFlowMiddle
     def event_recorder(event):
         events.append(f"{event.kind}.{event.scope_category}.{event.name}")
 
-    nemo_flow.subscribers.register("event_recorder", event_recorder)
+    nemo_relay.subscribers.register("event_recorder", event_recorder)
 
     try:
-        with nemo_flow.scope.scope("langchain-request", nemo_flow.ScopeType.Agent):
+        with nemo_relay.scope.scope("langchain-request", nemo_relay.ScopeType.Agent):
             if use_async:
                 result = asyncio.run(agent.ainvoke(input_payload))
             else:
                 result = agent.invoke(input_payload)
     finally:
-        nemo_flow.subscribers.deregister("event_recorder")
+        nemo_relay.subscribers.deregister("event_recorder")
 
     assert any(
         message.content == "The weather in San Francisco is sunny and 72 degrees." for message in result["messages"]

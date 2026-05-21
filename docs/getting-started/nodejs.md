@@ -18,7 +18,7 @@ local checkout.
 Use this path when you want the published package for application development.
 
 ```bash
-npm install nemo-flow-node
+npm install nemo-relay-node
 ```
 
 ### Install from the Repository
@@ -28,7 +28,7 @@ behavior.
 
 ```bash
 npm install --ignore-scripts
-npm run build --workspace=nemo-flow-node
+npm run build --workspace=nemo-relay-node
 ```
 
 This path is for local source development when you need to build the binding from the repository checkout.
@@ -47,7 +47,7 @@ const {
   event,
   toolCallExecute,
   llmCallExecute,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("quickstart-printer", (runtimeEvent) => {
@@ -108,9 +108,9 @@ These package entry points are the main Node.js APIs to use from applications an
 integrations.
 
 - Runtime lifecycle APIs are exported from the package root.
-- Typed wrappers live in `nemo-flow-node/typed`.
-- Plugin helpers live in `nemo-flow-node/plugin`.
-- Adaptive helpers live in `nemo-flow-node/adaptive`.
+- Typed wrappers live in `nemo-relay-node/typed`.
+- Plugin helpers live in `nemo-relay-node/plugin`.
+- Adaptive helpers live in `nemo-relay-node/adaptive`.
 
 ## What to Learn Next
 

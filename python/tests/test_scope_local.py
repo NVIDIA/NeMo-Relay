@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Flow scope-local middleware registry.
+"""Tests for NeMo Relay scope-local middleware registry.
 
 Scope-local registrations are tied to a scope handle and are automatically
 cleaned up when the scope is popped. These tests verify that guardrails,
-intercepts, and subscribers registered via ``nemo_flow.scope_local`` only
+intercepts, and subscribers registered via ``nemo_relay.scope_local`` only
 take effect within their owning scope and do not leak to other scopes.
 """
 
@@ -13,7 +13,7 @@ from typing import cast
 
 import pytest
 
-from nemo_flow import (
+from nemo_relay import (
     JsonObject,
     LLMRequest,
     MarkEvent,

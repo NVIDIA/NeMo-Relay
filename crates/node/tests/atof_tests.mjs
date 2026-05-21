@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const { AtofExporter, ScopeType, pushScope, popScope, event } = require('../index.js');
 
 function tempDir(prefix) {
-  return mkdtempSync(join(tmpdir(), `nemo-flow-${prefix}-`));
+  return mkdtempSync(join(tmpdir(), `nemo-relay-${prefix}-`));
 }
 
 function lines(path) {
@@ -26,7 +26,7 @@ function lines(path) {
 describe('AtofExporter', () => {
   it('constructs with defaults and rejects invalid mode', () => {
     const exporter = new AtofExporter({ outputDirectory: tempDir('node-atof-defaults') });
-    assert.match(exporter.path, /nemo-flow-events-\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}\.jsonl$/);
+    assert.match(exporter.path, /nemo-relay-events-\d{4}-\d{2}-\d{2}-\d{2}\.\d{2}\.\d{2}\.jsonl$/);
     exporter.shutdown();
 
     assert.throws(() => new AtofExporter({ mode: 'invalid' }), /mode must be/i);

@@ -5,20 +5,20 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Guardrails Example Plugin
 
-This example shows how to write a Python NeMo Flow plugin that calls the NeMo
+This example shows how to write a Python NeMo Relay plugin that calls the NeMo
 Guardrails Python API.
 
 The example lives under `examples/nemoguardrails`. The single-file plugin
 implementation, runnable agent, and Guardrails config artifacts are under
 `example`.
 It is not part of the
-`nemo_flow` Python package, and NeMo Flow does not depend on `nemoguardrails`.
+`nemo_relay` Python package, and NeMo Relay does not depend on `nemoguardrails`.
 Applications that use the example install NeMo Guardrails in their own
 environment and import or vendor the example plugin.
 
 ## Install
 
-Install NeMo Flow normally, then install NeMo Guardrails in the application or
+Install NeMo Relay normally, then install NeMo Guardrails in the application or
 example environment that activates the plugin:
 
 ```bash
@@ -41,16 +41,16 @@ Guardrails config directory, or pass inline YAML content.
 ```python
 import asyncio
 
-import nemo_flow
+import nemo_relay
 import plugin as nemoguardrails_plugin
 
 
 async def main() -> None:
     nemoguardrails_plugin.register()
     try:
-        config = nemo_flow.plugin.PluginConfig(
+        config = nemo_relay.plugin.PluginConfig(
             components=[
-                nemo_flow.plugin.ComponentSpec(
+                nemo_relay.plugin.ComponentSpec(
                     kind=nemoguardrails_plugin.DEFAULT_KIND,
                     config={
                         "config_path": "./rails",
@@ -59,9 +59,9 @@ async def main() -> None:
                 )
             ]
         )
-        await nemo_flow.plugin.initialize(config)
+        await nemo_relay.plugin.initialize(config)
     finally:
-        nemo_flow.plugin.clear()
+        nemo_relay.plugin.clear()
         nemoguardrails_plugin.deregister()
 
 
@@ -89,7 +89,7 @@ rails:
 prompts:
   - task: self_check_input
     content: |-
-      You are checking whether a NeMo Flow request should be allowed.
+      You are checking whether a NeMo Relay request should be allowed.
       The input may be plain user text or a JSON object with tool_name and
       arguments fields.
       User input: {{ user_input }}
@@ -97,7 +97,7 @@ prompts:
 
   - task: self_check_output
     content: |-
-      You are checking whether a NeMo Flow response should be returned.
+      You are checking whether a NeMo Relay response should be returned.
       The output may be assistant text or a JSON object with tool_name,
       arguments, and result fields.
       Model output: {{ bot_response }}
@@ -130,7 +130,7 @@ concrete example agent that initializes the plugin, checks a managed
 `tools.execute(...)` call, and checks a managed `llm.execute(...)` call against
 live NVIDIA-hosted inference.
 
-Run it from a checkout where NeMo Flow and NeMo Guardrails are installed. The
+Run it from a checkout where NeMo Relay and NeMo Guardrails are installed. The
 default lane uses a passthrough Guardrails config and the `current_time` tool.
 This is the fastest live validation path because it exercises the real plugin,
 real `nemoguardrails` initialization, tool execution, and LLM execution without
@@ -178,7 +178,7 @@ python examples/nemoguardrails/example/agent_example.py \
 For non-streaming `llm.execute(...)` calls, the plugin checks the user input
 before the model call and checks the assistant text after the model call.
 Guardrails can pass, block, or rewrite input. For output, this example supports
-pass and block; modified output raises because NeMo Flow response codecs are
+pass and block; modified output raises because NeMo Relay response codecs are
 decode-only and the example does not rewrite provider-shaped responses.
 
 For managed `tools.execute(...)` calls, the plugin can also check serialized
@@ -196,20 +196,20 @@ sanitize guardrail.
 
 ## Supported Codecs
 
-The example is intentionally limited to NeMo Flow's built-in LLM codec shapes:
+The example is intentionally limited to NeMo Relay's built-in LLM codec shapes:
 
 - `openai_chat` for OpenAI Chat Completions-style requests and responses.
 - `openai_responses` for OpenAI Responses API-style requests and responses.
 - `anthropic_messages` for Anthropic Messages-style requests and responses.
 
-Provider-specific payloads outside those codecs need a NeMo Flow codec and a
+Provider-specific payloads outside those codecs need a NeMo Relay codec and a
 response text replacement strategy before a production plugin can apply
 modified output safely.
 
 ## Limitations
 
 This example calls NeMo Guardrails `check_async`, not `generate_async`. It
-checks around NeMo Flow LLM and tool execution calls, but it does not let NeMo
+checks around NeMo Relay LLM and tool execution calls, but it does not let NeMo
 Guardrails take over generation or agent orchestration.
 
 The example does not support:
@@ -217,13 +217,13 @@ The example does not support:
 - Streaming LLM calls.
 - Dialog rails, retrieval rails, execution rails, or generation rails that
   require NeMo Guardrails to orchestrate the full generation flow.
-- Arbitrary provider payloads beyond the three supported NeMo Flow codecs.
+- Arbitrary provider payloads beyond the three supported NeMo Relay codecs.
 - Applying modified LLM output back into provider responses.
 - Rewriting tool-call arguments inside model responses before an application
   turns those model tool calls into managed `tools.execute(...)` calls.
 
 Tool checks use serialized JSON and NeMo Guardrails input/output checks. They
-are NeMo Flow tool middleware checks powered by Guardrails, not a full
+are NeMo Relay tool middleware checks powered by Guardrails, not a full
 `generate_async` agent-loop integration.
 
 `config_path` points at native NeMo Guardrails configuration. Guardrails config

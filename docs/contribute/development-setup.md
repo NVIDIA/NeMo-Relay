@@ -10,7 +10,7 @@ changes.
 
 ## Package Installation
 
-If you are consuming NeMo Flow rather than developing this repository, install
+If you are consuming NeMo Relay rather than developing this repository, install
 the published package for your language. Use
 [Installation](../getting-started/installation.md) for package-manager commands
 covering the CLI, Python, Node.js, Rust, and supported integrations.
@@ -37,7 +37,7 @@ bindings from source in the same branch.
 Clone the repository and build the workspace:
 
 ```bash
-git clone <repo-url> && cd NeMo-Flow
+git clone <repo-url> && cd NeMo-Relay
 uv sync
 cargo install just --locked
 uv run pre-commit install
@@ -49,7 +49,7 @@ just build-node
 Validate the source builds for the experimental bindings when you touch them:
 
 ```bash
-cd go/nemo_flow
+cd go/nemo_relay
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 cd ../..
 

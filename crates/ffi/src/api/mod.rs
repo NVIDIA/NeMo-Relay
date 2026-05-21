@@ -4,7 +4,7 @@
 //! Top-level FFI API functions exported as `extern "C"`.
 //!
 //! Each function clears the thread-local error before executing and returns an
-//! [`NemoFlowStatus`]. On failure, call [`nemo_flow_last_error`] to retrieve
+//! [`NemoRelayStatus`]. On failure, call [`nemo_relay_last_error`] to retrieve
 //! the error message.
 
 use std::ffi::CStr;
@@ -14,53 +14,53 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoFlowCodecDecodeFn, NemoFlowCodecEncodeFn, NemoFlowCollectorCb, NemoFlowEventSubscriberCb,
-    NemoFlowFinalizerCb, NemoFlowFreeFn, NemoFlowJsonCb, NemoFlowLlmConditionalCb,
-    NemoFlowLlmExecCb, NemoFlowLlmExecInterceptCb, NemoFlowLlmRequestCb,
-    NemoFlowLlmRequestInterceptCb, NemoFlowPluginRegisterCb, NemoFlowPluginValidateCb,
-    NemoFlowToolConditionalCb, NemoFlowToolExecCb, NemoFlowToolExecInterceptCb,
-    NemoFlowToolSanitizeCb, wrap_codec_fn, wrap_collector_fn, wrap_event_subscriber,
-    wrap_finalizer_fn, wrap_llm_conditional_fn, wrap_llm_exec_fn, wrap_llm_exec_intercept_fn,
-    wrap_llm_request_intercept_fn, wrap_llm_response_fn, wrap_llm_sanitize_request_fn,
-    wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
-    wrap_tool_exec_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
-    wrap_tool_sanitize_fn,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
+    NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayJsonCb,
+    NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
+    NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn,
+    wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn, wrap_llm_exec_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
+    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_tool_conditional_fn, wrap_tool_exec_fn, wrap_tool_exec_intercept_fn,
+    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::convert::{
-    c_str_to_json, c_str_to_opt_json, c_str_to_string, json_to_c_string, nemo_flow_string_free,
+    c_str_to_json, c_str_to_opt_json, c_str_to_string, json_to_c_string, nemo_relay_string_free,
     str_to_c_string, unix_micros_to_opt_timestamp,
 };
 use crate::error::{
-    NemoFlowStatus, clear_last_error, last_error_message, set_last_error, status_from_error,
+    NemoRelayStatus, clear_last_error, last_error_message, set_last_error, status_from_error,
     status_from_plugin_error,
 };
 use crate::types::{
     FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiOpenInferenceSubscriber,
     FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle, FfiScopeStack,
-    FfiThreadScopeStackBinding, FfiToolHandle, NemoFlowScopeType,
+    FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
 };
-pub use crate::types::{nemo_flow_openinference_subscriber_free, nemo_flow_otel_subscriber_free};
+pub use crate::types::{nemo_relay_openinference_subscriber_free, nemo_relay_otel_subscriber_free};
 use libc::c_char;
-use nemo_flow::api::llm as core_llm_api;
-use nemo_flow::api::llm::{LlmAttributes, LlmRequest};
-use nemo_flow::api::registry as core_registry_api;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::runtime::{
+use nemo_relay::api::llm as core_llm_api;
+use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_thread_scope_stack, create_scope_stack, current_scope_stack,
     restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack,
 };
-use nemo_flow::api::scope as core_scope_api;
-use nemo_flow::api::scope::ScopeAttributes;
-use nemo_flow::api::subscriber as core_subscriber_api;
-use nemo_flow::api::tool as core_tool_api;
-use nemo_flow::api::tool::ToolAttributes;
-use nemo_flow::error::Result as FlowResult;
-use nemo_flow::plugin::{
+use nemo_relay::api::scope as core_scope_api;
+use nemo_relay::api::scope::ScopeAttributes;
+use nemo_relay::api::subscriber as core_subscriber_api;
+use nemo_relay::api::tool as core_tool_api;
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::error::Result as FlowResult;
+use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
     initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,
 };
-use nemo_flow_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;
 
 mod llm;
@@ -106,20 +106,20 @@ fn tokio_runtime() -> &'static Runtime {
 /// - `name`: Tool name (null-terminated C string).
 /// - `args_json`: Tool arguments as a JSON C string.
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nemo_flow_string_free`).
+///   with `nemo_relay_string_free`).
 ///
 /// # Returns
-/// Returns [`NemoFlowStatus::Ok`] on success and writes the transformed JSON
+/// Returns [`NemoRelayStatus::Ok`] on success and writes the transformed JSON
 /// string to `out`.
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_request_intercepts(
+pub unsafe extern "C" fn nemo_relay_tool_request_intercepts(
     name: *const c_char,
     args_json: *const c_char,
     out: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -127,12 +127,12 @@ pub unsafe extern "C" fn nemo_flow_tool_request_intercepts(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     match core_tool_api::tool_request_intercepts(&name, args) {
         Ok(result) => {
             unsafe { *out = json_to_c_string(&result) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -140,24 +140,24 @@ pub unsafe extern "C" fn nemo_flow_tool_request_intercepts(
 
 /// Run the registered tool conditional execution guardrail chain.
 ///
-/// Returns `NemoFlowStatus::Ok` if all guardrails pass, or
-/// `NemoFlowStatus::GuardrailRejected` if blocked.
+/// Returns `NemoRelayStatus::Ok` if all guardrails pass, or
+/// `NemoRelayStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
 /// - `name`: Tool name (null-terminated C string).
 /// - `args_json`: Tool arguments as a JSON C string.
 ///
 /// # Returns
-/// Returns [`NemoFlowStatus::Ok`] when execution is allowed and
-/// [`NemoFlowStatus::GuardrailRejected`] when a guardrail blocks the call.
+/// Returns [`NemoRelayStatus::Ok`] when execution is allowed and
+/// [`NemoRelayStatus::GuardrailRejected`] when a guardrail blocks the call.
 ///
 /// # Safety
 /// All pointers must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_conditional_execution(
+pub unsafe extern "C" fn nemo_relay_tool_conditional_execution(
     name: *const c_char,
     args_json: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -165,10 +165,10 @@ pub unsafe extern "C" fn nemo_flow_tool_conditional_execution(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     match core_tool_api::tool_conditional_execution(&name, &args) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -184,20 +184,20 @@ pub unsafe extern "C" fn nemo_flow_tool_conditional_execution(
 /// - `native_json`: The request payload as a JSON C string representing an
 ///   `LlmRequest` (`{"headers": {...}, "content": {...}}`).
 /// - `out`: On success, receives the transformed JSON string (caller must free
-///   with `nemo_flow_string_free`). The output is a serialized `LlmRequest`.
+///   with `nemo_relay_string_free`). The output is a serialized `LlmRequest`.
 ///
 /// # Returns
-/// Returns [`NemoFlowStatus::Ok`] on success and writes the transformed
+/// Returns [`NemoRelayStatus::Ok`] on success and writes the transformed
 /// serialized request to `out`.
 ///
 /// # Safety
 /// All pointers must be valid. `out` must be non-null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_request_intercepts(
+pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
     name: *const c_char,
     native_json: *const c_char,
     out: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name_str = if name.is_null() {
         ""
@@ -206,20 +206,20 @@ pub unsafe extern "C" fn nemo_flow_llm_request_intercepts(
     };
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let request: LlmRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LlmRequest");
-            return NemoFlowStatus::InvalidJson;
+            return NemoRelayStatus::InvalidJson;
         }
     };
     match core_llm_api::llm_request_intercepts(name_str, request) {
         Ok(transformed) => {
             let result_json = serde_json::to_value(&transformed).unwrap_or(serde_json::Value::Null);
             unsafe { *out = json_to_c_string(&result_json) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -227,37 +227,37 @@ pub unsafe extern "C" fn nemo_flow_llm_request_intercepts(
 
 /// Run the registered LLM conditional execution guardrail chain.
 ///
-/// Returns `NemoFlowStatus::Ok` if all guardrails pass, or
-/// `NemoFlowStatus::GuardrailRejected` if blocked.
+/// Returns `NemoRelayStatus::Ok` if all guardrails pass, or
+/// `NemoRelayStatus::GuardrailRejected` if blocked.
 ///
 /// # Parameters
 /// - `native_json`: The request payload as a JSON C string representing an
 ///   `LlmRequest` (`{"headers": {...}, "content": {...}}`).
 ///
 /// # Returns
-/// Returns [`NemoFlowStatus::Ok`] when execution is allowed and
-/// [`NemoFlowStatus::GuardrailRejected`] when a guardrail blocks the call.
+/// Returns [`NemoRelayStatus::Ok`] when execution is allowed and
+/// [`NemoRelayStatus::GuardrailRejected`] when a guardrail blocks the call.
 ///
 /// # Safety
 /// All pointers must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_conditional_execution(
+pub unsafe extern "C" fn nemo_relay_llm_conditional_execution(
     native_json: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let native = match c_str_to_json(native_json) {
         Some(j) => j,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let request: LlmRequest = match serde_json::from_value(native) {
         Ok(r) => r,
         Err(_) => {
             set_last_error("failed to parse native_json as LlmRequest");
-            return NemoFlowStatus::InvalidJson;
+            return NemoRelayStatus::InvalidJson;
         }
     };
     match core_llm_api::llm_conditional_execution(&request) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }

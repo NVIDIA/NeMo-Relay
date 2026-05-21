@@ -3,10 +3,10 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Flow Codex Observability
+# NeMo Relay Codex Observability
 
 This package contains Codex hook entries that forward canonical Codex hook JSON
-to `nemo-flow` at `/hooks/codex`.
+to `nemo-relay` at `/hooks/codex`.
 
 Codex CLI is fully supported for local sessions. Codex GUI or app sessions are
 supported only when they run locally and honor the same hook/plugin config and
@@ -20,7 +20,7 @@ provider alias surface the gateway relies on).
 
 - `.codex-plugin/plugin.json` describes the Codex plugin package.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-flow hook-forward codex`.
+  `nemo-relay hook-forward codex`.
 
 ## Captured Events
 
@@ -36,24 +36,24 @@ hook entries into `.codex/hooks.json`.
 
 ## Transparent Setup
 
-Build or install the gateway binary so `nemo-flow` is on `PATH`.
+Build or install the gateway binary so `nemo-relay` is on `PATH`.
 
 Run Codex through the wrapper:
 
 ```bash
-nemo-flow run -- codex
+nemo-relay run -- codex
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
 enables Codex hooks with CLI config overrides, injects hook commands that use
-`NEMO_FLOW_GATEWAY_URL`, and points Codex at a temporary `nemo-flow-openai`
+`NEMO_RELAY_GATEWAY_URL`, and points Codex at a temporary `nemo-relay-openai`
 provider alias that uses the gateway URL while preserving Codex's OpenAI auth
 path.
 
 Inspect the launch without starting Codex:
 
 ```bash
-nemo-flow run \
+nemo-relay run \
   --dry-run \
   --print \
   -- codex
@@ -61,16 +61,16 @@ nemo-flow run \
 
 ## Shared Config
 
-Use `.nemo-flow/config.toml` for project defaults or
-`~/.config/nemo-flow/config.toml` for user defaults:
+Use `.nemo-relay/config.toml` for project defaults or
+`~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
 [agents.codex]
 command = "codex"
 ```
 
-Configure observability with `nemo-flow plugins edit --project` or
-`.nemo-flow/plugins.toml`:
+Configure observability with `nemo-relay plugins edit --project` or
+`.nemo-relay/plugins.toml`:
 
 ```toml
 version = 1
@@ -81,13 +81,13 @@ enabled = true
 
 [components.config.atif]
 enabled = true
-output_directory = ".nemo-flow/atif"
+output_directory = ".nemo-relay/atif"
 ```
 
 Then run:
 
 ```bash
-nemo-flow run --agent codex
+nemo-relay run --agent codex
 ```
 
 ## Standalone Gateway
@@ -96,17 +96,17 @@ Use the long-running gateway only when you do not want to launch Codex through
 the wrapper. Start the gateway manually:
 
 ```bash
-nemo-flow --bind 127.0.0.1:4040
+nemo-relay --bind 127.0.0.1:4040
 ```
 
 Then configure local Codex to use a gateway provider alias instead of
 overriding the reserved built-in `openai` provider:
 
 ```toml
-model_provider = "nemo-flow-openai"
+model_provider = "nemo-relay-openai"
 
-[model_providers.nemo-flow-openai]
-name = "NeMo Flow OpenAI"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay OpenAI"
 base_url = "http://127.0.0.1:4040"
 wire_api = "responses"
 requires_openai_auth = true
@@ -119,7 +119,7 @@ Run a Codex session that starts, uses one simple tool, and ends. Confirm that
 ATIF was written:
 
 ```bash
-ls .nemo-flow/atif
+ls .nemo-relay/atif
 ```
 
 For a direct endpoint smoke test against a manually started gateway:
@@ -127,13 +127,13 @@ For a direct endpoint smoke test against a manually started gateway:
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-codex","hook_event_name":"sessionStart"}' \
-  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward codex --fail-closed
+  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward codex --fail-closed
 ```
 
 If hooks arrive but LLM spans are missing, confirm Codex was started by
-`nemo-flow run` or that the active provider points to the gateway URL.
+`nemo-relay run` or that the active provider points to the gateway URL.
 
 If LLM spans are present but attached to the top-level agent instead of a
-subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
+subagent, include `x-nemo-relay-subagent-id` on gateway requests or share
 `conversation_id`, `generation_id`, or `request_id` values between hook payloads
 and provider requests.

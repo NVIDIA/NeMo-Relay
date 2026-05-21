@@ -17,16 +17,16 @@ local checkout.
 Use the published crates when you are consuming a release:
 
 ```bash
-cargo add nemo-flow@0.3.0
-cargo add nemo-flow-adaptive@0.3.0
+cargo add nemo-relay@0.3.0
+cargo add nemo-relay-adaptive@0.3.0
 cargo add serde_json
 ```
 
-Install the published NeMo Flow CLI separately when you need coding-agent hook
+Install the published NeMo Relay CLI separately when you need coding-agent hook
 and LLM gateway observability:
 
 ```bash
-cargo install nemo-flow-cli@0.3.0
+cargo install nemo-relay-cli@0.3.0
 ```
 
 ### Install from the Repository
@@ -35,25 +35,25 @@ Use a path dependency when your application is consuming a local checkout:
 
 ```toml
 [dependencies]
-nemo-flow = { path = "../NeMo-Flow/crates/core" }
-nemo-flow-adaptive = { path = "../NeMo-Flow/crates/adaptive" }
+nemo-relay = { path = "../NeMo-Relay/crates/core" }
+nemo-relay-adaptive = { path = "../NeMo-Relay/crates/adaptive" }
 serde_json = "1"
 ```
 
-- `nemo-flow` is the core Rust runtime surface.
-- `nemo-flow-adaptive` is the companion crate for adaptive runtime primitives and Redis-backed learning components.
-- `nemo-flow-cli` is a binary crate. Use `cargo install nemo-flow-cli@0.3.0` when
-  you need the NeMo Flow CLI.
+- `nemo-relay` is the core Rust runtime surface.
+- `nemo-relay-adaptive` is the companion crate for adaptive runtime primitives and Redis-backed learning components.
+- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.3.0` when
+  you need the NeMo Relay CLI.
 
 ## Push a Scope and Emit a Mark
 
 The example below creates a scope and records a mark event from Rust.
 
 ```rust
-use nemo_flow::api::scope::{
+use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 

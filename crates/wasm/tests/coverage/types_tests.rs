@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for types in the NeMo Flow WebAssembly crate.
+//! Coverage tests for types in the NeMo Relay WebAssembly crate.
 
 use super::*;
-use nemo_flow::api::event::{BaseEvent, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
+use nemo_relay::api::event::{BaseEvent, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
 use serde_json::json;
 use uuid::Uuid;
 

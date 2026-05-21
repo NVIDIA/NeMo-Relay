@@ -8,19 +8,19 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use futures_util::StreamExt;
-use nemo_flow::api::llm::{
+use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
-use nemo_flow::codec::anthropic::{AnthropicMessagesCodec, AnthropicMessagesStreamingCodec};
-use nemo_flow::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
-use nemo_flow::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
-use nemo_flow::codec::streaming::StreamingCodec;
-use nemo_flow::codec::traits::LlmResponseCodec;
-use nemo_flow::error::FlowError;
+use nemo_relay::codec::anthropic::{AnthropicMessagesCodec, AnthropicMessagesStreamingCodec};
+use nemo_relay::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
+use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
+use nemo_relay::codec::streaming::StreamingCodec;
+use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 
 use crate::alignment::{self, GatewayRouteKind};
@@ -31,7 +31,7 @@ use crate::session::{GatewayCallPrep, LlmGatewayStart, SessionManager};
 
 const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 
-/// Proxies supported LLM API requests through NeMo Flow's managed execution pipeline.
+/// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
 /// The gateway buffers the inbound body once, opens a managed LLM call against the resolved
 /// session, and lets the runtime own the start/end events. Provider routes that have a built-in
@@ -68,7 +68,7 @@ struct PreparedGatewayRequest {
 }
 
 // Validates the gateway route, buffers the request body exactly once, and derives the metadata used
-// for both upstream forwarding and NeMo Flow LLM start events. Provider JSON parse failures are not
+// for both upstream forwarding and NeMo Relay LLM start events. Provider JSON parse failures are not
 // request failures because the gateway still forwards raw bytes unchanged.
 async fn prepare_gateway_request(
     config: &crate::config::GatewayConfig,
@@ -111,7 +111,7 @@ async fn prepare_gateway_request(
 // because the later runtime-managed LLM call only sees this normalized start payload.
 fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
     LlmGatewayStart {
-        // Explicit NeMo Flow headers still win, but alignment can recover agent-native session
+        // Explicit NeMo Relay headers still win, but alignment can recover agent-native session
         // signals when available. Applies to Claude Code's session header and Codex's Responses
         // prompt-cache thread id today.
         session_id: gateway_session_id(&request.headers, &request.request_json, request.provider),
@@ -128,7 +128,7 @@ fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart 
         conversation_id: gateway_identifier(
             &request.headers,
             &request.request_json,
-            "x-nemo-flow-conversation-id",
+            "x-nemo-relay-conversation-id",
             &[
                 &["conversation_id"],
                 &["conversationId"],
@@ -138,13 +138,13 @@ fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart 
         generation_id: gateway_identifier(
             &request.headers,
             &request.request_json,
-            "x-nemo-flow-generation-id",
+            "x-nemo-relay-generation-id",
             &[&["generation_id"], &["generationId"], &["generation", "id"]],
         ),
         request_id: gateway_identifier(
             &request.headers,
             &request.request_json,
-            "x-nemo-flow-request-id",
+            "x-nemo-relay-request-id",
             &[
                 &["request_id"],
                 &["requestId"],
@@ -503,7 +503,7 @@ fn build_streaming_func(
 // shared `SseEventDecoder`. Trailing partial frames are surfaced to the runtime so the collector
 // observes whatever the upstream sent before disconnect.
 fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
-    use nemo_flow::codec::streaming::SseEventDecoder;
+    use nemo_relay::codec::streaming::SseEventDecoder;
     let mut decoder = SseEventDecoder::new();
     let mut bytes = response.bytes_stream();
     let stream = stream! {
@@ -702,7 +702,7 @@ fn effective_upstream_request(
             Ok(serialized) => Bytes::from(serialized),
             Err(error) => {
                 eprintln!(
-                    "nemo-flow CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
+                    "nemo-relay CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
                 );
                 return (body_bytes.clone(), headers.clone());
             }

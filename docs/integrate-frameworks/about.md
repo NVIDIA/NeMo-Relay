@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # About
 
 Use this section when an agent framework, orchestration layer, SDK, or provider
-adapter owns the tool and LLM call sites that need NeMo Flow instrumentation.
+adapter owns the tool and LLM call sites that need NeMo Relay instrumentation.
 
 Framework integrations differ from direct application instrumentation because the
 integration often does not own the full invocation. A framework may control
@@ -22,10 +22,10 @@ intercept helpers, or mark events.
 
 Use these signals to decide whether this documentation path matches your current task.
 
-- Maintain a framework integration for NeMo Flow
+- Maintain a framework integration for NeMo Relay
 - Need to instrument calls without rewriting framework internals
 - Need to handle provider-specific request or response payloads
-- Need to keep non-serializable framework objects outside NeMo Flow payloads
+- Need to keep non-serializable framework objects outside NeMo Relay payloads
 - Are building or reviewing third-party integration patches
 
 If you own the application call sites directly, use [Instrument Applications](../instrument-applications/about.md) first.
@@ -37,7 +37,7 @@ LangGraph, Deep Agents, or OpenClaw, start with
 
 Use these guide links to move from the overview into task-specific instructions.
 
-- [Adding Scopes](adding-scopes.md) shows how framework request and run hooks become NeMo Flow ownership boundaries.
+- [Adding Scopes](adding-scopes.md) shows how framework request and run hooks become NeMo Relay ownership boundaries.
 - [Wrap Tool Calls](wrap-tool-calls.md) explains where to place managed tool wrappers and tool lifecycle fallbacks.
 - [Wrap LLM Calls](wrap-llm-calls.md) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
 - [Handle Non-Serializable Data](non-serializable-data.md) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
@@ -47,7 +47,7 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Code Examples](code-examples.md) collects fallback APIs, mark events, and repository patch workflow examples.
 
 For coding-agent hook and LLM gateway observability, use
-[NeMo Flow CLI](../nemo-flow-cli/about.md). That section covers Claude Code,
+[NeMo Relay CLI](../nemo-relay-cli/about.md). That section covers Claude Code,
 Codex, Cursor, and Hermes Agent support.
 
 Start by identifying the framework's stable tool and LLM boundaries. Prefer

@@ -1,6 +1,6 @@
 ---
 name: test-rust-core
-description: Build and test the NeMo Flow Rust core and adaptive crates; use this for crates/core, crates/adaptive, or shared runtime semantics changes
+description: Build and test the NeMo Relay Rust core and adaptive crates; use this for crates/core, crates/adaptive, or shared runtime semantics changes
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -41,10 +41,10 @@ cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Core runtime only
-cargo test -p nemo-flow
+cargo test -p nemo-relay
 
 # Adaptive crate when touched
-cargo test -p nemo-flow-adaptive
+cargo test -p nemo-relay-adaptive
 
 # Compile sweep
 just build-rust

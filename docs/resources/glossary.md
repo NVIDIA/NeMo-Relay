@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Glossary
 
-NeMo Flow uses specialized runtime, integration, plugin, adaptive, and
+NeMo Relay uses specialized runtime, integration, plugin, adaptive, and
 observability terms across bindings. This glossary defines the shared terms so
 the rest of the documentation can use them consistently.
 
@@ -34,7 +34,7 @@ Adaptive Hint
   hint to adjust behavior when explicitly configured to do so.
 
 Adaptive Tuning
-  **Adaptive tuning** is the NeMo Flow runtime capability that observes
+  **Adaptive tuning** is the NeMo Relay runtime capability that observes
   instrumented work and enables controlled behavior changes through the plugin
   system.
 
@@ -49,12 +49,12 @@ Adaptive Telemetry
 
 Agent Trajectory Interchange Format (ATIF)
   **Agent Trajectory Interchange Format (ATIF)** is an external trajectory
-  format used for offline analysis, replay, or evaluation. The NeMo Flow ATIF
+  format used for offline analysis, replay, or evaluation. The NeMo Relay ATIF
   exporter collects lifecycle events and exports ATIF v1.6 trajectory data.
 
 Agent Trajectory Observability Format (ATOF)
   **Agent Trajectory Observability Format (ATOF)** is the canonical event format
-  NeMo Flow emits for scope lifecycle events and mark events. Subscribers and
+  NeMo Relay emits for scope lifecycle events and mark events. Subscribers and
   exporters consume ATOF events before translating them into downstream
   observability formats such as ATIF trajectories, OpenTelemetry traces, or
   OpenInference spans.
@@ -66,7 +66,7 @@ Annotated Request And Response Data
   provider request or response shape.
 
 Binding
-  A **binding** is a language-specific public API surface for the NeMo Flow
+  A **binding** is a language-specific public API surface for the NeMo Relay
   runtime, such as Python, Node.js, Go, WebAssembly, Rust, or C FFI.
 
 Break Chain
@@ -76,18 +76,18 @@ Break Chain
 
 Callback
   A **callback** is the application, framework, tool, or provider function that
-  does the real work. Managed execution passes this callback through NeMo Flow
+  does the real work. Managed execution passes this callback through NeMo Relay
   so middleware and lifecycle events surround the invocation.
 
 Category Profile
   A **category profile** is the event field that stores category-specific
-  semantic details. NeMo Flow uses it for values such as LLM ``model_name``,
+  semantic details. NeMo Relay uses it for values such as LLM ``model_name``,
   tool ``tool_call_id``, and custom ``subtype``.
 
 Codec
-  A **codec** is a deterministic translator at a NeMo Flow boundary. Codecs let
+  A **codec** is a deterministic translator at a NeMo Relay boundary. Codecs let
   framework or provider-native values remain convenient for application code
-  while NeMo Flow observes JSON-compatible or normalized data.
+  while NeMo Relay observes JSON-compatible or normalized data.
 
 Collection Window
   A **collection window** is the period during which an in-process exporter,
@@ -103,7 +103,7 @@ Conditional Execution
   run at all.
 
 Event
-  An **event** is the runtime record of something that happened. NeMo Flow emits
+  An **event** is the runtime record of something that happened. NeMo Relay emits
   events for scope start and end, tool start and end, LLM start and end, and
   named mark points.
 
@@ -131,12 +131,12 @@ Explicit Lifecycle API
   but does not let execution intercepts wrap the real callback automatically.
 
 Exporter
-  An **exporter** is a subscriber-oriented component that translates NeMo Flow
+  An **exporter** is a subscriber-oriented component that translates NeMo Relay
   events into an external artifact or backend format, such as an ATIF trajectory
   or OTLP trace spans.
 
 FFI
-  **FFI** means foreign function interface. NeMo Flow's C FFI layer exposes core
+  **FFI** means foreign function interface. NeMo Relay's C FFI layer exposes core
   runtime behavior to non-Rust languages and is used by the Go binding.
 
 Finalizer
@@ -145,7 +145,7 @@ Finalizer
   sanitize-response guardrails, subscribers, and exporters can observe.
 
 Global And Scope-Local Registration
-  NeMo Flow supports two main ownership levels for middleware and subscribers.
+  NeMo Relay supports two main ownership levels for middleware and subscribers.
 
   - **Global registrations** stay active for the whole process until removed.
   - **Scope-local registrations** are owned by one active scope and are cleaned
@@ -163,7 +163,7 @@ Guardrail
 
 Integration Boundary
   An **integration boundary** is the stable point in an application, framework,
-  or provider adapter where NeMo Flow can wrap, observe, or transform a tool or
+  or provider adapter where NeMo Relay can wrap, observe, or transform a tool or
   LLM invocation.
 
 Intercept
@@ -171,7 +171,7 @@ Intercept
   real callback.
 
 JSON-Compatible Payload
-  A **JSON-compatible payload** is data that can be represented in NeMo Flow's
+  A **JSON-compatible payload** is data that can be represented in NeMo Relay's
   JSON model. Event data, middleware payloads, and codec output should be
   JSON-compatible.
 
@@ -192,27 +192,27 @@ LLM Call
 
 LLM Stream
   An **LLM stream** is a streaming model response managed across multiple chunks
-  rather than a single response object. NeMo Flow captures the originating scope
+  rather than a single response object. NeMo Relay captures the originating scope
   stack, runs stream execution intercepts, collects chunks, and finalizes the
   stream into a response-side event payload.
 
 Managed Execution And Manual Lifecycle
-  NeMo Flow supports two main ways to model tool and LLM work.
+  NeMo Relay supports two main ways to model tool and LLM work.
 
-  - **Managed execution** means NeMo Flow owns the middleware pipeline and
+  - **Managed execution** means NeMo Relay owns the middleware pipeline and
     emitted lifecycle around the invocation.
   - **Manual lifecycle** means some other framework or runtime owns the real
-    call boundary, and NeMo Flow only records the start and end points
+    call boundary, and NeMo Relay only records the start and end points
     explicitly.
 
   Managed execution is the default choice for application code. Manual
   lifecycle exists mainly for framework integrations that cannot delegate the
-  real invocation to NeMo Flow.
+  real invocation to NeMo Relay.
 
 Managed Execution Wrapper
   A **managed execution wrapper** is the integration pattern where a tool or LLM
-  provider callback is routed through NeMo Flow's managed execute helper. This
-  is the preferred pattern when NeMo Flow can own middleware ordering, lifecycle
+  provider callback is routed through NeMo Relay's managed execute helper. This
+  is the preferred pattern when NeMo Relay can own middleware ordering, lifecycle
   pairing, and event emission around the real callback.
 
 Mark Event
@@ -226,7 +226,7 @@ Middleware
   Middleware can inspect, reject, transform, wrap, or sanitize execution at
   well-defined lifecycle points.
 
-  NeMo Flow has two major middleware families:
+  NeMo Relay has two major middleware families:
 
   - **Intercepts** affect the real execution path.
   - **Guardrails** block work or rewrite the observability payload.
@@ -246,17 +246,17 @@ Next Function
 Non-Serializable Data
   **Non-serializable data** is framework or SDK state that cannot be represented
   as JSON, such as clients, streams, callbacks, file handles, or class
-  instances. Keep those objects outside NeMo Flow payloads and pass only stable
+  instances. Keep those objects outside NeMo Relay payloads and pass only stable
   identifiers or projections through events and middleware.
 
 OpenInference
   **OpenInference** is an AI-observability semantic convention layered on trace
-  spans. NeMo Flow's OpenInference subscriber maps lifecycle payloads to
+  spans. NeMo Relay's OpenInference subscriber maps lifecycle payloads to
   OpenInference-oriented attributes such as model inputs, outputs, and token
   usage.
 
 OpenTelemetry
-  **OpenTelemetry** is a vendor-neutral observability ecosystem. NeMo Flow can
+  **OpenTelemetry** is a vendor-neutral observability ecosystem. NeMo Relay can
   export lifecycle events as OpenTelemetry-compatible trace spans.
 
 OpenTelemetry Protocol (OTLP)
@@ -411,7 +411,7 @@ Tool Parallelism
 
 Trace Span
   A **trace span** is a timed observability record in a tracing backend.
-  Exported NeMo Flow scopes, tool calls, LLM calls, and marks appear as spans
+  Exported NeMo Relay scopes, tool calls, LLM calls, and marks appear as spans
   when using OpenTelemetry or OpenInference export.
 
 Trajectory
@@ -421,6 +421,6 @@ Trajectory
 
 Typed Value Codec
   A **typed value codec** converts application-facing values to JSON before
-  NeMo Flow runs middleware or emits events, then converts JSON back into the
+  NeMo Relay runs middleware or emits events, then converts JSON back into the
   type expected by the framework callback or caller.
 ```

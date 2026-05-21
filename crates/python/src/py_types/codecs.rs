@@ -576,7 +576,7 @@ impl PyAnnotatedLLMResponse {
 ///
 /// Example:
 /// ```python
-/// from nemo_flow.codecs import OpenAIChatCodec
+/// from nemo_relay.codecs import OpenAIChatCodec
 /// codec = OpenAIChatCodec()
 /// annotated_req = codec.decode(request)
 /// annotated_resp = codec.decode_response(response)
@@ -592,8 +592,8 @@ impl PyOpenAIChatCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_flow::codec::openai_chat::OpenAIChatCodec),
-            inner_response_codec: Arc::new(nemo_flow::codec::openai_chat::OpenAIChatCodec),
+            inner_codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
+            inner_response_codec: Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
         }
     }
 
@@ -641,7 +641,7 @@ impl PyOpenAIChatCodec {
 ///
 /// Example:
 /// ```python
-/// from nemo_flow.codecs import OpenAIResponsesCodec
+/// from nemo_relay.codecs import OpenAIResponsesCodec
 /// codec = OpenAIResponsesCodec()
 /// annotated_req = codec.decode(request)
 /// annotated_resp = codec.decode_response(response)
@@ -657,9 +657,9 @@ impl PyOpenAIResponsesCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_flow::codec::openai_responses::OpenAIResponsesCodec),
+            inner_codec: Arc::new(nemo_relay::codec::openai_responses::OpenAIResponsesCodec),
             inner_response_codec: Arc::new(
-                nemo_flow::codec::openai_responses::OpenAIResponsesCodec,
+                nemo_relay::codec::openai_responses::OpenAIResponsesCodec,
             ),
         }
     }
@@ -708,7 +708,7 @@ impl PyOpenAIResponsesCodec {
 ///
 /// Example:
 /// ```python
-/// from nemo_flow.codecs import AnthropicMessagesCodec
+/// from nemo_relay.codecs import AnthropicMessagesCodec
 /// codec = AnthropicMessagesCodec()
 /// annotated_req = codec.decode(request)
 /// annotated_resp = codec.decode_response(response)
@@ -724,8 +724,8 @@ impl PyAnthropicMessagesCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_flow::codec::anthropic::AnthropicMessagesCodec),
-            inner_response_codec: Arc::new(nemo_flow::codec::anthropic::AnthropicMessagesCodec),
+            inner_codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
+            inner_response_codec: Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
         }
     }
 

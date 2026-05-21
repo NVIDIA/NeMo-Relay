@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for error in the NeMo Flow FFI crate.
+//! Coverage tests for error in the NeMo Relay FFI crate.
 
 use super::*;
 use std::ffi::{CStr, CString};
 
-use nemo_flow::plugin::PluginError;
+use nemo_relay::plugin::PluginError;
 
 #[test]
 fn test_last_error_round_trip_and_clear() {
     clear_last_error();
     assert_eq!(last_error_message(), None);
-    assert!(nemo_flow_last_error().is_null());
+    assert!(nemo_relay_last_error().is_null());
 
     set_last_error("ffi failure");
     assert_eq!(last_error_message(), Some("ffi failure".into()));
 
-    let raw = nemo_flow_last_error();
+    let raw = nemo_relay_last_error();
     assert_eq!(
         unsafe { CStr::from_ptr(raw) }.to_str().unwrap(),
         "ffi failure"
@@ -25,17 +25,17 @@ fn test_last_error_round_trip_and_clear() {
 
     clear_last_error();
     assert_eq!(last_error_message(), None);
-    assert!(nemo_flow_last_error().is_null());
+    assert!(nemo_relay_last_error().is_null());
 }
 
 #[test]
 fn test_set_last_error_message_handles_null_and_invalid_utf8() {
-    unsafe { nemo_flow_set_last_error_message(std::ptr::null()) };
+    unsafe { nemo_relay_set_last_error_message(std::ptr::null()) };
     assert_eq!(last_error_message(), Some("unknown callback error".into()));
 
     let invalid_utf8 = [0xffu8, 0];
     unsafe {
-        nemo_flow_set_last_error_message(invalid_utf8.as_ptr() as *const c_char);
+        nemo_relay_set_last_error_message(invalid_utf8.as_ptr() as *const c_char);
     }
     assert_eq!(
         last_error_message(),
@@ -43,7 +43,7 @@ fn test_set_last_error_message_handles_null_and_invalid_utf8() {
     );
 
     let valid = CString::new("callback failed").unwrap();
-    unsafe { nemo_flow_set_last_error_message(valid.as_ptr()) };
+    unsafe { nemo_relay_set_last_error_message(valid.as_ptr()) };
     assert_eq!(last_error_message(), Some("callback failed".into()));
 }
 
@@ -52,29 +52,32 @@ fn test_status_from_error_maps_variants_and_sets_message() {
     let cases = [
         (
             FlowError::AlreadyExists("dup".into()),
-            NemoFlowStatus::AlreadyExists,
+            NemoRelayStatus::AlreadyExists,
         ),
         (
             FlowError::NotFound("missing".into()),
-            NemoFlowStatus::NotFound,
+            NemoRelayStatus::NotFound,
         ),
         (
             FlowError::InvalidArgument("bad arg".into()),
-            NemoFlowStatus::InvalidArg,
+            NemoRelayStatus::InvalidArg,
         ),
         (
             FlowError::GuardrailRejected("blocked".into()),
-            NemoFlowStatus::GuardrailRejected,
+            NemoRelayStatus::GuardrailRejected,
         ),
-        (FlowError::Internal("boom".into()), NemoFlowStatus::Internal),
-        (FlowError::ScopeStackEmpty, NemoFlowStatus::ScopeStackEmpty),
+        (
+            FlowError::Internal("boom".into()),
+            NemoRelayStatus::Internal,
+        ),
+        (FlowError::ScopeStackEmpty, NemoRelayStatus::ScopeStackEmpty),
     ];
 
     for (error, expected_status) in cases {
         clear_last_error();
         let status = status_from_error(&error);
         assert_eq!(status, expected_status);
-        assert_eq!(NemoFlowStatus::from(&error), expected_status);
+        assert_eq!(NemoRelayStatus::from(&error), expected_status);
         assert!(last_error_message().unwrap().contains(&error.to_string()));
     }
 }
@@ -85,27 +88,27 @@ fn test_status_from_plugin_error_maps_variants_and_sets_message() {
     let cases = [
         (
             PluginError::NotFound("missing plugin".into()),
-            NemoFlowStatus::NotFound,
+            NemoRelayStatus::NotFound,
             "missing plugin",
         ),
         (
             PluginError::InvalidConfig("bad config".into()),
-            NemoFlowStatus::InvalidArg,
+            NemoRelayStatus::InvalidArg,
             "bad config",
         ),
         (
             PluginError::Serialization(serialization_error),
-            NemoFlowStatus::InvalidArg,
+            NemoRelayStatus::InvalidArg,
             "serialization error",
         ),
         (
             PluginError::Internal("plugin blew up".into()),
-            NemoFlowStatus::Internal,
+            NemoRelayStatus::Internal,
             "plugin blew up",
         ),
         (
             PluginError::RegistrationFailed("register failed".into()),
-            NemoFlowStatus::Internal,
+            NemoRelayStatus::Internal,
             "register failed",
         ),
     ];

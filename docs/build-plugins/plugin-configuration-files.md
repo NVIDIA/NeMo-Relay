@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Plugin Configuration Files
 
-Use `plugins.toml` when the `nemo-flow` CLI gateway should activate plugins at
+Use `plugins.toml` when the `nemo-relay` CLI gateway should activate plugins at
 startup. The file contains the same generic plugin configuration document used
 by the Rust, Python, and Node.js plugin APIs, but encoded as TOML at the file
 root.
@@ -15,7 +15,7 @@ and conflict rules for the CLI gateway. Component-specific fields are documented
 in the guide for each plugin component.
 
 :::{note}
-NeMo Flow plugin configuration keys use `snake_case` regardless of language or
+NeMo Relay plugin configuration keys use `snake_case` regardless of language or
 file format. Node.js helper APIs can have `camelCase` function names, but the
 generic plugin document and component-local `config` objects use canonical
 `snake_case` keys.
@@ -86,11 +86,11 @@ not loaded for that run.
 When no explicit `--config` path is supplied, the gateway checks these
 `plugins.toml` locations from lowest to highest precedence:
 
-1. System: `/etc/nemo-flow/plugins.toml`
-2. Project: the nearest `.nemo-flow/plugins.toml` found by walking upward from
+1. System: `/etc/nemo-relay/plugins.toml`
+2. Project: the nearest `.nemo-relay/plugins.toml` found by walking upward from
    the current directory
-3. User: `$XDG_CONFIG_HOME/nemo-flow/plugins.toml`, or
-   `~/.config/nemo-flow/plugins.toml` when `XDG_CONFIG_HOME` is not set
+3. User: `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`, or
+   `~/.config/nemo-relay/plugins.toml` when `XDG_CONFIG_HOME` is not set
 
 Missing files are skipped. If no plugin config source exists, the gateway starts
 without process-level plugin activation.
@@ -100,36 +100,36 @@ without process-level plugin activation.
 Use the interactive editor for Observability and Adaptive plugin configuration:
 
 ```bash
-nemo-flow plugins edit
+nemo-relay plugins edit
 ```
 
 By default, the editor writes the user plugin file:
 
 ```text
-$XDG_CONFIG_HOME/nemo-flow/plugins.toml
+$XDG_CONFIG_HOME/nemo-relay/plugins.toml
 ```
 
 or:
 
 ```text
-~/.config/nemo-flow/plugins.toml
+~/.config/nemo-relay/plugins.toml
 ```
 
 Use a scope flag to edit another location:
 
 ```bash
-nemo-flow plugins edit --project
-nemo-flow plugins edit --global
+nemo-relay plugins edit --project
+nemo-relay plugins edit --global
 ```
 
 Scope flags are mutually exclusive.
 
-`--project` writes the nearest existing `.nemo-flow/plugins.toml`. If none
-exists, it writes next to the nearest `.nemo-flow/config.toml`. If neither file
-exists in the parent directories, it writes `./.nemo-flow/plugins.toml` from the
+`--project` writes the nearest existing `.nemo-relay/plugins.toml`. If none
+exists, it writes next to the nearest `.nemo-relay/config.toml`. If neither file
+exists in the parent directories, it writes `./.nemo-relay/plugins.toml` from the
 current directory.
 
-`--global` writes `/etc/nemo-flow/plugins.toml` and usually requires elevated
+`--global` writes `/etc/nemo-relay/plugins.toml` and usually requires elevated
 filesystem permissions.
 
 The editor menus support these controls:
@@ -163,7 +163,7 @@ kind = "observability"
 
 [components.config.atof]
 enabled = true
-output_directory = "/var/log/nemo-flow"
+output_directory = "/var/log/nemo-relay"
 mode = "append"
 ```
 
@@ -237,7 +237,7 @@ Common validation failures include:
 - Component-specific semantic failures, such as an Agent Trajectory Interchange
   Format (ATIF) filename template that does not contain `{session_id}`.
 
-Use `nemo-flow doctor` to inspect the resolved gateway configuration and plugin
+Use `nemo-relay doctor` to inspect the resolved gateway configuration and plugin
 diagnostics. For Observability, doctor also reports enabled exporter sections and
 checks writable file exporter directories or reachable OTLP endpoints when those
 settings are present.

@@ -80,9 +80,9 @@ export type PluginHookModelCallStartedEvent = {
 
 export type PluginHookModelCallEndedEvent = PluginHookModelCallStartedEvent & {
   durationMs: number;
-  outcome: "completed" | "error";
+  outcome: 'completed' | 'error';
   errorCategory?: string;
-  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
+  failureKind?: 'aborted' | 'connection_closed' | 'connection_reset' | 'terminated' | 'timeout';
   requestPayloadBytes?: number;
   responseStreamBytes?: number;
   timeToFirstByteMs?: number;
@@ -122,7 +122,7 @@ export type PluginHookSessionEndEvent = {
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
-  reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "shutdown" | "restart" | "unknown";
+  reason?: 'new' | 'reset' | 'idle' | 'daily' | 'compaction' | 'deleted' | 'shutdown' | 'restart' | 'unknown';
   sessionFile?: string;
   transcriptArchived?: boolean;
   nextSessionId?: string;
@@ -172,7 +172,7 @@ export type PluginHookSubagentSpawnedEvent = {
   childSessionKey: string;
   agentId: string;
   label?: string;
-  mode: "run" | "session";
+  mode: 'run' | 'session';
   requester?: {
     channel?: string;
     accountId?: string;
@@ -185,13 +185,13 @@ export type PluginHookSubagentSpawnedEvent = {
 
 export type PluginHookSubagentEndedEvent = {
   targetSessionKey: string;
-  targetKind: "subagent" | "acp";
+  targetKind: 'subagent' | 'acp';
   reason: string;
   sendFarewell?: boolean;
   accountId?: string;
   runId?: string;
   endedAt?: number;
-  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  outcome?: 'ok' | 'error' | 'timeout' | 'killed' | 'reset' | 'deleted';
   error?: string;
 };
 

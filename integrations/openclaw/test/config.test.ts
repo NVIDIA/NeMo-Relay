@@ -4,37 +4,33 @@
 /**
  * Plugin config and registration tests for the OpenClaw integration shell.
  */
-import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import { describe, it } from "node:test";
+import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, it } from 'node:test';
 
+import { NEMO_RELAY_OPENCLAW_JSON_SCHEMA, nemoRelayConfigSchema, parseConfig } from '../src/config.js';
 import {
-  NEMO_FLOW_OPENCLAW_JSON_SCHEMA,
-  nemoFlowConfigSchema,
-  parseConfig,
-} from "../src/config.js";
-import {
-  defaultNemoFlowModuleLoader,
-  type NemoFlowModuleLoader,
-  type NemoFlowModules,
-  type NemoFlowRuntimeModule,
-} from "../src/modules.js";
-import { registerNemoFlowPlugin } from "../src/runtime-state.js";
-import type { PluginAgentToolCallMiddlewareContext } from "../src/openclaw-hook-types.js";
-import type { OpenClawPluginApi, PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import { callGatewayStatus, type TestGatewayMethodHandler } from "./gateway-status.js";
+  defaultNemoRelayModuleLoader,
+  type NemoRelayModuleLoader,
+  type NemoRelayModules,
+  type NemoRelayRuntimeModule,
+} from '../src/modules.js';
+import { registerNemoRelayPlugin } from '../src/runtime-state.js';
+import type { PluginAgentToolCallMiddlewareContext } from '../src/openclaw-hook-types.js';
+import type { OpenClawPluginApi, PluginLogger } from 'openclaw/plugin-sdk/plugin-entry';
+import { callGatewayStatus, type TestGatewayMethodHandler } from './gateway-status.js';
 
-const liveSmokeEnabled = process.env.NEMO_FLOW_OPENCLAW_LIVE_SMOKE === "1";
+const liveSmokeEnabled = process.env.NEMO_RELAY_OPENCLAW_LIVE_SMOKE === '1';
 
-describe("nemo-flow OpenClaw plugin shell", () => {
-  it("applies hook-backend config defaults", () => {
+describe('nemo-relay OpenClaw plugin shell', () => {
+  it('applies hook-backend config defaults', () => {
     const config = parseConfig(undefined);
 
     assert.equal(config.enabled, true);
-    assert.equal(config.backend, "hooks");
+    assert.equal(config.backend, 'hooks');
     assert.deepEqual(config.plugins, { version: 1, components: [] });
     assert.deepEqual(config.capture, {
       includePrompts: true,
@@ -49,20 +45,20 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     });
   });
 
-  it("keeps the generic plugin config shape under top-level plugins", () => {
+  it('keeps the generic plugin config shape under top-level plugins', () => {
     const pluginConfig = {
       version: 1,
       components: [
         {
-          kind: "observability",
+          kind: 'observability',
           enabled: true,
           config: {
             version: 1,
-            atif: { enabled: true, agent_name: "openclaw" },
+            atif: { enabled: true, agent_name: 'openclaw' },
           },
         },
       ],
-      policy: { unknown_component: "error" },
+      policy: { unknown_component: 'error' },
     };
 
     const config = parseConfig({ plugins: pluginConfig });
@@ -70,30 +66,30 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.deepEqual(config.plugins, pluginConfig);
   });
 
-  it("keeps adaptive components in the generic plugin config path", () => {
+  it('keeps adaptive components in the generic plugin config path', () => {
     const pluginConfig = {
       version: 1,
       components: [
         {
-          kind: "adaptive",
+          kind: 'adaptive',
           enabled: true,
           config: {
             version: 1,
-            agent_id: "openclaw",
+            agent_id: 'openclaw',
             state: {
               backend: {
-                kind: "in_memory",
+                kind: 'in_memory',
                 config: {},
               },
             },
             telemetry: {
-              learners: ["tool_parallelism"],
+              learners: ['tool_parallelism'],
             },
             adaptive_hints: {
               priority: 100,
               break_chain: false,
               inject_header: true,
-              inject_body_path: "nvext.agent_hints",
+              inject_body_path: 'nvext.agent_hints',
             },
           },
         },
@@ -105,10 +101,10 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.deepEqual(config.plugins, pluginConfig);
   });
 
-  it("rejects unsupported backends and invalid correlation values", () => {
+  it('rejects unsupported backends and invalid correlation values', () => {
     assert.throws(
-      () => parseConfig({ backend: "managed_execution" }),
-      /unsupported nemo-flow backend: managed_execution/,
+      () => parseConfig({ backend: 'managed_execution' }),
+      /unsupported nemo-relay backend: managed_execution/,
     );
     assert.throws(
       () => parseConfig({ correlation: { llmOutputGraceMs: -1 } }),
@@ -124,7 +120,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     );
   });
 
-  it("rejects removed specialized OpenClaw output fields with migration errors", () => {
+  it('rejects removed specialized OpenClaw output fields with migration errors', () => {
     assert.throws(
       () => parseConfig({ atif: { enabled: true } }),
       /atif was removed; configure plugins\.components\[\]\.config\.atif/,
@@ -134,21 +130,21 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       /telemetry was removed; configure plugins\.components\[\]\.config\.opentelemetry or openinference/,
     );
     assert.throws(
-      () => parseConfig({ nemoFlow: { pluginConfig: { version: 1, components: [] } } }),
-      /nemoFlow\.pluginConfig was removed; use top-level plugins instead/,
+      () => parseConfig({ nemoRelay: { pluginConfig: { version: 1, components: [] } } }),
+      /nemoRelay\.pluginConfig was removed; use top-level plugins instead/,
     );
   });
 
-  it("wraps manifest JSON Schema in OpenClawPluginConfigSchema", () => {
-    assert.equal(typeof nemoFlowConfigSchema.safeParse, "function");
-    assert.deepEqual(nemoFlowConfigSchema.jsonSchema, NEMO_FLOW_OPENCLAW_JSON_SCHEMA);
-    assert.equal(nemoFlowConfigSchema.safeParse?.({ backend: "hooks" }).success, true);
-    assert.equal(nemoFlowConfigSchema.safeParse?.({ backend: "bad" }).success, false);
-    assert.equal(nemoFlowConfigSchema.safeParse?.({ atif: { enabled: true } }).success, false);
+  it('wraps manifest JSON Schema in OpenClawPluginConfigSchema', () => {
+    assert.equal(typeof nemoRelayConfigSchema.safeParse, 'function');
+    assert.deepEqual(nemoRelayConfigSchema.jsonSchema, NEMO_RELAY_OPENCLAW_JSON_SCHEMA);
+    assert.equal(nemoRelayConfigSchema.safeParse?.({ backend: 'hooks' }).success, true);
+    assert.equal(nemoRelayConfigSchema.safeParse?.({ backend: 'bad' }).success, false);
+    assert.equal(nemoRelayConfigSchema.safeParse?.({ atif: { enabled: true } }).success, false);
   });
 
-  it("returns without side effects outside full registration mode", () => {
-    const api = createApi({ registrationMode: "discovery" });
+  it('returns without side effects outside full registration mode', () => {
+    const api = createApi({ registrationMode: 'discovery' });
 
     registerPlugin(api);
 
@@ -159,7 +155,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.toolMiddlewares.length, 0);
   });
 
-  it("returns without side effects when disabled", () => {
+  it('returns without side effects when disabled', () => {
     const api = createApi({ pluginConfig: { enabled: false } });
 
     registerPlugin(api);
@@ -169,11 +165,11 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.gatewayMethods.length, 0);
     assert.equal(api.calls.hooks.length, 0);
     assert.equal(api.calls.toolMiddlewares.length, 0);
-    assert.deepEqual(api.messages.info, ["nemo-flow observability disabled by plugin config"]);
+    assert.deepEqual(api.messages.info, ['nemo-relay observability disabled by plugin config']);
   });
 
-  it("returns without side effects when config parsing fails during registration", () => {
-    const api = createApi({ pluginConfig: { backend: "managed_execution" } });
+  it('returns without side effects when config parsing fails during registration', () => {
+    const api = createApi({ pluginConfig: { backend: 'managed_execution' } });
 
     registerPlugin(api);
 
@@ -182,45 +178,52 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(api.calls.gatewayMethods.length, 0);
     assert.equal(api.calls.hooks.length, 0);
     assert.equal(api.calls.toolMiddlewares.length, 0);
-    assert.match(
-      api.messages.warn[0] ?? "",
-      /nemo-flow observability disabled because plugin config is invalid/,
-    );
+    assert.match(api.messages.warn[0] ?? '', /nemo-relay observability disabled because plugin config is invalid/);
   });
 
-  it("registers service, lifecycle, and health surfaces in full mode", () => {
+  it('registers service, lifecycle, and health surfaces in full mode', () => {
     const api = createApi();
 
     registerPlugin(api, async () => createModules());
 
-    assert.deepEqual(api.calls.services.map((service) => service.id), ["nemo-flow-observability"]);
-    assert.deepEqual(api.calls.lifecycle.map((lifecycle) => lifecycle.id), ["nemo-flow-observability-cleanup"]);
-    assert.deepEqual(api.calls.gatewayMethods.map((method) => method.method), ["nemoFlow.status"]);
-    assert.deepEqual(api.calls.toolMiddlewares.map((middleware) => middleware.options), [
-      { runtimes: ["pi"], priority: 100 },
-    ]);
+    assert.deepEqual(
+      api.calls.services.map((service) => service.id),
+      ['nemo-relay-observability'],
+    );
+    assert.deepEqual(
+      api.calls.lifecycle.map((lifecycle) => lifecycle.id),
+      ['nemo-relay-observability-cleanup'],
+    );
+    assert.deepEqual(
+      api.calls.gatewayMethods.map((method) => method.method),
+      ['nemoRelay.status'],
+    );
+    assert.deepEqual(
+      api.calls.toolMiddlewares.map((middleware) => middleware.options),
+      [{ runtimes: ['pi'], priority: 100 }],
+    );
     assert.deepEqual(
       api.calls.hooks.map((hook) => hook.hookName),
       [
-        "gateway_start",
-        "gateway_stop",
-        "session_start",
-        "session_end",
-        "llm_input",
-        "llm_output",
-        "model_call_started",
-        "model_call_ended",
-        "after_tool_call",
-        "before_message_write",
-        "agent_end",
-        "before_agent_finalize",
-        "subagent_spawned",
-        "subagent_ended",
+        'gateway_start',
+        'gateway_stop',
+        'session_start',
+        'session_end',
+        'llm_input',
+        'llm_output',
+        'model_call_started',
+        'model_call_ended',
+        'after_tool_call',
+        'before_message_write',
+        'agent_end',
+        'before_agent_finalize',
+        'subagent_spawned',
+        'subagent_ended',
       ],
     );
   });
 
-  it("runs tool conditional guardrails before OpenClaw tool middleware execution", async () => {
+  it('runs tool conditional guardrails before OpenClaw tool middleware execution', async () => {
     const modules = createModules();
     const api = createApi();
 
@@ -229,25 +232,23 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.ok(middleware);
 
     const result = await middleware.handler({
-      toolName: "shell",
-      params: { command: "pwd" },
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId: "run-1",
-      agentId: "agent-1",
+      toolName: 'shell',
+      params: { command: 'pwd' },
+      sessionId: 'session-1',
+      sessionKey: 'agent:main:session-1',
+      runId: 'run-1',
+      agentId: 'agent-1',
       execute: async (params) => ({ ok: true, params }),
     });
 
-    assert.deepEqual(result, { ok: true, params: { command: "pwd" } });
-    assert.deepEqual(modules.nf.calls.toolConditionalExecution, [
-      { name: "shell", args: { command: "pwd" } },
-    ]);
+    assert.deepEqual(result, { ok: true, params: { command: 'pwd' } });
+    assert.deepEqual(modules.nf.calls.toolConditionalExecution, [{ name: 'shell', args: { command: 'pwd' } }]);
   });
 
-  it("does not execute OpenClaw tools when conditional guardrails reject", async () => {
+  it('does not execute OpenClaw tools when conditional guardrails reject', async () => {
     const modules = createModules();
     modules.nf.toolConditionalExecution = async () => {
-      throw new Error("guardrail rejected: blocked by policy");
+      throw new Error('guardrail rejected: blocked by policy');
     };
     const api = createApi();
     let executed = false;
@@ -259,9 +260,9 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     await assert.rejects(
       () =>
         middleware.handler({
-          toolName: "shell",
-          params: { command: "rm -rf /tmp/demo" },
-          sessionId: "session-1",
+          toolName: 'shell',
+          params: { command: 'rm -rf /tmp/demo' },
+          sessionId: 'session-1',
           execute: async () => {
             executed = true;
             return { ok: true };
@@ -272,51 +273,51 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.equal(executed, false);
   });
 
-  it("uses config parsed during registration when service starts", async () => {
+  it('uses config parsed during registration when service starts', async () => {
     const api = createApi({ pluginConfig: { correlation: { maxRecordsPerKey: 1 } } });
 
     registerPlugin(api, async () => createModules());
-    api.pluginConfig = { backend: "managed_execution" };
+    api.pluginConfig = { backend: 'managed_execution' };
 
     const service = api.calls.services[0];
     assert.ok(service);
     try {
       await assert.doesNotReject(async () => {
-        await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+        await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
       });
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     }
   });
 
-  it("validates and initializes configured generic plugin components", async () => {
+  it('validates and initializes configured generic plugin components', async () => {
     const configuredPlugins = {
       version: 1,
       components: [
         {
-          kind: "observability",
+          kind: 'observability',
           enabled: true,
           config: {
             version: 1,
-            atif: { enabled: true, agent_name: "openclaw" },
-            opentelemetry: { enabled: true, endpoint: "http://otel.example" },
-            openinference: { enabled: true, endpoint: "http://phoenix.example" },
+            atif: { enabled: true, agent_name: 'openclaw' },
+            opentelemetry: { enabled: true, endpoint: 'http://otel.example' },
+            openinference: { enabled: true, endpoint: 'http://phoenix.example' },
           },
         },
         {
-          kind: "adaptive",
+          kind: 'adaptive',
           enabled: true,
           config: {
             version: 1,
-            agent_id: "openclaw",
+            agent_id: 'openclaw',
             state: {
               backend: {
-                kind: "in_memory",
+                kind: 'in_memory',
                 config: {},
               },
             },
             telemetry: {
-              learners: ["tool_parallelism"],
+              learners: ['tool_parallelism'],
             },
           },
         },
@@ -329,33 +330,33 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
       assert.deepEqual(modules.pluginHost.calls.validate, [configuredPlugins]);
       assert.deepEqual(modules.pluginHost.calls.initialize, [configuredPlugins]);
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-      assert.equal(status.status.state, "ready");
+      assert.equal(status.status.state, 'ready');
       assert.deepEqual(status.outputs, {
-        atif: "enabled",
-        otel: "enabled",
-        openInference: "enabled",
+        atif: 'enabled',
+        otel: 'enabled',
+        openInference: 'enabled',
       });
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     }
   });
 
-  it("passes adaptive helper components through plugin host initialization", async () => {
+  it('passes adaptive helper components through plugin host initialization', async () => {
     const modules = createModules();
     const configuredPlugins = {
       version: 1,
       components: [
         modules.adaptive.ComponentSpec({
           version: 1,
-          agent_id: "openclaw-helper",
+          agent_id: 'openclaw-helper',
           state: {
             backend: {
-              kind: "in_memory",
+              kind: 'in_memory',
               config: {},
             },
           },
@@ -363,7 +364,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
             priority: 100,
             break_chain: false,
             inject_header: true,
-            inject_body_path: "nvext.agent_hints",
+            inject_body_path: 'nvext.agent_hints',
           },
         }),
       ],
@@ -374,20 +375,20 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
       assert.deepEqual(modules.pluginHost.calls.validate, [configuredPlugins]);
       assert.deepEqual(modules.pluginHost.calls.initialize, [configuredPlugins]);
       assert.equal(configuredPlugins.components[0]?.kind, modules.adaptive.ADAPTIVE_PLUGIN_KIND);
       assert.equal(configuredPlugins.components[0]?.enabled, true);
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     }
   });
 
-  it("continues hook-backed telemetry when plugin host validation fails", async () => {
+  it('continues hook-backed telemetry when plugin host validation fails', async () => {
     const modules = createModules({
-      validateDiagnostics: [{ level: "error", code: "bad_config", message: "invalid" }],
+      validateDiagnostics: [{ level: 'error', code: 'bad_config', message: 'invalid' }],
     });
     const api = createApi({
       pluginConfig: {
@@ -395,7 +396,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
           version: 1,
           components: [
             {
-              kind: "observability",
+              kind: 'observability',
               config: { version: 1, atif: { enabled: true } },
             },
           ],
@@ -407,25 +408,28 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
-      const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+      const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
       assert.ok(sessionStart);
-      await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+      await sessionStart.handler({ sessionId: 'session-1' }, { sessionId: 'session-1' });
 
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-      assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
-      assert.equal(status.status.state, "degraded");
+      assert.deepEqual(
+        modules.nf.calls.event.map((event) => event.name),
+        ['openclaw.session_start'],
+      );
+      assert.equal(status.status.state, 'degraded');
       assert.equal(status.initializedPluginHost, false);
-      assert.equal(status.outputs.atif, "degraded");
+      assert.equal(status.outputs.atif, 'degraded');
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     }
   });
 
-  it("reports configured outputs degraded when plugin host initialization returns error diagnostics", async () => {
+  it('reports configured outputs degraded when plugin host initialization returns error diagnostics', async () => {
     const modules = createModules({
-      initializeDiagnostics: [{ level: "error", code: "activation_failed", message: "failed to activate" }],
+      initializeDiagnostics: [{ level: 'error', code: 'activation_failed', message: 'failed to activate' }],
     });
     const api = createApi({
       pluginConfig: {
@@ -433,7 +437,7 @@ describe("nemo-flow OpenClaw plugin shell", () => {
           version: 1,
           components: [
             {
-              kind: "observability",
+              kind: 'observability',
               config: { version: 1, atif: { enabled: true } },
             },
           ],
@@ -445,21 +449,21 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const service = api.calls.services[0];
     assert.ok(service);
     try {
-      await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-      assert.equal(status.status.state, "degraded");
-      assert.equal(status.status.reason, "NeMo Flow plugin host initialization reported errors");
+      assert.equal(status.status.state, 'degraded');
+      assert.equal(status.status.reason, 'NeMo Relay plugin host initialization reported errors');
       assert.equal(status.initializedPluginHost, true);
-      assert.equal(status.outputs.atif, "degraded");
+      assert.equal(status.outputs.atif, 'degraded');
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     }
   });
 
-  it("degrades hook replay when plugin host validation throws", async () => {
+  it('degrades hook replay when plugin host validation throws', async () => {
     const modules = createModules({
-      validateThrows: new Error("invalid plugin document"),
+      validateThrows: new Error('invalid plugin document'),
     });
     const api = createApi({
       pluginConfig: {
@@ -475,43 +479,46 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     assert.ok(service);
     try {
       await assert.doesNotReject(async () => {
-        await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+        await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
       });
 
-      const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+      const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
       assert.ok(sessionStart);
-      await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+      await sessionStart.handler({ sessionId: 'session-1' }, { sessionId: 'session-1' });
 
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-      assert.equal(status.status.state, "degraded");
+      assert.equal(status.status.state, 'degraded');
       assert.equal(status.initializedPluginHost, false);
-      assert.match(status.status.reason, /failed to validate NeMo Flow plugin host config/);
-      assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+      assert.match(status.status.reason, /failed to validate NeMo Relay plugin host config/);
+      assert.deepEqual(
+        modules.nf.calls.event.map((event) => event.name),
+        ['openclaw.session_start'],
+      );
     } finally {
-      await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+      await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
     }
   });
 
   it(
-    "exports ATIF with the documented observability component through the real plugin host",
+    'exports ATIF with the documented observability component through the real plugin host',
     { skip: !liveSmokeEnabled },
     async () => {
-      const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "nemo-flow-openclaw-observability-"));
+      const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nemo-relay-openclaw-observability-'));
       const api = createApi({
         pluginConfig: {
           plugins: {
             version: 1,
             components: [
               {
-                kind: "observability",
+                kind: 'observability',
                 enabled: true,
                 config: {
                   version: 1,
                   atif: {
                     enabled: true,
-                    agent_name: "openclaw",
+                    agent_name: 'openclaw',
                     output_directory: outputDir,
-                    filename_template: "openclaw-e2e-{session_id}.json",
+                    filename_template: 'openclaw-e2e-{session_id}.json',
                   },
                 },
               },
@@ -522,28 +529,31 @@ describe("nemo-flow OpenClaw plugin shell", () => {
       let serviceStarted = false;
 
       try {
-        registerPlugin(api, defaultNemoFlowModuleLoader);
+        registerPlugin(api, defaultNemoRelayModuleLoader);
         const service = api.calls.services[0];
         assert.ok(service);
         await service.start({ stateDir: outputDir, config: {} as never, logger: api.logger });
         serviceStarted = true;
 
-        const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
-        const sessionEnd = api.calls.hooks.find((hook) => hook.hookName === "session_end");
+        const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
+        const sessionEnd = api.calls.hooks.find((hook) => hook.hookName === 'session_end');
         assert.ok(sessionStart);
         assert.ok(sessionEnd);
-        await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
-        await sessionEnd.handler({ sessionId: "session-1", messageCount: 1, reason: "done" }, { sessionId: "session-1" });
+        await sessionStart.handler({ sessionId: 'session-1' }, { sessionId: 'session-1' });
+        await sessionEnd.handler(
+          { sessionId: 'session-1', messageCount: 1, reason: 'done' },
+          { sessionId: 'session-1' },
+        );
 
         const files = await fs.readdir(outputDir);
-        const atifFile = files.find((file) => file.startsWith("openclaw-e2e-") && file.endsWith(".json"));
-        assert.ok(atifFile, "expected generic observability ATIF export");
-        const exported = JSON.parse(await fs.readFile(path.join(outputDir, atifFile), "utf8")) as unknown;
-        assert.equal(typeof exported, "object");
+        const atifFile = files.find((file) => file.startsWith('openclaw-e2e-') && file.endsWith('.json'));
+        assert.ok(atifFile, 'expected generic observability ATIF export');
+        const exported = JSON.parse(await fs.readFile(path.join(outputDir, atifFile), 'utf8')) as unknown;
+        assert.equal(typeof exported, 'object');
 
         const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-        assert.equal(status.status.state, "ready");
-        assert.equal(status.outputs.atif, "enabled");
+        assert.equal(status.status.state, 'ready');
+        assert.equal(status.outputs.atif, 'enabled');
       } finally {
         if (serviceStarted) {
           await api.calls.services[0]?.stop?.({ stateDir: outputDir, config: {} as never, logger: api.logger });
@@ -553,32 +563,32 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     },
   );
 
-  it("routes gateway_stop through runtime stop", async () => {
+  it('routes gateway_stop through runtime stop', async () => {
     const modules = createModules();
     const api = createApi();
 
     registerPlugin(api, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
-    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
-    const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === "gateway_stop");
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
+    const gatewayStop = api.calls.hooks.find((hook) => hook.hookName === 'gateway_stop');
     assert.ok(sessionStart);
     assert.ok(gatewayStop);
-    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
-    await gatewayStop.handler({ reason: "test_stop" }, {});
+    await sessionStart.handler({ sessionId: 'session-1' }, { sessionId: 'session-1' });
+    await gatewayStop.handler({ reason: 'test_stop' }, {});
 
     const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(status.status.state, "stopped");
+    assert.equal(status.status.state, 'stopped');
     assert.equal(status.counters.marksEmitted, 2);
-    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), [
-      "openclaw.session_start",
-      "openclaw.session_end",
-    ]);
+    assert.deepEqual(
+      modules.nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start', 'openclaw.session_end'],
+    );
   });
 
-  it("keeps the runtime running for scoped lifecycle cleanup", async () => {
+  it('keeps the runtime running for scoped lifecycle cleanup', async () => {
     const modules = createModules();
     const api = createApi();
 
@@ -587,36 +597,38 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const lifecycle = api.calls.lifecycle[0];
     assert.ok(service);
     assert.ok(lifecycle?.cleanup);
-    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
-    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
     assert.ok(sessionStart);
-    await sessionStart.handler({ sessionId: "session-1", sessionKey: "agent:main:session-1" }, {
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-    });
+    await sessionStart.handler(
+      { sessionId: 'session-1', sessionKey: 'agent:main:session-1' },
+      {
+        sessionId: 'session-1',
+        sessionKey: 'agent:main:session-1',
+      },
+    );
 
-    await lifecycle.cleanup({ reason: "restart", sessionKey: "agent:main:session-1" });
+    await lifecycle.cleanup({ reason: 'restart', sessionKey: 'agent:main:session-1' });
 
     const statusAfterScopedCleanup = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(statusAfterScopedCleanup.status.state, "ready");
+    assert.equal(statusAfterScopedCleanup.status.state, 'ready');
     assert.equal(statusAfterScopedCleanup.counters.marksEmitted, 2);
 
-    await sessionStart.handler({ sessionId: "session-2" }, { sessionId: "session-2" });
+    await sessionStart.handler({ sessionId: 'session-2' }, { sessionId: 'session-2' });
 
     const statusAfterNextHook = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(statusAfterNextHook.status.state, "ready");
+    assert.equal(statusAfterNextHook.status.state, 'ready');
     assert.equal(statusAfterNextHook.counters.marksEmitted, 3);
-    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), [
-      "openclaw.session_start",
-      "openclaw.session_end",
-      "openclaw.session_start",
-    ]);
+    assert.deepEqual(
+      modules.nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start', 'openclaw.session_end', 'openclaw.session_start'],
+    );
 
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
   });
 
-  it("restarts hook replay after unscoped runtime restart cleanup", async () => {
+  it('restarts hook replay after unscoped runtime restart cleanup', async () => {
     const modules = createModules();
     const api = createApi();
 
@@ -625,65 +637,71 @@ describe("nemo-flow OpenClaw plugin shell", () => {
     const lifecycle = api.calls.lifecycle[0];
     assert.ok(service);
     assert.ok(lifecycle?.cleanup);
-    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
 
-    await lifecycle.cleanup({ reason: "restart" });
+    await lifecycle.cleanup({ reason: 'restart' });
     const statusAfterRestart = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(statusAfterRestart.status.state, "not_initialized");
-    assert.equal(statusAfterRestart.status.reason, "restart");
+    assert.equal(statusAfterRestart.status.state, 'not_initialized');
+    assert.equal(statusAfterRestart.status.reason, 'restart');
 
-    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
     assert.ok(sessionStart);
-    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+    await sessionStart.handler({ sessionId: 'session-1' }, { sessionId: 'session-1' });
 
     const statusAfterNextHook = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(statusAfterNextHook.status.state, "ready");
+    assert.equal(statusAfterNextHook.status.state, 'ready');
     assert.equal(statusAfterNextHook.counters.marksEmitted, 1);
-    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+    assert.deepEqual(
+      modules.nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start'],
+    );
 
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
   });
 
-  it("starts hook replay from the OpenClaw runtime when service start has not run", async () => {
+  it('starts hook replay from the OpenClaw runtime when service start has not run', async () => {
     const modules = createModules();
     const api = createApi();
 
     registerPlugin(api, async () => modules);
-    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === "session_start");
+    const sessionStart = api.calls.hooks.find((hook) => hook.hookName === 'session_start');
     assert.ok(sessionStart);
 
-    await sessionStart.handler({ sessionId: "session-1" }, { sessionId: "session-1" });
+    await sessionStart.handler({ sessionId: 'session-1' }, { sessionId: 'session-1' });
 
     const statusAfterHook = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
-    assert.equal(statusAfterHook.status.state, "ready");
+    assert.equal(statusAfterHook.status.state, 'ready');
     assert.equal(statusAfterHook.counters.marksEmitted, 1);
-    assert.deepEqual(modules.nf.calls.event.map((event) => event.name), ["openclaw.session_start"]);
+    assert.deepEqual(
+      modules.nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start'],
+    );
 
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
   });
 
-  it("removes beforeExit listener during normal stop", async () => {
+  it('removes beforeExit listener during normal stop', async () => {
     const modules = createModules();
     const api = createApi();
-    const before = process.listenerCount("beforeExit");
+    const before = process.listenerCount('beforeExit');
 
     registerPlugin(api, async () => modules);
     const service = api.calls.services[0];
     assert.ok(service);
-    await service.start({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-    assert.equal(process.listenerCount("beforeExit"), before + 1);
+    await service.start({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    assert.equal(process.listenerCount('beforeExit'), before + 1);
 
-    await service.stop?.({ stateDir: "/tmp/openclaw-state", config: {} as never, logger: api.logger });
-    assert.equal(process.listenerCount("beforeExit"), before);
+    await service.stop?.({ stateDir: '/tmp/openclaw-state', config: {} as never, logger: api.logger });
+    assert.equal(process.listenerCount('beforeExit'), before);
   });
 
-  it("does not statically import nemo-flow-node or OpenClaw private src paths", () => {
-    const files = readBuiltJavaScriptFiles(new URL("../../", import.meta.url));
+  it('does not statically import nemo-relay-node or OpenClaw private src paths', () => {
+    const files = readBuiltJavaScriptFiles(new URL('../../', import.meta.url));
 
-    assert.doesNotMatch(files, /from ["']nemo-flow-node/);
-    assert.doesNotMatch(files, /from ["']nemo-flow-node\/plugin/);
+    assert.doesNotMatch(files, /from ["']nemo-relay-node/);
+    assert.doesNotMatch(files, /from ["']nemo-relay-node\/plugin/);
     assert.doesNotMatch(files, /openclaw\/src\//);
   });
 });
@@ -691,14 +709,14 @@ describe("nemo-flow OpenClaw plugin shell", () => {
 function readBuiltJavaScriptFiles(directory: URL): string {
   const chunks: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const child = new URL(`${entry.name}${entry.isDirectory() ? "/" : ""}`, directory);
+    const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, directory);
     if (entry.isDirectory()) {
       chunks.push(readBuiltJavaScriptFiles(child));
-    } else if (entry.isFile() && entry.name.endsWith(".js")) {
-      chunks.push(readFileSync(child, "utf8"));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      chunks.push(readFileSync(child, 'utf8'));
     }
   }
-  return chunks.join("\n");
+  return chunks.join('\n');
 }
 
 type HookHandler = (event: unknown, ctx: unknown) => void | Promise<void>;
@@ -707,26 +725,22 @@ type ToolMiddlewareHandler = (ctx: PluginAgentToolCallMiddlewareContext) => Prom
 type TestApi = {
   id: string;
   version?: string;
-  registrationMode: OpenClawPluginApi["registrationMode"];
+  registrationMode: OpenClawPluginApi['registrationMode'];
   pluginConfig?: Record<string, unknown>;
   logger: PluginLogger;
-  runtime: OpenClawPluginApi["runtime"];
-  resolvePath: OpenClawPluginApi["resolvePath"];
-  registerService: (service: Parameters<OpenClawPluginApi["registerService"]>[0]) => void;
-  registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0]) => void;
+  runtime: OpenClawPluginApi['runtime'];
+  resolvePath: OpenClawPluginApi['resolvePath'];
+  registerService: (service: Parameters<OpenClawPluginApi['registerService']>[0]) => void;
+  registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi['registerRuntimeLifecycle']>[0]) => void;
   on: (hookName: string, handler: HookHandler) => void;
   registerAgentToolCallMiddleware: (
     handler: ToolMiddlewareHandler,
     options?: { runtimes?: string[]; priority?: number },
   ) => void;
-  registerGatewayMethod: (
-    method: string,
-    handler: TestGatewayMethodHandler,
-    opts?: { scope?: string },
-  ) => void;
+  registerGatewayMethod: (method: string, handler: TestGatewayMethodHandler, opts?: { scope?: string }) => void;
   calls: {
-    services: Parameters<OpenClawPluginApi["registerService"]>[0][];
-    lifecycle: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0][];
+    services: Parameters<OpenClawPluginApi['registerService']>[0][];
+    lifecycle: Parameters<OpenClawPluginApi['registerRuntimeLifecycle']>[0][];
     gatewayMethods: Array<{
       method: string;
       handler: TestGatewayMethodHandler;
@@ -743,12 +757,14 @@ type TestApi = {
   };
 };
 
-function createApi(params: {
-  registrationMode?: OpenClawPluginApi["registrationMode"];
-  pluginConfig?: Record<string, unknown>;
-} = {}): TestApi {
-  const messages: TestApi["messages"] = { info: [], warn: [] };
-  const calls: TestApi["calls"] = {
+function createApi(
+  params: {
+    registrationMode?: OpenClawPluginApi['registrationMode'];
+    pluginConfig?: Record<string, unknown>;
+  } = {},
+): TestApi {
+  const messages: TestApi['messages'] = { info: [], warn: [] };
+  const calls: TestApi['calls'] = {
     services: [],
     lifecycle: [],
     gatewayMethods: [],
@@ -762,15 +778,15 @@ function createApi(params: {
   };
 
   const api: TestApi = {
-    id: "nemo-flow",
-    version: "1.2.3",
-    registrationMode: params.registrationMode ?? "full",
+    id: 'nemo-relay',
+    version: '1.2.3',
+    registrationMode: params.registrationMode ?? 'full',
     logger,
     runtime: {
       state: {
-        resolveStateDir: () => "/tmp/openclaw-state",
+        resolveStateDir: () => '/tmp/openclaw-state',
       },
-    } as unknown as OpenClawPluginApi["runtime"],
+    } as unknown as OpenClawPluginApi['runtime'],
     resolvePath: (input) => input,
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
@@ -789,11 +805,11 @@ function createApi(params: {
   return api;
 }
 
-function registerPlugin(api: TestApi, moduleLoader?: NemoFlowModuleLoader): void {
-  registerNemoFlowPlugin(api as unknown as OpenClawPluginApi, moduleLoader);
+function registerPlugin(api: TestApi, moduleLoader?: NemoRelayModuleLoader): void {
+  registerNemoRelayPlugin(api as unknown as OpenClawPluginApi, moduleLoader);
 }
 
-type TestPluginHost = NemoFlowModules["pluginHost"] & {
+type TestPluginHost = NemoRelayModules['pluginHost'] & {
   calls: {
     validate: unknown[];
     initialize: unknown[];
@@ -801,30 +817,32 @@ type TestPluginHost = NemoFlowModules["pluginHost"] & {
   };
 };
 
-type TestNemoFlowRuntime = NemoFlowModules["nf"] & {
+type TestNemoRelayRuntime = NemoRelayModules['nf'] & {
   calls: {
     event: Array<{ name: string; handle: unknown; data: unknown }>;
     toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
 };
 
-type TestModules = NemoFlowModules & {
-  nf: TestNemoFlowRuntime;
+type TestModules = NemoRelayModules & {
+  nf: TestNemoRelayRuntime;
   pluginHost: TestPluginHost;
 };
 
-function createModules(params: {
-  validateDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }>;
-  validateThrows?: Error;
-  initializeDiagnostics?: Array<{ level: "warning" | "error"; code: string; message: string }>;
-} = {}): TestModules {
-  const nf = createNemoFlowRuntime();
-  const calls: TestPluginHost["calls"] = { validate: [], initialize: [], clear: 0 };
-  const adaptive: TestModules["adaptive"] = {
-    ADAPTIVE_PLUGIN_KIND: "adaptive",
+function createModules(
+  params: {
+    validateDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
+    validateThrows?: Error;
+    initializeDiagnostics?: Array<{ level: 'warning' | 'error'; code: string; message: string }>;
+  } = {},
+): TestModules {
+  const nf = createNemoRelayRuntime();
+  const calls: TestPluginHost['calls'] = { validate: [], initialize: [], clear: 0 };
+  const adaptive: TestModules['adaptive'] = {
+    ADAPTIVE_PLUGIN_KIND: 'adaptive',
     ComponentSpec: (
-      config: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[0],
-      options?: Parameters<NemoFlowModules["adaptive"]["ComponentSpec"]>[1],
+      config: Parameters<NemoRelayModules['adaptive']['ComponentSpec']>[0],
+      options?: Parameters<NemoRelayModules['adaptive']['ComponentSpec']>[1],
     ) => ({
       kind: adaptive.ADAPTIVE_PLUGIN_KIND,
       enabled: options?.enabled ?? true,
@@ -855,24 +873,25 @@ function createModules(params: {
   };
 }
 
-function createNemoFlowRuntime(): TestNemoFlowRuntime {
-  const calls: TestNemoFlowRuntime["calls"] = {
+function createNemoRelayRuntime(): TestNemoRelayRuntime {
+  const calls: TestNemoRelayRuntime['calls'] = {
     event: [],
     toolConditionalExecution: [],
   };
 
   return {
-    ScopeType: { Agent: 0 } as NemoFlowRuntimeModule["ScopeType"],
+    ScopeType: { Agent: 0 } as NemoRelayRuntimeModule['ScopeType'],
     calls,
-    createScopeStack: () => ({ type: "stack" }) as unknown as ReturnType<NemoFlowRuntimeModule["createScopeStack"]>,
-    currentScopeStack: () => ({ type: "previous-stack" }) as unknown as ReturnType<NemoFlowRuntimeModule["currentScopeStack"]>,
+    createScopeStack: () => ({ type: 'stack' }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
+    currentScopeStack: () =>
+      ({ type: 'previous-stack' }) as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: () => {},
-    pushScope: () => ({ type: "scope" } as unknown as ReturnType<NemoFlowRuntimeModule["pushScope"]>),
+    pushScope: () => ({ type: 'scope' }) as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>,
     popScope: () => {},
     event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["llmCall"]>),
+    llmCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>,
     llmCallEnd: () => {},
-    toolCall: () => ({} as unknown as ReturnType<NemoFlowRuntimeModule["toolCall"]>),
+    toolCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>,
     toolCallEnd: () => {},
     toolConditionalExecution: async (name, args) => {
       calls.toolConditionalExecution.push({ name, args });

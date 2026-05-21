@@ -6,16 +6,16 @@
  *
  * Hook payloads can contain undefined values, circular objects, errors, and
  * prototype-sensitive keys. This module normalizes them before they cross the
- * NeMo Flow NAPI boundary.
+ * NeMo Relay NAPI boundary.
  */
-import type { PluginHookAfterToolCallEvent } from "../openclaw-hook-types.js";
-import type { JsonObject as JsonRecord, JsonValue } from "nemo-flow-node/typed";
-import type { HookReplayBackendState, SessionState } from "./session.js";
-import type { NemoFlowRuntimeModule } from "../modules.js";
+import type { PluginHookAfterToolCallEvent } from '../openclaw-hook-types.js';
+import type { JsonObject as JsonRecord, JsonValue } from 'nemo-relay-node/typed';
+import type { HookReplayBackendState, SessionState } from './session.js';
+import type { NemoRelayRuntimeModule } from '../modules.js';
 
-/** Emit a NeMo Flow event under an existing OpenClaw session root span. */
+/** Emit a NeMo Relay event under an existing OpenClaw session root span. */
 export function emitMark(params: {
-  nf: NemoFlowRuntimeModule;
+  nf: NemoRelayRuntimeModule;
   state: HookReplayBackendState;
   session: SessionState;
   name: string;
@@ -37,7 +37,7 @@ export function blockedToolDetails(
   context?: { runId?: string | undefined },
 ): JsonRecord | undefined {
   const details = resultDetails(event.result);
-  if (details?.status !== "blocked") {
+  if (details?.status !== 'blocked') {
     return undefined;
   }
 
@@ -46,7 +46,7 @@ export function blockedToolDetails(
     toolCallId: event.toolCallId,
     runId: event.runId ?? context?.runId,
     blocked: true,
-    deniedReason: typeof details.deniedReason === "string" ? details.deniedReason : undefined,
+    deniedReason: typeof details.deniedReason === 'string' ? details.deniedReason : undefined,
     durationMs: event.durationMs,
   });
 }
@@ -91,7 +91,7 @@ function stripUndefined(input: Record<string, unknown>, seen: WeakSet<object>): 
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) {
       const normalized = normalizeJsonValue(value, seen);
-      if (key === "__proto__") {
+      if (key === '__proto__') {
         Object.defineProperty(output, key, {
           configurable: true,
           enumerable: true,
@@ -108,15 +108,15 @@ function stripUndefined(input: Record<string, unknown>, seen: WeakSet<object>): 
 
 /** Normalize any hook value into JSON, replacing cycles and unsupported primitives. */
 function normalizeJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
     return value;
   }
-  if (typeof value === "number") {
+  if (typeof value === 'number') {
     return Number.isFinite(value) ? value : null;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
-      return "[Circular]";
+      return '[Circular]';
     }
     seen.add(value);
     const out = value.map((item) => normalizeJsonValue(item, seen));
@@ -125,7 +125,7 @@ function normalizeJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
   }
   if (isRecord(value)) {
     if (seen.has(value)) {
-      return "[Circular]";
+      return '[Circular]';
     }
     seen.add(value);
     const out = stripUndefined(value, seen);
@@ -137,5 +137,5 @@ function normalizeJsonValue(value: unknown, seen: WeakSet<object>): JsonValue {
 
 /** Narrow unknown values to plain records for payload traversal. */
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -27,7 +27,7 @@ export type TimestampedRecord = {
 
 /** Serialize correlation tuple parts while preserving empty or missing fields as null. */
 export function tupleKey(parts: unknown[]): string {
-  return JSON.stringify(parts.map((part) => (typeof part === "string" && part.length > 0 ? part : null)));
+  return JSON.stringify(parts.map((part) => (typeof part === 'string' && part.length > 0 ? part : null)));
 }
 
 /** Build the best available key for pairing public llm_input and llm_output hooks. */
@@ -59,7 +59,7 @@ export function evictExpiredRecords<T extends TimestampedRecord>(
   }
 }
 
-/** Return wall-clock microseconds for NeMo Flow span APIs. */
+/** Return wall-clock microseconds for NeMo Relay span APIs. */
 export function nowMicros(): number {
   return Date.now() * 1000;
 }

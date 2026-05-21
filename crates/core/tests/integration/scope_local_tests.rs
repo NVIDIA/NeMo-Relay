@@ -12,24 +12,24 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::registry::{
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::registry::{
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
     register_tool_request_intercept, register_tool_sanitize_request_guardrail,
     scope_register_tool_conditional_execution_guardrail, scope_register_tool_request_intercept,
     scope_register_tool_sanitize_request_guardrail,
 };
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::ToolExecutionNextFn;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_flow::api::scope::{ScopeHandle, ScopeType};
-use nemo_flow::api::scope::{pop_scope, push_scope};
-use nemo_flow::api::subscriber::{
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::ToolExecutionNextFn;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::api::scope::{pop_scope, push_scope};
+use nemo_relay::api::subscriber::{
     deregister_subscriber, register_subscriber, scope_register_subscriber,
 };
-use nemo_flow::api::tool::{tool_call, tool_call_end, tool_call_execute};
-use nemo_flow::error::FlowError;
+use nemo_relay::api::tool::{tool_call, tool_call_end, tool_call_execute};
+use nemo_relay::error::FlowError;
 use serde_json::json;
 
 // All tests share the global context, so we serialize them.
@@ -38,7 +38,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 /// Helper: create a fresh scope stack on the current thread and push a scope,
@@ -47,7 +47,7 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
     let stack = create_scope_stack();
     set_thread_scope_stack(stack);
     push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name(name)
             .scope_type(ScopeType::Agent)
             .build(),
@@ -97,7 +97,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
 
     // Invoke tool_call — the sanitize guardrail runs inside.
     let tool_handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("test_tool")
             .args(json!({"input": "data"}))
             .build(),
@@ -114,7 +114,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     }
 
     tool_call_end(
-        nemo_flow::api::tool::ToolCallEndParams::builder()
+        nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .result(json!("ok"))
             .build(),
@@ -124,7 +124,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     // Cleanup
     deregister_subscriber("sanitize_observer").unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -146,7 +146,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     set_thread_scope_stack(stack);
 
     let handle = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("ephemeral")
             .scope_type(ScopeType::Function)
             .build(),
@@ -171,7 +171,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     // Verify it runs before pop.
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"v": 1}))
             .func(func)
@@ -183,7 +183,7 @@ async fn test_auto_cleanup_on_scope_pop() {
 
     // Pop the scope — middleware should be cleaned up.
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -192,7 +192,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     // Now execute again — the field should NOT appear.
     let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result2 = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"v": 2}))
             .func(func2)
@@ -271,7 +271,7 @@ async fn test_priority_merge_global_and_scope_local() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -293,7 +293,7 @@ async fn test_priority_merge_global_and_scope_local() {
     deregister_tool_request_intercept("global_p10").unwrap();
     deregister_tool_request_intercept("global_p30").unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -343,7 +343,7 @@ fn test_name_coexistence_global_and_scope_local() {
 
     // Use tool_call which exercises sanitize guardrails.
     let _tool_handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -356,7 +356,7 @@ fn test_name_coexistence_global_and_scope_local() {
     // Cleanup
     deregister_tool_sanitize_request_guardrail("shared_name").unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -382,7 +382,7 @@ async fn test_scope_isolation_between_stacks() {
     let scope_a = {
         set_thread_scope_stack(stack_a.clone());
         let s = push_scope(
-            nemo_flow::api::scope::PushScopeParams::builder()
+            nemo_relay::api::scope::PushScopeParams::builder()
                 .name("agent_a")
                 .scope_type(ScopeType::Agent)
                 .build(),
@@ -408,7 +408,7 @@ async fn test_scope_isolation_between_stacks() {
     let scope_b = {
         set_thread_scope_stack(stack_b.clone());
         let s = push_scope(
-            nemo_flow::api::scope::PushScopeParams::builder()
+            nemo_relay::api::scope::PushScopeParams::builder()
                 .name("agent_b")
                 .scope_type(ScopeType::Agent)
                 .build(),
@@ -434,7 +434,7 @@ async fn test_scope_isolation_between_stacks() {
     set_thread_scope_stack(stack_a.clone());
     let func_a: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result_a = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func_a)
@@ -448,7 +448,7 @@ async fn test_scope_isolation_between_stacks() {
     set_thread_scope_stack(stack_b.clone());
     let func_b: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result_b = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func_b)
@@ -461,14 +461,14 @@ async fn test_scope_isolation_between_stacks() {
     // Cleanup
     set_thread_scope_stack(stack_a);
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_a.uuid)
             .build(),
     )
     .unwrap();
     set_thread_scope_stack(stack_b);
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_b.uuid)
             .build(),
     )
@@ -510,7 +510,7 @@ async fn test_nested_scope_inheritance() {
 
     // Push scope A with its own request intercept
     let scope_a = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("scope_a")
             .scope_type(ScopeType::Agent)
             .build(),
@@ -534,7 +534,7 @@ async fn test_nested_scope_inheritance() {
 
     // Push child scope B with its own request intercept
     let scope_b = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("scope_b")
             .scope_type(ScopeType::Function)
             .parent(&scope_a)
@@ -560,7 +560,7 @@ async fn test_nested_scope_inheritance() {
     // Execute within scope B — should see global + scope_a + scope_b
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -579,13 +579,13 @@ async fn test_nested_scope_inheritance() {
 
     // Cleanup
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_b.uuid)
             .build(),
     )
     .unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_a.uuid)
             .build(),
     )
@@ -624,7 +624,7 @@ fn test_scope_local_subscriber() {
 
     // Push a child scope — this emits a Start event
     let child = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("child")
             .scope_type(ScopeType::Function)
             .parent(&handle)
@@ -634,7 +634,7 @@ fn test_scope_local_subscriber() {
 
     // Pop the child — emits End event
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&child.uuid)
             .build(),
     )
@@ -651,7 +651,7 @@ fn test_scope_local_subscriber() {
     // The End event for this scope is emitted *before* removal, so the
     // scope-local subscriber sees its own scope's End event as well.
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -666,14 +666,14 @@ fn test_scope_local_subscriber() {
 
     // After pop, push another scope — the subscriber should NOT fire
     let another = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("after_pop")
             .scope_type(ScopeType::Function)
             .build(),
     )
     .unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&another.uuid)
             .build(),
     )
@@ -715,7 +715,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     // Call to banned_tool should be rejected
     let func_banned: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let err = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("banned_tool")
             .args(json!({"input": 1}))
             .func(func_banned)
@@ -734,7 +734,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     // Call to a different tool should succeed
     let func_ok: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("allowed_tool")
             .args(json!({"input": 2}))
             .func(func_ok)
@@ -746,7 +746,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     assert_eq!(result["input"], 2);
 
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )

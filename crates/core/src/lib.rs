@@ -3,16 +3,16 @@
 
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
 
-//! # NeMo Flow Core
+//! # NeMo Relay Core
 //!
-//! The core runtime library for the NeMo Flow multi-language agent framework. This crate
+//! The core runtime library for the NeMo Relay multi-language agent framework. This crate
 //! provides execution scope management, lifecycle event tracking, and middleware pipelines
 //! (guardrails and intercepts) for tool and LLM calls.
 //!
 //! ## Architecture
 //!
 //! The runtime is organized around a **global context**
-//! ([`api::runtime::NemoFlowContextState`]) that holds all registered middleware
+//! ([`api::runtime::NemoRelayContextState`]) that holds all registered middleware
 //! (guardrails, intercepts, subscribers) and a **scope stack**
 //! ([`api::runtime::ScopeStack`]) that tracks the hierarchical execution context
 //! via task-local or thread-local storage.

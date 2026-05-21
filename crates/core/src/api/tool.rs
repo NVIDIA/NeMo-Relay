@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::ToolExecutionNextFn;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -57,7 +57,7 @@ pub struct ToolHandle {
     pub tool_call_id: Option<String>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::create_tool_handle`].
+/// Builder parameters for [`NemoRelayContextState::create_tool_handle`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateToolHandleParams<'a> {
@@ -84,7 +84,7 @@ pub struct CreateToolHandleParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::build_tool_end_event`].
+/// Builder parameters for [`NemoRelayContextState::build_tool_end_event`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct EndToolHandleParams<'a> {
@@ -239,7 +239,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
         (handle, event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
@@ -301,7 +301,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         );
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -319,7 +319,7 @@ fn emit_tool_end_without_output(handle: &ToolHandle, metadata: Option<Json>) -> 
         let event = state.end_tool_handle(handle, handle.data.clone(), metadata);
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -383,7 +383,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
                 metadata.clone(),
             )
         };
-        if let Some(error) = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
+        if let Some(error) = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
             &name,
             &args,
             &entries,
@@ -530,7 +530,7 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))
     };
-    if let Some(error) = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
+    if let Some(error) = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
         name,
         args,
         &entries,

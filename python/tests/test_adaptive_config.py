@@ -6,9 +6,9 @@
 from pathlib import Path
 from typing import Literal, cast
 
-from nemo_flow import adaptive as adaptive_module
-from nemo_flow import plugin
-from nemo_flow.adaptive import (
+from nemo_relay import adaptive as adaptive_module
+from nemo_relay import plugin
+from nemo_relay.adaptive import (
     AcgConfig,
     AcgStabilityThresholds,
     AdaptiveConfig,

@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # OpenInference
 
-Use the `openinference` section when you want NeMo Flow lifecycle events
+Use the `openinference` section when you want NeMo Relay lifecycle events
 exported as OTLP trace spans with OpenInference-oriented semantics.
 
 OpenInference export maps model-centric payloads directly into trace
@@ -32,7 +32,7 @@ endpoint = "http://localhost:6006/v1/traces"
 service_name = "agent-service"
 service_namespace = "nemo"
 service_version = "1.0.0"
-instrumentation_scope = "nemo-flow-openinference"
+instrumentation_scope = "nemo-relay-openinference"
 timeout_millis = 3000
 
 [components.config.openinference.headers]
@@ -57,7 +57,7 @@ OpenInference uses the same OTLP section shape as
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `resource_attributes` | `{}` | String-to-string OTLP resource attributes. |
-| `service_name` | `nemo-flow` | `service.name` resource attribute. |
+| `service_name` | `nemo-relay` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
 | `instrumentation_scope` | Omitted | Optional instrumentation scope name. |
@@ -69,10 +69,10 @@ The backend should show OpenInference-oriented spans for scopes, tools, and LLM
 calls grouped by root scope. LLM usage metadata appears as token counters when
 provider responses include usage information.
 
-Each lifecycle span includes `nemo_flow.uuid` and `nemo_flow.parent_uuid`
+Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and
 `step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
-the root agent span's `nemo_flow.uuid` also matches the ATIF `session_id`.
+the root agent span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
 Redact sensitive event payloads with sanitize guardrails before production
@@ -80,7 +80,7 @@ export.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Flow own the
+Use plugin configuration when the application should let NeMo Relay own the
 OpenInference subscriber lifecycle.
 
 :::::{tab-set}
@@ -90,8 +90,8 @@ OpenInference subscriber lifecycle.
 :sync: python
 
 ```python
-from nemo_flow import plugin
-from nemo_flow.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
+from nemo_relay import plugin
+from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
 
 config = plugin.PluginConfig(
     components=[
@@ -104,7 +104,7 @@ config = plugin.PluginConfig(
                     service_name="agent-service",
                     service_namespace="nemo",
                     service_version="1.0.0",
-                    instrumentation_scope="nemo-flow-openinference",
+                    instrumentation_scope="nemo-relay-openinference",
                     resource_attributes={"deployment.environment": "dev"},
                     headers={"authorization": "Bearer <token>"},
                 )
@@ -131,8 +131,8 @@ finally:
 :sync: node
 
 ```js
-const plugin = require("nemo-flow-node/plugin");
-const observability = require("nemo-flow-node/observability");
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
 
 await plugin.initialize({
   version: 1,
@@ -146,7 +146,7 @@ await plugin.initialize({
         service_name: "agent-service",
         service_namespace: "nemo",
         service_version: "1.0.0",
-        instrumentation_scope: "nemo-flow-openinference",
+        instrumentation_scope: "nemo-relay-openinference",
         resource_attributes: {
           "deployment.environment": "dev",
         },
@@ -171,10 +171,10 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::plugin_component::{
+use nemo_relay::observability::plugin_component::{
     ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
 };
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     openinference: Some(OtlpSectionConfig {
@@ -184,7 +184,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
         service_name: "agent-service".into(),
         service_namespace: Some("nemo".into()),
         service_version: Some("1.0.0".into()),
-        instrumentation_scope: Some("nemo-flow-openinference".into()),
+        instrumentation_scope: Some("nemo-relay-openinference".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         headers: [("authorization".into(), "Bearer <token>".into())].into(),
         ..OtlpSectionConfig::default()
@@ -220,7 +220,7 @@ direct `force_flush` control.
 :sync: python
 
 ```python
-from nemo_flow import OpenInferenceConfig, OpenInferenceSubscriber
+from nemo_relay import OpenInferenceConfig, OpenInferenceSubscriber
 
 config = OpenInferenceConfig()
 config.transport = "http_binary"
@@ -244,7 +244,7 @@ subscriber.shutdown()
 :sync: node
 
 ```js
-const { OpenInferenceSubscriber } = require("nemo-flow-node");
+const { OpenInferenceSubscriber } = require("nemo-relay-node");
 
 const subscriber = new OpenInferenceSubscriber({
   transport: "http_binary",
@@ -272,7 +272,7 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::openinference::{
+use nemo_relay::observability::openinference::{
     OpenInferenceConfig, OpenInferenceSubscriber,
 };
 

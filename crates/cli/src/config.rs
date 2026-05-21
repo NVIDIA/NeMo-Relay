@@ -13,8 +13,8 @@ use serde_json::Value;
 use crate::error::CliError;
 
 #[derive(Debug, Clone, Parser)]
-#[command(name = "nemo-flow")]
-#[command(about = "Coding-agent gateway for NeMo Flow observability")]
+#[command(name = "nemo-relay")]
+#[command(about = "Coding-agent gateway for NeMo Relay observability")]
 #[command(version)]
 pub(crate) struct Cli {
     #[command(flatten)]
@@ -27,55 +27,55 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Run Claude Code with observability (setup on first use)
     #[command(
-        long_about = "Run Anthropic's `claude` CLI under an ephemeral NeMo Flow gateway. \
+        long_about = "Run Anthropic's `claude` CLI under an ephemeral NeMo Relay gateway. \
                       Observability (ATIF + OpenInference) is wired in transparently via \
                       ANTHROPIC_BASE_URL. First-time use launches the setup wizard so the \
-                      `[agents.claude]` block lands in `.nemo-flow/config.toml` and observation \
+                      `[agents.claude]` block lands in `.nemo-relay/config.toml` and observation \
                       starts on the next invocation without prompts.",
         after_help = "Examples:\n  \
-                      nemo-flow claude\n  \
-                      nemo-flow claude -- chat \"refactor the launcher\"\n  \
-                      nemo-flow claude -- --resume <session-id>"
+                      nemo-relay claude\n  \
+                      nemo-relay claude -- chat \"refactor the launcher\"\n  \
+                      nemo-relay claude -- --resume <session-id>"
     )]
     Claude(EasyPathCommand),
     /// Run Codex with observability (setup on first use)
     #[command(
-        long_about = "Run OpenAI's `codex` CLI under an ephemeral NeMo Flow gateway. NeMo Flow \
-                      injects a `nemo-flow-openai` provider override so codex points at the \
+        long_about = "Run OpenAI's `codex` CLI under an ephemeral NeMo Relay gateway. NeMo Relay \
+                      injects a `nemo-relay-openai` provider override so codex points at the \
                       gateway; the gateway then forwards to `--openai-base-url` (defaults to \
                       api.openai.com) with `OPENAI_API_KEY` injected on the codex route (see \
                       NMF-86 — codex's own auth.json JWT is stripped). Requires codex-cli >= \
                       0.129.0.",
         after_help = "Examples:\n  \
-                      nemo-flow codex\n  \
-                      nemo-flow codex -- exec \"fix the bug in foo.rs\"\n  \
-                      nemo-flow --openai-base-url https://inference-api.nvidia.com codex"
+                      nemo-relay codex\n  \
+                      nemo-relay codex -- exec \"fix the bug in foo.rs\"\n  \
+                      nemo-relay --openai-base-url https://inference-api.nvidia.com codex"
     )]
     Codex(EasyPathCommand),
     /// Run Cursor with observability (setup on first use)
     #[command(
-        long_about = "Run Cursor's `cursor-agent` CLI under an ephemeral NeMo Flow gateway. The \
+        long_about = "Run Cursor's `cursor-agent` CLI under an ephemeral NeMo Relay gateway. The \
                       launcher temporarily patches `.cursor/hooks.json` in the project root \
                       during the run and restores it on exit. Disable that via \
                       `[agents.cursor] patch_restore_hooks = false` in config.toml if you \
                       maintain `.cursor/hooks.json` yourself.",
         after_help = "Examples:\n  \
-                      nemo-flow cursor\n  \
-                      nemo-flow cursor -- agent --resume <session-id>"
+                      nemo-relay cursor\n  \
+                      nemo-relay cursor -- agent --resume <session-id>"
     )]
     Cursor(EasyPathCommand),
     /// Run Hermes with observability (setup on first use)
     #[command(
-        long_about = "Run NVIDIA's Hermes agent under a NeMo Flow gateway. Hermes reads hooks \
+        long_about = "Run NVIDIA's Hermes agent under a NeMo Relay gateway. Hermes reads hooks \
                       from `.hermes/config.yaml`; first-run setup writes that file alongside \
-                      `.nemo-flow/config.toml` so every subsequent invocation traces \
-                      automatically. Re-run `nemo-flow config hermes` to refresh the hooks.",
+                      `.nemo-relay/config.toml` so every subsequent invocation traces \
+                      automatically. Re-run `nemo-relay config hermes` to refresh the hooks.",
         after_help = "Examples:\n  \
-                      nemo-flow hermes\n  \
-                      nemo-flow hermes -- chat --provider custom"
+                      nemo-relay hermes\n  \
+                      nemo-relay hermes -- chat --provider custom"
     )]
     Hermes(EasyPathCommand),
-    /// Run the interactive setup (writes `.nemo-flow/config.toml`)
+    /// Run the interactive setup (writes `.nemo-relay/config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
     Plugins(PluginsCommand),
@@ -83,7 +83,7 @@ pub(crate) enum Command {
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
     Agents(AgentsCommand),
-    /// Print shell completion script (e.g. `nemo-flow completions zsh > ~/.zfunc/_nemo-flow`)
+    /// Print shell completion script (e.g. `nemo-relay completions zsh > ~/.zfunc/_nemo-relay`)
     Completions(CompletionsCommand),
     /// Run an agent deterministically (no wizard; errors if config is missing)
     Run(RunCommand),
@@ -92,7 +92,7 @@ pub(crate) enum Command {
     HookForward(HookForwardCommand),
 }
 
-/// Args for `nemo-flow doctor`. `--json` is on this command (rather than as a global flag)
+/// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
 /// so it doesn't pollute the help output of subcommands where it has no meaning.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct DoctorCommand {
@@ -105,7 +105,7 @@ pub(crate) struct DoctorCommand {
     pub(crate) json: bool,
 }
 
-/// Args for `nemo-flow agents`. Shares the `--json` shape with `nemo-flow doctor`'s
+/// Args for `nemo-relay agents`. Shares the `--json` shape with `nemo-relay doctor`'s
 /// `agents` field so the two outputs can be unified by downstream consumers.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AgentsCommand {
@@ -114,7 +114,7 @@ pub(crate) struct AgentsCommand {
     pub(crate) json: bool,
 }
 
-/// Args for `nemo-flow completions <shell>` (print to stdout) or `nemo-flow completions --install`
+/// Args for `nemo-relay completions <shell>` (print to stdout) or `nemo-relay completions --install`
 /// (auto-detect $SHELL and write to the standard fpath / completions directory).
 ///
 /// The Homebrew / curl-install flows drop completion scripts automatically; this subcommand is
@@ -132,7 +132,7 @@ pub(crate) struct CompletionsCommand {
     pub(crate) install: bool,
 }
 
-/// Args for `nemo-flow config`. The setup wizard runs by default; `--reset` short-circuits to
+/// Args for `nemo-relay config`. The setup wizard runs by default; `--reset` short-circuits to
 /// a destructive clear. An optional positional agent name scopes both the wizard and `--reset`
 /// to a single agent's settings, leaving other agents' blocks untouched.
 #[derive(Debug, Clone, Args)]
@@ -142,13 +142,13 @@ pub(crate) struct ConfigCommand {
     #[arg(value_enum)]
     pub(crate) agent: Option<CodingAgent>,
     /// Delete the project config file (or remove just the scoped agent's block when an agent
-    /// is named). The wizard does NOT run after a reset — invoke `nemo-flow config` again to
+    /// is named). The wizard does NOT run after a reset — invoke `nemo-relay config` again to
     /// re-create the file from scratch.
     #[arg(long)]
     pub(crate) reset: bool,
 }
 
-/// Args for `nemo-flow plugins`.
+/// Args for `nemo-relay plugins`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PluginsCommand {
     #[command(subcommand)]
@@ -162,7 +162,7 @@ pub(crate) enum PluginsSubcommand {
     Edit(PluginsEditCommand),
 }
 
-/// Args for `nemo-flow plugins edit`.
+/// Args for `nemo-relay plugins edit`.
 #[derive(Debug, Clone, Default, Args)]
 #[command(group(
     ArgGroup::new("scope")
@@ -170,13 +170,13 @@ pub(crate) enum PluginsSubcommand {
         .multiple(false)
 ))]
 pub(crate) struct PluginsEditCommand {
-    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-flow/plugins.toml`.
+    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) user: bool,
-    /// Edit the nearest project config at `.nemo-flow/plugins.toml`.
+    /// Edit the nearest project config at `.nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) project: bool,
-    /// Edit the system config at `/etc/nemo-flow/plugins.toml`.
+    /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) global: bool,
 }
@@ -187,23 +187,23 @@ pub(crate) struct ServerArgs {
     #[arg(long)]
     pub(crate) config: Option<PathBuf>,
     /// Address for the gateway to listen on in daemon mode (default 127.0.0.1:4040)
-    #[arg(long, env = "NEMO_FLOW_GATEWAY_BIND")]
+    #[arg(long, env = "NEMO_RELAY_GATEWAY_BIND")]
     pub(crate) bind: Option<SocketAddr>,
     /// Upstream OpenAI-compatible base URL (e.g. https://api.openai.com/v1, NVIDIA inference)
-    #[arg(long, env = "NEMO_FLOW_OPENAI_BASE_URL")]
+    #[arg(long, env = "NEMO_RELAY_OPENAI_BASE_URL")]
     pub(crate) openai_base_url: Option<String>,
     /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
-    #[arg(long, env = "NEMO_FLOW_ANTHROPIC_BASE_URL")]
+    #[arg(long, env = "NEMO_RELAY_ANTHROPIC_BASE_URL")]
     pub(crate) anthropic_base_url: Option<String>,
     /// Generic plugin configuration JSON for process-level gateway plugin activation.
-    #[arg(long, env = "NEMO_FLOW_PLUGIN_CONFIG")]
+    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG")]
     pub(crate) plugin_config: Option<String>,
 }
 
 impl ServerArgs {
     /// True when the user passed any flag that signals "I want the gateway, not the wizard." Used
-    /// by the bare `nemo-flow` dispatch to choose between launching the long-running daemon and
-    /// dropping into setup. `--config` is included: someone running `nemo-flow --config <path>`
+    /// by the bare `nemo-relay` dispatch to choose between launching the long-running daemon and
+    /// dropping into setup. `--config` is included: someone running `nemo-relay --config <path>`
     /// with no subcommand has explicitly pointed at a config file, which is only meaningful for
     /// daemon startup — the wizard creates configs, it doesn't consume them.
     pub(crate) fn requested_daemon_mode(&self) -> bool {
@@ -242,14 +242,14 @@ pub(crate) struct HookForwardCommand {
     pub(crate) fail_closed: bool,
 }
 
-/// Args for the easy-path agent shortcut (`nemo-flow claude`, `nemo-flow codex`, etc.).
+/// Args for the easy-path agent shortcut (`nemo-relay claude`, `nemo-relay codex`, etc.).
 /// Holds only pass-through agent args; the agent itself is selected by which subcommand variant
 /// is invoked, and upstream settings come from the resolved config file. If no config file is
 /// present, the dispatcher fires setup.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct EasyPathCommand {
     /// Pass-through args forwarded to the underlying agent process. Use `--` to separate them
-    /// from `nemo-flow`'s own flags. See the `Examples` section below for agent-specific shapes.
+    /// from `nemo-relay`'s own flags. See the `Examples` section below for agent-specific shapes.
     #[arg(last = true)]
     pub(crate) command: Vec<String>,
 }
@@ -311,11 +311,11 @@ impl GatewayConfig {
     // because install and hook-forward validate generated header values before sending them.
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
         let metadata =
-            header_json(headers, "x-nemo-flow-session-metadata").or_else(|| self.metadata.clone());
-        let plugin_config = header_json(headers, "x-nemo-flow-plugin-config")
+            header_json(headers, "x-nemo-relay-session-metadata").or_else(|| self.metadata.clone());
+        let plugin_config = header_json(headers, "x-nemo-relay-plugin-config")
             .or_else(|| self.plugin_config.clone());
-        let profile = header_string(headers, "x-nemo-flow-config-profile");
-        let gateway_mode = header_string(headers, "x-nemo-flow-gateway-mode");
+        let profile = header_string(headers, "x-nemo-relay-config-profile");
+        let gateway_mode = header_string(headers, "x-nemo-relay-gateway-mode");
         SessionConfig {
             metadata,
             plugin_config,
@@ -342,7 +342,7 @@ pub(crate) struct AgentConfigs {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AgentCommandConfig {
     pub(crate) command: Option<String>,
-    /// Recorded by `nemo-flow config` when it installs hermes shell hooks. Other agents leave
+    /// Recorded by `nemo-relay config` when it installs hermes shell hooks. Other agents leave
     /// this empty; the launcher reads it only to print a "hooks live here" pointer for hermes.
     pub(crate) hooks_path: Option<PathBuf>,
 }
@@ -544,7 +544,7 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
             if !legacy_observability.is_empty() {
                 return Err(CliError::Config(format!(
                     "legacy observability config in {} is no longer supported: {}; configure \
-                     observability in plugins.toml with `nemo-flow plugins edit`",
+                     observability in plugins.toml with `nemo-relay plugins edit`",
                     path.display(),
                     legacy_observability.join(", ")
                 )));
@@ -590,7 +590,7 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     if let Some(path) = explicit {
         return vec![path.clone()];
     }
-    let mut paths = vec![PathBuf::from("/etc/nemo-flow/config.toml")];
+    let mut paths = vec![PathBuf::from("/etc/nemo-relay/config.toml")];
     if let Ok(cwd) = std::env::current_dir()
         && let Some(project) = find_project_config(&cwd)
     {
@@ -621,7 +621,7 @@ fn implicit_plugin_config_paths(
 ) -> Vec<PathBuf> {
     // Ordered from lowest to highest precedence. User-level plugin config intentionally loads last
     // so an operator can override project-local plugin defaults without editing the checkout.
-    let mut paths = vec![PathBuf::from("/etc/nemo-flow").join(PLUGINS_TOML)];
+    let mut paths = vec![PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)];
     if let Some(cwd) = cwd
         && let Some(project) = find_project_plugin_config(cwd)
     {
@@ -637,7 +637,7 @@ fn implicit_plugin_config_paths(
 // The first hit wins so nested projects can override parent workspace defaults.
 fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-flow/config.toml");
+        let path = ancestor.join(".nemo-relay/config.toml");
         if path.exists() {
             return Some(path);
         }
@@ -648,7 +648,7 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
 // Walks upward from the current directory and returns the nearest project-local plugin config.
 fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-flow").join(PLUGINS_TOML);
+        let path = ancestor.join(".nemo-relay").join(PLUGINS_TOML);
         if path.exists() {
             return Some(path);
         }
@@ -666,11 +666,11 @@ pub(crate) fn project_plugin_config_path(start: &std::path::Path) -> PathBuf {
             find_project_config(start)
                 .and_then(|path| path.parent().map(|parent| parent.join(PLUGINS_TOML)))
         })
-        .unwrap_or_else(|| start.join(".nemo-flow").join(PLUGINS_TOML))
+        .unwrap_or_else(|| start.join(".nemo-relay").join(PLUGINS_TOML))
 }
 
 pub(crate) fn global_plugin_config_path() -> PathBuf {
-    PathBuf::from("/etc/nemo-flow").join(PLUGINS_TOML)
+    PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)
 }
 
 // Resolves the user config using XDG first and HOME/USERPROFILE second. Returning `None` keeps
@@ -679,15 +679,15 @@ fn user_config_path() -> Option<PathBuf> {
     user_config_dir().map(|dir| dir.join("config.toml"))
 }
 
-/// Resolves the nemo-flow user config DIRECTORY (without trailing filename) using the same XDG
+/// Resolves the nemo-relay user config DIRECTORY (without trailing filename) using the same XDG
 /// rules as `user_config_path`. Exposed so wizard/doctor code paths that write to or display
 /// the global location stay in sync with the loader — without this, hard-coded
-/// `$HOME/.config/nemo-flow` references silently ignore `$XDG_CONFIG_HOME`.
+/// `$HOME/.config/nemo-relay` references silently ignore `$XDG_CONFIG_HOME`.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(base).join("nemo-flow"));
+        return Some(PathBuf::from(base).join("nemo-relay"));
     }
-    home_dir().map(|home| home.join(".config/nemo-flow"))
+    home_dir().map(|home| home.join(".config/nemo-relay"))
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -828,15 +828,15 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
 // Applies environment variables after file configuration. Invalid bind values are ignored here to
 // preserve existing startup behavior, while string values replace earlier layers when present.
 fn apply_env_config(config: &mut GatewayConfig) {
-    if let Ok(value) = std::env::var("NEMO_FLOW_GATEWAY_BIND")
+    if let Ok(value) = std::env::var("NEMO_RELAY_GATEWAY_BIND")
         && let Ok(value) = value.parse()
     {
         config.bind = value;
     }
-    if let Ok(value) = std::env::var("NEMO_FLOW_OPENAI_BASE_URL") {
+    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
         config.openai_base_url = value;
     }
-    if let Ok(value) = std::env::var("NEMO_FLOW_ANTHROPIC_BASE_URL") {
+    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         config.anthropic_base_url = value;
     }
 }

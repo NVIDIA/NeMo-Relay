@@ -10,7 +10,7 @@ This page explains the runtime behavior that runs around managed tool and LLM ca
 ## What Middleware Is
 
 Middleware is the runtime behavior that runs around tool and LLM execution.
-NeMo Flow uses middleware to control, transform, or observe work at specific
+NeMo Relay uses middleware to control, transform, or observe work at specific
 lifecycle points.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
@@ -42,7 +42,7 @@ everything in application code.
 
 ## Middleware Families
 
-NeMo Flow has two major middleware families:
+NeMo Relay has two major middleware families:
 
 - **Intercepts** change the real execution path
 - **Guardrails** block work or rewrite emitted observability payloads
@@ -108,14 +108,14 @@ arguments passed to the callback or the real value returned to the caller.
 
 ## Managed Execution Order
 
-For managed execution, NeMo Flow applies middleware and emits lifecycle events
+For managed execution, NeMo Relay applies middleware and emits lifecycle events
 in this order:
 
 ```{mermaid}
 sequenceDiagram
     autonumber
     actor Caller as Application / Framework
-    participant Runtime as NeMo Flow Runtime
+    participant Runtime as NeMo Relay Runtime
     participant Cond as Conditional Guardrails
     participant Req as Request Intercepts
     participant Exec as Execution Intercepts

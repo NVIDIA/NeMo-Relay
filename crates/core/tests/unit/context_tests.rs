@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for context in the NeMo Flow core crate.
+//! Unit tests for context in the NeMo Relay core crate.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +12,7 @@ use crate::api::event::Event;
 use crate::api::llm::LlmRequest;
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept, RequestIntercept};
 use crate::api::runtime::EventSubscriberFn;
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::ScopeStack;
 use crate::api::runtime::global_context;
 use crate::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
@@ -183,7 +183,7 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
 
 #[test]
 fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
-    let mut state = NemoFlowContextState::new();
+    let mut state = NemoRelayContextState::new();
     state
         .tool_conditional_execution_guardrails
         .register(Guardrail {
@@ -209,7 +209,7 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     });
     let subscribers = [subscriber];
 
-    let rejection = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
+    let rejection = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
         "snapshot_target",
         &json!({}),
         &entries,
@@ -229,7 +229,7 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
 
 #[test]
 fn context_state_supports_extensions_events_and_builders() {
-    let mut state = NemoFlowContextState::new();
+    let mut state = NemoRelayContextState::new();
     assert!(state.extensions.is_empty());
 
     let key = format!("ext-{}", Uuid::now_v7());
@@ -299,7 +299,7 @@ fn context_state_supports_extensions_events_and_builders() {
     ));
     assert_eq!(event.uuid().get_version(), Some(Version::SortRand));
     let subscribers = state.collect_event_subscribers(&[]);
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     assert_eq!(events.lock().unwrap().as_slice(), ["mark"]);
 }
 

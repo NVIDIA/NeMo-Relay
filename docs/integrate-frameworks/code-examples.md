@@ -25,7 +25,7 @@ Choose the highest option your framework boundary supports:
 4. Standalone request-intercept helpers.
 5. Mark events for milestones that are not full tool or LLM calls.
 
-Managed execution wrappers give NeMo Flow the most complete lifecycle: middleware order, parent-child scope relationships, request and response event payloads, execution intercepts, and subscriber visibility. Fallback helpers are useful when the framework owns the real callback internally.
+Managed execution wrappers give NeMo Relay the most complete lifecycle: middleware order, parent-child scope relationships, request and response event payloads, execution intercepts, and subscriber visibility. Fallback helpers are useful when the framework owns the real callback internally.
 
 ## Managed Execution Wrappers
 
@@ -33,9 +33,9 @@ Use managed wrappers when the framework exposes a stable callable boundary.
 
 | Surface | Python | Node.js | Rust |
 |---|---|---|---|
-| Tool execute | `nemo_flow.tools.execute(...)` | `toolCallExecute(...)` | `nemo_flow::api::tool::tool_call_execute` |
-| LLM execute | `nemo_flow.llm.execute(...)` | `llmCallExecute(...)` | `nemo_flow::api::llm::llm_call_execute` |
-| LLM stream execute | `nemo_flow.typed.llm_stream_execute(...)` | `typedLlmStreamExecute(...)` | `nemo_flow::api::llm::llm_stream_call_execute` |
+| Tool execute | `nemo_relay.tools.execute(...)` | `toolCallExecute(...)` | `nemo_relay::api::tool::tool_call_execute` |
+| LLM execute | `nemo_relay.llm.execute(...)` | `llmCallExecute(...)` | `nemo_relay::api::llm::llm_call_execute` |
+| LLM stream execute | `nemo_relay.typed.llm_stream_execute(...)` | `typedLlmStreamExecute(...)` | `nemo_relay::api::llm::llm_stream_call_execute` |
 
 ## Fallback: Explicit API Calls
 
@@ -55,25 +55,25 @@ What you lose from managed execution wrappers:
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
+import nemo_relay
+from nemo_relay import LLMRequest
 
 
 def framework_tool_started(name: str, args: dict):
-    return nemo_flow.tools.call(name, args)
+    return nemo_relay.tools.call(name, args)
 
 
 def framework_tool_finished(handle, result: dict) -> None:
-    nemo_flow.tools.call_end(handle, result)
+    nemo_relay.tools.call_end(handle, result)
 
 
 def framework_llm_started(provider: str, payload: dict):
     request = LLMRequest({}, payload)
-    return nemo_flow.llm.call(provider, request, model_name=payload.get("model"))
+    return nemo_relay.llm.call(provider, request, model_name=payload.get("model"))
 
 
 def framework_llm_finished(handle, response: dict) -> None:
-    nemo_flow.llm.call_end(handle, response)
+    nemo_relay.llm.call_end(handle, response)
 ```
 :::
 
@@ -81,7 +81,7 @@ def framework_llm_finished(handle, response: dict) -> None:
 :sync: node
 
 ```ts
-import { LlmRequest, llmCall, llmCallEnd, toolCall, toolCallEnd } from 'nemo-flow-node';
+import { LlmRequest, llmCall, llmCallEnd, toolCall, toolCallEnd } from 'nemo-relay-node';
 
 export function frameworkToolStarted(name: string, args: unknown) {
   return toolCall(name, args, null, null, null, null, null);
@@ -106,8 +106,8 @@ export function frameworkLlmFinished(handle: unknown, response: unknown): void {
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_call, llm_call_end, LlmCallEndParams, LlmCallParams, LlmRequest};
-use nemo_flow::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
+use nemo_relay::api::llm::{llm_call, llm_call_end, LlmCallEndParams, LlmCallParams, LlmRequest};
+use nemo_relay::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
 use serde_json::{json, Value as Json};
 
 let tool_handle = tool_call(
@@ -156,11 +156,11 @@ Use conditional-execution helpers when the framework needs an allow-or-block dec
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
+import nemo_relay
+from nemo_relay import LLMRequest
 
-nemo_flow.tools.conditional_execution("search", {"query": "weather"})
-nemo_flow.llm.conditional_execution(LLMRequest({}, {"messages": []}))
+nemo_relay.tools.conditional_execution("search", {"query": "weather"})
+nemo_relay.llm.conditional_execution(LLMRequest({}, {"messages": []}))
 ```
 :::
 
@@ -168,7 +168,7 @@ nemo_flow.llm.conditional_execution(LLMRequest({}, {"messages": []}))
 :sync: node
 
 ```ts
-import { LlmRequest, llmConditionalExecution, toolConditionalExecution } from 'nemo-flow-node';
+import { LlmRequest, llmConditionalExecution, toolConditionalExecution } from 'nemo-relay-node';
 
 await toolConditionalExecution('search', { query: 'weather' });
 await llmConditionalExecution(new LlmRequest({}, { messages: [] }));
@@ -179,8 +179,8 @@ await llmConditionalExecution(new LlmRequest({}, { messages: [] }));
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_conditional_execution, LlmRequest};
-use nemo_flow::api::tool::tool_conditional_execution;
+use nemo_relay::api::llm::{llm_conditional_execution, LlmRequest};
+use nemo_relay::api::tool::tool_conditional_execution;
 use serde_json::json;
 
 tool_conditional_execution("search", &json!({"query": "weather"}))?;
@@ -193,7 +193,7 @@ llm_conditional_execution(&request)?;
 
 ## Request Intercepts
 
-Use request-intercept helpers when the framework wants NeMo Flow to rewrite arguments or provider requests before the framework invokes its own downstream code.
+Use request-intercept helpers when the framework wants NeMo Relay to rewrite arguments or provider requests before the framework invokes its own downstream code.
 
 ::::{tab-set}
 :sync-group: language
@@ -202,11 +202,11 @@ Use request-intercept helpers when the framework wants NeMo Flow to rewrite argu
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
+import nemo_relay
+from nemo_relay import LLMRequest
 
-rewritten_args = nemo_flow.tools.request_intercepts("search", {"query": "weather"})
-rewritten_request = nemo_flow.llm.request_intercepts(
+rewritten_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
+rewritten_request = nemo_relay.llm.request_intercepts(
     "demo-provider",
     LLMRequest({}, {"messages": []}),
 )
@@ -217,7 +217,7 @@ rewritten_request = nemo_flow.llm.request_intercepts(
 :sync: node
 
 ```ts
-import { LlmRequest, llmRequestIntercepts, toolRequestIntercepts } from 'nemo-flow-node';
+import { LlmRequest, llmRequestIntercepts, toolRequestIntercepts } from 'nemo-relay-node';
 
 const rewrittenArgs = await toolRequestIntercepts('search', { query: 'weather' });
 const rewrittenRequest = await llmRequestIntercepts('demo-provider', new LlmRequest({}, { messages: [] }));
@@ -228,8 +228,8 @@ const rewrittenRequest = await llmRequestIntercepts('demo-provider', new LlmRequ
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_request_intercepts, LlmRequest};
-use nemo_flow::api::tool::tool_request_intercepts;
+use nemo_relay::api::llm::{llm_request_intercepts, LlmRequest};
+use nemo_relay::api::tool::tool_request_intercepts;
 use serde_json::json;
 
 let rewritten_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
@@ -251,9 +251,9 @@ Use mark events when the framework exposes important milestones but not a full l
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-nemo_flow.scope.event("scheduler.retry", data={"attempt": 2})
+nemo_relay.scope.event("scheduler.retry", data={"attempt": 2})
 ```
 :::
 
@@ -261,7 +261,7 @@ nemo_flow.scope.event("scheduler.retry", data={"attempt": 2})
 :sync: node
 
 ```ts
-import { event } from 'nemo-flow-node';
+import { event } from 'nemo-relay-node';
 
 event('scheduler.retry', null, { attempt: 2 }, null);
 ```
@@ -271,7 +271,7 @@ event('scheduler.retry', null, { attempt: 2 }, null);
 :sync: rust
 
 ```rust
-use nemo_flow::api::scope::{event, EmitMarkEventParams};
+use nemo_relay::api::scope::{event, EmitMarkEventParams};
 use serde_json::json;
 
 event(
@@ -287,7 +287,7 @@ event(
 
 ## Sample Third-Party Patch Integrations
 
-NeMo Flow keeps sample third-party integrations as patch sets under `patches/`
+NeMo Relay keeps sample third-party integrations as patch sets under `patches/`
 and pinned upstream checkouts under `third_party/`. For the current OpenClaw
 end-user integration, use the
 [OpenClaw Plugin Guide](../integrations/openclaw-plugin.md).
@@ -306,12 +306,12 @@ The following table lists maintained patch checkouts:
 ## Quickstart: Apply Maintained Patches
 
 From the repository root, use the wrapper scripts when you want the maintained
-NeMo Flow patches applied to the pinned third-party checkouts:
+NeMo Relay patches applied to the pinned third-party checkouts:
 
 | Script | Purpose |
 |---|---|
 | `./scripts/bootstrap-third-party.sh` | Clone pinned third-party upstream checkouts from `third_party/sources.lock`. |
-| `./scripts/apply-patches.sh` | Apply NeMo Flow integration patches to third-party checkouts. |
+| `./scripts/apply-patches.sh` | Apply NeMo Relay integration patches to third-party checkouts. |
 | `./scripts/apply-patches.sh --check` | Ensure the patches apply cleanly to all third-party checkouts. |
 | `./scripts/generate-patches.sh` | Regenerate patch files from local third-party checkout changes. |
 | `./scripts/build-docs.sh` | Build the documentation site after integration docs change. |

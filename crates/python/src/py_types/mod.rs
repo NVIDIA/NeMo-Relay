@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python-facing type wrappers for NeMo Flow core types.
+//! Python-facing type wrappers for NeMo Relay core types.
 //!
-//! Each type wraps its corresponding `nemo_flow::types` struct and exposes
+//! Each type wraps its corresponding `nemo_relay::types` struct and exposes
 //! properties via `#[getter]`. Doc comments on `#[pyclass]` and `#[pymethods]`
 //! become Python `help()` output.
 
@@ -13,18 +13,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use nemo_flow::api::event::{MarkEvent, ScopeEvent};
-use nemo_flow::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_flow::api::runtime::ScopeStackHandle;
-use nemo_flow::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
-use nemo_flow::api::tool::{ToolAttributes, ToolHandle};
-use nemo_flow::codec::request::{
+use nemo_relay::api::event::{MarkEvent, ScopeEvent};
+use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
+use nemo_relay::api::runtime::ScopeStackHandle;
+use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType as CoreScopeType};
+use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
+use nemo_relay::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, GenerationParams, Message, ToolChoice,
     ToolDefinition,
 };
-use nemo_flow::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::Result as FlowResult;
+use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::Result as FlowResult;
 use pyo3::prelude::*;
 use serde::Serialize;
 

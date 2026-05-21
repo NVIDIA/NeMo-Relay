@@ -4,7 +4,7 @@
 //! Unit tests for the planned NeMo Guardrails plugin component contract.
 
 use super::*;
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::config_editor::{EditorConfig, EditorFieldKind};
 #[cfg(feature = "schema")]
@@ -20,7 +20,7 @@ fn reset_runtime() {
     let _ = deregister_nemo_guardrails_component();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
-    *context.write().unwrap() = NemoFlowContextState::new();
+    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 fn ensure_registered() {

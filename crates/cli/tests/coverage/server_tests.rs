@@ -12,10 +12,10 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
-use nemo_flow::api::registry::{
+use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
-use nemo_flow::plugin::{
+use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
     register_plugin,
 };
@@ -61,7 +61,7 @@ impl Plugin for GenericTestPlugin {
         &'a self,
         _plugin_config: &Map<String, Value>,
         ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = nemo_flow::plugin::Result<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
         Box::pin(async move {
             GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
             ctx.add_registration(PluginRegistration::new(
@@ -154,7 +154,7 @@ async fn healthz_returns_ok() {
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -194,7 +194,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    assert!(nemo_flow::plugin::active_plugin_report().is_some());
+    assert!(nemo_relay::plugin::active_plugin_report().is_some());
 
     let client = test_http_client();
     for hook_event_name in ["on_session_start", "on_session_finalize"] {
@@ -212,7 +212,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     assert!(
@@ -236,7 +236,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
 #[tokio::test]
 async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -301,7 +301,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     let agent_starts = events
@@ -322,7 +322,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
 #[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
     GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
@@ -367,14 +367,14 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
         GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
         1
     );
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
 }
 
 #[tokio::test]
 async fn serve_listener_activates_adaptive_plugin_config() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -405,18 +405,18 @@ async fn serve_listener_activates_adaptive_plugin_config() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    let report = nemo_flow::plugin::active_plugin_report().unwrap();
+    let report = nemo_relay::plugin::active_plugin_report().unwrap();
     assert!(report.diagnostics.is_empty());
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
 async fn serve_listener_rejects_invalid_plugin_config() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -442,7 +442,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
         .unwrap_err();
 
     assert!(error.to_string().contains("ATOF mode"));
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
@@ -452,7 +452,7 @@ async fn gateway_errors_render_structured_json_responses() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["error"]["type"], json!("nemo_flow_gateway_error"));
+    assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
     assert!(
         body["error"]["message"]
             .as_str()
@@ -563,7 +563,10 @@ async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["error"]["type"], json!("nemo_flow_guardrail_rejected"));
+    assert_eq!(
+        body["error"]["type"],
+        json!("nemo_relay_guardrail_rejected")
+    );
     assert_eq!(body["error"]["reason"], json!("blocked by policy"));
 }
 

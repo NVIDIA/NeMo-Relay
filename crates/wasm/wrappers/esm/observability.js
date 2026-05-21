@@ -39,9 +39,9 @@ export function atofConfig(config = {}) {
 export function atifConfig(config = {}) {
   return {
     enabled: false,
-    agent_name: 'NeMo Flow',
+    agent_name: 'NeMo Relay',
     model_name: 'unknown',
-    filename_template: 'nemo-flow-atif-{session_id}.json',
+    filename_template: 'nemo-relay-atif-{session_id}.json',
     ...config,
   };
 }
@@ -58,7 +58,7 @@ export function otlpConfig(config = {}) {
     transport: 'http_binary',
     headers: {},
     resource_attributes: {},
-    service_name: 'nemo-flow',
+    service_name: 'nemo-relay',
     timeout_millis: 3000,
     ...config,
   };

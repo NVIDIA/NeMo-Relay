@@ -35,7 +35,7 @@ pub(super) struct ClassificationRules<'a> {
 // fields, and finally a v7 UUID. Header precedence lets gateway and hook-forward callers
 // correlate events even when agent payload schemas omit or rename their native session field.
 fn session_id(payload: &Value, headers: &HeaderMap) -> String {
-    header_string(headers, "x-nemo-flow-session-id")
+    header_string(headers, "x-nemo-relay-session-id")
         .or_else(|| header_string(headers, "x-claude-code-session-id"))
         .or_else(|| session_id_from_payload(payload))
         .unwrap_or_else(|| format!("hook-{}", Uuid::now_v7()))
@@ -85,7 +85,7 @@ fn metadata(payload: &Value, headers: &HeaderMap, kind: AgentKind, event_name: &
     let mut object = Map::new();
     object.insert("agent_kind".into(), json!(kind.as_str()));
     object.insert("hook_event_name".into(), json!(event_name));
-    if let Some(profile) = header_string(headers, "x-nemo-flow-config-profile") {
+    if let Some(profile) = header_string(headers, "x-nemo-relay-config-profile") {
         object.insert("gateway_config_profile".into(), json!(profile));
     }
     for (key, value) in [
@@ -127,7 +127,7 @@ pub(crate) fn common_session_event(
 fn common_subagent_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> SubagentEvent {
     let session = common_session_event(payload, headers, kind);
     let subagent_id = subagent_id(payload)
-        .or_else(|| header_string(headers, "x-nemo-flow-subagent-id"))
+        .or_else(|| header_string(headers, "x-nemo-relay-subagent-id"))
         .unwrap_or_else(|| "subagent".to_string());
     SubagentEvent {
         session_id: session.session_id,
@@ -223,7 +223,7 @@ fn first_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
 // because it is the agent's native ownership signal; the header exists for gateway correlation and
 // sparse hook systems.
 fn hook_subagent_id(payload: &Value, headers: &HeaderMap) -> Option<String> {
-    subagent_id(payload).or_else(|| header_string(headers, "x-nemo-flow-subagent-id"))
+    subagent_id(payload).or_else(|| header_string(headers, "x-nemo-relay-subagent-id"))
 }
 
 // Resolves a tool call identifier from all known agent payload conventions before synthesizing a

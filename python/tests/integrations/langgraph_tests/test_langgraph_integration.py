@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the LangGraph NeMo Flow callback integration."""
+"""Tests for the LangGraph NeMo Relay callback integration."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ from uuid import uuid4
 import pytest
 from typing_extensions import TypedDict
 
-import nemo_flow
+import nemo_relay
 
 if TYPE_CHECKING:
     from langgraph.graph import CompiledStateGraph
 
-    from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
+    from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
 
 
 class State(TypedDict):
@@ -58,17 +58,17 @@ def async_graph_fixture() -> CompiledStateGraph:
 
 
 @pytest.fixture(name="callback_handler")
-def callback_handler_fixture() -> NemoFlowCallbackHandler:
-    from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
+def callback_handler_fixture() -> NemoRelayCallbackHandler:
+    from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
 
-    return NemoFlowCallbackHandler()
+    return NemoRelayCallbackHandler()
 
 
-def _events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
+def _events_to_strings(events: list[nemo_relay.Event]) -> list[str]:
     event_strings: list[str] = []
 
     for event in events:
-        if isinstance(event, nemo_flow.ScopeEvent):
+        if isinstance(event, nemo_relay.ScopeEvent):
             event_strings.append(f"{event.kind}.{event.scope_category}.{event.name}")
         else:
             event_strings.append(f"{event.kind}.{event.name}")
@@ -76,10 +76,10 @@ def _events_to_strings(events: list[nemo_flow.Event]) -> list[str]:
     return event_strings
 
 
-def test_handler_type(callback_handler: NemoFlowCallbackHandler):
+def test_handler_type(callback_handler: NemoRelayCallbackHandler):
     from langgraph.callbacks import GraphCallbackHandler
 
-    from nemo_flow.integrations.langchain.callbacks import NemoFlowCallbackHandler as LangChainCallbackHandler
+    from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler as LangChainCallbackHandler
 
     assert isinstance(callback_handler, LangChainCallbackHandler)
     assert isinstance(callback_handler, GraphCallbackHandler)
@@ -98,10 +98,10 @@ class TestGraphCallbacks:
     def test_sync(
         self,
         sync_graph: CompiledStateGraph,
-        subscribed_events: list[nemo_flow.Event],
-        callback_handler: NemoFlowCallbackHandler,
+        subscribed_events: list[nemo_relay.Event],
+        callback_handler: NemoRelayCallbackHandler,
     ):
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
             result = sync_graph.invoke({"value": 1}, config={"callbacks": [callback_handler]})
 
         assert result == {"value": 2}
@@ -110,10 +110,10 @@ class TestGraphCallbacks:
     async def test_async(
         self,
         async_graph: CompiledStateGraph,
-        subscribed_events: list[nemo_flow.Event],
-        callback_handler: NemoFlowCallbackHandler,
+        subscribed_events: list[nemo_relay.Event],
+        callback_handler: NemoRelayCallbackHandler,
     ):
-        with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
             result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [callback_handler]})
 
         assert result == {"value": 2}
@@ -121,8 +121,8 @@ class TestGraphCallbacks:
 
 
 def test_graph_lifecycle_callbacks_emit_marks(
-    subscribed_events: list[nemo_flow.Event],
-    callback_handler: NemoFlowCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: NemoRelayCallbackHandler,
 ):
     from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
     from langgraph.types import Interrupt
@@ -136,7 +136,7 @@ def test_graph_lifecycle_callbacks_emit_marks(
         "scope.end.request",
     ]
 
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
         callback_handler.on_interrupt(
             GraphInterruptEvent(
                 run_id=run_id,
@@ -159,12 +159,12 @@ def test_graph_lifecycle_callbacks_emit_marks(
     assert _events_to_strings(subscribed_events) == expected_event_strings
 
     interrupt_event = subscribed_events[1]
-    assert isinstance(interrupt_event, nemo_flow.MarkEvent)
+    assert isinstance(interrupt_event, nemo_relay.MarkEvent)
     interrupt_data = cast(dict[str, Any], interrupt_event.data)
     assert interrupt_data["interrupts"] == [{"id": "interrupt-1", "value": "needs approval"}]
 
     resume_event = subscribed_events[2]
-    assert isinstance(resume_event, nemo_flow.MarkEvent)
+    assert isinstance(resume_event, nemo_relay.MarkEvent)
     resume_data = cast(dict[str, Any], resume_event.data)
     assert resume_data["checkpoint_ns"] == ["parent", "child"]
     assert resume_event.metadata == {"integration": "langgraph"}

@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Add Middleware
 
-Use this guide when instrumentation is working and you want NeMo Flow to enforce policy, transform requests, wrap execution, or sanitize observability payloads around tool and LLM calls.
+Use this guide when instrumentation is working and you want NeMo Relay to enforce policy, transform requests, wrap execution, or sanitize observability payloads around tool and LLM calls.
 
 ## What You Build
 
@@ -18,7 +18,7 @@ You will add middleware to an instrumented application and verify that it runs i
 
 ## Before You Start
 
-Complete [Instrument a Tool Call](instrument-tool-call.md) or [Instrument an LLM Call](instrument-llm-call.md). Middleware only runs when the call goes through a NeMo Flow managed lifecycle API.
+Complete [Instrument a Tool Call](instrument-tool-call.md) or [Instrument an LLM Call](instrument-llm-call.md). Middleware only runs when the call goes through a NeMo Relay managed lifecycle API.
 
 ## Choose the Middleware Type
 
@@ -51,7 +51,7 @@ This example adds three behaviors around a `search` tool:
 ```python
 import time
 
-import nemo_flow
+import nemo_relay
 
 
 def redact_api_key(tool_name, args):
@@ -76,9 +76,9 @@ async def measure_tool(tool_name, args, next_call):
         print(f"{tool_name} completed in {elapsed_ms} ms")
 
 
-nemo_flow.guardrails.register_tool_sanitize_request("search.redact_api_key", 10, redact_api_key)
-nemo_flow.guardrails.register_tool_conditional_execution("search.require_query", 20, require_query)
-nemo_flow.intercepts.register_tool_execution("search.measure", 30, measure_tool)
+nemo_relay.guardrails.register_tool_sanitize_request("search.redact_api_key", 10, redact_api_key)
+nemo_relay.guardrails.register_tool_conditional_execution("search.require_query", 20, require_query)
+nemo_relay.intercepts.register_tool_execution("search.measure", 30, measure_tool)
 ```
 :::
 
@@ -90,7 +90,7 @@ const {
   registerToolConditionalExecutionGuardrail,
   registerToolExecutionIntercept,
   registerToolSanitizeRequestGuardrail,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 registerToolSanitizeRequestGuardrail("search.redact_api_key", 10, (_toolName, args) => {
   if (!args.api_key) {
@@ -118,7 +118,7 @@ registerToolExecutionIntercept("search.measure", 30, async (args, next) => {
 :sync: rust
 
 ```rust
-use nemo_flow::api::registry::{
+use nemo_relay::api::registry::{
     register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept,
     register_tool_sanitize_request_guardrail,
@@ -181,7 +181,7 @@ Use global middleware for process-wide behavior, such as organization-wide redac
 
 ## Middleware Registration Families
 
-NeMo Flow exposes the same core middleware families for tools and LLMs:
+NeMo Relay exposes the same core middleware families for tools and LLMs:
 
 | Family | Tool Registration | LLM Registration | Changes Real Execution |
 |---|---|---|---|
@@ -194,7 +194,7 @@ NeMo Flow exposes the same core middleware families for tools and LLMs:
 
 Sanitize guardrails affect only the payload recorded on emitted events. Request intercepts affect the real request that reaches the tool or provider. Execution intercepts wrap the callback itself and are only available when the invocation uses managed execution.
 
-Scope-local variants are available through `nemo_flow.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
+Scope-local variants are available through `nemo_relay.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
 
 ## Validate the Middleware
 

@@ -16,8 +16,8 @@ defaults:
 env:
   GH_TOKEN: "${{ github.token }}"
   GIT_COMMIT: "${{ github.sha }}"
-  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
-  NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -62,7 +62,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -74,7 +74,7 @@ jobs:
           cache: false
 
       - name: Run Go tests with coverage
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
           just --set ci true --set output_dir "${{ github.workspace }}" test-go

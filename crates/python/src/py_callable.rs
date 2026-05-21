@@ -24,21 +24,21 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
-use nemo_flow::error::{FlowError, Result as FlowResult};
+use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_flow::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest};
@@ -189,19 +189,19 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
             let py_args = match json_to_py(py, &args) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nemo_flow: json_to_py failed in tool fn for '{name}': {e}");
+                    eprintln!("nemo_relay: json_to_py failed in tool fn for '{name}': {e}");
                     return args.clone();
                 }
             };
             let result = match py_fn.call1(py, (name, py_args)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nemo_flow: Python tool callable failed for '{name}': {e}");
+                    eprintln!("nemo_relay: Python tool callable failed for '{name}': {e}");
                     return args.clone();
                 }
             };
             py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nemo_flow: py_to_json failed in tool fn for '{name}': {e}");
+                eprintln!("nemo_relay: py_to_json failed in tool fn for '{name}': {e}");
                 args.clone()
             })
         })
@@ -597,7 +597,7 @@ pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn
             let result = match py_fn.call1(py, (py_req,)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nemo_flow: LLM sanitize request guardrail callable failed: {e}");
+                    eprintln!("nemo_relay: LLM sanitize request guardrail callable failed: {e}");
                     return request;
                 }
             };
@@ -606,7 +606,7 @@ pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn
                 Ok(r) => r.inner,
                 Err(e) => {
                     eprintln!(
-                        "nemo_flow: LLM sanitize request guardrail returned unexpected type \
+                        "nemo_relay: LLM sanitize request guardrail returned unexpected type \
                          (expected LlmRequest): {e}"
                     );
                     request
@@ -805,12 +805,12 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
             let result = match py_fn.call0(py) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nemo_flow: Python finalizer callable failed: {e}");
+                    eprintln!("nemo_relay: Python finalizer callable failed: {e}");
                     return Json::Null;
                 }
             };
             py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nemo_flow: py_to_json failed in finalizer: {e}");
+                eprintln!("nemo_relay: py_to_json failed in finalizer: {e}");
                 Json::Null
             })
         })
@@ -825,7 +825,7 @@ pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponse
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!(
-                        "nemo_flow: json_to_py failed in LLM sanitize response guardrail: {e}"
+                        "nemo_relay: json_to_py failed in LLM sanitize response guardrail: {e}"
                     );
                     return response.clone();
                 }
@@ -833,12 +833,12 @@ pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponse
             let result = match py_fn.call1(py, (py_resp,)) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("nemo_flow: LLM sanitize response guardrail callable failed: {e}");
+                    eprintln!("nemo_relay: LLM sanitize response guardrail callable failed: {e}");
                     return response.clone();
                 }
             };
             py_to_json(result.bind(py)).unwrap_or_else(|e| {
-                eprintln!("nemo_flow: py_to_json failed in LLM sanitize response guardrail: {e}");
+                eprintln!("nemo_relay: py_to_json failed in LLM sanitize response guardrail: {e}");
                 response.clone()
             })
         })

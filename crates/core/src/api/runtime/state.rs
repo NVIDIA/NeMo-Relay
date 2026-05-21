@@ -3,7 +3,7 @@
 
 //! Process-global runtime state and middleware-chain builders.
 //!
-//! [`NemoFlowContextState`] owns the registries and helper methods that power
+//! [`NemoRelayContextState`] owns the registries and helper methods that power
 //! the public scope, tool, and LLM APIs. Advanced integrations can use this
 //! type directly to register middleware, attach runtime extensions, and build
 //! the resolved callback chains that the higher-level API layer executes.
@@ -44,7 +44,7 @@ use uuid::Uuid;
 /// The public API layer stores one shared instance of this type for the
 /// process. It contains global middleware registries, lifecycle subscribers,
 /// and arbitrary extension slots used by bindings or integrations.
-pub struct NemoFlowContextState {
+pub struct NemoRelayContextState {
     /// Global tool request sanitizers applied to emitted tool-start payloads.
     pub(crate) tool_sanitize_request_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Global tool response sanitizers applied to emitted tool-end payloads.
@@ -74,11 +74,11 @@ pub struct NemoFlowContextState {
     pub(crate) extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
-impl NemoFlowContextState {
+impl NemoRelayContextState {
     /// Create an empty runtime state with no registered middleware.
     ///
     /// # Returns
-    /// A [`NemoFlowContextState`] with empty registries, no subscribers, and no
+    /// A [`NemoRelayContextState`] with empty registries, no subscribers, and no
     /// extensions.
     pub fn new() -> Self {
         Self {
@@ -1027,7 +1027,7 @@ fn end_timestamp_after(started_at: chrono::DateTime<Utc>) -> chrono::DateTime<Ut
     }
 }
 
-impl Default for NemoFlowContextState {
+impl Default for NemoRelayContextState {
     fn default() -> Self {
         Self::new()
     }

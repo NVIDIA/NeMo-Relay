@@ -5,12 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Third-Party Integrations
 
-NeMo Flow maintains some third-party integrations as patch sets applied to local
+NeMo Relay maintains some third-party integrations as patch sets applied to local
 upstream checkouts under `third_party/`. The public wrapper commands stay at
 the `scripts/` root, while their implementations live under
 `scripts/third-party/`.
 
-The tracked upstream sources live in [sources.lock](sources.lock). The NeMo Flow
+The tracked upstream sources live in [sources.lock](sources.lock). The NeMo Relay
 patches live under [`../patches/`](../patches/).
 
 Integration-specific setup, usage, and validation notes live next to this file:
@@ -30,7 +30,7 @@ Bootstrap the tracked upstream checkouts from the manifest:
 ./scripts/bootstrap-third-party.sh
 ```
 
-Apply the NeMo Flow integration patches:
+Apply the NeMo Relay integration patches:
 
 ```bash
 ./scripts/apply-patches.sh
@@ -77,7 +77,7 @@ Example for `langgraph`:
 ```bash
 git clone https://github.com/langchain-ai/langgraph.git third_party/langgraph
 git -C third_party/langgraph checkout --detach 5c9c1d598d65411317e0957a42cc3af681d395f8
-git -C third_party/langgraph apply ../patches/langgraph/0001-add-nemo-flow-integration.patch
+git -C third_party/langgraph apply ../patches/langgraph/0001-add-nemo-relay-integration.patch
 ```
 
 ## Updating Patch Sets

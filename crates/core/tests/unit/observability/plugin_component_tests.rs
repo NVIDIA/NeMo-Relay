@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::api::event::{BaseEvent, EventCategory, ScopeEvent};
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{PopScopeParams, PushScopeParams};
 use crate::config_editor::{EditorConfig, EditorFieldKind};
@@ -24,7 +24,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("nemo-flow-{prefix}-{id}"));
+    let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -33,7 +33,7 @@ fn reset_runtime() {
     let _ = clear_plugin_configuration();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
-    *context.write().unwrap() = NemoFlowContextState::new();
+    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 fn component(config: Json) -> PluginComponentSpec {
@@ -173,15 +173,15 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
-    assert_eq!(atif.agent_name, "NeMo Flow");
+    assert_eq!(atif.agent_name, "NeMo Relay");
     assert_eq!(atif.agent_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(atif.model_name, "unknown");
-    assert_eq!(atif.filename_template, "nemo-flow-atif-{session_id}.json");
+    assert_eq!(atif.filename_template, "nemo-relay-atif-{session_id}.json");
 
     let otlp = OtlpSectionConfig::default();
     assert!(!otlp.enabled);
     assert_eq!(otlp.transport, "http_binary");
-    assert_eq!(otlp.service_name, "nemo-flow");
+    assert_eq!(otlp.service_name, "nemo-relay");
     assert_eq!(otlp.timeout_millis, 3_000);
 
     let generic: PluginComponentSpec = ComponentSpec::new(ObservabilityConfig {
@@ -195,7 +195,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(generic.kind, OBSERVABILITY_PLUGIN_KIND);
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(1));
-    assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Flow"));
+    assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
 }
 
 #[cfg(feature = "schema")]
@@ -494,7 +494,7 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["__nemo_flow_plugin__observability__atof"]);
+        assert_eq!(names, vec!["__nemo_relay_plugin__observability__atof"]);
     }
 
     let agent = push_agent("atof-agent");
@@ -540,8 +540,8 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
     pop(&second);
     clear_plugin_configuration().unwrap();
 
-    let first_path = dir.join(format!("nemo-flow-atif-{}.json", first.uuid));
-    let second_path = dir.join(format!("nemo-flow-atif-{}.json", second.uuid));
+    let first_path = dir.join(format!("nemo-relay-atif-{}.json", first.uuid));
+    let second_path = dir.join(format!("nemo-relay-atif-{}.json", second.uuid));
     assert!(first_path.exists());
     assert!(second_path.exists());
 
@@ -550,7 +550,7 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
         serde_json::from_str(&fs::read_to_string(second_path).unwrap()).unwrap();
 
     assert_eq!(first_json["session_id"], first.uuid.to_string());
-    assert_eq!(first_json["agent"]["name"], "NeMo Flow");
+    assert_eq!(first_json["agent"]["name"], "NeMo Relay");
     assert_eq!(first_json["agent"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(first_json["agent"]["model_name"], "unknown");
     let first_serialized = first_json.to_string();
@@ -616,7 +616,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         .unwrap()
         .observe_scope(&end_event, agent.uuid)
         .unwrap();
-    let path = dir.join(format!("nemo-flow-atif-{}.json", agent.uuid));
+    let path = dir.join(format!("nemo-relay-atif-{}.json", agent.uuid));
     assert!(!path.exists());
     write_atif_file(&pending_write).unwrap();
     let scope_subscriber = manager
@@ -749,7 +749,7 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
         .keys()
         .cloned()
         .collect::<Vec<_>>();
-    assert!(names.contains(&"__nemo_flow_plugin__observability__opentelemetry".to_string()));
-    assert!(names.contains(&"__nemo_flow_plugin__observability__openinference".to_string()));
+    assert!(names.contains(&"__nemo_relay_plugin__observability__opentelemetry".to_string()));
+    assert!(names.contains(&"__nemo_relay_plugin__observability__openinference".to_string()));
     clear_plugin_configuration().unwrap();
 }

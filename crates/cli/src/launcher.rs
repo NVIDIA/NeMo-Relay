@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nemo_flow::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
-use nemo_flow::plugin::PluginConfig;
+use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_relay::plugin::PluginConfig;
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -37,12 +37,12 @@ pub(crate) async fn run(
     run.execute().await
 }
 
-/// Runs the easy-path bare-agent shortcut (`nemo-flow claude`, `nemo-flow codex`, etc.).
+/// Runs the easy-path bare-agent shortcut (`nemo-relay claude`, `nemo-relay codex`, etc.).
 ///
 /// If no config file is present at any discovery layer, this fires the interactive setup inline
 /// (`crate::setup::run`) which writes a `config.toml`, then proceeds to launch the agent. When
 /// config IS present, the easy path constructs a synthetic `RunCommand` and delegates to the
-/// same transparent-run pipeline `nemo-flow run` uses — same observability wiring, same agent
+/// same transparent-run pipeline `nemo-relay run` uses — same observability wiring, same agent
 /// argv resolution, same lifecycle management.
 pub(crate) async fn easy_path(
     agent: CodingAgent,
@@ -179,7 +179,7 @@ fn resolve_agent_and_argv(
 // Resolves the full argv to spawn. When `--agent` is set (the easy-path and explicit `--agent`
 // flows both go through this case), the configured agent command is the base argv and anything
 // after `--` is appended as pass-through args. When `--agent` is absent, `command.command` IS
-// the full argv (e.g., `nemo-flow run -- codex --model X` runs that exact command and infers
+// the full argv (e.g., `nemo-relay run -- codex --model X` runs that exact command and infers
 // the agent from argv[0]).
 fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<String>, CliError> {
     if let Some(agent) = command.agent {
@@ -288,7 +288,7 @@ impl PreparedRun {
     ) -> Result<Self, CliError> {
         let mut run = Self {
             argv,
-            env: vec![("NEMO_FLOW_GATEWAY_URL".into(), gateway_url.into())],
+            env: vec![("NEMO_RELAY_GATEWAY_URL".into(), gateway_url.into())],
             temp_dirs: Vec::new(),
             cursor_restore: None,
             notes: Vec::new(),
@@ -339,15 +339,15 @@ impl PreparedRun {
     // Creates a temporary Claude Code plugin containing gateway hooks and points Claude at both
     // that plugin directory and the gateway Anthropic-compatible gateway URL.
     fn prepare_claude(&mut self, gateway_url: &str) -> Result<(), CliError> {
-        let root = temp_dir("nemo-flow-claude-plugin")?;
+        let root = temp_dir("nemo-relay-claude-plugin")?;
         std::fs::create_dir_all(root.join(".claude-plugin"))?;
         std::fs::create_dir_all(root.join("hooks"))?;
         std::fs::write(
             root.join(".claude-plugin/plugin.json"),
             serde_json::to_vec_pretty(&json!({
-                "name": "nemo-flow-cli",
+                "name": "nemo-relay-cli",
                 "version": env!("CARGO_PKG_VERSION"),
-                "description": "Temporary NeMo Flow gateway hooks"
+                "description": "Temporary NeMo Relay gateway hooks"
             }))
             .map_err(|error| CliError::Launch(error.to_string()))?,
         )?;
@@ -406,7 +406,7 @@ impl PreparedRun {
             "--config".to_string(),
             "features.hooks=true".to_string(),
             "--config".to_string(),
-            "model_provider=\"nemo-flow-openai\"".to_string(),
+            "model_provider=\"nemo-relay-openai\"".to_string(),
             "--config".to_string(),
             codex_gateway_provider_config(gateway_url),
         ];
@@ -441,22 +441,22 @@ impl PreparedRun {
     fn prepare_cursor_dry(&mut self) -> Result<(), CliError> {
         let path = cursor_hooks_path()?;
         self.notes.push(format!(
-            "would temporarily merge NeMo Flow hooks into {}",
+            "would temporarily merge NeMo Relay hooks into {}",
             path.display()
         ));
         Ok(())
     }
 
-    // Surfaces where hermes' shell hooks live so users know what `nemo-flow config hermes` wrote.
+    // Surfaces where hermes' shell hooks live so users know what `nemo-relay config hermes` wrote.
     // Hermes reads hooks from .hermes/config.yaml on its own; this launcher only exports the live
-    // gateway URL via NEMO_FLOW_GATEWAY_URL so installed hooks reach the ephemeral gateway.
+    // gateway URL via NEMO_RELAY_GATEWAY_URL so installed hooks reach the ephemeral gateway.
     fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) {
         let note = match hooks_path {
             Some(path) => format!(
-                "Hermes hooks at {} — re-run `nemo-flow config hermes` to refresh.",
+                "Hermes hooks at {} — re-run `nemo-relay config hermes` to refresh.",
                 path.display()
             ),
-            None => "Hermes hooks not yet installed — run `nemo-flow config hermes` once so hermes traces under this gateway.".into(),
+            None => "Hermes hooks not yet installed — run `nemo-relay config hermes` once so hermes traces under this gateway.".into(),
         };
         self.notes.push(note);
     }
@@ -520,7 +520,7 @@ impl PreparedRun {
         }
 
         let mut lines: Vec<String> = Vec::new();
-        lines.push(format!("NeMo Flow → {}", agent.as_arg()));
+        lines.push(format!("NeMo Relay → {}", agent.as_arg()));
         lines.push(format!("  Gateway        {gateway_url}"));
         let destinations = exporter_destinations(&resolved.gateway);
         if destinations.is_empty() {
@@ -634,7 +634,7 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
             section
                 .filename
                 .clone()
-                .unwrap_or_else(|| "nemo-flow-events-<timestamp>.jsonl".into()),
+                .unwrap_or_else(|| "nemo-relay-events-<timestamp>.jsonl".into()),
         );
         destinations.push(format!("ATOF {}", path.display()));
     }
@@ -724,7 +724,7 @@ fn codex_gateway_provider_config(gateway_url: &str) -> String {
     // environment the JWT is replaced (see `gateway.rs::strip_chatgpt_oauth_for_openai_route`
     // and `inject_provider_auth`); otherwise the JWT is forwarded to the ChatGPT backend.
     format!(
-        "model_providers.nemo-flow-openai={{name=\"NeMo Flow OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
+        "model_providers.nemo-relay-openai={{name=\"NeMo Relay OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
         toml_string(gateway_url)
     )
 }
@@ -751,12 +751,12 @@ fn transparent_hook_executable() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.to_str().map(str::to_owned))
-        .unwrap_or_else(|| "nemo-flow".to_string())
+        .unwrap_or_else(|| "nemo-relay".to_string())
 }
 
 // Appends the running gateway binary's directory to the child agent PATH. Transparent hooks use
 // the absolute executable path when possible, but adding the directory also covers hook loaders or
-// user-managed hook commands that resolve `nemo-flow` through PATH inside the launched agent. Keep
+// user-managed hook commands that resolve `nemo-relay` through PATH inside the launched agent. Keep
 // user PATH precedence intact so normal agent tool resolution does not change.
 fn path_with_transparent_hook_dir() -> Option<String> {
     let dir = std::env::current_exe()
@@ -810,7 +810,7 @@ fn backup_existing_cursor_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), 
     if !had_original {
         return Ok((false, None));
     }
-    let backup = path.with_extension(format!("json.nemo-flow-run.bak.{}", timestamp()?));
+    let backup = path.with_extension(format!("json.nemo-relay-run.bak.{}", timestamp()?));
     std::fs::copy(path, &backup)?;
     Ok((true, Some(backup)))
 }

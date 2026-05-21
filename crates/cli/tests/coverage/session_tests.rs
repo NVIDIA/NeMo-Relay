@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
-use nemo_flow::api::event::ScopeCategory;
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_relay::api::event::ScopeCategory;
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use serde_json::json;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -211,7 +211,7 @@ async fn parallel_subagents_are_siblings_under_turn_scope() {
             .unwrap()
             .metadata
             .as_ref()
-            .unwrap()["nemo_flow_scope_role"],
+            .unwrap()["nemo_relay_scope_role"],
         json!("subagent")
     );
     assert_eq!(
@@ -255,7 +255,7 @@ async fn codex_turn_is_agent_scope_with_turn_role_metadata() {
     assert_eq!(turn.name, "codex-turn");
     assert_eq!(turn.scope_type, ScopeType::Agent);
     assert_eq!(
-        turn.metadata.as_ref().unwrap()["nemo_flow_scope_role"],
+        turn.metadata.as_ref().unwrap()["nemo_relay_scope_role"],
         json!("turn")
     );
 }
@@ -1175,10 +1175,10 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let manager = SessionManager::new(config);
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-nemo-flow-session-metadata",
+        "x-nemo-relay-session-metadata",
         r#"{"team":"coverage"}"#.parse().unwrap(),
     );
-    headers.insert("x-nemo-flow-gateway-mode", "required".parse().unwrap());
+    headers.insert("x-nemo-relay-gateway-mode", "required".parse().unwrap());
 
     manager
         .apply_events(
@@ -2503,7 +2503,7 @@ async fn request_affinity_pairs_parallel_subagents_across_provider_formats() {
                 subagent_id: Some("python-worker".into()),
                 ..llm_start_with_responses_task(
                     "parallel-affinity",
-                    "Very thorough analysis of the python/nemo_flow package.",
+                    "Very thorough analysis of the python/nemo_relay package.",
                 )
             },
         )
@@ -2521,7 +2521,7 @@ async fn request_affinity_pairs_parallel_subagents_across_provider_formats() {
                 subagent_id: Some("go-worker".into()),
                 ..llm_start_with_messages_task(
                     "parallel-affinity",
-                    "Very thorough analysis of the go/nemo_flow binding.",
+                    "Very thorough analysis of the go/nemo_relay binding.",
                 )
             },
         )
@@ -2543,7 +2543,7 @@ async fn request_affinity_pairs_parallel_subagents_across_provider_formats() {
                     tool_call_id: "go-tool".into(),
                     tool_name: "Read".into(),
                     subagent_id: Some("go-worker".into()),
-                    arguments: json!({ "file_path": "go/nemo_flow/nemo_flow.go" }),
+                    arguments: json!({ "file_path": "go/nemo_relay/nemo_relay.go" }),
                     result: Value::Null,
                     status: None,
                     payload: json!({}),
@@ -2582,7 +2582,7 @@ async fn request_affinity_pairs_parallel_subagents_across_provider_formats() {
             &HeaderMap::new(),
             llm_start_with_chat_completion_task(
                 "parallel-affinity",
-                "Very thorough analysis of the python/nemo_flow package.",
+                "Very thorough analysis of the python/nemo_relay package.",
             ),
         )
         .await

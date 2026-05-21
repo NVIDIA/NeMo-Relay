@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use console::style;
-use nemo_flow::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
-use nemo_flow_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use serde_json::{Map, Value};
 
 use crate::config::{
@@ -124,7 +124,7 @@ pub(super) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
         let messages = report
             .diagnostics
             .into_iter()
-            .filter(|diagnostic| diagnostic.level == nemo_flow::plugin::DiagnosticLevel::Error)
+            .filter(|diagnostic| diagnostic.level == nemo_relay::plugin::DiagnosticLevel::Error)
             .map(|diagnostic| diagnostic.message)
             .collect::<Vec<_>>()
             .join("; ");

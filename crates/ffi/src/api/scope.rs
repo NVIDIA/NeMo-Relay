@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    FfiScopeHandle, NemoFlowScopeType, NemoFlowStatus, ScopeAttributes, c_char, c_str_to_opt_json,
-    c_str_to_string, clear_last_error, core_scope_api, set_last_error, status_from_error,
-    unix_micros_to_opt_timestamp,
+    FfiScopeHandle, NemoRelayScopeType, NemoRelayStatus, ScopeAttributes, c_char,
+    c_str_to_opt_json, c_str_to_string, clear_last_error, core_scope_api, set_last_error,
+    status_from_error, unix_micros_to_opt_timestamp,
 };
 
 // ---------------------------------------------------------------------------
@@ -15,21 +15,21 @@ use super::{
 ///
 /// # Parameters
 /// - `out`: On success, receives a heap-allocated `FfiScopeHandle` that must be
-///   freed with `nemo_flow_scope_handle_free`.
+///   freed with `nemo_relay_scope_handle_free`.
 ///
 /// # Safety
 /// `out` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_get_handle(out: *mut *mut FfiScopeHandle) -> NemoFlowStatus {
+pub unsafe extern "C" fn nemo_relay_get_handle(out: *mut *mut FfiScopeHandle) -> NemoRelayStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     match core_scope_api::get_handle() {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -55,7 +55,7 @@ pub unsafe extern "C" fn nemo_flow_get_handle(out: *mut *mut FfiScopeHandle) -> 
 /// - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the
 ///   handle start time and start event, or null to use the current UTC time.
 /// - `out`: On success, receives a heap-allocated `FfiScopeHandle` that must
-///   be freed with `nemo_flow_scope_handle_free`.
+///   be freed with `nemo_relay_scope_handle_free`.
 ///
 /// # Errors
 /// Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when
@@ -67,9 +67,9 @@ pub unsafe extern "C" fn nemo_flow_get_handle(out: *mut *mut FfiScopeHandle) -> 
 /// be null; when non-null, optional pointers must be valid for reads for the
 /// duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_push_scope(
+pub unsafe extern "C" fn nemo_relay_push_scope(
     name: *const c_char,
-    scope_type: NemoFlowScopeType,
+    scope_type: NemoRelayScopeType,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
@@ -77,11 +77,11 @@ pub unsafe extern "C" fn nemo_flow_push_scope(
     input_json: *const c_char,
     timestamp_unix_micros: *const i64,
     out: *mut *mut FfiScopeHandle,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -95,19 +95,19 @@ pub unsafe extern "C" fn nemo_flow_push_scope(
     let attrs = ScopeAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let input = match c_str_to_opt_json(input_json) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidArg,
+        None => return NemoRelayStatus::InvalidArg,
     };
 
     match core_scope_api::push_scope(
@@ -124,7 +124,7 @@ pub unsafe extern "C" fn nemo_flow_push_scope(
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiScopeHandle(h))) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -152,23 +152,23 @@ pub unsafe extern "C" fn nemo_flow_push_scope(
 /// `timestamp_unix_micros` may be null; when non-null, optional pointers must
 /// be valid for reads for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_pop_scope(
+pub unsafe extern "C" fn nemo_relay_pop_scope(
     handle: *const FfiScopeHandle,
     output_json: *const c_char,
     timestamp_unix_micros: *const i64,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let output = match c_str_to_opt_json(output_json) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidArg,
+        None => return NemoRelayStatus::InvalidArg,
     };
     match core_scope_api::pop_scope(
         core_scope_api::PopScopeParams::builder()
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn nemo_flow_pop_scope(
             .timestamp_opt(timestamp)
             .build(),
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -206,13 +206,13 @@ pub unsafe extern "C" fn nemo_flow_pop_scope(
 /// non-null, optional pointers must be valid for reads for the duration of the
 /// call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event(
+pub unsafe extern "C" fn nemo_relay_event(
     name: *const c_char,
     parent: *const FfiScopeHandle,
     data_json: *const c_char,
     metadata_json: *const c_char,
     timestamp_unix_micros: *const i64,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -225,15 +225,15 @@ pub unsafe extern "C" fn nemo_flow_event(
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidArg,
+        None => return NemoRelayStatus::InvalidArg,
     };
 
     match core_scope_api::event(
@@ -245,7 +245,7 @@ pub unsafe extern "C" fn nemo_flow_event(
             .timestamp_opt(timestamp)
             .build(),
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }

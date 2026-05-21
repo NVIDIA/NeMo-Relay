@@ -47,7 +47,7 @@ SKIP_BASENAMES = frozenset(
         "LICENSE",
         "index.js",
         "index.d.ts",
-        "nemo_flow.h",
+        "nemo_relay.h",
     }
 )
 

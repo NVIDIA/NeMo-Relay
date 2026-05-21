@@ -9,7 +9,7 @@ This file provides guidance to agents, including Claude Code and OpenAI Codex, w
 
 ## Project Overview
 
-NeMo Flow is a multi-language agent runtime framework for execution scopes, lifecycle events, middleware, plugins, and observability around tool and LLM calls. The core runtime is Rust. Primary supported bindings are Rust, Python, and Node.js. Go, WebAssembly, and the raw C FFI are experimental and source-first.
+NeMo Relay is a multi-language agent runtime framework for execution scopes, lifecycle events, middleware, plugins, and observability around tool and LLM calls. The core runtime is Rust. Primary supported bindings are Rust, Python, and Node.js. Go, WebAssembly, and the raw C FFI are experimental and source-first.
 
 The shared runtime model is:
 
@@ -26,22 +26,22 @@ integration patches, and agent-facing skills.
 
 ```text
 crates/
-  core/       # Rust core runtime crate, published as nemo-flow
+  core/       # Rust core runtime crate, published as nemo-relay
   adaptive/   # Adaptive runtime primitives and plugin components
   python/     # PyO3 native extension for the Python package
   ffi/        # Raw C ABI layer used by downstream bindings such as Go
   node/       # NAPI Node.js binding and JavaScript/TypeScript entry points
   wasm/       # wasm-bindgen WebAssembly binding and JS wrappers
 python/
-  nemo_flow/  # Python wrapper package: scopes, tools, LLM, middleware, typed helpers, plugins, adaptive helpers
+  nemo_relay/  # Python wrapper package: scopes, tools, LLM, middleware, typed helpers, plugins, adaptive helpers
   tests/      # Python tests
 go/
-  nemo_flow/  # Experimental Go CGo binding and tests
+  nemo_relay/  # Experimental Go CGo binding and tests
 docs/         # Sphinx documentation site
 scripts/      # Stable wrappers and helper scripts; build/test/docs entry points live in justfile
 third_party/  # Pinned upstream checkouts for sample integration patches
-patches/      # NeMo Flow patch sets applied to third_party checkouts
-skills/       # Published Codex/agent skills for NeMo Flow usage patterns
+patches/      # NeMo Relay patch sets applied to third_party checkouts
+skills/       # Published Codex/agent skills for NeMo Relay usage patterns
 ```
 
 ## Prerequisites
@@ -136,11 +136,11 @@ just clean
 Focused fallback commands are acceptable for narrow loops:
 
 ```bash
-cargo test -p nemo-flow -- <test_name>
+cargo test -p nemo-relay -- <test_name>
 uv run pytest python/tests/test_scope.py
 uv run pytest -k "test_name"
 cd crates/node && node --test --test-name-pattern="pattern" tests/*.mjs
-cd go/nemo_flow && go test -v -run TestFoo ./...
+cd go/nemo_relay && go test -v -run TestFoo ./...
 wasm-pack test --node crates/wasm
 ```
 
@@ -167,7 +167,7 @@ repository.
 
 - Keep SPDX headers on source, docs, scripts, and configuration files. The project is Apache-2.0.
 - `SKILL.md` files are skill entrypoints and do not need SPDX headers, but they must always start with YAML frontmatter containing at least `name` and `description`.
-- Follow binding naming conventions: Rust and Python `snake_case`, C FFI exports prefixed `nemo_flow_`, Go `PascalCase` for public APIs, Node.js `camelCase`.
+- Follow binding naming conventions: Rust and Python `snake_case`, C FFI exports prefixed `nemo_relay_`, Go `PascalCase` for public APIs, Node.js `camelCase`.
 - Preserve the shared runtime model across bindings. Do not add behavior to one primary binding without considering Rust, Python, and Node.js parity.
 - Prefer documented public APIs and stable wrapper commands. Do not rely on internal helpers in examples or user-facing docs.
 - Keep primary documentation focused on Rust, Python, and Node.js. Treat Go, WebAssembly, and raw FFI as experimental and source-first unless binding-support guidance changes.
@@ -197,15 +197,15 @@ These notes summarize how each language binding relates to the Rust runtime sour
 truth.
 
 - Rust is the source of truth for runtime behavior. Binding APIs should mirror the Rust semantics unless a language-specific wrapper intentionally improves ergonomics.
-- Python wrapper modules live under `python/nemo_flow/`; the native extension is built from `crates/python` with `maturin`.
-- Node.js public entry points include the main runtime package plus `nemo-flow-node/typed`, `nemo-flow-node/plugin`, and `nemo-flow-node/adaptive`.
+- Python wrapper modules live under `python/nemo_relay/`; the native extension is built from `crates/python` with `maturin`.
+- Node.js public entry points include the main runtime package plus `nemo-relay-node/typed`, `nemo-relay-node/plugin`, and `nemo-relay-node/adaptive`.
 - Go uses the C FFI and requires the FFI library build before tests; `just test-go` handles the library path setup.
 - WebAssembly includes Rust wasm-bindgen tests plus JS wrapper/package tests; `just test-wasm` runs both paths.
 
 ## Third-Party Integrations And Patches
 
 ### Patch-based Integrations
-Sample integrations are maintained as patch sets, not as primary package source. The pinned upstream checkouts are listed in `third_party/sources.lock`, local checkouts live under `third_party/`, and NeMo Flow patches live under `patches/`.
+Sample integrations are maintained as patch sets, not as primary package source. The pinned upstream checkouts are listed in `third_party/sources.lock`, local checkouts live under `third_party/`, and NeMo Relay patches live under `patches/`.
 
 Current integration patch sets include:
 
@@ -228,10 +228,10 @@ Use the stable root-level wrappers:
 `apply-patches.sh` expects clean third-party checkouts. After editing an integration checkout, run `./scripts/generate-patches.sh` to regenerate patch files and verify they apply to a clean detached checkout.
 
 ### Public API-based Integrations
-Some integrations can be implemented using public APIs without patching. Currently the Python based integrations are located under `python/nemo_flow/integrations/` with their own README files and test suites.
+Some integrations can be implemented using public APIs without patching. Currently the Python based integrations are located under `python/nemo_relay/integrations/` with their own README files and test suites.
 
 Current public API-based integrations include:
-- LangChain: `python/nemo_flow/integrations/langchain`
+- LangChain: `python/nemo_relay/integrations/langchain`
 
 ## Documentation And Contribution Workflow
 

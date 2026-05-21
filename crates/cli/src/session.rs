@@ -6,17 +6,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
-use nemo_flow::api::llm::{
+use nemo_relay::api::llm::{
     LlmAttributes, LlmCallEndParams, LlmCallParams, LlmHandle, LlmRequest, llm_call, llm_call_end,
 };
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     ScopeStackHandle, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
 };
-use nemo_flow::api::scope::{
+use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeHandle, ScopeType,
     event as emit_mark_event, get_handle, pop_scope, push_scope,
 };
-use nemo_flow::api::tool::{
+use nemo_relay::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
     tool_conditional_execution,
 };
@@ -238,7 +238,7 @@ impl SessionManager {
                 )
                 .await
                 {
-                    eprintln!("nemo-flow CLI gateway: idle session teardown failed: {error}");
+                    eprintln!("nemo-relay CLI gateway: idle session teardown failed: {error}");
                 }
             }
         });
@@ -966,7 +966,7 @@ impl Session {
         let _root = get_handle()?;
         let metadata = merge_metadata(
             self.scope_metadata(event_metadata),
-            json!({ "nemo_flow_scope_role": "session" }),
+            json!({ "nemo_relay_scope_role": "session" }),
         );
         let scope = push_scope(
             PushScopeParams::builder()
@@ -1014,7 +1014,7 @@ impl Session {
         let metadata = merge_metadata(
             self.scope_metadata(event_metadata),
             json!({
-                "nemo_flow_scope_role": "turn",
+                "nemo_relay_scope_role": "turn",
                 "turn_index": self.turn_index,
                 "turn_source": turn_source,
             }),
@@ -1221,7 +1221,7 @@ impl Session {
         let subagent_name = format!("subagent:{subagent_id}");
         let metadata = merge_metadata(
             event.metadata,
-            json!({ "nemo_flow_scope_role": "subagent" }),
+            json!({ "nemo_relay_scope_role": "subagent" }),
         );
         let subagent_stack = create_scope_stack();
         let scope = TASK_SCOPE_STACK
@@ -1263,7 +1263,7 @@ impl Session {
         self.ensure_turn_started(event.metadata.clone())?;
         if !self.subagents.contains_key(&event.subagent_id) {
             eprintln!(
-                "nemo-flow CLI gateway: received {} for subagent {} without a matching start",
+                "nemo-relay CLI gateway: received {} for subagent {} without a matching start",
                 event.event_name, event.subagent_id
             );
             return self.mark(

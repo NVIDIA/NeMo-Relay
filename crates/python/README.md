@@ -3,22 +3,22 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Flow)](https://github.com/NVIDIA/NeMo-Flow/blob/main/LICENSE)
-[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Flow/)
-[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Flow?color=green)](https://github.com/NVIDIA/NeMo-Flow/releases)
-[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Flow/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Flow)
-[![PyPI](https://img.shields.io/pypi/v/nemo-flow?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-flow/)
-[![npm node](https://img.shields.io/npm/v/nemo-flow-node?label=nemo-flow-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
+[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
+[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Relay?color=green)](https://github.com/NVIDIA/NeMo-Relay/releases)
+[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
+[![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
+[![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
+[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
 
-# NeMo Flow Python Bindings
+# NeMo Relay Python Bindings
 
 This crate builds the native extension behind the public Python package
-`nemo-flow`. It connects Python applications to the Rust NeMo Flow runtime
+`nemo-relay`. It connects Python applications to the Rust NeMo Relay runtime
 through PyO3 and Maturin.
 
 Most Python users should install the Python package rather than depend on this
@@ -27,16 +27,16 @@ crate directly.
 ## Why Use It?
 
 - 🧩 **Bridge Python to the shared runtime**: Connect Python applications to the
-  Rust NeMo Flow runtime without reimplementing runtime semantics in Python.
+  Rust NeMo Relay runtime without reimplementing runtime semantics in Python.
 - 🛠️ **Build through standard Python packaging**: Use the repository
   `pyproject.toml`, Maturin, and PyO3 to produce the native extension behind
-  `nemo-flow`.
+  `nemo-relay`.
 - 🔁 **Keep binding behavior aligned**: Expose the same scopes, middleware,
-  plugins, lifecycle events, and adaptive helpers used by the rest of NeMo Flow.
+  plugins, lifecycle events, and adaptive helpers used by the rest of NeMo Relay.
 
 ## What You Get
 
-- ✅ **Native extension**: The compiled `nemo_flow._native` module used by the
+- ✅ **Native extension**: The compiled `nemo_relay._native` module used by the
   public Python package.
 - ✅ **Runtime APIs for Python**: Access to scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, typed helpers, codecs, and adaptive helpers.
@@ -50,13 +50,13 @@ crate directly.
 Install the published Python package:
 
 ```bash
-uv add nemo-flow
+uv add nemo-relay
 ```
 
 If you are not using `uv`, install it with `pip`:
 
 ```bash
-pip install nemo-flow
+pip install nemo-relay
 ```
 
 For local source development from the repository root:
@@ -70,12 +70,12 @@ uv sync
 Import the public Python package and create a scoped runtime boundary:
 
 ```python
-import nemo_flow
+import nemo_relay
 
-with nemo_flow.scope.scope("demo-agent", nemo_flow.ScopeType.Agent) as handle:
-    nemo_flow.scope.event("initialized", handle=handle, data={"binding": "python"})
+with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
+    nemo_relay.scope.event("initialized", handle=handle, data={"binding": "python"})
 ```
 
 ## Documentation
 
-NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow
+NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay

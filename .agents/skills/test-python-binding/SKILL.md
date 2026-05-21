@@ -1,6 +1,6 @@
 ---
 name: test-python-binding
-description: Build and test the NeMo Flow Python binding; use this for python/nemo_flow or crates/python changes
+description: Build and test the NeMo Relay Python binding; use this for python/nemo_relay or crates/python changes
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when the change is primarily in `python/nemo_flow`,
+Use this skill when the change is primarily in `python/nemo_relay`,
 `python/tests`, `crates/python`, or Python-facing docs/examples.
 
 ## Default Path
@@ -27,7 +27,7 @@ Use this skill when the change is primarily in `python/nemo_flow`,
    `cargo clippy --workspace --all-targets -- -D warnings`.
 5. Use `just build-python` when you want an explicit build-only pass.
 6. If the native Rust bridge changed, add the Rust crate tests for
-   `nemo-flow-python`.
+   `nemo-relay-python`.
 
 ## Python Test Style
 
@@ -69,7 +69,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 just build-python
 
 # Native extension crate when crates/python changed
-cargo test -p nemo-flow-python
+cargo test -p nemo-relay-python
 ```
 
 ## When To Escalate
@@ -84,7 +84,7 @@ cargo test -p nemo-flow-python
 - `pyproject.toml`
 - `crates/python/Cargo.toml`
 - `crates/python/README.md`
-- `python/nemo_flow/README.md`
+- `python/nemo_relay/README.md`
 - `docs/getting-started/python.md`
 - `docs/contribute/testing-and-docs.md`
 - `validate-change`

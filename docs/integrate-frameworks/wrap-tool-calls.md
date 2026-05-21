@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Wrap Tool Calls
 
-Use this guide when a framework, SDK, or orchestration layer owns tool invocation and you need NeMo Flow to observe and control those calls without changing the framework's public behavior.
+Use this guide when a framework, SDK, or orchestration layer owns tool invocation and you need NeMo Relay to observe and control those calls without changing the framework's public behavior.
 
 ## What You Build
 
-You will place a managed NeMo Flow tool execution wrapper at the framework's stable tool boundary. The wrapper emits tool lifecycle events, runs tool middleware, keeps the tool attached to the active scope, and returns the original tool result to the framework.
+You will place a managed NeMo Relay tool execution wrapper at the framework's stable tool boundary. The wrapper emits tool lifecycle events, runs tool middleware, keeps the tool attached to the active scope, and returns the original tool result to the framework.
 
 ## Before You Start
 
@@ -30,7 +30,7 @@ Follow this sequence to keep framework work attached to the expected runtime con
 4. Keep framework-owned clients, callbacks, streams, and handles outside the emitted JSON payload.
 5. Return the tool result exactly as the framework expects.
 
-Managed wrappers are the first choice because NeMo Flow owns the full call boundary. That gives subscribers complete start and end events, lets execution intercepts wrap the real callback, and keeps guardrails and request intercepts in the normal middleware order.
+Managed wrappers are the first choice because NeMo Relay owns the full call boundary. That gives subscribers complete start and end events, lets execution intercepts wrap the real callback, and keeps guardrails and request intercepts in the normal middleware order.
 
 ## Concrete Tool Example
 
@@ -45,7 +45,7 @@ The examples below wrap one framework tool callback and attach it to the active 
 ```python
 from typing import TypedDict
 
-import nemo_flow
+import nemo_relay
 
 
 class SearchArgs(TypedDict):
@@ -58,12 +58,12 @@ class SearchResult(TypedDict):
 
 
 async def framework_tool(tool_name: str, raw_args: SearchArgs) -> SearchResult:
-    parent = nemo_flow.scope.get_handle()
+    parent = nemo_relay.scope.get_handle()
 
     async def invoke(args: SearchArgs) -> SearchResult:
         return {"hits": 2, "echo": args}
 
-    return await nemo_flow.tools.execute(
+    return await nemo_relay.tools.execute(
         tool_name,
         raw_args,
         invoke,
@@ -76,7 +76,7 @@ async def framework_tool(tool_name: str, raw_args: SearchArgs) -> SearchResult:
 :sync: node
 
 ```ts
-import { getHandle, toolCallExecute, type ScopeHandle } from 'nemo-flow-node';
+import { getHandle, toolCallExecute, type ScopeHandle } from 'nemo-relay-node';
 
 type SearchArgs = { query: string };
 type SearchResult = { hits: number; echo: SearchArgs };
@@ -101,8 +101,8 @@ export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Prom
 :sync: rust
 
 ```rust
-use nemo_flow::api::scope::get_handle;
-use nemo_flow::api::tool::{tool_call_execute, ToolCallExecuteParams};
+use nemo_relay::api::scope::get_handle;
+use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -149,9 +149,9 @@ Run one framework tool path and check:
 
 Check these symptoms first when the workflow does not behave as expected.
 
-- **Tool events appear without parentage**: Pass the active scope handle or ensure the framework tool runs inside a NeMo Flow scope.
+- **Tool events appear without parentage**: Pass the active scope handle or ensure the framework tool runs inside a NeMo Relay scope.
 - **Middleware does not run**: The framework still calls the real tool callback directly.
-- **Payload serialization fails**: Project framework objects into JSON-compatible tool arguments and results before NeMo Flow sees them.
+- **Payload serialization fails**: Project framework objects into JSON-compatible tool arguments and results before NeMo Relay sees them.
 - **A fallback emits incomplete spans**: Manual start and end lifecycle calls must use the same handle.
 
 ## Next Steps

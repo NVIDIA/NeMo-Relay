@@ -26,7 +26,7 @@ use super::response::AnnotatedLlmResponse;
 /// - **Synchronous**: `decode`/`encode` are pure data transforms (JSON
 ///   restructuring), not I/O operations. This matches existing guardrails
 ///   and request intercepts.
-/// - **`Send + Sync`**: Required because [`NemoFlowContextState`](crate::api::runtime::NemoFlowContextState)
+/// - **`Send + Sync`**: Required because [`NemoRelayContextState`](crate::api::runtime::NemoRelayContextState)
 ///   is behind `Arc<RwLock<>>` and accessed from async contexts.
 /// - **Trait object**: Codecs are registered at runtime (e.g., by Python
 ///   patches), so the Rust core cannot know concrete types at compile time.

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Public NAPI API functions for the NeMo Flow Node.js bindings.
+//! Public NAPI API functions for the NeMo Relay Node.js bindings.
 //!
 //! This module exposes the full agent runtime API to JavaScript/TypeScript:
 //! scope stack management, tool and LLM lifecycle operations, guardrail and
@@ -25,22 +25,22 @@ use napi_derive::napi;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_flow::api::llm as core_llm_api;
-use nemo_flow::api::llm::{LlmAttributes, LlmRequest};
-use nemo_flow::api::registry as core_registry_api;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::runtime::{
+use nemo_relay::api::llm as core_llm_api;
+use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
 };
-use nemo_flow::api::scope as core_scope_api;
-use nemo_flow::api::scope::ScopeAttributes;
-use nemo_flow::api::subscriber as core_subscriber_api;
-use nemo_flow::api::tool as core_tool_api;
-use nemo_flow::api::tool::ToolAttributes;
-use nemo_flow::error::{FlowError, Result as FlowResult};
-use nemo_flow::plugin::{
+use nemo_relay::api::scope as core_scope_api;
+use nemo_relay::api::scope::ScopeAttributes;
+use nemo_relay::api::subscriber as core_subscriber_api;
+use nemo_relay::api::tool as core_tool_api;
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report as active_plugin_report_impl,
     clear_plugin_configuration as clear_plugin_configuration_impl,
@@ -48,8 +48,8 @@ use nemo_flow::plugin::{
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
     validate_plugin_config as validate_plugin_config_impl,
 };
-use nemo_flow::shared_runtime::initialize_shared_runtime_binding;
-use nemo_flow_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 
 use crate::callable;
 use crate::convert::{
@@ -94,24 +94,24 @@ fn parse_string_map(
 
 fn build_otel_config(
     options: Option<OpenTelemetryConfig>,
-) -> napi::Result<nemo_flow::observability::otel::OpenTelemetryConfig> {
+) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
     let options = options.unwrap_or_default();
     let transport = options
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = options
         .service_name
-        .unwrap_or_else(|| "nemo-flow".to_string());
+        .unwrap_or_else(|| "nemo-relay".to_string());
     let instrumentation_scope = options
         .instrumentation_scope
-        .unwrap_or_else(|| "nemo-flow-otel".to_string());
+        .unwrap_or_else(|| "nemo-relay-otel".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
 
     let mut config = match transport.as_str() {
         "http_binary" => {
-            nemo_flow::observability::otel::OpenTelemetryConfig::http_binary(service_name)
+            nemo_relay::observability::otel::OpenTelemetryConfig::http_binary(service_name)
         }
-        "grpc" => nemo_flow::observability::otel::OpenTelemetryConfig::grpc(service_name),
+        "grpc" => nemo_relay::observability::otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             return Err(napi::Error::from_reason(format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -142,9 +142,9 @@ fn build_otel_config(
 
 fn build_atof_config(
     options: Option<AtofExporterConfig>,
-) -> napi::Result<nemo_flow::observability::atof::AtofExporterConfig> {
+) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
     let options = options.unwrap_or_default();
-    let mut config = nemo_flow::observability::atof::AtofExporterConfig::new();
+    let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
 
     if let Some(output_directory) = options.output_directory {
         config = config.with_output_directory(PathBuf::from(output_directory));
@@ -153,7 +153,7 @@ fn build_atof_config(
         config = config.with_filename(filename);
     }
     if let Some(mode) = options.mode {
-        let Some(mode) = nemo_flow::observability::atof::AtofExporterMode::parse(&mode) else {
+        let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode) else {
             return Err(napi::Error::from_reason(
                 "mode must be 'append' or 'overwrite'",
             ));
@@ -166,22 +166,22 @@ fn build_atof_config(
 
 fn build_openinference_config(
     options: Option<OpenInferenceConfig>,
-) -> napi::Result<nemo_flow::observability::openinference::OpenInferenceConfig> {
+) -> napi::Result<nemo_relay::observability::openinference::OpenInferenceConfig> {
     let options = options.unwrap_or_default();
     let transport = options
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = options
         .service_name
-        .unwrap_or_else(|| "nemo-flow".to_string());
+        .unwrap_or_else(|| "nemo-relay".to_string());
     let instrumentation_scope = options
         .instrumentation_scope
-        .unwrap_or_else(|| "nemo-flow-openinference".to_string());
+        .unwrap_or_else(|| "nemo-relay-openinference".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
 
     let transport = match transport.as_str() {
-        "http_binary" => nemo_flow::observability::openinference::OtlpTransport::HttpBinary,
-        "grpc" => nemo_flow::observability::openinference::OtlpTransport::Grpc,
+        "http_binary" => nemo_relay::observability::openinference::OtlpTransport::HttpBinary,
+        "grpc" => nemo_relay::observability::openinference::OtlpTransport::Grpc,
         other => {
             return Err(napi::Error::from_reason(format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -189,7 +189,7 @@ fn build_openinference_config(
         }
     };
 
-    let mut config = nemo_flow::observability::openinference::OpenInferenceConfig::new()
+    let mut config = nemo_relay::observability::openinference::OpenInferenceConfig::new()
         .with_transport(transport)
         .with_service_name(service_name)
         .with_instrumentation_scope(instrumentation_scope)
@@ -368,8 +368,9 @@ fn build_plugin_context(
 
     let subscriber_regs = registrations.clone();
     let subscriber_namespace = namespace_prefix.clone();
-    let register_subscriber =
-        env.create_function_from_closure("__nemo_flow_adaptive_register_subscriber", move |ctx| {
+    let register_subscriber = env.create_function_from_closure(
+        "__nemo_relay_adaptive_register_subscriber",
+        move |ctx| {
             let name = format!("{}{}", subscriber_namespace, ctx.get::<String>(0)?);
             let callback = ctx.get::<JsFunction>(1)?;
             let tsfn = json_callback_tsfn(ctx.env, &callback)?;
@@ -397,13 +398,14 @@ fn build_plugin_context(
                     }),
                 ));
             ctx.env.get_undefined()
-        })?;
+        },
+    )?;
     context.set_named_property("registerSubscriber", register_subscriber)?;
 
     let tool_sanitize_request_regs = registrations.clone();
     let tool_sanitize_request_namespace = namespace_prefix.clone();
     let register_tool_sanitize_request_guardrail = env.create_function_from_closure(
-        "__nemo_flow_plugin_register_tool_sanitize_request_guardrail",
+        "__nemo_relay_plugin_register_tool_sanitize_request_guardrail",
         move |ctx| {
             let name = format!(
                 "{}{}",
@@ -448,7 +450,7 @@ fn build_plugin_context(
     let tool_sanitize_response_regs = registrations.clone();
     let tool_sanitize_response_namespace = namespace_prefix.clone();
     let register_tool_sanitize_response_guardrail = env.create_function_from_closure(
-        "__nemo_flow_plugin_register_tool_sanitize_response_guardrail",
+        "__nemo_relay_plugin_register_tool_sanitize_response_guardrail",
         move |ctx| {
             let name = format!(
                 "{}{}",
@@ -493,7 +495,7 @@ fn build_plugin_context(
     let tool_conditional_regs = registrations.clone();
     let tool_conditional_namespace = namespace_prefix.clone();
     let register_tool_conditional_execution_guardrail = env.create_function_from_closure(
-        "__nemo_flow_plugin_register_tool_conditional_execution_guardrail",
+        "__nemo_relay_plugin_register_tool_conditional_execution_guardrail",
         move |ctx| {
             let name = format!("{}{}", tool_conditional_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -536,7 +538,7 @@ fn build_plugin_context(
     let llm_sanitize_request_regs = registrations.clone();
     let llm_sanitize_request_namespace = namespace_prefix.clone();
     let register_llm_sanitize_request_guardrail = env.create_function_from_closure(
-        "__nemo_flow_plugin_register_llm_sanitize_request_guardrail",
+        "__nemo_relay_plugin_register_llm_sanitize_request_guardrail",
         move |ctx| {
             let name = format!(
                 "{}{}",
@@ -580,7 +582,7 @@ fn build_plugin_context(
     let llm_sanitize_response_regs = registrations.clone();
     let llm_sanitize_response_namespace = namespace_prefix.clone();
     let register_llm_sanitize_response_guardrail = env.create_function_from_closure(
-        "__nemo_flow_plugin_register_llm_sanitize_response_guardrail",
+        "__nemo_relay_plugin_register_llm_sanitize_response_guardrail",
         move |ctx| {
             let name = format!(
                 "{}{}",
@@ -624,7 +626,7 @@ fn build_plugin_context(
     let llm_conditional_regs = registrations.clone();
     let llm_conditional_namespace = namespace_prefix.clone();
     let register_llm_conditional_execution_guardrail = env.create_function_from_closure(
-        "__nemo_flow_plugin_register_llm_conditional_execution_guardrail",
+        "__nemo_relay_plugin_register_llm_conditional_execution_guardrail",
         move |ctx| {
             let name = format!("{}{}", llm_conditional_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -666,7 +668,7 @@ fn build_plugin_context(
     let llm_regs = registrations.clone();
     let llm_request_namespace = namespace_prefix.clone();
     let register_llm_request_intercept = env.create_function_from_closure(
-        "__nemo_flow_adaptive_register_llm_request_intercept",
+        "__nemo_relay_adaptive_register_llm_request_intercept",
         move |ctx| {
             let name = format!("{}{}", llm_request_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -706,7 +708,7 @@ fn build_plugin_context(
     let llm_exec_regs = registrations.clone();
     let llm_exec_namespace = namespace_prefix.clone();
     let register_llm_execution_intercept = env.create_function_from_closure(
-        "__nemo_flow_adaptive_register_llm_execution_intercept",
+        "__nemo_relay_adaptive_register_llm_execution_intercept",
         move |ctx| {
             let name = format!("{}{}", llm_exec_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -748,7 +750,7 @@ fn build_plugin_context(
     let llm_stream_exec_regs = registrations.clone();
     let llm_stream_namespace = namespace_prefix.clone();
     let register_llm_stream_execution_intercept = env.create_function_from_closure(
-        "__nemo_flow_adaptive_register_llm_stream_execution_intercept",
+        "__nemo_relay_adaptive_register_llm_stream_execution_intercept",
         move |ctx| {
             let name = format!("{}{}", llm_stream_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -795,7 +797,7 @@ fn build_plugin_context(
     let tool_request_regs = registrations.clone();
     let tool_request_namespace = namespace_prefix.clone();
     let register_tool_request_intercept = env.create_function_from_closure(
-        "__nemo_flow_adaptive_register_tool_request_intercept",
+        "__nemo_relay_adaptive_register_tool_request_intercept",
         move |ctx| {
             let name = format!("{}{}", tool_request_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -838,7 +840,7 @@ fn build_plugin_context(
     let tool_regs = registrations.clone();
     let tool_exec_namespace = namespace_prefix;
     let register_tool_execution_intercept = env.create_function_from_closure(
-        "__nemo_flow_adaptive_register_tool_execution_intercept",
+        "__nemo_relay_adaptive_register_tool_execution_intercept",
         move |ctx| {
             let name = format!("{}{}", tool_exec_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
@@ -1850,8 +1852,8 @@ pub fn llm_stream_call_execute(
         // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
         let wrapper = serde_json::json!({
-            "__nemo_flow_native": req_json,
-            "__nemo_flow_stream_id": stream_id,
+            "__nemo_relay_native": req_json,
+            "__nemo_relay_stream_id": stream_id,
         });
 
         // NonBlocking: queue the call on the JS event loop and return immediately.
@@ -2897,7 +2899,7 @@ pub fn llm_conditional_execution(env: Env, request: Json) -> Result<JsObject> {
 /// When ready, call `exportJson()` to serialize the collected trajectory.
 #[napi]
 pub struct AtifExporter {
-    inner: nemo_flow::observability::atif::AtifExporter,
+    inner: nemo_relay::observability::atif::AtifExporter,
 }
 
 #[napi]
@@ -2913,7 +2915,7 @@ impl AtifExporter {
         agent_version: String,
         model_name: Option<String>,
     ) -> napi::Result<Self> {
-        let agent_info = nemo_flow::observability::atif::AtifAgentInfo {
+        let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -2921,7 +2923,7 @@ impl AtifExporter {
             extra: None,
         };
         Ok(Self {
-            inner: nemo_flow::observability::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
@@ -2968,14 +2970,14 @@ pub struct AtofExporterConfig {
     pub output_directory: Option<String>,
     /// `"append"` (default) or `"overwrite"`.
     pub mode: Option<String>,
-    /// Output filename. Defaults to `nemo-flow-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
+    /// Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
     pub filename: Option<String>,
 }
 
 /// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
 #[napi]
 pub struct AtofExporter {
-    inner: nemo_flow::observability::atof::AtofExporter,
+    inner: nemo_relay::observability::atof::AtofExporter,
 }
 
 #[napi]
@@ -2984,7 +2986,7 @@ impl AtofExporter {
     /// from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<AtofExporterConfig>) -> napi::Result<Self> {
-        let inner = nemo_flow::observability::atof::AtofExporter::new(build_atof_config(config)?)
+        let inner = nemo_relay::observability::atof::AtofExporter::new(build_atof_config(config)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -3040,13 +3042,13 @@ pub struct OpenTelemetryConfig {
     pub headers: Option<Json>,
     /// Extra OpenTelemetry resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
-    /// `service.name` resource attribute. Defaults to `"nemo-flow"`.
+    /// `service.name` resource attribute. Defaults to `"nemo-relay"`.
     pub service_name: Option<String>,
     /// Optional `service.namespace` resource attribute.
     pub service_namespace: Option<String>,
     /// Optional `service.version` resource attribute.
     pub service_version: Option<String>,
-    /// Instrumentation scope name. Defaults to `"nemo-flow-otel"`.
+    /// Instrumentation scope name. Defaults to `"nemo-relay-otel"`.
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
@@ -3064,13 +3066,13 @@ pub struct OpenInferenceConfig {
     pub headers: Option<Json>,
     /// Extra OpenInference resource attributes as string key/value pairs.
     pub resource_attributes: Option<Json>,
-    /// `service.name` resource attribute. Defaults to `"nemo-flow"`.
+    /// `service.name` resource attribute. Defaults to `"nemo-relay"`.
     pub service_name: Option<String>,
     /// Optional `service.namespace` resource attribute.
     pub service_namespace: Option<String>,
     /// Optional `service.version` resource attribute.
     pub service_version: Option<String>,
-    /// Instrumentation scope name. Defaults to `"nemo-flow-openinference"`.
+    /// Instrumentation scope name. Defaults to `"nemo-relay-openinference"`.
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
@@ -3079,7 +3081,7 @@ pub struct OpenInferenceConfig {
 /// OpenTelemetry-backed event subscriber.
 #[napi]
 pub struct OpenTelemetrySubscriber {
-    inner: nemo_flow::observability::otel::OpenTelemetrySubscriber,
+    inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
 }
 
 #[napi]
@@ -3087,7 +3089,7 @@ impl OpenTelemetrySubscriber {
     /// Create a new OpenTelemetry subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<OpenTelemetryConfig>) -> napi::Result<Self> {
-        let inner = nemo_flow::observability::otel::OpenTelemetrySubscriber::new(
+        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
             build_otel_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
@@ -3130,7 +3132,7 @@ impl OpenTelemetrySubscriber {
 /// OpenInference-backed event subscriber.
 #[napi]
 pub struct OpenInferenceSubscriber {
-    inner: nemo_flow::observability::openinference::OpenInferenceSubscriber,
+    inner: nemo_relay::observability::openinference::OpenInferenceSubscriber,
 }
 
 #[napi]
@@ -3138,7 +3140,7 @@ impl OpenInferenceSubscriber {
     /// Create a new OpenInference subscriber from a config object.
     #[napi(constructor)]
     pub fn new(config: Option<OpenInferenceConfig>) -> napi::Result<Self> {
-        let inner = nemo_flow::observability::openinference::OpenInferenceSubscriber::new(
+        let inner = nemo_relay::observability::openinference::OpenInferenceSubscriber::new(
             build_openinference_config(config)?,
         )
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;

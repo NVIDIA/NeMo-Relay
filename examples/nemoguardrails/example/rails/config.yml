@@ -17,7 +17,7 @@ rails:
 prompts:
   - task: self_check_input
     content: |-
-      You are checking whether a NeMo Flow request should be allowed.
+      You are checking whether a NeMo Relay request should be allowed.
 
       The input may be plain user text or a JSON object with tool_name and arguments fields.
 
@@ -31,7 +31,7 @@ prompts:
 
   - task: self_check_output
     content: |-
-      You are checking whether a NeMo Flow response should be returned.
+      You are checking whether a NeMo Relay response should be returned.
 
       The output may be assistant text or a JSON object with tool_name, arguments, and result fields.
 

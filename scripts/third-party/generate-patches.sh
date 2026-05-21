@@ -50,7 +50,7 @@ generate_patches() {
     fi
 
     mkdir -p "$patch_dir"
-    local patch_file="$patch_dir/0001-add-nemo-flow-integration.patch"
+    local patch_file="$patch_dir/0001-add-nemo-relay-integration.patch"
 
     # Combine tracked diffs and new file diffs
     {

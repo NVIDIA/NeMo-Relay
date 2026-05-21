@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 
-from nemo_flow import ScopeType, plugin, scope
-from nemo_flow.observability import (
+from nemo_relay import ScopeType, plugin, scope
+from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
     AtofConfig,
@@ -23,16 +23,16 @@ class TestObservabilityConfigHelpers:
         assert AtofConfig().to_dict() == {"enabled": False, "mode": "append"}
         assert AtifConfig().to_dict() == {
             "enabled": False,
-            "agent_name": "NeMo Flow",
+            "agent_name": "NeMo Relay",
             "model_name": "unknown",
-            "filename_template": "nemo-flow-atif-{session_id}.json",
+            "filename_template": "nemo-relay-atif-{session_id}.json",
         }
         assert OtlpConfig().to_dict() == {
             "enabled": False,
             "transport": "http_binary",
             "headers": {},
             "resource_attributes": {},
-            "service_name": "nemo-flow",
+            "service_name": "nemo-relay",
             "timeout_millis": 3000,
         }
 
@@ -113,7 +113,7 @@ class TestObservabilityConfigHelpers:
         handle = scope.push("python-open-agent", ScopeType.Agent)
         try:
             plugin.clear()
-            assert (tmp_path / f"nemo-flow-atif-{handle.uuid}.json").exists()
+            assert (tmp_path / f"nemo-relay-atif-{handle.uuid}.json").exists()
         finally:
             scope.pop(handle)
 

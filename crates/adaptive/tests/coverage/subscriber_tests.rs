@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for subscriber in the NeMo Flow adaptive crate.
+//! Coverage tests for subscriber in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_flow::api::event::{
+use nemo_relay::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
 };
-use nemo_flow::api::scope::ScopeType;
-use nemo_flow::codec::response::{AnnotatedLlmResponse, FinishReason};
+use nemo_relay::api::scope::ScopeType;
+use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]

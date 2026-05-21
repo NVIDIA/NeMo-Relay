@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Provider Codecs
 
-Use this guide when a framework integration needs NeMo Flow middleware, intercepts, or subscribers to reason about provider-specific LLM payloads through a stable annotated shape.
+Use this guide when a framework integration needs NeMo Relay middleware, intercepts, or subscribers to reason about provider-specific LLM payloads through a stable annotated shape.
 
 ## What You Build
 
@@ -26,24 +26,24 @@ You need:
 
 ## What Provider Codecs Are
 
-A provider codec is a pure data translator at the NeMo Flow LLM boundary.
+A provider codec is a pure data translator at the NeMo Relay LLM boundary.
 
 - An LLM request codec converts a raw provider request into a normalized annotated request, then encodes any annotated edits back into the original provider request.
 - An LLM response codec converts a raw provider response into a normalized response annotation for lifecycle events.
 
-Provider codecs let framework code keep using provider-native payloads while NeMo Flow middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](using-codecs.md).
+Provider codecs let framework code keep using provider-native payloads while NeMo Relay middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](using-codecs.md).
 
 ## How Provider Codecs Work
 
 When a managed LLM call has a request codec:
 
-1. NeMo Flow calls `decode` before LLM request intercepts run.
+1. NeMo Relay calls `decode` before LLM request intercepts run.
 2. Request intercepts receive both the raw request and the annotated request.
 3. Intercepts may edit the raw request, the annotated request, or both.
-4. NeMo Flow calls `encode` to merge the annotated request back into the original raw request.
+4. NeMo Relay calls `encode` to merge the annotated request back into the original raw request.
 5. Execution intercepts and the provider callback receive the encoded provider request.
 
-When a managed LLM call has a response codec, NeMo Flow decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](provider-response-codecs.md) for response-only behavior and custom response codec examples.
+When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](provider-response-codecs.md) for response-only behavior and custom response codec examples.
 
 Codec implementations should preserve fields they do not understand. Treat `encode` as a merge operation over the original provider payload, not as a full replacement.
 
@@ -66,9 +66,9 @@ The built-in provider codecs expose the same core methods:
 
 | Codec | Python Import | Node.js Import | Methods |
 |---|---|---|---|
-| OpenAI Chat | `nemo_flow.codecs.OpenAIChatCodec` | `OpenAIChatCodec` from `nemo-flow-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
-| OpenAI Responses | `nemo_flow.codecs.OpenAIResponsesCodec` | `OpenAIResponsesCodec` from `nemo-flow-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
-| Anthropic Messages | `nemo_flow.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-flow-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| OpenAI Chat | `nemo_relay.codecs.OpenAIChatCodec` | `OpenAIChatCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| OpenAI Responses | `nemo_relay.codecs.OpenAIResponsesCodec` | `OpenAIResponsesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| Anthropic Messages | `nemo_relay.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 
 Choose the provider codec that matches the payload shape the framework already sends to the provider. Do not translate to a different provider shape only to make the codec fit.
 
@@ -83,9 +83,9 @@ This example uses a request intercept to edit the normalized request. The codec 
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
-from nemo_flow.codecs import OpenAIChatCodec
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay.codecs import OpenAIChatCodec
 
 
 def add_system_message(_name, request, annotated):
@@ -99,7 +99,7 @@ def add_system_message(_name, request, annotated):
     return request, annotated
 
 
-nemo_flow.intercepts.register_llm_request(
+nemo_relay.intercepts.register_llm_request(
     "framework.add_system_message",
     10,
     False,
@@ -127,7 +127,7 @@ request = LLMRequest(
     },
 )
 
-response = await nemo_flow.llm.execute(
+response = await nemo_relay.llm.execute(
     "openai-chat",
     request,
     invoke_provider,
@@ -145,11 +145,11 @@ response = await nemo_flow.llm.execute(
 import {
   OpenAIChatCodec,
   registerLlmRequestIntercept,
-} from 'nemo-flow-node';
+} from 'nemo-relay-node';
 import {
   JsonPassthrough,
   typedLlmExecute,
-} from 'nemo-flow-node/typed';
+} from 'nemo-relay-node/typed';
 
 registerLlmRequestIntercept(
   'framework.add_system_message',
@@ -207,9 +207,9 @@ const response = await typedLlmExecute(
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_flow::codec::openai_chat::OpenAIChatCodec;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -263,8 +263,8 @@ Use a custom codec when a framework uses a payload shape that does not directly 
 :sync: python
 
 ```python
-from nemo_flow import AnnotatedLLMRequest, LLMRequest
-from nemo_flow.codecs import LlmCodec
+from nemo_relay import AnnotatedLLMRequest, LLMRequest
+from nemo_relay.codecs import LlmCodec
 
 
 class FrameworkChatCodec(LlmCodec):
@@ -301,7 +301,7 @@ class FrameworkChatCodec(LlmCodec):
 :sync: node
 
 ```ts
-import type { JsonValue, LlmCodec } from 'nemo-flow-node/typed';
+import type { JsonValue, LlmCodec } from 'nemo-relay-node/typed';
 
 type FrameworkRequest = {
   headers: Record<string, JsonValue>;

@@ -44,7 +44,7 @@ allowing later request intercepts to continue running.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Flow own the
+Use plugin configuration when the application should let NeMo Relay own the
 Adaptive Hints request-intercept lifecycle.
 
 ::::{tab-set}
@@ -54,33 +54,33 @@ Adaptive Hints request-intercept lifecycle.
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     agent_id="planner",
-    state=nemo_flow.adaptive.StateConfig(
-        backend=nemo_flow.adaptive.BackendSpec.in_memory(),
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
     ),
-    telemetry=nemo_flow.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
-    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+    telemetry=nemo_relay.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
+    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
     ),
 )
 
-plugin_config = nemo_flow.plugin.PluginConfig(
-    components=[nemo_flow.adaptive.ComponentSpec(adaptive_config)]
+plugin_config = nemo_relay.plugin.PluginConfig(
+    components=[nemo_relay.adaptive.ComponentSpec(adaptive_config)]
 )
 
-report = nemo_flow.plugin.validate(plugin_config)
+report = nemo_relay.plugin.validate(plugin_config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-await nemo_flow.plugin.initialize(plugin_config)
+await nemo_relay.plugin.initialize(plugin_config)
 try:
     # Run instrumented application work here.
     pass
 finally:
-    nemo_flow.plugin.clear()
+    nemo_relay.plugin.clear()
 ```
 :::
 
@@ -88,8 +88,8 @@ finally:
 :sync: node
 
 ```js
-const adaptive = require("nemo-flow-node/adaptive");
-const plugin = require("nemo-flow-node/plugin");
+const adaptive = require("nemo-relay-node/adaptive");
+const plugin = require("nemo-relay-node/plugin");
 
 const adaptiveConfig = adaptive.defaultConfig();
 adaptiveConfig.agent_id = "planner";
@@ -120,9 +120,9 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
-use nemo_flow_adaptive::plugin_component::ComponentSpec;
-use nemo_flow_adaptive::{
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay_adaptive::plugin_component::ComponentSpec;
+use nemo_relay_adaptive::{
     AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
 };
 
@@ -164,24 +164,24 @@ directly instead of activating the top-level plugin component.
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     agent_id="planner",
-    state=nemo_flow.adaptive.StateConfig(
-        backend=nemo_flow.adaptive.BackendSpec.in_memory(),
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
     ),
-    telemetry=nemo_flow.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
-    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+    telemetry=nemo_relay.adaptive.TelemetryConfig(learners=["tool_parallelism"]),
+    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
     ),
 )
 
-runtime = nemo_flow.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
 await runtime.register()
 try:
     # Run instrumented application work here.
-    nemo_flow.adaptive.set_latency_sensitivity(8)
+    nemo_relay.adaptive.set_latency_sensitivity(8)
 finally:
     await runtime.shutdown()
 ```
@@ -199,7 +199,7 @@ Hints from Node.js.
 :sync: rust
 
 ```rust
-use nemo_flow_adaptive::{
+use nemo_relay_adaptive::{
     set_latency_sensitivity, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
     BackendSpec, StateConfig, TelemetryComponentConfig,
 };

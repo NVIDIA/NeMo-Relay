@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # License Agreement
 
-NeMo Flow is licensed under the Apache License 2.0.
+NeMo Relay is licensed under the Apache License 2.0.
 
 The full license text is available in the repository root `LICENSE` file.
 

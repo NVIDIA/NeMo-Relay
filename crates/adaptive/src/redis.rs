@@ -48,7 +48,7 @@ impl RedisBackend {
     /// # Arguments
     ///
     /// * `url` — Redis connection URL (e.g. `redis://127.0.0.1:6379`).
-    /// * `key_prefix` — String prepended to every Redis key (e.g. `"nemo_flow:"`).
+    /// * `key_prefix` — String prepended to every Redis key (e.g. `"nemo_relay:"`).
     ///
     /// # Errors
     ///

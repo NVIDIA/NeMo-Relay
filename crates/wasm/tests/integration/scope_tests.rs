@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for scope in the NeMo Flow WebAssembly crate.
+//! Integration tests for scope in the NeMo Relay WebAssembly crate.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::*;
 
-use nemo_flow_wasm::api::*;
-use nemo_flow_wasm::types::*;
+use nemo_relay_wasm::api::*;
+use nemo_relay_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -33,7 +33,7 @@ fn push_scope(
     data: JsValue,
     metadata: JsValue,
 ) -> Result<ScopeHandle, JsValue> {
-    nemo_flow_wasm::api::push_scope(
+    nemo_relay_wasm::api::push_scope(
         name,
         scope_type,
         parent_handle(handle),
@@ -54,7 +54,7 @@ fn with_scope(
     data: JsValue,
     metadata: JsValue,
 ) -> Result<js_sys::Promise, JsValue> {
-    nemo_flow_wasm::api::with_scope(
+    nemo_relay_wasm::api::with_scope(
         name,
         scope_type,
         callback,
@@ -67,11 +67,11 @@ fn with_scope(
 }
 
 fn pop_scope(handle: &ScopeHandle) -> Result<(), JsValue> {
-    nemo_flow_wasm::api::pop_scope(handle, JsValue::NULL, None)
+    nemo_relay_wasm::api::pop_scope(handle, JsValue::NULL, None)
 }
 
 fn pop_scope_with_output(handle: &ScopeHandle, output: JsValue) -> Result<(), JsValue> {
-    nemo_flow_wasm::api::pop_scope(handle, output, None)
+    nemo_relay_wasm::api::pop_scope(handle, output, None)
 }
 
 fn event(
@@ -80,7 +80,7 @@ fn event(
     data: JsValue,
     metadata: JsValue,
 ) -> Result<(), JsValue> {
-    nemo_flow_wasm::api::event(name, parent_handle(handle), data, metadata, None)
+    nemo_relay_wasm::api::event(name, parent_handle(handle), data, metadata, None)
 }
 
 // ===========================================================================

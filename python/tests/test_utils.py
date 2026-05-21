@@ -7,21 +7,21 @@ import asyncio
 
 import pytest
 
-import nemo_flow
-from nemo_flow.utils import run_sync
+import nemo_relay
+from nemo_relay.utils import run_sync
 
 
 @pytest.mark.parametrize("from_async", [False, True])
 def test_run_sync(from_async: bool):
     """
-    Test that run_sync correctly propagates the NeMo Flow scope stack to the worker thread,
+    Test that run_sync correctly propagates the NeMo Relay scope stack to the worker thread,
     and that it can be called from inside a running loop and outside a running loop.
     """
-    scope_stack = nemo_flow.get_scope_stack()
+    scope_stack = nemo_relay.get_scope_stack()
     assert scope_stack is not None
 
     async def coro_fn() -> int:
-        thread_scope_stack = nemo_flow.get_scope_stack()
+        thread_scope_stack = nemo_relay.get_scope_stack()
         assert thread_scope_stack is scope_stack
         return 1
 

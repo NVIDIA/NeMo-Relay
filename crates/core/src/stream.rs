@@ -33,7 +33,7 @@ use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::LlmHandle;
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::codec::response::AnnotatedLlmResponse;
@@ -175,7 +175,7 @@ impl LlmStreamWrapper {
             }
         };
         if let Some((event, subscribers)) = event_snapshot {
-            NemoFlowContextState::emit_event(&event, &subscribers);
+            NemoRelayContextState::emit_event(&event, &subscribers);
         }
     }
 
@@ -207,7 +207,7 @@ impl LlmStreamWrapper {
             }
         };
         if let Some((event, subscribers)) = event_snapshot {
-            NemoFlowContextState::emit_event(&event, &subscribers);
+            NemoRelayContextState::emit_event(&event, &subscribers);
         }
     }
 }

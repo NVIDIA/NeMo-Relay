@@ -1,14 +1,12 @@
 {
-  "id": "nemo-flow",
-  "name": "NeMo Flow Observability",
-  "description": "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Flow.",
+  "id": "nemo-relay",
+  "name": "NeMo Relay Observability",
+  "description": "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Relay.",
   "activation": {
     "onStartup": true
   },
   "contracts": {
-    "agentToolCallMiddleware": [
-      "pi"
-    ]
+    "agentToolCallMiddleware": ["pi"]
   },
   "configSchema": {
     "type": "object",
@@ -17,19 +15,17 @@
       "enabled": {
         "type": "boolean",
         "default": true,
-        "description": "Enables the NeMo Flow OpenClaw hook replay plugin."
+        "description": "Enables the NeMo Relay OpenClaw hook replay plugin."
       },
       "backend": {
         "type": "string",
-        "enum": [
-          "hooks"
-        ],
+        "enum": ["hooks"],
         "default": "hooks",
         "description": "Hook replay backend implementation. Only the hook-backed backend is supported."
       },
       "plugins": {
-        "$ref": "#/$defs/nemoFlowPluginConfig",
-        "description": "Generic NeMo Flow plugin configuration document. Use the observability component to configure ATIF, OpenTelemetry, and OpenInference exporters."
+        "$ref": "#/$defs/nemoRelayPluginConfig",
+        "description": "Generic NeMo Relay plugin configuration document. Use the observability component to configure ATIF, OpenTelemetry, and OpenInference exporters."
       },
       "capture": {
         "type": "object",
@@ -85,14 +81,14 @@
       }
     },
     "$defs": {
-      "nemoFlowPluginConfig": {
+      "nemoRelayPluginConfig": {
         "type": "object",
         "additionalProperties": true,
         "properties": {
           "version": {
             "type": "integer",
             "default": 1,
-            "description": "NeMo Flow generic plugin config version."
+            "description": "NeMo Relay generic plugin config version."
           },
           "components": {
             "type": "array",
@@ -100,7 +96,7 @@
               "$ref": "#/$defs/pluginComponent"
             },
             "default": [],
-            "description": "NeMo Flow plugin components to validate and initialize."
+            "description": "NeMo Relay plugin components to validate and initialize."
           },
           "policy": {
             "$ref": "#/$defs/pluginPolicy",
@@ -114,14 +110,12 @@
       },
       "pluginComponent": {
         "type": "object",
-        "required": [
-          "kind"
-        ],
+        "required": ["kind"],
         "additionalProperties": false,
         "properties": {
           "kind": {
             "type": "string",
-            "description": "Registered NeMo Flow plugin kind."
+            "description": "Registered NeMo Relay plugin kind."
           },
           "enabled": {
             "type": "boolean",
@@ -152,13 +146,9 @@
       },
       "unsupportedBehavior": {
         "type": "string",
-        "enum": [
-          "ignore",
-          "warn",
-          "error"
-        ]
+        "enum": ["ignore", "warn", "error"]
       }
     },
-    "description": "Configuration for the NeMo Flow OpenClaw hook replay plugin."
+    "description": "Configuration for the NeMo Relay OpenClaw hook replay plugin."
   }
 }

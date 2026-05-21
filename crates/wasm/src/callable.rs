@@ -28,18 +28,18 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::runtime::{
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
-use nemo_flow::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 #[cfg(target_arch = "wasm32")]
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::{FlowError, Result};
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result};
 
 #[cfg(target_arch = "wasm32")]
 use crate::convert::record_callback_error;
@@ -57,13 +57,13 @@ fn js_error_message(e: &JsValue) -> String {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn flow_error_from_js(e: &JsValue) -> FlowError {
+fn relay_error_from_js(e: &JsValue) -> FlowError {
     FlowError::Internal(js_error_message(e))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn flow_json_from_js(val: &JsValue) -> Result<Json> {
-    js_callback_to_json(val).map_err(|e| flow_error_from_js(&e))
+fn relay_json_from_js(val: &JsValue) -> Result<Json> {
+    js_callback_to_json(val).map_err(|e| relay_error_from_js(&e))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -124,13 +124,13 @@ async fn resolve_js_value(result: std::result::Result<JsValue, JsValue>) -> Resu
             if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                 let resolved = JsFuture::from(promise.clone())
                     .await
-                    .map_err(|e| flow_error_from_js(&e))?;
-                flow_json_from_js(&resolved)
+                    .map_err(|e| relay_error_from_js(&e))?;
+                relay_json_from_js(&resolved)
             } else {
-                flow_json_from_js(&val)
+                relay_json_from_js(&val)
             }
         }
-        Err(e) => Err(flow_error_from_js(&e)),
+        Err(e) => Err(relay_error_from_js(&e)),
     }
 }
 
@@ -168,8 +168,8 @@ pub fn wrap_js_tool_fn(func: Function) -> ToolSanitizeFn {
         // errors through the type system. Log errors so failures are not silent.
         callback_json_or_fallback(
             func.call2(&JsValue::NULL, &js_name, &js_args),
-            "nemo_flow: JS tool callback result conversion failed",
-            "nemo_flow: JS tool callback threw",
+            "nemo_relay: JS tool callback result conversion failed",
+            "nemo_relay: JS tool callback threw",
             Json::Null,
         )
     })
@@ -218,8 +218,8 @@ pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
         let js_args = json_to_js(&args);
         let result = func
             .call2(&JsValue::NULL, &js_name, &js_args)
-            .map_err(|e| flow_error_from_js(&e))?;
-        flow_json_from_js(&result)
+            .map_err(|e| relay_error_from_js(&e))?;
+        relay_json_from_js(&result)
     })
 }
 
@@ -245,14 +245,14 @@ pub fn wrap_js_tool_exec_fn(
                     // Check if it's a Promise
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => flow_json_from_js(&resolved),
-                            Err(e) => Err(flow_error_from_js(&e)),
+                            Ok(resolved) => relay_json_from_js(&resolved),
+                            Err(e) => Err(relay_error_from_js(&e)),
                         }
                     } else {
-                        flow_json_from_js(&val)
+                        relay_json_from_js(&val)
                     }
                 }
-                Err(e) => Err(flow_error_from_js(&e)),
+                Err(e) => Err(relay_error_from_js(&e)),
             }
         }))
     })
@@ -313,7 +313,7 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
                     ))
                 })?;
             let new_req_json =
-                js_callback_to_json(&js_new_req).map_err(|e| flow_error_from_js(&e))?;
+                js_callback_to_json(&js_new_req).map_err(|e| relay_error_from_js(&e))?;
             let new_request: LlmRequest = serde_json::from_value(new_req_json).map_err(|e| {
                 FlowError::Internal(format!("failed to deserialize LlmRequest: {e}"))
             })?;
@@ -361,8 +361,8 @@ pub fn wrap_js_llm_sanitize_request_fn(func: Function) -> LlmSanitizeRequestFn {
         // errors through the type system. Log errors so failures are not silent.
         let result_json = callback_json_or_fallback(
             func.call1(&JsValue::NULL, &js_req),
-            "nemo_flow: JS LLM sanitize request result conversion failed",
-            "nemo_flow: JS LLM sanitize request callback threw",
+            "nemo_relay: JS LLM sanitize request result conversion failed",
+            "nemo_relay: JS LLM sanitize request callback threw",
             Json::Null,
         );
         serde_json::from_value(result_json).unwrap_or(request)
@@ -383,7 +383,7 @@ pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
         let js_req = json_to_js(&req_json);
         let result = func
             .call1(&JsValue::NULL, &js_req)
-            .map_err(|e| flow_error_from_js(&e))?;
+            .map_err(|e| relay_error_from_js(&e))?;
 
         if result.is_null() || result.is_undefined() {
             Ok(None)
@@ -422,14 +422,14 @@ pub fn wrap_js_llm_exec_fn(
                 Ok(val) => {
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => flow_json_from_js(&resolved),
-                            Err(e) => Err(flow_error_from_js(&e)),
+                            Ok(resolved) => relay_json_from_js(&resolved),
+                            Err(e) => Err(relay_error_from_js(&e)),
                         }
                     } else {
-                        flow_json_from_js(&val)
+                        relay_json_from_js(&val)
                     }
                 }
-                Err(e) => Err(flow_error_from_js(&e)),
+                Err(e) => Err(relay_error_from_js(&e)),
             }
         }))
     })
@@ -457,7 +457,7 @@ pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) -> Result<()>
                 let msg = e
                     .as_string()
                     .unwrap_or_else(|| "JS collector threw an exception".to_string());
-                record_callback_error(format!("nemo_flow: {msg}"));
+                record_callback_error(format!("nemo_relay: {msg}"));
                 Err(FlowError::Internal(msg))
             }
         }
@@ -482,8 +482,8 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
         // errors through the type system. Log errors so failures are not silent.
         callback_json_or_fallback(
             func.call0(&JsValue::NULL),
-            "nemo_flow: JS finalizer result conversion failed",
-            "nemo_flow: JS finalizer callback threw",
+            "nemo_relay: JS finalizer result conversion failed",
+            "nemo_relay: JS finalizer callback threw",
             Json::Null,
         )
     })
@@ -503,7 +503,7 @@ pub fn wrap_js_event_subscriber(func: Function) -> EventSubscriberFn {
             Ok(event) => event,
             Err(error) => {
                 record_callback_error(format!(
-                    "nemo_flow: failed to serialize JS event subscriber payload: {error}"
+                    "nemo_relay: failed to serialize JS event subscriber payload: {error}"
                 ));
                 return;
             }
@@ -513,11 +513,11 @@ pub fn wrap_js_event_subscriber(func: Function) -> EventSubscriberFn {
             .unwrap_or(JsValue::NULL);
         if let Err(e) = func.call1(&JsValue::NULL, &js_event) {
             record_callback_error(format!(
-                "nemo_flow: JS event subscriber callback threw: {}",
+                "nemo_relay: JS event subscriber callback threw: {}",
                 js_error_message(&e)
             ));
             eprintln!(
-                "nemo_flow: JS event subscriber callback threw: {}",
+                "nemo_relay: JS event subscriber callback threw: {}",
                 js_error_message(&e)
             );
         }
@@ -574,14 +574,14 @@ pub fn wrap_js_tool_exec_intercept_fn(
                 Ok(val) => {
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => flow_json_from_js(&resolved),
-                            Err(e) => Err(flow_error_from_js(&e)),
+                            Ok(resolved) => relay_json_from_js(&resolved),
+                            Err(e) => Err(relay_error_from_js(&e)),
                         }
                     } else {
-                        flow_json_from_js(&val)
+                        relay_json_from_js(&val)
                     }
                 }
-                Err(e) => Err(flow_error_from_js(&e)),
+                Err(e) => Err(relay_error_from_js(&e)),
             }
         }))
     })
@@ -905,8 +905,8 @@ pub fn wrap_js_llm_response_fn(func: Function) -> LlmSanitizeResponseFn {
         // errors through the type system. Log errors and fall back to original response.
         callback_json_or_fallback(
             func.call1(&JsValue::NULL, &js_resp),
-            "nemo_flow: JS LLM response callback result conversion failed",
-            "nemo_flow: JS LLM response callback threw",
+            "nemo_relay: JS LLM response callback result conversion failed",
+            "nemo_relay: JS LLM response callback threw",
             response,
         )
     })

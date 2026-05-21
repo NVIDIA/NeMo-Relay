@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     ScopeStack, TASK_SCOPE_STACK, create_scope_stack, current_scope_stack,
     propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
     task_scope_push, task_scope_remove, task_scope_top,
 };
-use nemo_flow::api::scope::{ScopeHandle, ScopeType};
-use nemo_flow::error::FlowError;
+use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::error::FlowError;
 use uuid::Uuid;
 
 /// Two ScopeStackHandles push different scopes → verify independent.

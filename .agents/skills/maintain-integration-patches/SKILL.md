@@ -1,6 +1,6 @@
 ---
 name: maintain-integration-patches
-description: Refresh, rebase, regenerate, and validate existing NeMo Flow third-party integration patches
+description: Refresh, rebase, regenerate, and validate existing NeMo Relay third-party integration patches
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when an existing `patches/<name>/0001-add-nemo-flow-integration.patch`
+Use this skill when an existing `patches/<name>/0001-add-nemo-relay-integration.patch`
 has drifted against the pinned upstream checkout or needs regeneration after
 local changes.
 
@@ -54,7 +54,7 @@ This root command is the stable public wrapper. The implementation lives under
 - Do not apply patches on top of a dirty upstream checkout unless you explicitly
   understand and intend the merge state.
 - Prefer the repo patch scripts over ad hoc `git diff > patch` workflows.
-- Keep the patch minimal and focused on the NeMo Flow integration surface.
+- Keep the patch minimal and focused on the NeMo Relay integration surface.
 - If upstream drift changes behavior, update docs or test expectations in the
   same branch.
 

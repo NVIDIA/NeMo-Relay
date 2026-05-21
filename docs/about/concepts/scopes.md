@@ -10,7 +10,7 @@ isolation.
 
 ## Why Scopes Exist
 
-Scopes are the ownership backbone of NeMo Flow. Every tool call, LLM call, and
+Scopes are the ownership backbone of NeMo Relay. Every tool call, LLM call, and
 mark event attaches to a scope hierarchy.
 
 That hierarchy lets the runtime:
@@ -48,7 +48,7 @@ That hierarchy determines:
 
 ## Scope Types
 
-NeMo Flow includes standard scope types for common runtime semantics, including:
+NeMo Relay includes standard scope types for common runtime semantics, including:
 
 - `Agent`
 - `Function`

@@ -1,6 +1,6 @@
 ---
 name: update-project-version
-description: Update the NeMo Flow project version across Cargo, Node, generated WebAssembly package metadata, and lockfiles without leaving release surfaces out of sync
+description: Update the NeMo Relay project version across Cargo, Node, generated WebAssembly package metadata, and lockfiles without leaving release surfaces out of sync
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when changing the released NeMo Flow version, including
+Use this skill when changing the released NeMo Relay version, including
 pre-release or build-metadata variants used during packaging.
 
 ## Source Of Truth
@@ -43,9 +43,9 @@ pre-release or build-metadata variants used during packaging.
    version string.
 2. Run `just set-version <version>` to update release-version source files:
    - `[workspace.package].version`
-   - `workspace.dependencies.nemo-flow.version`
-   - `workspace.dependencies.nemo-flow-adaptive.version`
-   - `workspace.dependencies.nemo-flow-ffi.version`
+   - `workspace.dependencies.nemo-relay.version`
+   - `workspace.dependencies.nemo-relay-adaptive.version`
+   - `workspace.dependencies.nemo-relay-ffi.version`
    - `crates/node/package.json` `version`
    - `integrations/openclaw/package.json` `version`
    - `package-lock.json` `packages["crates/node"].version`
@@ -66,7 +66,7 @@ pre-release or build-metadata variants used during packaging.
      `./scripts/generate_attributions.sh node`.
    - If the change needs WebAssembly publish validation, rebuild the generated package
      with `just build-wasm` or
-     `NEMO_FLOW_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-flow-wasm`. Inspect
+     `NEMO_RELAY_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-relay-wasm`. Inspect
      `crates/wasm/pkg/package.json`, not `crates/wasm/package.json`.
 5. Audit remaining references to the old version with targeted search. Separate
    true version pins from examples, generated attribution files, and unrelated
@@ -74,7 +74,7 @@ pre-release or build-metadata variants used during packaging.
 
 ## Validation
 
-- `rg -n '^version =|nemo-flow = \\{ version =|nemo-flow-adaptive = \\{ version =' Cargo.toml`
+- `rg -n '^version =|nemo-relay = \\{ version =|nemo-relay-adaptive = \\{ version =' Cargo.toml`
 - `rg -n '\"version\"' crates/node/package.json integrations/openclaw/package.json package-lock.json`
 - `cargo check --workspace`
 - If Rust attribution files are expected to stay current:

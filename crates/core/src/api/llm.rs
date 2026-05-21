@@ -10,7 +10,7 @@ use serde_json::json;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
@@ -79,7 +79,7 @@ pub struct LlmRequest {
     pub content: Json,
 }
 
-/// Builder parameters for [`NemoFlowContextState::create_llm_handle`].
+/// Builder parameters for [`NemoRelayContextState::create_llm_handle`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateLlmHandleParams<'a> {
@@ -106,7 +106,7 @@ pub struct CreateLlmHandleParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::build_llm_end_event`].
+/// Builder parameters for [`NemoRelayContextState::build_llm_end_event`].
 #[derive(Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct EndLlmHandleParams<'a> {
@@ -296,7 +296,7 @@ fn emit_llm_start(
         let event = state.build_llm_start_event(handle, Some(input), annotated_request);
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -431,7 +431,7 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
         );
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     if let Some(error) = decode_error {
         Err(error)
     } else {
@@ -453,7 +453,7 @@ fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Re
         let event = state.end_llm_handle(handle, handle.data.clone(), metadata, None);
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -530,7 +530,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 metadata.clone(),
             )
         };
-        if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
+        if let Some(error) = NemoRelayContextState::llm_conditional_execution_snapshot_chain(
             &request,
             &entries,
             &subscribers,
@@ -678,7 +678,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 metadata.clone(),
             )
         };
-        if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
+        if let Some(error) = NemoRelayContextState::llm_conditional_execution_snapshot_chain(
             &request,
             &entries,
             &subscribers,
@@ -820,7 +820,7 @@ pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))
     };
-    if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
+    if let Some(error) = NemoRelayContextState::llm_conditional_execution_snapshot_chain(
         request,
         &entries,
         &subscribers,

@@ -3,7 +3,7 @@
 
 //! Canonical adaptive config and diagnostics types.
 
-use nemo_flow::plugin::ConfigPolicy;
+use nemo_relay::plugin::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
@@ -216,7 +216,7 @@ fn default_acg_priority() -> i32 {
     50
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl AdaptiveConfig {
         agent_id => { label: "fallback_agent_id", kind: String, optional: true },
         state => {
@@ -263,7 +263,7 @@ nemo_flow::editor_config! {
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl StateConfig {
         backend => {
             label: "backend",
@@ -274,21 +274,21 @@ nemo_flow::editor_config! {
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl BackendSpec {
         kind => { label: "kind", kind: Enum, values: ["in_memory", "redis"] },
         config => { label: "config", kind: Json },
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl TelemetryComponentConfig {
         subscriber_name => { label: "subscriber_name", kind: String, optional: true },
         learners => { label: "learners", kind: Json },
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl AdaptiveHintsComponentConfig {
         priority => { label: "priority", kind: Integer },
         break_chain => { label: "break_chain", kind: Boolean },
@@ -297,7 +297,7 @@ nemo_flow::editor_config! {
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl ToolParallelismComponentConfig {
         priority => { label: "priority", kind: Integer },
         mode => {
@@ -308,7 +308,7 @@ nemo_flow::editor_config! {
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl AcgComponentConfig {
         provider => {
             label: "provider",
@@ -326,7 +326,7 @@ nemo_flow::editor_config! {
     }
 }
 
-nemo_flow::editor_config! {
+nemo_relay::editor_config! {
     impl crate::acg::stability::StabilityThresholds {
         stable_threshold => { label: "stable_threshold", kind: Float },
         semi_stable_threshold => { label: "semi_stable_threshold", kind: Float },

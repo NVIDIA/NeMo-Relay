@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use serde_json::{Map, Value};
 
-const ACG_DEBUG_ENV: &str = "NEMO_FLOW_ACG_DEBUG";
+const ACG_DEBUG_ENV: &str = "NEMO_RELAY_ACG_DEBUG";
 
 fn env_flag_enabled(value: &str) -> bool {
     !matches!(
@@ -40,7 +40,7 @@ pub(crate) fn emit(event: &str, payload: Value) {
         }
     }
 
-    eprintln!("nemo-flow-adaptive acg-debug {}", Value::Object(body));
+    eprintln!("nemo-relay-adaptive acg-debug {}", Value::Object(body));
 }
 
 #[cfg(test)]

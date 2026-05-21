@@ -10,9 +10,9 @@ import json
 from collections.abc import Callable
 from typing import Any, Protocol, cast
 
-from nemo_flow import Json, LLMRequest
-from nemo_flow import plugin as flow_plugin
-from nemo_flow.codecs import (
+from nemo_relay import Json, LLMRequest
+from nemo_relay import plugin as relay_plugin
+from nemo_relay.codecs import (
     AnthropicMessagesCodec,
     LlmCodec,
     LlmResponseCodec,
@@ -412,15 +412,15 @@ class NeMoGuardrailsPlugin:
 
 
 def register(kind: str = DEFAULT_KIND) -> None:
-    """Register the NeMo Guardrails plugin kind with NeMo Flow."""
+    """Register the NeMo Guardrails plugin kind with NeMo Relay."""
 
-    flow_plugin.register(kind, cast(flow_plugin.Plugin, NeMoGuardrailsPlugin()))
+    relay_plugin.register(kind, cast(relay_plugin.Plugin, NeMoGuardrailsPlugin()))
 
 
 def deregister(kind: str = DEFAULT_KIND) -> bool:
-    """Deregister the NeMo Guardrails plugin kind from NeMo Flow."""
+    """Deregister the NeMo Guardrails plugin kind from NeMo Relay."""
 
-    return flow_plugin.deregister(kind)
+    return relay_plugin.deregister(kind)
 
 
 __all__ = [

@@ -15,7 +15,7 @@ pub(crate) mod openai_responses;
 
 use std::collections::HashSet;
 
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 use serde_json::Value;
 
 use crate::acg::prompt_ir::PromptIR;

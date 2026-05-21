@@ -15,7 +15,7 @@ if (fs.existsSync(pkgDir)) {
 }
 
 const wasmPackArgs = ['build'];
-if (process.env.NEMO_FLOW_WASM_RELEASE) {
+if (process.env.NEMO_RELAY_WASM_RELEASE) {
   wasmPackArgs.push('--release');
 }
 wasmPackArgs.push('--target', 'nodejs', '--out-dir', 'pkg');

@@ -103,7 +103,7 @@ export declare function inMemoryBackend(): BackendSpec;
  * @param keyPrefix - Prefix applied to Redis keys.
  * @returns An adaptive backend spec using Redis storage.
  * @remarks The default key prefix namespaces runtime records under
- * `nemo_flow:` unless a different prefix is supplied.
+ * `nemo_relay:` unless a different prefix is supplied.
  */
 export declare function redisBackend(url: string, keyPrefix?: string): BackendSpec;
 /**

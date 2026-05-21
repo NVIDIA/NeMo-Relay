@@ -4,7 +4,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use nemo_flow::error::FlowError;
+use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 
 #[derive(Debug, thiserror::Error)]
@@ -25,10 +25,10 @@ pub(crate) enum CliError {
     Config(String),
     #[error("launcher error: {0}")]
     Launch(String),
-    #[error("NeMo Flow runtime error: {0}")]
-    Flow(#[from] nemo_flow::error::FlowError),
+    #[error("NeMo Relay runtime error: {0}")]
+    Flow(#[from] nemo_relay::error::FlowError),
     #[error("openinference error: {0}")]
-    OpenInference(#[from] nemo_flow::observability::openinference::OpenInferenceError),
+    OpenInference(#[from] nemo_relay::observability::openinference::OpenInferenceError),
 }
 
 impl CliError {
@@ -65,9 +65,9 @@ impl IntoResponse for CliError {
             (false, _) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let error_type = if guardrail_reason.is_some() {
-            "nemo_flow_guardrail_rejected"
+            "nemo_relay_guardrail_rejected"
         } else {
-            "nemo_flow_gateway_error"
+            "nemo_relay_gateway_error"
         };
         let mut error = Map::from_iter([
             ("message".to_string(), json!(message)),

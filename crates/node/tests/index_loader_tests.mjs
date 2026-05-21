@@ -116,17 +116,17 @@ describe('index.js loader', () => {
   const binding = realLib;
 
   const localCases = [
-    ['android', 'arm64', 'nemo-flow.android-arm64.node', './nemo-flow.android-arm64.node'],
-    ['android', 'arm', 'nemo-flow.android-arm-eabi.node', './nemo-flow.android-arm-eabi.node'],
-    ['win32', 'x64', 'nemo-flow.win32-x64-msvc.node', './nemo-flow.win32-x64-msvc.node'],
-    ['win32', 'ia32', 'nemo-flow.win32-ia32-msvc.node', './nemo-flow.win32-ia32-msvc.node'],
-    ['win32', 'arm64', 'nemo-flow.win32-arm64-msvc.node', './nemo-flow.win32-arm64-msvc.node'],
-    ['freebsd', 'x64', 'nemo-flow.freebsd-x64.node', './nemo-flow.freebsd-x64.node'],
-    ['linux', 'x64', 'nemo-flow.linux-x64-gnu.node', './nemo-flow.linux-x64-gnu.node'],
-    ['linux', 'arm64', 'nemo-flow.linux-arm64-gnu.node', './nemo-flow.linux-arm64-gnu.node'],
-    ['linux', 'arm', 'nemo-flow.linux-arm-gnueabihf.node', './nemo-flow.linux-arm-gnueabihf.node'],
-    ['linux', 'riscv64', 'nemo-flow.linux-riscv64-gnu.node', './nemo-flow.linux-riscv64-gnu.node'],
-    ['linux', 's390x', 'nemo-flow.linux-s390x-gnu.node', './nemo-flow.linux-s390x-gnu.node'],
+    ['android', 'arm64', 'nemo-relay.android-arm64.node', './nemo-relay.android-arm64.node'],
+    ['android', 'arm', 'nemo-relay.android-arm-eabi.node', './nemo-relay.android-arm-eabi.node'],
+    ['win32', 'x64', 'nemo-relay.win32-x64-msvc.node', './nemo-relay.win32-x64-msvc.node'],
+    ['win32', 'ia32', 'nemo-relay.win32-ia32-msvc.node', './nemo-relay.win32-ia32-msvc.node'],
+    ['win32', 'arm64', 'nemo-relay.win32-arm64-msvc.node', './nemo-relay.win32-arm64-msvc.node'],
+    ['freebsd', 'x64', 'nemo-relay.freebsd-x64.node', './nemo-relay.freebsd-x64.node'],
+    ['linux', 'x64', 'nemo-relay.linux-x64-gnu.node', './nemo-relay.linux-x64-gnu.node'],
+    ['linux', 'arm64', 'nemo-relay.linux-arm64-gnu.node', './nemo-relay.linux-arm64-gnu.node'],
+    ['linux', 'arm', 'nemo-relay.linux-arm-gnueabihf.node', './nemo-relay.linux-arm-gnueabihf.node'],
+    ['linux', 'riscv64', 'nemo-relay.linux-riscv64-gnu.node', './nemo-relay.linux-riscv64-gnu.node'],
+    ['linux', 's390x', 'nemo-relay.linux-s390x-gnu.node', './nemo-relay.linux-s390x-gnu.node'],
   ];
 
   it('loads local binary branches for supported platforms', () => {
@@ -147,18 +147,18 @@ describe('index.js loader', () => {
 
   it('loads package branches for supported platforms', () => {
     const packageCases = [
-      ['android', 'arm64', 'nemo-flow-node-android-arm64'],
-      ['android', 'arm', 'nemo-flow-node-android-arm-eabi'],
-      ['win32', 'x64', 'nemo-flow-node-win32-x64-msvc'],
-      ['win32', 'ia32', 'nemo-flow-node-win32-ia32-msvc'],
-      ['win32', 'arm64', 'nemo-flow-node-win32-arm64-msvc'],
-      ['darwin', 'x64', 'nemo-flow-node-darwin-universal'],
-      ['freebsd', 'x64', 'nemo-flow-node-freebsd-x64'],
-      ['linux', 'x64', 'nemo-flow-node-linux-x64-gnu'],
-      ['linux', 'arm64', 'nemo-flow-node-linux-arm64-gnu'],
-      ['linux', 'arm', 'nemo-flow-node-linux-arm-gnueabihf'],
-      ['linux', 'riscv64', 'nemo-flow-node-linux-riscv64-gnu'],
-      ['linux', 's390x', 'nemo-flow-node-linux-s390x-gnu'],
+      ['android', 'arm64', 'nemo-relay-node-android-arm64'],
+      ['android', 'arm', 'nemo-relay-node-android-arm-eabi'],
+      ['win32', 'x64', 'nemo-relay-node-win32-x64-msvc'],
+      ['win32', 'ia32', 'nemo-relay-node-win32-ia32-msvc'],
+      ['win32', 'arm64', 'nemo-relay-node-win32-arm64-msvc'],
+      ['darwin', 'x64', 'nemo-relay-node-darwin-universal'],
+      ['freebsd', 'x64', 'nemo-relay-node-freebsd-x64'],
+      ['linux', 'x64', 'nemo-relay-node-linux-x64-gnu'],
+      ['linux', 'arm64', 'nemo-relay-node-linux-arm64-gnu'],
+      ['linux', 'arm', 'nemo-relay-node-linux-arm-gnueabihf'],
+      ['linux', 'riscv64', 'nemo-relay-node-linux-riscv64-gnu'],
+      ['linux', 's390x', 'nemo-relay-node-linux-s390x-gnu'],
     ];
 
     for (const [platformName, archName, specifier] of packageCases) {
@@ -185,11 +185,11 @@ describe('index.js loader', () => {
         },
       },
       providedModules: {
-        'nemo-flow-node-linux-x64-musl': binding,
+        'nemo-relay-node-linux-x64-musl': binding,
       },
     });
     assert.equal(viaReport.exports.toolCall, binding.toolCall);
-    assert.ok(viaReport.calls.includes('nemo-flow-node-linux-x64-musl'));
+    assert.ok(viaReport.calls.includes('nemo-relay-node-linux-x64-musl'));
 
     const viaLdd = loadIndexForTest({
       platform: 'linux',
@@ -197,12 +197,12 @@ describe('index.js loader', () => {
       processReport: null,
       lddContent: 'musl libc',
       providedModules: {
-        'nemo-flow-node-linux-arm64-musl': binding,
+        'nemo-relay-node-linux-arm64-musl': binding,
       },
     });
     assert.equal(viaLdd.exports.toolCall, binding.toolCall);
     assert.ok(viaLdd.calls.includes('child_process'));
-    assert.ok(viaLdd.calls.includes('nemo-flow-node-linux-arm64-musl'));
+    assert.ok(viaLdd.calls.includes('nemo-relay-node-linux-arm64-musl'));
 
     const viaLddFailure = loadIndexForTest({
       platform: 'linux',
@@ -210,59 +210,59 @@ describe('index.js loader', () => {
       processReport: null,
       childProcessThrows: true,
       providedModules: {
-        'nemo-flow-node-linux-arm-musleabihf': binding,
+        'nemo-relay-node-linux-arm-musleabihf': binding,
       },
     });
     assert.equal(viaLddFailure.exports.toolCall, binding.toolCall);
-    assert.ok(viaLddFailure.calls.includes('nemo-flow-node-linux-arm-musleabihf'));
+    assert.ok(viaLddFailure.calls.includes('nemo-relay-node-linux-arm-musleabihf'));
   });
 
   it('falls back from darwin universal to arch-specific binaries', () => {
     const universalLocal = loadIndexForTest({
       platform: 'darwin',
       arch: 'arm64',
-      existingFiles: ['nemo-flow.darwin-universal.node'],
+      existingFiles: ['nemo-relay.darwin-universal.node'],
       providedModules: {
-        './nemo-flow.darwin-universal.node': binding,
+        './nemo-relay.darwin-universal.node': binding,
       },
     });
     assert.equal(universalLocal.exports.toolCall, binding.toolCall);
-    assert.ok(universalLocal.calls.includes('./nemo-flow.darwin-universal.node'));
+    assert.ok(universalLocal.calls.includes('./nemo-relay.darwin-universal.node'));
 
     const x64 = loadIndexForTest({
       platform: 'darwin',
       arch: 'x64',
-      existingFiles: ['nemo-flow.darwin-x64.node'],
+      existingFiles: ['nemo-relay.darwin-x64.node'],
       providedModules: {
-        'nemo-flow-node-darwin-universal': new Error('universal missing'),
-        './nemo-flow.darwin-x64.node': binding,
+        'nemo-relay-node-darwin-universal': new Error('universal missing'),
+        './nemo-relay.darwin-x64.node': binding,
       },
     });
     assert.equal(x64.exports.toolCall, binding.toolCall);
-    assert.ok(x64.calls.includes('nemo-flow-node-darwin-universal'));
-    assert.ok(x64.calls.includes('./nemo-flow.darwin-x64.node'));
+    assert.ok(x64.calls.includes('nemo-relay-node-darwin-universal'));
+    assert.ok(x64.calls.includes('./nemo-relay.darwin-x64.node'));
 
     const x64PackageFallback = loadIndexForTest({
       platform: 'darwin',
       arch: 'x64',
       providedModules: {
-        'nemo-flow-node-darwin-universal': new Error('universal missing'),
-        'nemo-flow-node-darwin-x64': binding,
+        'nemo-relay-node-darwin-universal': new Error('universal missing'),
+        'nemo-relay-node-darwin-x64': binding,
       },
     });
     assert.equal(x64PackageFallback.exports.toolCall, binding.toolCall);
-    assert.ok(x64PackageFallback.calls.includes('nemo-flow-node-darwin-x64'));
+    assert.ok(x64PackageFallback.calls.includes('nemo-relay-node-darwin-x64'));
 
     const arm64 = loadIndexForTest({
       platform: 'darwin',
       arch: 'arm64',
       providedModules: {
-        'nemo-flow-node-darwin-universal': new Error('universal missing'),
-        'nemo-flow-node-darwin-arm64': binding,
+        'nemo-relay-node-darwin-universal': new Error('universal missing'),
+        'nemo-relay-node-darwin-arm64': binding,
       },
     });
     assert.equal(arm64.exports.toolCall, binding.toolCall);
-    assert.ok(arm64.calls.includes('nemo-flow-node-darwin-arm64'));
+    assert.ok(arm64.calls.includes('nemo-relay-node-darwin-arm64'));
   });
 
   it('throws unsupported platform and architecture errors', () => {
@@ -324,7 +324,7 @@ describe('index.js loader', () => {
           platform: 'freebsd',
           arch: 'x64',
           providedModules: {
-            'nemo-flow-node-freebsd-x64': failure,
+            'nemo-relay-node-freebsd-x64': failure,
           },
         }),
       /package missing/,
@@ -339,7 +339,7 @@ describe('index.js loader', () => {
           platform: 'android',
           arch: 'arm64',
           providedModules: {
-            'nemo-flow-node-android-arm64': androidArm64Failure,
+            'nemo-relay-node-android-arm64': androidArm64Failure,
           },
         }),
       /android arm64 package missing/,
@@ -352,7 +352,7 @@ describe('index.js loader', () => {
           platform: 'android',
           arch: 'arm',
           providedModules: {
-            'nemo-flow-node-android-arm-eabi': androidArmFailure,
+            'nemo-relay-node-android-arm-eabi': androidArmFailure,
           },
         }),
       /android arm package missing/,
@@ -365,7 +365,7 @@ describe('index.js loader', () => {
           platform: 'win32',
           arch: 'x64',
           providedModules: {
-            'nemo-flow-node-win32-x64-msvc': win32X64Failure,
+            'nemo-relay-node-win32-x64-msvc': win32X64Failure,
           },
         }),
       /win32 x64 package missing/,
@@ -378,7 +378,7 @@ describe('index.js loader', () => {
           platform: 'win32',
           arch: 'ia32',
           providedModules: {
-            'nemo-flow-node-win32-ia32-msvc': win32Ia32Failure,
+            'nemo-relay-node-win32-ia32-msvc': win32Ia32Failure,
           },
         }),
       /win32 ia32 package missing/,
@@ -391,7 +391,7 @@ describe('index.js loader', () => {
           platform: 'win32',
           arch: 'arm64',
           providedModules: {
-            'nemo-flow-node-win32-arm64-msvc': win32Arm64Failure,
+            'nemo-relay-node-win32-arm64-msvc': win32Arm64Failure,
           },
         }),
       /win32 arm64 package missing/,
@@ -403,10 +403,10 @@ describe('index.js loader', () => {
         loadIndexForTest({
           platform: 'darwin',
           arch: 'x64',
-          existingFiles: ['nemo-flow.darwin-x64.node'],
+          existingFiles: ['nemo-relay.darwin-x64.node'],
           providedModules: {
-            'nemo-flow-node-darwin-universal': new Error('universal missing'),
-            './nemo-flow.darwin-x64.node': darwinX64LocalFailure,
+            'nemo-relay-node-darwin-universal': new Error('universal missing'),
+            './nemo-relay.darwin-x64.node': darwinX64LocalFailure,
           },
         }),
       /darwin x64 local missing/,
@@ -418,10 +418,10 @@ describe('index.js loader', () => {
         loadIndexForTest({
           platform: 'darwin',
           arch: 'arm64',
-          existingFiles: ['nemo-flow.darwin-arm64.node'],
+          existingFiles: ['nemo-relay.darwin-arm64.node'],
           providedModules: {
-            'nemo-flow-node-darwin-universal': new Error('universal missing'),
-            './nemo-flow.darwin-arm64.node': darwinArm64LocalFailure,
+            'nemo-relay-node-darwin-universal': new Error('universal missing'),
+            './nemo-relay.darwin-arm64.node': darwinArm64LocalFailure,
           },
         }),
       /darwin arm64 local missing/,
@@ -438,9 +438,9 @@ describe('index.js loader', () => {
               glibcVersionRuntime: null,
             },
           },
-          existingFiles: ['nemo-flow.linux-x64-musl.node'],
+          existingFiles: ['nemo-relay.linux-x64-musl.node'],
           providedModules: {
-            './nemo-flow.linux-x64-musl.node': x64MuslLocalFailure,
+            './nemo-relay.linux-x64-musl.node': x64MuslLocalFailure,
           },
         }),
       /x64 musl local missing/,
@@ -452,9 +452,9 @@ describe('index.js loader', () => {
         loadIndexForTest({
           platform: 'linux',
           arch: 'x64',
-          existingFiles: ['nemo-flow.linux-x64-gnu.node'],
+          existingFiles: ['nemo-relay.linux-x64-gnu.node'],
           providedModules: {
-            './nemo-flow.linux-x64-gnu.node': x64GnuLocalFailure,
+            './nemo-relay.linux-x64-gnu.node': x64GnuLocalFailure,
           },
         }),
       /x64 gnu local missing/,
@@ -471,9 +471,9 @@ describe('index.js loader', () => {
               glibcVersionRuntime: null,
             },
           },
-          existingFiles: ['nemo-flow.linux-arm64-musl.node'],
+          existingFiles: ['nemo-relay.linux-arm64-musl.node'],
           providedModules: {
-            './nemo-flow.linux-arm64-musl.node': arm64MuslLocalFailure,
+            './nemo-relay.linux-arm64-musl.node': arm64MuslLocalFailure,
           },
         }),
       /arm64 musl local missing/,
@@ -486,7 +486,7 @@ describe('index.js loader', () => {
           platform: 'linux',
           arch: 'arm64',
           providedModules: {
-            'nemo-flow-node-linux-arm64-gnu': arm64GnuFailure,
+            'nemo-relay-node-linux-arm64-gnu': arm64GnuFailure,
           },
         }),
       /arm64 gnu package missing/,
@@ -503,9 +503,9 @@ describe('index.js loader', () => {
               glibcVersionRuntime: null,
             },
           },
-          existingFiles: ['nemo-flow.linux-arm-musleabihf.node'],
+          existingFiles: ['nemo-relay.linux-arm-musleabihf.node'],
           providedModules: {
-            './nemo-flow.linux-arm-musleabihf.node': armMuslLocalFailure,
+            './nemo-relay.linux-arm-musleabihf.node': armMuslLocalFailure,
           },
         }),
       /arm musl local missing/,
@@ -518,7 +518,7 @@ describe('index.js loader', () => {
           platform: 'linux',
           arch: 'arm',
           providedModules: {
-            'nemo-flow-node-linux-arm-gnueabihf': armGnuFailure,
+            'nemo-relay-node-linux-arm-gnueabihf': armGnuFailure,
           },
         }),
       /arm gnu package missing/,
@@ -535,9 +535,9 @@ describe('index.js loader', () => {
               glibcVersionRuntime: null,
             },
           },
-          existingFiles: ['nemo-flow.linux-riscv64-musl.node'],
+          existingFiles: ['nemo-relay.linux-riscv64-musl.node'],
           providedModules: {
-            './nemo-flow.linux-riscv64-musl.node': riscvMuslLocalFailure,
+            './nemo-relay.linux-riscv64-musl.node': riscvMuslLocalFailure,
           },
         }),
       /riscv musl local missing/,
@@ -555,7 +555,7 @@ describe('index.js loader', () => {
             },
           },
           providedModules: {
-            'nemo-flow-node-linux-riscv64-musl': riscvMuslFailure,
+            'nemo-relay-node-linux-riscv64-musl': riscvMuslFailure,
           },
         }),
       /riscv musl package missing/,
@@ -568,7 +568,7 @@ describe('index.js loader', () => {
           platform: 'linux',
           arch: 'riscv64',
           providedModules: {
-            'nemo-flow-node-linux-riscv64-gnu': riscvGnuFailure,
+            'nemo-relay-node-linux-riscv64-gnu': riscvGnuFailure,
           },
         }),
       /riscv gnu package missing/,
@@ -581,7 +581,7 @@ describe('index.js loader', () => {
           platform: 'linux',
           arch: 's390x',
           providedModules: {
-            'nemo-flow-node-linux-s390x-gnu': s390xFailure,
+            'nemo-relay-node-linux-s390x-gnu': s390xFailure,
           },
         }),
       /s390x package missing/,
@@ -595,7 +595,7 @@ describe('index.js loader', () => {
           platform: 'freebsd',
           arch: 'x64',
           providedModules: {
-            'nemo-flow-node-freebsd-x64': null,
+            'nemo-relay-node-freebsd-x64': null,
           },
         }),
       /Failed to load native binding/,

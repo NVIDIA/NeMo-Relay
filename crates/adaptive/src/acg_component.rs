@@ -23,17 +23,17 @@ use crate::acg::{
     PassthroughPlugin, SharingScope, StabilityAnalysisResult, debug as acg_debug,
 };
 use chrono::Utc;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::runtime::{
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn,
 };
-use nemo_flow::codec::anthropic::AnthropicMessagesCodec;
-use nemo_flow::codec::openai_chat::OpenAIChatCodec;
-use nemo_flow::codec::openai_responses::OpenAIResponsesCodec;
-use nemo_flow::codec::request::AnnotatedLlmRequest;
-use nemo_flow::codec::traits::LlmCodec;
-use nemo_flow::json::Json;
+use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::traits::LlmCodec;
+use nemo_relay::json::Json;
 use uuid::Uuid;
 
 use crate::acg_profile::{derive_acg_learning_key, derive_acg_profile_key};
@@ -620,7 +620,7 @@ pub(crate) fn create_acg_llm_execution_intercept(
                     translate_request(&request, &agent_id, &provider, plugin.as_ref(), &cache)
                         .unwrap_or(request);
                 next(translated).await
-            }) as Pin<Box<dyn Future<Output = nemo_flow::error::Result<Json>> + Send>>
+            }) as Pin<Box<dyn Future<Output = nemo_relay::error::Result<Json>> + Send>>
         },
     )
 }

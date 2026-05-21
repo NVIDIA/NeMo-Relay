@@ -16,13 +16,13 @@ before editing.
 
 Use this skill when reviewing docs-only changes, example-heavy changes, or any
 public-facing text update that should be checked against NVIDIA style guidance
-and NeMo Flow repo conventions.
+and NeMo Relay repo conventions.
 
 ## Review Priorities
 
 - Prioritize factual accuracy over copy polish
 - Flag stale commands, package names, APIs, bindings, repo paths, or support claims before stylistic issues
-- Keep docs aligned with current NeMo Flow behavior, repo layout, and entry points
+- Keep docs aligned with current NeMo Relay behavior, repo layout, and entry points
 - Apply NVIDIA technical-writing guidance where it improves clarity and consistency without watering down technical precision
 
 ## Review Flow
@@ -33,7 +33,7 @@ and NeMo Flow repo conventions.
    - `README.md`
    - `docs/index.md`
    - Package or crate READMEs
-   - Binding-level source READMEs such as `python/nemo_flow/README.md` or `crates/core/README.md`
+   - Binding-level source READMEs such as `python/nemo_relay/README.md` or `crates/core/README.md`
 4. Start with `assets/nvidia-style-guide.md`, then open only the focused support document needed for the issue under review.
 5. Scan for high-signal style issues in headings, links, code formatting, terminology, procedures, and plain-English readability.
 6. Report findings in severity order with file references and concrete rewrites.

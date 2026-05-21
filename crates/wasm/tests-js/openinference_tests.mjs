@@ -11,8 +11,8 @@ test('WebAssembly package exposes OpenInference config defaults', () => {
   const config = wasm.defaultOpenInferenceConfig();
   assert.equal(config.transport, 'http_binary');
   assert.equal(config.endpoint, undefined);
-  assert.equal(config.serviceName, 'nemo-flow');
-  assert.equal(config.instrumentationScope, 'nemo-flow-openinference');
+  assert.equal(config.serviceName, 'nemo-relay');
+  assert.equal(config.instrumentationScope, 'nemo-relay-openinference');
   assert.equal(config.timeoutMillis, 3000);
   assert.equal(config.headers instanceof Map, true);
   assert.equal(config.headers.size, 0);

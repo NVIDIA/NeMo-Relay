@@ -3,7 +3,7 @@
 
 //! Process-wide runtime ownership guard.
 //!
-//! NeMo Flow does not support multiple bindings claiming the runtime in the
+//! NeMo Relay does not support multiple bindings claiming the runtime in the
 //! same OS process. This module provides a minimal process-wide owner token so
 //! the first binding (or direct Rust caller) claims ownership and later
 //! incompatible bindings fail fast instead of silently creating a second
@@ -21,9 +21,9 @@ use crate::error::FlowError;
 use crate::error::Result;
 
 #[cfg(not(target_arch = "wasm32"))]
-const BINDING_KIND_ENV: &str = "NEMO_FLOW_BINDING_KIND";
+const BINDING_KIND_ENV: &str = "NEMO_RELAY_BINDING_KIND";
 #[cfg(not(target_arch = "wasm32"))]
-const OWNER_TOKEN_ENV: &str = "NEMO_FLOW_RUNTIME_OWNER";
+const OWNER_TOKEN_ENV: &str = "NEMO_RELAY_RUNTIME_OWNER";
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,14 +51,14 @@ impl RuntimeOwner {
         for field in token.split(';') {
             if let Some(value) = field.strip_prefix("pid=") {
                 pid = Some(value.parse::<u32>().map_err(|e| {
-                    FlowError::Internal(
-                        format!("invalid NeMo Flow owner token pid {value:?}: {e}",),
-                    )
+                    FlowError::Internal(format!(
+                        "invalid NeMo Relay owner token pid {value:?}: {e}",
+                    ))
                 })?);
             } else if let Some(value) = field.strip_prefix("binding=") {
                 if value.is_empty() {
                     return Err(FlowError::Internal(
-                        "invalid NeMo Flow owner token: binding kind is empty".into(),
+                        "invalid NeMo Relay owner token: binding kind is empty".into(),
                     ));
                 }
                 binding_kind = Some(value.to_string());
@@ -69,13 +69,13 @@ impl RuntimeOwner {
 
         Ok(Self {
             pid: pid.ok_or_else(|| {
-                FlowError::Internal("invalid NeMo Flow owner token: missing pid".into())
+                FlowError::Internal("invalid NeMo Relay owner token: missing pid".into())
             })?,
             binding_kind: binding_kind.ok_or_else(|| {
-                FlowError::Internal("invalid NeMo Flow owner token: missing binding".into())
+                FlowError::Internal("invalid NeMo Relay owner token: missing binding".into())
             })?,
             major_version: version.ok_or_else(|| {
-                FlowError::Internal("invalid NeMo Flow owner token: missing version".into())
+                FlowError::Internal("invalid NeMo Relay owner token: missing version".into())
             })?,
         })
     }
@@ -127,7 +127,7 @@ fn compatibility_major_version(version: &str) -> Result<&str> {
         .filter(|value| !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()))
         .ok_or_else(|| {
             FlowError::Internal(format!(
-                "invalid NeMo Flow version {version:?}: expected a semver-compatible major",
+                "invalid NeMo Relay version {version:?}: expected a semver-compatible major",
             ))
         })
 }
@@ -186,7 +186,7 @@ pub fn initialize_shared_runtime_binding(binding_kind: &str) -> Result<()> {
             && existing != binding_kind
         {
             return Err(FlowError::InvalidArgument(format!(
-                "NeMo Flow binding identity is already initialized as {existing}; attempted={binding_kind}",
+                "NeMo Relay binding identity is already initialized as {existing}; attempted={binding_kind}",
             )));
         }
         let previous = guard.binding_kind.clone();
@@ -236,7 +236,7 @@ pub(crate) fn ensure_process_runtime_owner() -> Result<()> {
             Ok(())
         }
         Some(existing) => Err(FlowError::InvalidArgument(format!(
-            "NeMo Flow does not support multiple bindings in one process; existing owner={} attempted={}",
+            "NeMo Relay does not support multiple bindings in one process; existing owner={} attempted={}",
             existing, current
         ))),
         None => {

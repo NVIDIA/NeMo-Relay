@@ -19,13 +19,13 @@ local checkout.
 Use this path when you want the published package for application development.
 
 ```bash
-uv add nemo-flow@0.3.0
+uv add nemo-relay@0.3.0
 ```
 
 Run `uv add` from an application project that has a `pyproject.toml`; it records
-`nemo-flow` as a dependency. If you are only installing into an active virtual
-environment, use `uv pip install nemo-flow`. If you are not using `uv`, install
-the published package with `pip install nemo-flow`.
+`nemo-relay` as a dependency. If you are only installing into an active virtual
+environment, use `uv pip install nemo-relay`. If you are not using `uv`, install
+the published package with `pip install nemo-relay`.
 
 ### Install from the Repository
 
@@ -42,7 +42,7 @@ If you are consuming the local checkout from another `uv` project, add the sourc
 path from that application's directory instead:
 
 ```bash
-uv add --editable ../NeMo-Flow
+uv add --editable ../NeMo-Relay
 ```
 
 This records the local source in the application's `pyproject.toml` through
@@ -55,7 +55,7 @@ The example below runs one minimal instrumented workflow through the binding.
 ```python
 import asyncio
 
-import nemo_flow
+import nemo_relay
 
 
 def on_event(event) -> None:
@@ -74,15 +74,15 @@ async def model(request):
 
 
 async def main():
-    nemo_flow.subscribers.register("quickstart-printer", on_event)
+    nemo_relay.subscribers.register("quickstart-printer", on_event)
 
-    with nemo_flow.scope.scope("demo-agent", nemo_flow.ScopeType.Agent) as handle:
-        nemo_flow.scope.event("initialized", handle=handle, data={"binding": "python"})
+    with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
+        nemo_relay.scope.event("initialized", handle=handle, data={"binding": "python"})
 
-        tool_result = await nemo_flow.tools.execute("search", {"query": "hello"}, search, handle=handle)
-        llm_result = await nemo_flow.llm.execute(
+        tool_result = await nemo_relay.tools.execute("search", {"query": "hello"}, search, handle=handle)
+        llm_result = await nemo_relay.llm.execute(
             "demo-provider",
-            nemo_flow.LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}]}),
+            nemo_relay.LLMRequest({}, {"messages": [{"role": "user", "content": "hi"}]}),
             model,
             handle=handle,
         )
@@ -90,7 +90,7 @@ async def main():
         print(tool_result)
         print(llm_result)
 
-    nemo_flow.subscribers.deregister("quickstart-printer")
+    nemo_relay.subscribers.deregister("quickstart-printer")
 
 
 asyncio.run(main())
@@ -106,22 +106,22 @@ You should see:
 
 If you only see the returned values and no event lines, the callbacks ran but
 you did not verify instrumentation. The subscriber output is the fast check that
-NeMo Flow actually emitted lifecycle events.
+NeMo Relay actually emitted lifecycle events.
 
 ## Where the Python Surface Lives
 
 These modules are the main Python APIs to use from applications and integrations.
 
-- `nemo_flow.scope`
-- `nemo_flow.tools`
-- `nemo_flow.llm`
-- `nemo_flow.guardrails`
-- `nemo_flow.intercepts`
-- `nemo_flow.subscribers`
-- `nemo_flow.plugin`
-- `nemo_flow.adaptive`
-- `nemo_flow.typed`
-- `nemo_flow.codecs`
+- `nemo_relay.scope`
+- `nemo_relay.tools`
+- `nemo_relay.llm`
+- `nemo_relay.guardrails`
+- `nemo_relay.intercepts`
+- `nemo_relay.subscribers`
+- `nemo_relay.plugin`
+- `nemo_relay.adaptive`
+- `nemo_relay.typed`
+- `nemo_relay.codecs`
 
 ## What to Learn Next
 

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for config in the NeMo Flow adaptive crate.
+//! Unit tests for config in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_flow::config_editor::{EditorConfig, EditorFieldKind};
+use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
 #[test]
@@ -16,7 +16,7 @@ fn test_adaptive_config_defaults() {
     assert!(config.tool_parallelism.is_none());
     assert_eq!(
         config.policy.unknown_component,
-        nemo_flow::plugin::UnsupportedBehavior::Warn
+        nemo_relay::plugin::UnsupportedBehavior::Warn
     );
 }
 

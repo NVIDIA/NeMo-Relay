@@ -104,14 +104,14 @@ fn hook_forward_url(command: &HookForwardCommand) -> Result<Option<String>, CliE
     let Some(gateway_url) = resolve_hook_gateway_url(
         command.agent,
         command.gateway_url.clone(),
-        std::env::var("NEMO_FLOW_GATEWAY_URL").ok(),
+        std::env::var("NEMO_RELAY_GATEWAY_URL").ok(),
     ) else {
         eprintln!(
-            "nemo-flow hook forward failed: missing gateway URL; pass --gateway-url or set NEMO_FLOW_GATEWAY_URL"
+            "nemo-relay hook forward failed: missing gateway URL; pass --gateway-url or set NEMO_RELAY_GATEWAY_URL"
         );
         if command.fail_closed {
             return Err(CliError::Install(
-                "missing gateway URL; pass --gateway-url or set NEMO_FLOW_GATEWAY_URL".into(),
+                "missing gateway URL; pass --gateway-url or set NEMO_RELAY_GATEWAY_URL".into(),
             ));
         }
         return Ok(None);
@@ -161,7 +161,7 @@ async fn handle_hook_forward_response(
                 if let Some(reason) = guardrail_rejection_reason(&body) {
                     return Err(CliError::GuardrailRejected(reason));
                 }
-                eprintln!("nemo-flow hook forward failed with HTTP {status}");
+                eprintln!("nemo-relay hook forward failed with HTTP {status}");
                 if fail_closed {
                     return Err(CliError::Install(format!(
                         "hook forward failed with HTTP {status}"
@@ -175,7 +175,7 @@ async fn handle_hook_forward_response(
             Ok(())
         }
         Err(error) => {
-            eprintln!("nemo-flow hook forward failed: {error}");
+            eprintln!("nemo-relay hook forward failed: {error}");
             if fail_closed {
                 Err(CliError::Upstream(error))
             } else {
@@ -188,7 +188,7 @@ async fn handle_hook_forward_response(
 fn guardrail_rejection_reason(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
     let error = value.get("error")?;
-    (error.get("type").and_then(Value::as_str) == Some("nemo_flow_guardrail_rejected"))
+    (error.get("type").and_then(Value::as_str) == Some("nemo_relay_guardrail_rejected"))
         .then(|| {
             error
                 .get("reason")
@@ -200,7 +200,7 @@ fn guardrail_rejection_reason(body: &str) -> Option<String> {
 }
 
 // Chooses the gateway URL for hook-forward. Hermes prefers the runtime environment URL because
-// its hooks are installed persistently by setup but reused under `nemo-flow hermes` with an
+// its hooks are installed persistently by setup but reused under `nemo-relay hermes` with an
 // ephemeral gateway; other agents prefer the installed command URL for stable configuration.
 fn resolve_hook_gateway_url(
     agent: CodingAgent,
@@ -231,7 +231,7 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
 // path of the currently running gateway binary so spawned hook subprocesses do not depend on the
 // user's `PATH` (which Codex/Claude/Cursor inherit but which typically does not include
 // `target/debug` or other dev locations); persistent-install callers can pass the bare name
-// `"nemo-flow"` because the user is expected to have the binary on `PATH` after install.
+// `"nemo-relay"` because the user is expected to have the binary on `PATH` after install.
 pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> String {
     format!("{executable} hook-forward {}", agent.as_arg())
 }
@@ -439,16 +439,16 @@ fn gateway_headers(
     gateway_mode: Option<GatewayMode>,
 ) -> Result<HeaderMap, CliError> {
     let mut headers = HeaderMap::new();
-    insert_header(&mut headers, "x-nemo-flow-config-profile", profile)?;
+    insert_header(&mut headers, "x-nemo-relay-config-profile", profile)?;
     insert_header(
         &mut headers,
-        "x-nemo-flow-session-metadata",
+        "x-nemo-relay-session-metadata",
         session_metadata,
     )?;
-    insert_header(&mut headers, "x-nemo-flow-plugin-config", plugin_config)?;
+    insert_header(&mut headers, "x-nemo-relay-plugin-config", plugin_config)?;
     insert_header(
         &mut headers,
-        "x-nemo-flow-gateway-mode",
+        "x-nemo-relay-gateway-mode",
         gateway_mode.map(GatewayMode::as_arg),
     )?;
     Ok(headers)

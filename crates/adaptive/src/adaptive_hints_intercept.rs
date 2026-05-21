@@ -12,9 +12,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::runtime::LlmRequestInterceptFn;
-use nemo_flow::codec::request::AnnotatedLlmRequest;
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::LlmRequestInterceptFn;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
@@ -116,7 +116,7 @@ fn inject_agent_hints(request: &mut LlmRequest, hints: &AgentHints) {
 ///
 /// Constructed via [`AdaptiveHintsIntercept::new`] and converted to an
 /// [`LlmRequestInterceptFn`] via [`AdaptiveHintsIntercept::into_request_fn`] for
-/// registration with the NeMo Flow runtime.
+/// registration with the NeMo Relay runtime.
 pub struct AdaptiveHintsIntercept {
     hot_cache: Arc<RwLock<HotCache>>,
     agent_id: String,

@@ -3,10 +3,10 @@
 
 use super::*;
 use crate::config::{global_plugin_config_path, project_plugin_config_path};
-use nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
-use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
-use nemo_flow_adaptive::AdaptiveConfig;
-use nemo_flow_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_relay_adaptive::AdaptiveConfig;
+use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 
 fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
     json!({
@@ -221,7 +221,7 @@ fn typed_editor_serializes_disabled_section_override() {
     assert_eq!(atif.get("enabled"), Some(&Value::Bool(false)));
     assert_eq!(
         atif.get("filename_template"),
-        Some(&json!("nemo-flow-atif-{session_id}.json"))
+        Some(&json!("nemo-relay-atif-{session_id}.json"))
     );
 }
 

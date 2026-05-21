@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::type_complexity)]
-//! JavaScript callable wrappers for NeMo Flow callbacks.
+//! JavaScript callable wrappers for NeMo Relay callbacks.
 //!
 //! This module bridges JavaScript functions (received as NAPI `ThreadsafeFunction` values)
-//! into the Rust closure signatures expected by the NeMo Flow core runtime. Each wrapper
+//! into the Rust closure signatures expected by the NeMo Relay core runtime. Each wrapper
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
@@ -22,12 +22,12 @@ use nemo_flow::api::runtime::{
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::codec::request::AnnotatedLlmRequest;
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::{FlowError, Result};
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result};
 
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
@@ -114,13 +114,13 @@ pub fn wrap_js_tool_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nemo_flow: failed to queue JS tool callback: {status:?}"
+                "nemo_relay: failed to queue JS tool callback: {status:?}"
             ));
             return Json::Null;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        recv_json_or_null(rx, "nemo_flow: JS tool callback failed")
+        recv_json_or_null(rx, "nemo_relay: JS tool callback failed")
     })
 }
 
@@ -295,7 +295,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nemo_flow: failed to queue JS LLM sanitize request callback: {status:?}"
+                "nemo_relay: failed to queue JS LLM sanitize request callback: {status:?}"
             ));
             return request;
         }
@@ -303,7 +303,7 @@ pub fn wrap_js_llm_sanitize_request_fn(
         // errors through the type system. Log the error so failures are not silent.
         recv_llm_request_or_value(
             rx,
-            "nemo_flow: JS LLM sanitize request callback failed",
+            "nemo_relay: JS LLM sanitize request callback failed",
             request,
         )
     })
@@ -327,13 +327,13 @@ pub fn wrap_js_llm_response_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nemo_flow: failed to queue JS LLM response callback: {status:?}"
+                "nemo_relay: failed to queue JS LLM response callback: {status:?}"
             ));
             return response;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error and fall back to original response.
-        recv_json_or_value(rx, "nemo_flow: JS LLM response callback failed", response)
+        recv_json_or_value(rx, "nemo_relay: JS LLM response callback failed", response)
     })
 }
 
@@ -409,7 +409,7 @@ pub fn wrap_js_collector_fn(
         if status == napi::Status::Ok {
             Ok(())
         } else {
-            let message = format!("nemo_flow: failed to queue JS collector callback: {status:?}");
+            let message = format!("nemo_relay: failed to queue JS collector callback: {status:?}");
             record_callback_error(message.clone());
             Err(FlowError::Internal(message))
         }
@@ -436,13 +436,13 @@ pub fn wrap_js_finalizer_fn(
         );
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nemo_flow: failed to queue JS finalizer callback: {status:?}"
+                "nemo_relay: failed to queue JS finalizer callback: {status:?}"
             ));
             return Json::Null;
         }
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log the error so failures are not silent.
-        recv_json_or_null(rx, "nemo_flow: JS finalizer callback failed")
+        recv_json_or_null(rx, "nemo_relay: JS finalizer callback failed")
     })
 }
 
@@ -456,7 +456,7 @@ pub fn wrap_js_event_subscriber(
             Ok(event) => event.into_json(),
             Err(error) => {
                 record_callback_error(format!(
-                    "nemo_flow: failed to serialize JS event subscriber payload: {error}"
+                    "nemo_relay: failed to serialize JS event subscriber payload: {error}"
                 ));
                 return;
             }
@@ -464,7 +464,7 @@ pub fn wrap_js_event_subscriber(
         let status = func.call(event_json, ThreadsafeFunctionCallMode::NonBlocking);
         if status != napi::Status::Ok {
             record_callback_error(format!(
-                "nemo_flow: failed to queue JS event subscriber callback: {status:?}"
+                "nemo_relay: failed to queue JS event subscriber callback: {status:?}"
             ));
         }
     })

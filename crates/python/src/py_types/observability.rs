@@ -33,7 +33,7 @@ use super::{
 /// ```
 #[pyclass(name = "AtifExporter")]
 pub struct PyAtifExporter {
-    inner: nemo_flow::observability::atif::AtifExporter,
+    inner: nemo_relay::observability::atif::AtifExporter,
 }
 
 #[pymethods]
@@ -62,7 +62,7 @@ impl PyAtifExporter {
             Some(obj) if !obj.is_none() => Some(py_to_json(obj)?),
             _ => None,
         };
-        let agent_info = nemo_flow::observability::atif::AtifAgentInfo {
+        let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -70,14 +70,14 @@ impl PyAtifExporter {
             extra: extra_json,
         };
         Ok(Self {
-            inner: nemo_flow::observability::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
         })
     }
 
     /// Register this exporter as an event subscriber with the given name.
     pub(crate) fn register(&self, name: String) -> PyResult<()> {
         let subscriber = self.inner.subscriber();
-        nemo_flow::api::subscriber::register_subscriber(&name, subscriber)
+        nemo_relay::api::subscriber::register_subscriber(&name, subscriber)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -85,7 +85,7 @@ impl PyAtifExporter {
     ///
     /// Returns ``True`` if a subscriber with that name was found and removed.
     pub(crate) fn deregister(&self, name: String) -> PyResult<bool> {
-        nemo_flow::api::subscriber::deregister_subscriber(&name)
+        nemo_relay::api::subscriber::deregister_subscriber(&name)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -140,7 +140,7 @@ pub enum PyAtofExporterMode {
     Overwrite = 1,
 }
 
-impl From<PyAtofExporterMode> for nemo_flow::observability::atof::AtofExporterMode {
+impl From<PyAtofExporterMode> for nemo_relay::observability::atof::AtofExporterMode {
     fn from(value: PyAtofExporterMode) -> Self {
         match value {
             PyAtofExporterMode::Append => Self::Append,
@@ -149,11 +149,11 @@ impl From<PyAtofExporterMode> for nemo_flow::observability::atof::AtofExporterMo
     }
 }
 
-impl From<nemo_flow::observability::atof::AtofExporterMode> for PyAtofExporterMode {
-    fn from(value: nemo_flow::observability::atof::AtofExporterMode) -> Self {
+impl From<nemo_relay::observability::atof::AtofExporterMode> for PyAtofExporterMode {
+    fn from(value: nemo_relay::observability::atof::AtofExporterMode) -> Self {
         match value {
-            nemo_flow::observability::atof::AtofExporterMode::Append => Self::Append,
-            nemo_flow::observability::atof::AtofExporterMode::Overwrite => Self::Overwrite,
+            nemo_relay::observability::atof::AtofExporterMode::Append => Self::Append,
+            nemo_relay::observability::atof::AtofExporterMode::Overwrite => Self::Overwrite,
         }
     }
 }
@@ -170,8 +170,8 @@ pub struct PyAtofExporterConfig {
 }
 
 impl PyAtofExporterConfig {
-    fn to_rust_config(&self) -> nemo_flow::observability::atof::AtofExporterConfig {
-        nemo_flow::observability::atof::AtofExporterConfig::new()
+    fn to_rust_config(&self) -> nemo_relay::observability::atof::AtofExporterConfig {
+        nemo_relay::observability::atof::AtofExporterConfig::new()
             .with_output_directory(PathBuf::from(self.output_directory.clone()))
             .with_mode(self.mode.clone().into())
             .with_filename(self.filename.clone())
@@ -182,7 +182,7 @@ impl PyAtofExporterConfig {
 impl PyAtofExporterConfig {
     #[new]
     pub(crate) fn new() -> Self {
-        let config = nemo_flow::observability::atof::AtofExporterConfig::new();
+        let config = nemo_relay::observability::atof::AtofExporterConfig::new();
         Self {
             output_directory: config.output_directory.to_string_lossy().into_owned(),
             mode: config.mode.into(),
@@ -204,14 +204,14 @@ impl PyAtofExporterConfig {
 /// code, then deregister and shut down the exporter to flush output.
 #[pyclass(name = "AtofExporter")]
 pub struct PyAtofExporter {
-    inner: nemo_flow::observability::atof::AtofExporter,
+    inner: nemo_relay::observability::atof::AtofExporter,
 }
 
 #[pymethods]
 impl PyAtofExporter {
     #[new]
     pub(crate) fn new(config: PyRef<'_, PyAtofExporterConfig>) -> PyResult<Self> {
-        let inner = nemo_flow::observability::atof::AtofExporter::new(config.to_rust_config())
+        let inner = nemo_relay::observability::atof::AtofExporter::new(config.to_rust_config())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -294,14 +294,14 @@ pub struct PyOpenTelemetryConfig {
 impl PyOpenTelemetryConfig {
     pub(crate) fn to_rust_config(
         &self,
-    ) -> PyResult<nemo_flow::observability::otel::OpenTelemetryConfig> {
+    ) -> PyResult<nemo_relay::observability::otel::OpenTelemetryConfig> {
         let mut config = match self.transport.as_str() {
-            "http_binary" => nemo_flow::observability::otel::OpenTelemetryConfig::http_binary(
+            "http_binary" => nemo_relay::observability::otel::OpenTelemetryConfig::http_binary(
                 self.service_name.clone(),
             ),
-            "grpc" => {
-                nemo_flow::observability::otel::OpenTelemetryConfig::grpc(self.service_name.clone())
-            }
+            "grpc" => nemo_relay::observability::otel::OpenTelemetryConfig::grpc(
+                self.service_name.clone(),
+            ),
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -337,10 +337,10 @@ impl PyOpenTelemetryConfig {
         Self {
             transport: "http_binary".to_string(),
             endpoint: None,
-            service_name: "nemo-flow".to_string(),
+            service_name: "nemo-relay".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nemo-flow-otel".to_string(),
+            instrumentation_scope: "nemo-relay-otel".to_string(),
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -397,7 +397,7 @@ impl PyOpenTelemetryConfig {
 /// name, then call ``force_flush()`` or ``shutdown()`` when appropriate.
 #[pyclass(name = "OpenTelemetrySubscriber")]
 pub struct PyOpenTelemetrySubscriber {
-    inner: nemo_flow::observability::otel::OpenTelemetrySubscriber,
+    inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
 }
 
 #[pymethods]
@@ -405,7 +405,7 @@ impl PyOpenTelemetrySubscriber {
     #[new]
     pub(crate) fn new(config: PyRef<'_, PyOpenTelemetryConfig>) -> PyResult<Self> {
         let inner =
-            nemo_flow::observability::otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
+            nemo_relay::observability::otel::OpenTelemetrySubscriber::new(config.to_rust_config()?)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -475,10 +475,10 @@ pub struct PyOpenInferenceConfig {
 impl PyOpenInferenceConfig {
     pub(crate) fn to_rust_config(
         &self,
-    ) -> PyResult<nemo_flow::observability::openinference::OpenInferenceConfig> {
+    ) -> PyResult<nemo_relay::observability::openinference::OpenInferenceConfig> {
         let transport = match self.transport.as_str() {
-            "http_binary" => nemo_flow::observability::openinference::OtlpTransport::HttpBinary,
-            "grpc" => nemo_flow::observability::openinference::OtlpTransport::Grpc,
+            "http_binary" => nemo_relay::observability::openinference::OtlpTransport::HttpBinary,
+            "grpc" => nemo_relay::observability::openinference::OtlpTransport::Grpc,
             other => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "transport must be 'http_binary' or 'grpc', got {other:?}"
@@ -486,7 +486,7 @@ impl PyOpenInferenceConfig {
             }
         };
 
-        let mut config = nemo_flow::observability::openinference::OpenInferenceConfig::new()
+        let mut config = nemo_relay::observability::openinference::OpenInferenceConfig::new()
             .with_transport(transport)
             .with_service_name(self.service_name.clone())
             .with_instrumentation_scope(self.instrumentation_scope.clone())
@@ -518,10 +518,10 @@ impl PyOpenInferenceConfig {
         Self {
             transport: "http_binary".to_string(),
             endpoint: None,
-            service_name: "nemo-flow".to_string(),
+            service_name: "nemo-relay".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nemo-flow-openinference".to_string(),
+            instrumentation_scope: "nemo-relay-openinference".to_string(),
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -575,7 +575,7 @@ impl PyOpenInferenceConfig {
 /// OpenInference-backed event subscriber.
 #[pyclass(name = "OpenInferenceSubscriber")]
 pub struct PyOpenInferenceSubscriber {
-    inner: nemo_flow::observability::openinference::OpenInferenceSubscriber,
+    inner: nemo_relay::observability::openinference::OpenInferenceSubscriber,
     owned_runtime: Option<Runtime>,
 }
 
@@ -593,7 +593,7 @@ impl PyOpenInferenceSubscriber {
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             let _guard = runtime.enter();
             let inner =
-                nemo_flow::observability::openinference::OpenInferenceSubscriber::new(rust_config)
+                nemo_relay::observability::openinference::OpenInferenceSubscriber::new(rust_config)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(Self {
                 inner,
@@ -601,7 +601,7 @@ impl PyOpenInferenceSubscriber {
             })
         } else {
             let inner =
-                nemo_flow::observability::openinference::OpenInferenceSubscriber::new(rust_config)
+                nemo_relay::observability::openinference::OpenInferenceSubscriber::new(rust_config)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             Ok(Self {
                 inner,

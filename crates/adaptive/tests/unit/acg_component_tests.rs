@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for acg component in the NeMo Flow adaptive crate.
+//! Unit tests for acg component in the NeMo Relay adaptive crate.
 
 use super::*;
 
@@ -15,10 +15,10 @@ use crate::acg::prompt_ir::{
 };
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackendDyn;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::runtime::LlmExecutionNextFn;
-use nemo_flow::api::runtime::LlmStreamExecutionNextFn;
-use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::LlmExecutionNextFn;
+use nemo_relay::api::runtime::LlmStreamExecutionNextFn;
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 
@@ -592,7 +592,7 @@ async fn acg_component_stream_execution_intercept_rewrites_streaming_requests() 
         Box::pin(async move {
             Ok(Box::pin(tokio_stream::iter(vec![Ok(req.content)]))
                 as Pin<
-                    Box<dyn tokio_stream::Stream<Item = nemo_flow::error::Result<Json>> + Send>,
+                    Box<dyn tokio_stream::Stream<Item = nemo_relay::error::Result<Json>> + Send>,
                 >)
         })
     });

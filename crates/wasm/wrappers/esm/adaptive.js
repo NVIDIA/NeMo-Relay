@@ -44,12 +44,12 @@ export function inMemoryBackend() {
  * should be shared or persisted through Redis.
  *
  * @param {string} url - Redis connection URL for the backend.
- * @param {string} [keyPrefix='nemo_flow:'] - Prefix applied to Redis keys.
+ * @param {string} [keyPrefix='nemo_relay:'] - Prefix applied to Redis keys.
  * @returns {object} An adaptive backend spec using Redis storage.
  * @remarks The default key prefix namespaces runtime records under
- * `nemo_flow:` unless a different prefix is supplied.
+ * `nemo_relay:` unless a different prefix is supplied.
  */
-export function redisBackend(url, keyPrefix = 'nemo_flow:') {
+export function redisBackend(url, keyPrefix = 'nemo_relay:') {
   return {
     kind: 'redis',
     config: {

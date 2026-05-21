@@ -1,24 +1,24 @@
 {
-  "name": "nemo-flow-node",
+  "name": "nemo-relay-node",
   "version": "0.3.0",
-  "description": "Node.js bindings for the NeMo Flow agent runtime.",
+  "description": "Node.js bindings for the NeMo Relay agent runtime.",
   "keywords": [
     "agents",
     "ai",
     "llm",
     "middleware",
-    "nemo-flow",
+    "nemo-relay",
     "observability",
     "runtime",
     "tools"
   ],
-  "homepage": "https://github.com/NVIDIA/NeMo-Flow#readme",
+  "homepage": "https://github.com/NVIDIA/NeMo-Relay#readme",
   "bugs": {
-    "url": "https://github.com/NVIDIA/NeMo-Flow/issues"
+    "url": "https://github.com/NVIDIA/NeMo-Relay/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NVIDIA/NeMo-Flow.git",
+    "url": "git+https://github.com/NVIDIA/NeMo-Relay.git",
     "directory": "crates/node"
   },
   "author": "NVIDIA Corporation & Affiliates",
@@ -50,7 +50,7 @@
     "node": ">=20.0.0"
   },
   "napi": {
-    "name": "nemo-flow",
+    "name": "nemo-relay",
     "triples": {}
   },
   "scripts": {

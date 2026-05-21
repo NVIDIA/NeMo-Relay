@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Troubleshooting Guide
 
-Use this page when a NeMo Flow setup, build, or runtime workflow does not behave as expected.
+Use this page when a NeMo Relay setup, build, or runtime workflow does not behave as expected.
 
 ## Package Or Build Setup Fails
 
@@ -18,14 +18,14 @@ If a command worked previously and now fails, check whether a toolchain update c
 Run the narrowest failing build first:
 
 ```bash
-cargo build -p nemo-flow
+cargo build -p nemo-relay
 ```
 
 If the core crate builds but another crate fails, rerun the binding-specific build or test command from [Testing and Documentation](../contribute/testing-and-docs.md). Binding crates often depend on generated native artifacts, host toolchain headers, or runtime-specific test setup.
 
 ## Python Native Module Does Not Import
 
-If `import nemo_flow` fails, rebuild the Python environment and native extension:
+If `import nemo_relay` fails, rebuild the Python environment and native extension:
 
 ```bash
 uv sync
@@ -40,7 +40,7 @@ If Node.js reports a missing or incompatible native addon, reinstall dependencie
 
 ```bash
 npm install
-npm test --workspace=nemo-flow-node
+npm test --workspace=nemo-relay-node
 ```
 
 Use [Node.js Getting Started](../getting-started/nodejs.md) to confirm that the example runs against the generated local build, not a stale package or a globally installed copy.
@@ -50,8 +50,8 @@ Use [Node.js Getting Started](../getting-started/nodejs.md) to confirm that the 
 The Go binding loads the shared FFI library through CGo. Build the release FFI library before running Go tests, and point the linker and runtime loader at the release target directory:
 
 ```bash
-cargo build --release -p nemo-flow-ffi
-cd go/nemo_flow
+cargo build --release -p nemo-relay-ffi
+cd go/nemo_relay
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="../../target/release" go test -race -v ./...
 ```
 
@@ -141,7 +141,7 @@ Use [Wrap LLM Calls](../integrate-frameworks/wrap-llm-calls.md) and [Provider Re
 
 ## Provider Payloads Fail To Convert
 
-JSON conversion errors usually mean the integration passed a value that cannot be represented in NeMo Flow's JSON model, such as functions, class instances, handles, or provider-specific streaming objects.
+JSON conversion errors usually mean the integration passed a value that cannot be represented in NeMo Relay's JSON model, such as functions, class instances, handles, or provider-specific streaming objects.
 
 Use [Non-Serializable Data](../integrate-frameworks/non-serializable-data.md), [Provider Codecs](../integrate-frameworks/provider-codecs.md), and [Using Codecs](../integrate-frameworks/using-codecs.md) to define explicit conversions for provider-specific payloads.
 
@@ -175,6 +175,6 @@ If the patch still does not apply, confirm that the local checkout is clean and 
 
 ## Third-Party Integration Behaves Differently From Core APIs
 
-First reproduce the behavior through the closest core or binding-level API. If the core API behaves correctly, inspect the integration wrapper, codec, or provider adapter that translates provider calls into NeMo Flow calls.
+First reproduce the behavior through the closest core or binding-level API. If the core API behaves correctly, inspect the integration wrapper, codec, or provider adapter that translates provider calls into NeMo Relay calls.
 
 Use [Integrate Frameworks](../integrate-frameworks/about.md), [Wrap Tool Calls](../integrate-frameworks/wrap-tool-calls.md), and [Wrap LLM Calls](../integrate-frameworks/wrap-llm-calls.md) to compare the integration path with the core runtime path.

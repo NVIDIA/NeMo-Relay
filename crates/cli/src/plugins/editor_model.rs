@@ -3,11 +3,11 @@
 
 //! Testable plugin editor state helpers.
 
-use nemo_flow::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
-use nemo_flow::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
-use nemo_flow::plugin::{PluginComponentSpec, PluginConfig};
-use nemo_flow_adaptive::AdaptiveConfig;
-use nemo_flow_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
+use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
+use nemo_relay_adaptive::AdaptiveConfig;
+use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -480,7 +480,7 @@ pub(super) fn merge_known_editor_object(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
     known_keys: &[&str],
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
 ) {
     for key in known_keys {
         let Some(edited_value) = edited.get(*key) else {
@@ -519,7 +519,7 @@ pub(super) fn observability_editor_fields_with_version() -> Vec<&'static str> {
 }
 
 pub(super) fn nested_editor_keys(
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
 ) -> Vec<&'static str> {
     schema.fields.iter().map(|field| field.name).collect()
 }

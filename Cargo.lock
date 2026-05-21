@@ -1189,7 +1189,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow"
+name = "nemo-relay"
 version = "0.3.0"
 dependencies = [
  "async-trait",
@@ -1220,11 +1220,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-adaptive"
+name = "nemo-relay-adaptive"
 version = "0.3.0"
 dependencies = [
  "chrono",
- "nemo-flow",
+ "nemo-relay",
  "redis",
  "regex",
  "serde",
@@ -1239,7 +1239,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-cli"
+name = "nemo-relay-cli"
 version = "0.3.0"
 dependencies = [
  "async-stream",
@@ -1252,8 +1252,8 @@ dependencies = [
  "futures-util",
  "http",
  "http-body-util",
- "nemo-flow",
- "nemo-flow-adaptive",
+ "nemo-relay",
+ "nemo-relay-adaptive",
  "reqwest",
  "rustls",
  "serde",
@@ -1269,14 +1269,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-ffi"
+name = "nemo-relay-ffi"
 version = "0.3.0"
 dependencies = [
  "cbindgen",
  "chrono",
  "libc",
- "nemo-flow",
- "nemo-flow-adaptive",
+ "nemo-relay",
+ "nemo-relay-adaptive",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -1284,15 +1284,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-node"
+name = "nemo-relay-node"
 version = "0.3.0"
 dependencies = [
  "chrono",
  "napi",
  "napi-build",
  "napi-derive",
- "nemo-flow",
- "nemo-flow-adaptive",
+ "nemo-relay",
+ "nemo-relay-adaptive",
  "serde",
  "serde_json",
  "tokio",
@@ -1301,12 +1301,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-python"
+name = "nemo-relay-python"
 version = "0.3.0"
 dependencies = [
  "chrono",
- "nemo-flow",
- "nemo-flow-adaptive",
+ "nemo-relay",
+ "nemo-relay-adaptive",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -1318,13 +1318,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nemo-flow-wasm"
+name = "nemo-relay-wasm"
 version = "0.3.0"
 dependencies = [
  "chrono",
  "js-sys",
- "nemo-flow",
- "nemo-flow-adaptive",
+ "nemo-relay",
+ "nemo-relay-adaptive",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",

@@ -1,6 +1,6 @@
 ---
 name: maintain-optimizer
-description: Maintain or extend the NeMo Flow adaptive surface across config, plugins, docs, and bindings; use this when users still say optimizer
+description: Maintain or extend the NeMo Relay adaptive surface across config, plugins, docs, and bindings; use this when users still say optimizer
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -38,10 +38,10 @@ See `docs/plugins/adaptive/configuration.md` and
 
 - `crates/adaptive`
 - Shared plugin behavior in core and bindings
-- Python adaptive/plugin wrappers in `python/nemo_flow/adaptive.py` and
-  `python/nemo_flow/plugin.py`
-- Go adaptive helpers under `go/nemo_flow/adaptive` plus shared plugin
-  helpers in `go/nemo_flow`
+- Python adaptive/plugin wrappers in `python/nemo_relay/adaptive.py` and
+  `python/nemo_relay/plugin.py`
+- Go adaptive helpers under `go/nemo_relay/adaptive` plus shared plugin
+  helpers in `go/nemo_relay`
 - Node/WebAssembly adaptive helpers and plugin wrappers
 - Docs and examples that show canonical config shapes
 

@@ -3,7 +3,7 @@
 
 //! Built-in observability plugin component.
 //!
-//! This module packages NeMo Flow's first-party observability exporters behind
+//! This module packages NeMo Relay's first-party observability exporters behind
 //! the shared plugin configuration system. Each exporter section is opt-in:
 //! omitted sections and sections with `enabled = false` validate but do not
 //! register subscribers or construct exporters.
@@ -1268,7 +1268,7 @@ fn default_atof_mode() -> String {
 }
 
 fn default_agent_name() -> String {
-    "NeMo Flow".to_string()
+    "NeMo Relay".to_string()
 }
 
 fn default_agent_version() -> String {
@@ -1280,7 +1280,7 @@ fn default_model_name() -> String {
 }
 
 fn default_atif_filename_template() -> String {
-    "nemo-flow-atif-{session_id}.json".to_string()
+    "nemo-relay-atif-{session_id}.json".to_string()
 }
 
 fn default_otlp_transport() -> String {
@@ -1288,7 +1288,7 @@ fn default_otlp_transport() -> String {
 }
 
 fn default_service_name() -> String {
-    "nemo-flow".to_string()
+    "nemo-relay".to_string()
 }
 
 fn default_timeout_millis() -> u64 {

@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # About
 
-Use this section when you want to package reusable NeMo Flow behavior as a plugin that can be activated from configuration.
+Use this section when you want to package reusable NeMo Relay behavior as a plugin that can be activated from configuration.
 
 Plugins are the configuration-driven packaging layer for shared runtime
 behavior. A plugin can validate component-local config, register middleware and
@@ -36,7 +36,7 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Plugin Configuration Files](plugin-configuration-files.md) documents `plugins.toml` file discovery, precedence, merge behavior, and editor controls for the CLI gateway.
 - [Register Plugin Behavior](register-behavior.md) shows how to initialize config and install subscribers or middleware through `PluginContext`.
 - [Design Plugin Configuration](advanced-configuration.md) covers validation rules, advanced configuration patterns, rollout controls, and `PluginContext` usage.
-- [NeMo Guardrails Example Plugin](nemoguardrails.md) shows an external Python plugin that applies NeMo Guardrails checks around NeMo Flow LLM and tool calls.
+- [NeMo Guardrails Example Plugin](nemoguardrails.md) shows an external Python plugin that applies NeMo Guardrails checks around NeMo Relay LLM and tool calls.
 - [Code Examples](code-examples.md) provides patterns for dynamic header injection, subscriber-oriented export, multi-surface bundles, and framework-facing plugins.
 
 Start by deciding which runtime surfaces the plugin owns: middleware,

@@ -600,8 +600,8 @@ fn maps_hermes_null_request_as_lossy_summary() {
 #[test]
 fn normalizes_mark_style_events_and_header_session_ids() {
     let mut headers = HeaderMap::new();
-    headers.insert("x-nemo-flow-session-id", "header-session".parse().unwrap());
-    headers.insert("x-nemo-flow-config-profile", "coverage".parse().unwrap());
+    headers.insert("x-nemo-relay-session-id", "header-session".parse().unwrap());
+    headers.insert("x-nemo-relay-config-profile", "coverage".parse().unwrap());
 
     for (event_name, expected) in [
         ("UserPromptSubmit", "prompt"),

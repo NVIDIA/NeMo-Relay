@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for shared runtime in the NeMo Flow core crate.
+//! Coverage tests for shared runtime in the NeMo Relay core crate.
 
 use super::*;
 
@@ -74,7 +74,7 @@ fn test_conflicting_binding_is_rejected() {
 
     let error = initialize_shared_runtime_binding("node").unwrap_err();
     let message = error.to_string();
-    assert!(message.contains("NeMo Flow does not support multiple bindings in one process"));
+    assert!(message.contains("NeMo Relay does not support multiple bindings in one process"));
     assert!(message.contains("existing owner=python@"));
     assert!(message.contains("attempted=node@"));
 }
@@ -132,7 +132,7 @@ fn test_api_use_rejects_conflicting_owner() {
 
     let error = get_handle().unwrap_err();
     let message = error.to_string();
-    assert!(message.contains("NeMo Flow does not support multiple bindings in one process"));
+    assert!(message.contains("NeMo Relay does not support multiple bindings in one process"));
     assert!(message.contains("existing owner=python@"));
     assert!(message.contains("attempted=rust@"));
 }
@@ -151,7 +151,7 @@ fn test_runtime_owner_parse_and_display_cover_invalid_tokens() {
     assert!(
         invalid_pid
             .to_string()
-            .contains("invalid NeMo Flow owner token pid")
+            .contains("invalid NeMo Relay owner token pid")
     );
 
     let empty_binding = RuntimeOwner::parse("pid=1;binding=;version=1.2.3").unwrap_err();

@@ -201,7 +201,7 @@ pub struct RequestDefaultsConfig {
 
 /// Request-time rail selection for Guardrails generation.
 ///
-/// These are backend request options, not top-level NeMo Flow interception
+/// These are backend request options, not top-level NeMo Relay interception
 /// surfaces.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

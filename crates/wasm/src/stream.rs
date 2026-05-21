@@ -11,8 +11,8 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use nemo_flow::error::Result as FlowResult;
-use nemo_flow::json::Json;
+use nemo_relay::error::Result as FlowResult;
+use nemo_relay::json::Json;
 
 /// Wraps a streaming LLM response for consumption from JavaScript/TypeScript.
 ///

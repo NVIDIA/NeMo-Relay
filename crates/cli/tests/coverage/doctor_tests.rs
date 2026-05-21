@@ -55,19 +55,19 @@ fn empty_report() -> DoctorReport {
         },
         configuration: ConfigurationInfo {
             workspace: ConfigLayer {
-                path: PathBuf::from("/x/.nemo-flow/config.toml"),
+                path: PathBuf::from("/x/.nemo-relay/config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
             },
             global: ConfigLayer {
-                path: PathBuf::from("/x/.config/nemo-flow/config.toml"),
+                path: PathBuf::from("/x/.config/nemo-relay/config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
             },
             system: ConfigLayer {
-                path: PathBuf::from("/etc/nemo-flow/config.toml"),
+                path: PathBuf::from("/etc/nemo-relay/config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
@@ -326,7 +326,7 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
 
     let temp = tempfile::tempdir().unwrap();
     let hook = temp.path().join("hooks.yaml");
-    std::fs::write(&hook, "cmd: nemo-flow hook-forward hermes\n").unwrap();
+    std::fs::write(&hook, "cmd: nemo-relay hook-forward hermes\n").unwrap();
     let (status, details) = hook_file_status(Ok(hook.clone()), CodingAgent::Hermes, true, "hooks");
     assert_eq!(status, Status::Pass);
     assert!(details.contains(hook.to_str().unwrap()));
@@ -334,7 +334,7 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     std::fs::write(&hook, "cmd: custom\n").unwrap();
     let (status, details) = hook_file_status(Ok(hook.clone()), CodingAgent::Hermes, true, "hooks");
     assert_eq!(status, Status::Fail);
-    assert!(details.contains("missing NeMo Flow hook"));
+    assert!(details.contains("missing NeMo Relay hook"));
     let (status, _) = hook_file_status(Ok(hook), CodingAgent::Hermes, false, "hooks");
     assert_eq!(status, Status::Info);
 }
@@ -343,20 +343,20 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
 fn collect_completions_reports_shell_specific_paths() {
     let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let zsh_completion = temp.path().join(".zfunc/_nemo-flow");
+    let zsh_completion = temp.path().join(".zfunc/_nemo-relay");
     std::fs::create_dir_all(zsh_completion.parent().unwrap()).unwrap();
-    std::fs::write(&zsh_completion, "#compdef nemo-flow\n").unwrap();
+    std::fs::write(&zsh_completion, "#compdef nemo-relay\n").unwrap();
 
     let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/bin/zsh")))]);
     let checks = collect_completions(Some(temp.path()));
     assert_eq!(checks[0].status, Status::Pass);
-    assert!(checks[0].details.contains("_nemo-flow"));
+    assert!(checks[0].details.contains("_nemo-relay"));
 
     drop(_env);
     let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/bin/fish")))]);
     let checks = collect_completions(Some(temp.path()));
     assert_eq!(checks[0].status, Status::Info);
-    assert!(checks[0].details.contains("nemo-flow.fish"));
+    assert!(checks[0].details.contains("nemo-relay.fish"));
 
     drop(_env);
     let _env = EnvScope::set(&[("SHELL", None)]);
@@ -427,7 +427,7 @@ fn cursor_hook_status_rejects_grouped_entries() {
                 "hooks": [
                   {
                     "type": "command",
-                    "command": "nemo-flow hook-forward cursor",
+                    "command": "nemo-relay hook-forward cursor",
                     "timeout": 30
                   }
                 ]
@@ -461,7 +461,7 @@ fn cursor_hook_status_rejects_any_grouped_entries_when_nemo_hook_is_direct() {
           "hooks": {
             "sessionStart": [
               {
-                "command": "nemo-flow hook-forward cursor",
+                "command": "nemo-relay hook-forward cursor",
                 "timeout": 30
               }
             ],
@@ -504,7 +504,7 @@ fn cursor_hook_status_requires_version_one() {
           "hooks": {
             "beforeShellExecution": [
               {
-                "command": "nemo-flow hook-forward cursor",
+                "command": "nemo-relay hook-forward cursor",
                 "timeout": 30
               }
             ]
@@ -536,7 +536,7 @@ fn cursor_hook_status_rejects_non_one_version() {
           "hooks": {
             "beforeShellExecution": [
               {
-                "command": "nemo-flow hook-forward cursor",
+                "command": "nemo-relay hook-forward cursor",
                 "timeout": 30
               }
             ]
@@ -568,7 +568,7 @@ fn cursor_hook_status_accepts_direct_versioned_entries() {
           "hooks": {
             "beforeShellExecution": [
               {
-                "command": "nemo-flow hook-forward cursor",
+                "command": "nemo-relay hook-forward cursor",
                 "timeout": 30
               }
             ]

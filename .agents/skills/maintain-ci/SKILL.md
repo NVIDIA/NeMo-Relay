@@ -1,6 +1,6 @@
 ---
 name: maintain-ci
-description: Maintain and review NeMo Flow GitHub Actions workflows with explicit per-job permissions, pinned action SHAs, deterministic caching, reusable workflow permission boundaries, and local validation
+description: Maintain and review NeMo Relay GitHub Actions workflows with explicit per-job permissions, pinned action SHAs, deterministic caching, reusable workflow permission boundaries, and local validation
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---

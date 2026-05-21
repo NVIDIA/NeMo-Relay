@@ -15,16 +15,16 @@ stages:
   - publish
 
 variables:
-  NEMO_FLOW_CI_DEBIAN_VERSION: "trixie"
-  NEMO_FLOW_CI_JUST_VERSION: "1.40.0"
-  NEMO_FLOW_CI_NODE_VERSION: "24"
-  NEMO_FLOW_CI_PYTHON_VERSION: "3.11"
-  NEMO_FLOW_CI_RUST_VERSION: "1.93.0"
-  NEMO_FLOW_CI_UV_VERSION: "0.9.28"
-  NEMO_FLOW_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Flow"
-  NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
-  NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS: "7200"
-  NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS: "60"
+  NEMO_RELAY_CI_DEBIAN_VERSION: "trixie"
+  NEMO_RELAY_CI_JUST_VERSION: "1.40.0"
+  NEMO_RELAY_CI_NODE_VERSION: "24"
+  NEMO_RELAY_CI_PYTHON_VERSION: "3.11"
+  NEMO_RELAY_CI_RUST_VERSION: "1.93.0"
+  NEMO_RELAY_CI_UV_VERSION: "0.9.28"
+  NEMO_RELAY_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Relay"
+  NEMO_RELAY_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
+  NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS: "7200"
+  NEMO_RELAY_CI_GITHUB_RUN_POLL_SECONDS: "60"
 
 check:sonar:
   stage: check
@@ -60,11 +60,11 @@ collect:github-artifacts:
     - |
       set -eu
 
-      if [ -z "${NEMO_FLOW_CI_GITHUB_TOKEN:-}" ]; then
-        echo "Error: NEMO_FLOW_CI_GITHUB_TOKEN is required to download GitHub Actions artifacts." >&2
+      if [ -z "${NEMO_RELAY_CI_GITHUB_TOKEN:-}" ]; then
+        echo "Error: NEMO_RELAY_CI_GITHUB_TOKEN is required to download GitHub Actions artifacts." >&2
         exit 1
       fi
-      export GH_TOKEN="${NEMO_FLOW_CI_GITHUB_TOKEN}"
+      export GH_TOKEN="${NEMO_RELAY_CI_GITHUB_TOKEN}"
 
       mkdir -p collected/wheels collected/wasm collected/node downloaded
 
@@ -75,24 +75,24 @@ collect:github-artifacts:
       fi
 
       tag_ref="tags/${tag}"
-      deadline="$(( $(date -u +%s) + NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS ))"
+      deadline="$(( $(date -u +%s) + NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS ))"
 
-      echo "Waiting for tag ${tag} in ${NEMO_FLOW_CI_GITHUB_REPOSITORY}"
-      while ! gh api "repos/${NEMO_FLOW_CI_GITHUB_REPOSITORY}/git/ref/${tag_ref}" >/dev/null 2>&1; do
+      echo "Waiting for tag ${tag} in ${NEMO_RELAY_CI_GITHUB_REPOSITORY}"
+      while ! gh api "repos/${NEMO_RELAY_CI_GITHUB_REPOSITORY}/git/ref/${tag_ref}" >/dev/null 2>&1; do
         if [ "$(date -u +%s)" -ge "$deadline" ]; then
-          echo "Error: tag ${tag} did not appear within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds." >&2
+          echo "Error: tag ${tag} did not appear within ${NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS} seconds." >&2
           exit 1
         fi
-        sleep "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS"
+        sleep "$NEMO_RELAY_CI_GITHUB_RUN_POLL_SECONDS"
       done
 
-      echo "Waiting for ${NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE} run for tag ${tag}"
+      echo "Waiting for ${NEMO_RELAY_CI_GITHUB_WORKFLOW_FILE} run for tag ${tag}"
       run_id=""
       while [ -z "$run_id" ]; do
         run_id="$(
           gh run list \
-            --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
-            --workflow "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE" \
+            --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" \
+            --workflow "$NEMO_RELAY_CI_GITHUB_WORKFLOW_FILE" \
             --event push \
             --branch "$tag" \
             --limit 1 \
@@ -103,10 +103,10 @@ collect:github-artifacts:
           break
         fi
         if [ "$(date -u +%s)" -ge "$deadline" ]; then
-          echo "Error: no GitHub Actions run found for tag ${tag} within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds." >&2
+          echo "Error: no GitHub Actions run found for tag ${tag} within ${NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS} seconds." >&2
           exit 1
         fi
-        sleep "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS"
+        sleep "$NEMO_RELAY_CI_GITHUB_RUN_POLL_SECONDS"
       done
       if [ -z "$run_id" ]; then
         echo "Error: no GitHub Actions run found for tag ${tag}." >&2
@@ -115,23 +115,23 @@ collect:github-artifacts:
 
       run_html_url="$(
         gh run view "$run_id" \
-          --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
+          --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" \
           --json url \
           --jq '.url'
       )"
       echo "Watching GitHub Actions run ${run_id} for tag ${tag}: ${run_html_url}"
-      if ! timeout "$NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS" \
+      if ! timeout "$NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS" \
         gh run watch "$run_id" \
-          --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" \
-          --interval "$NEMO_FLOW_CI_GITHUB_RUN_POLL_SECONDS" \
+          --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" \
+          --interval "$NEMO_RELAY_CI_GITHUB_RUN_POLL_SECONDS" \
           --exit-status; then
-        echo "Error: GitHub Actions run ${run_id} for tag ${tag} failed, was cancelled, or did not complete within ${NEMO_FLOW_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
+        echo "Error: GitHub Actions run ${run_id} for tag ${tag} failed, was cancelled, or did not complete within ${NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS} seconds: ${run_html_url}" >&2
         exit 1
       fi
 
-      gh run download "$run_id" --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
-      gh run download "$run_id" --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" --name wasm-bundler --dir downloaded/wasm
-      gh run download "$run_id" --repo "$NEMO_FLOW_CI_GITHUB_REPOSITORY" --name npm-consolidated --dir downloaded/node
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name wasm-bundler --dir downloaded/wasm
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name npm-consolidated --dir downloaded/node
 
       find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
       find downloaded/wasm -type f -name '*.tgz' -exec cp {} collected/wasm/ \;
@@ -159,7 +159,7 @@ collect:github-artifacts:
         printf '{\n'
         printf '  "run_id": "%s",\n' "$run_id"
         printf '  "run_url": "%s",\n' "$run_html_url"
-        printf '  "workflow": "%s",\n' "$NEMO_FLOW_CI_GITHUB_WORKFLOW_FILE"
+        printf '  "workflow": "%s",\n' "$NEMO_RELAY_CI_GITHUB_WORKFLOW_FILE"
         printf '  "tag": "%s"\n' "$tag"
         printf '}\n'
       } > collected/github-run.json
@@ -176,7 +176,7 @@ collect:github-artifacts:
 publish:artifactory:wheels:
   stage: publish
   image:
-    name: ghcr.io/astral-sh/uv:${NEMO_FLOW_CI_UV_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}-slim
+    name: ghcr.io/astral-sh/uv:${NEMO_RELAY_CI_UV_VERSION}-${NEMO_RELAY_CI_DEBIAN_VERSION}-slim
     pull_policy: if-not-present
   rules:
     - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_TAG
@@ -188,8 +188,8 @@ publish:artifactory:wheels:
     - |
       set -eu
 
-      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL:-}" ]; then
-        echo "Error: uploading wheels to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL." >&2
+      if [ -z "${NEMO_RELAY_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL:-}" ]; then
+        echo "Error: uploading wheels to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER, NEMO_RELAY_CI_ARTIFACTORY_KEY, and NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL." >&2
         exit 1
       fi
       if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
@@ -197,15 +197,15 @@ publish:artifactory:wheels:
         exit 1
       fi
 
-      UV_PUBLISH_USERNAME="${NEMO_FLOW_CI_ARTIFACTORY_USER}" \
-        UV_PUBLISH_PASSWORD="${NEMO_FLOW_CI_ARTIFACTORY_KEY}" \
-        UV_PUBLISH_URL="${NEMO_FLOW_CI_ARTIFACTORY_PYPI_URL}" \
+      UV_PUBLISH_USERNAME="${NEMO_RELAY_CI_ARTIFACTORY_USER}" \
+        UV_PUBLISH_PASSWORD="${NEMO_RELAY_CI_ARTIFACTORY_KEY}" \
+        UV_PUBLISH_URL="${NEMO_RELAY_CI_ARTIFACTORY_PYPI_URL}" \
         uv publish --no-progress collected/wheels/*.whl
 
 publish:artifactory:cargo:
   stage: publish
   image:
-    name: rust:${NEMO_FLOW_CI_RUST_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
+    name: rust:${NEMO_RELAY_CI_RUST_VERSION}-${NEMO_RELAY_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   rules:
     - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_TAG
@@ -215,11 +215,11 @@ publish:artifactory:cargo:
       artifacts: true
   before_script:
     - apt-get update -qq && apt-get install -y --no-install-recommends ca-certificates curl git nodejs && rm -rf /var/lib/apt/lists/*
-    - cargo install just --version "${NEMO_FLOW_CI_JUST_VERSION}" --locked
+    - cargo install just --version "${NEMO_RELAY_CI_JUST_VERSION}" --locked
     - curl -LsSf https://astral.sh/uv/install.sh -o /tmp/install-uv.sh
-    - UV_VERSION="${NEMO_FLOW_CI_UV_VERSION}" sh /tmp/install-uv.sh
+    - UV_VERSION="${NEMO_RELAY_CI_UV_VERSION}" sh /tmp/install-uv.sh
     - export PATH="${HOME}/.cargo/bin:${HOME}/.local/bin:${PATH}"
-    - uv python install "${NEMO_FLOW_CI_PYTHON_VERSION}"
+    - uv python install "${NEMO_RELAY_CI_PYTHON_VERSION}"
     - rustc --version
     - just --version
     - uv --version
@@ -227,8 +227,8 @@ publish:artifactory:cargo:
     - |
       set -eu
 
-      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
-        echo "Error: uploading Cargo crates to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_KEY and NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL." >&2
+      if [ -z "${NEMO_RELAY_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_CARGO_URL:-}" ]; then
+        echo "Error: uploading Cargo crates to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_KEY and NEMO_RELAY_CI_ARTIFACTORY_CARGO_URL." >&2
         exit 1
       fi
       if [ ! -f collected/github-run.json ]; then
@@ -259,10 +259,10 @@ publish:artifactory:cargo:
       [registry]
       global-credential-providers = ["cargo:token"]
       [registries]
-      artifactory = { index = "sparse+${NEMO_FLOW_CI_ARTIFACTORY_CARGO_URL}" }
+      artifactory = { index = "sparse+${NEMO_RELAY_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
-      export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="Bearer ${NEMO_FLOW_CI_ARTIFACTORY_KEY}"
-      export NEMO_FLOW_ARTIFACTORY_CRATE_DIRS="core adaptive ffi cli"
+      export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="Bearer ${NEMO_RELAY_CI_ARTIFACTORY_KEY}"
+      export NEMO_RELAY_ARTIFACTORY_CRATE_DIRS="core adaptive ffi cli"
 
       crates="$(
         uv run --no-project python - <<'PY'
@@ -272,14 +272,14 @@ publish:artifactory:cargo:
 
       manifest = Path("Cargo.toml")
       text = manifest.read_text()
-      for crate_dir in os.environ["NEMO_FLOW_ARTIFACTORY_CRATE_DIRS"].split():
+      for crate_dir in os.environ["NEMO_RELAY_ARTIFACTORY_CRATE_DIRS"].split():
           before = f'path = "crates/{crate_dir}"'
           after = f'{before}, registry = "artifactory"'
           if after not in text:
               text = text.replace(before, after)
       manifest.write_text(text)
 
-      for crate_dir in os.environ["NEMO_FLOW_ARTIFACTORY_CRATE_DIRS"].split():
+      for crate_dir in os.environ["NEMO_RELAY_ARTIFACTORY_CRATE_DIRS"].split():
           crate_manifest = Path("crates") / crate_dir / "Cargo.toml"
           print(tomllib.loads(crate_manifest.read_text())["package"]["name"])
       PY
@@ -292,7 +292,7 @@ publish:artifactory:cargo:
 publish:artifactory:npm:
   stage: publish
   image:
-    name: node:${NEMO_FLOW_CI_NODE_VERSION}-${NEMO_FLOW_CI_DEBIAN_VERSION}
+    name: node:${NEMO_RELAY_CI_NODE_VERSION}-${NEMO_RELAY_CI_DEBIAN_VERSION}
     pull_policy: if-not-present
   rules:
     - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_TAG
@@ -306,8 +306,8 @@ publish:artifactory:npm:
     - |
       set -eu
 
-      if [ -z "${NEMO_FLOW_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL:-}" ]; then
-        echo "Error: uploading npm packages to Artifactory requires NEMO_FLOW_CI_ARTIFACTORY_USER, NEMO_FLOW_CI_ARTIFACTORY_KEY, and NEMO_FLOW_CI_ARTIFACTORY_NPM_URL." >&2
+      if [ -z "${NEMO_RELAY_CI_ARTIFACTORY_USER:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_KEY:-}" ] || [ -z "${NEMO_RELAY_CI_ARTIFACTORY_NPM_URL:-}" ]; then
+        echo "Error: uploading npm packages to Artifactory requires NEMO_RELAY_CI_ARTIFACTORY_USER, NEMO_RELAY_CI_ARTIFACTORY_KEY, and NEMO_RELAY_CI_ARTIFACTORY_NPM_URL." >&2
         exit 1
       fi
       if [ ! -f collected/node/consolidated.zip ]; then
@@ -326,9 +326,9 @@ publish:artifactory:npm:
         exit 1
       fi
 
-      registry_url="${NEMO_FLOW_CI_ARTIFACTORY_NPM_URL%/}/"
+      registry_url="${NEMO_RELAY_CI_ARTIFACTORY_NPM_URL%/}/"
       registry_key="${registry_url#https:}"
-      npm_auth="$(printf '%s:%s' "${NEMO_FLOW_CI_ARTIFACTORY_USER}" "${NEMO_FLOW_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
+      npm_auth="$(printf '%s:%s' "${NEMO_RELAY_CI_ARTIFACTORY_USER}" "${NEMO_RELAY_CI_ARTIFACTORY_KEY}" | base64 | tr -d '\n')"
       npm config set registry "$registry_url"
       npm config set "${registry_key}:_auth" "$npm_auth"
 

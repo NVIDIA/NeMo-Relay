@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for api in the NeMo Flow WebAssembly crate.
+//! Unit tests for api in the NeMo Relay WebAssembly crate.
 
 use super::*;
 use std::sync::{Mutex, OnceLock};
@@ -21,10 +21,10 @@ fn test_mutex() -> &'static Mutex<()> {
 fn wasm_config_defaults_match_expected_values() {
     let otel_config = WasmOpenTelemetryConfig::default();
     assert_eq!(otel_config.transport.as_deref(), Some("http_binary"));
-    assert_eq!(otel_config.service_name.as_deref(), Some("nemo-flow"));
+    assert_eq!(otel_config.service_name.as_deref(), Some("nemo-relay"));
     assert_eq!(
         otel_config.instrumentation_scope.as_deref(),
-        Some("nemo-flow-otel")
+        Some("nemo-relay-otel")
     );
     assert_eq!(otel_config.timeout_millis, Some(3_000));
 
@@ -35,11 +35,11 @@ fn wasm_config_defaults_match_expected_values() {
     );
     assert_eq!(
         openinference_config.service_name.as_deref(),
-        Some("nemo-flow")
+        Some("nemo-relay")
     );
     assert_eq!(
         openinference_config.instrumentation_scope.as_deref(),
-        Some("nemo-flow-openinference")
+        Some("nemo-relay-openinference")
     );
     assert_eq!(openinference_config.timeout_millis, Some(3_000));
 }

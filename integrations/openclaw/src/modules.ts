@@ -2,76 +2,78 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Dynamic module loading boundary for NeMo Flow Node bindings.
+ * Dynamic module loading boundary for NeMo Relay Node bindings.
  *
  * Keeping imports behind this loader lets the plugin register in OpenClaw even
  * when the native binding is unavailable, then degrade only at runtime start.
  */
-import type * as NemoFlowRuntime from "nemo-flow-node";
-import type * as NemoFlowAdaptive from "nemo-flow-node/adaptive";
-import type * as NemoFlowPluginHost from "nemo-flow-node/plugin";
+import type * as NemoRelayRuntime from 'nemo-relay-node';
+import type * as NemoRelayAdaptive from 'nemo-relay-node/adaptive';
+import type * as NemoRelayPluginHost from 'nemo-relay-node/plugin';
 
-type NemoFlowRuntimeKeys =
-  | "ScopeType"
-  | "createScopeStack"
-  | "currentScopeStack"
-  | "setThreadScopeStack"
-  | "pushScope"
-  | "popScope"
-  | "event"
-  | "llmCall"
-  | "llmCallEnd"
-  | "toolCall"
-  | "toolCallEnd"
-  | "toolConditionalExecution";
+type NemoRelayRuntimeKeys =
+  | 'ScopeType'
+  | 'createScopeStack'
+  | 'currentScopeStack'
+  | 'setThreadScopeStack'
+  | 'pushScope'
+  | 'popScope'
+  | 'event'
+  | 'llmCall'
+  | 'llmCallEnd'
+  | 'toolCall'
+  | 'toolCallEnd'
+  | 'toolConditionalExecution';
 
-type NemoFlowPluginHostKeys = "defaultConfig" | "validate" | "initialize" | "clear";
-type NemoFlowAdaptiveKeys = "ADAPTIVE_PLUGIN_KIND" | "ComponentSpec";
+type NemoRelayPluginHostKeys = 'defaultConfig' | 'validate' | 'initialize' | 'clear';
+type NemoRelayAdaptiveKeys = 'ADAPTIVE_PLUGIN_KIND' | 'ComponentSpec';
 
-export type ConfigDiagnostic = NemoFlowPluginHost.ConfigDiagnostic;
-export type ConfigReport = NemoFlowPluginHost.ConfigReport;
+export type ConfigDiagnostic = NemoRelayPluginHost.ConfigDiagnostic;
+export type ConfigReport = NemoRelayPluginHost.ConfigReport;
 
 /**
- * @internal Package-owned subset of the dynamically imported `nemo-flow-node`
+ * @internal Package-owned subset of the dynamically imported `nemo-relay-node`
  * namespace used by this integration.
  */
-export type NemoFlowRuntimeModule = Omit<Pick<typeof NemoFlowRuntime, NemoFlowRuntimeKeys>, "ScopeType"> & {
-  ScopeType: {
-    Agent?: Parameters<typeof NemoFlowRuntime.pushScope>[1];
-  } | undefined;
+export type NemoRelayRuntimeModule = Omit<Pick<typeof NemoRelayRuntime, NemoRelayRuntimeKeys>, 'ScopeType'> & {
+  ScopeType:
+    | {
+        Agent?: Parameters<typeof NemoRelayRuntime.pushScope>[1];
+      }
+    | undefined;
 };
 
 /**
  * @internal Package-owned subset of the dynamically imported
- * `nemo-flow-node/plugin` namespace used by this integration.
+ * `nemo-relay-node/plugin` namespace used by this integration.
  */
-export type NemoFlowPluginHostModule = Pick<typeof NemoFlowPluginHost, NemoFlowPluginHostKeys>;
+export type NemoRelayPluginHostModule = Pick<typeof NemoRelayPluginHost, NemoRelayPluginHostKeys>;
 
 /**
  * @internal Adaptive helper subset loaded so the package verifies the built-in
  * adaptive plugin path is available alongside the generic plugin host.
  */
-export type NemoFlowAdaptiveModule = Pick<typeof NemoFlowAdaptive, NemoFlowAdaptiveKeys>;
+export type NemoRelayAdaptiveModule = Pick<typeof NemoRelayAdaptive, NemoRelayAdaptiveKeys>;
 
-export type NemoFlowModules = {
-  nf: NemoFlowRuntimeModule;
-  pluginHost: NemoFlowPluginHostModule;
-  adaptive: NemoFlowAdaptiveModule;
+export type NemoRelayModules = {
+  nf: NemoRelayRuntimeModule;
+  pluginHost: NemoRelayPluginHostModule;
+  adaptive: NemoRelayAdaptiveModule;
 };
 
-export type NemoFlowModuleLoader = () => Promise<NemoFlowModules>;
+export type NemoRelayModuleLoader = () => Promise<NemoRelayModules>;
 
 /** Load the runtime and plugin-host modules used by the OpenClaw integration. */
-export const defaultNemoFlowModuleLoader: NemoFlowModuleLoader = async () => {
+export const defaultNemoRelayModuleLoader: NemoRelayModuleLoader = async () => {
   const [nf, pluginHost, adaptive] = await Promise.all([
-    import("nemo-flow-node"),
-    import("nemo-flow-node/plugin"),
-    import("nemo-flow-node/adaptive"),
+    import('nemo-relay-node'),
+    import('nemo-relay-node/plugin'),
+    import('nemo-relay-node/adaptive'),
   ]);
 
   return {
-    nf: nf as NemoFlowRuntimeModule,
-    pluginHost: pluginHost as NemoFlowPluginHostModule,
-    adaptive: adaptive as NemoFlowAdaptiveModule,
+    nf: nf as NemoRelayRuntimeModule,
+    pluginHost: pluginHost as NemoRelayPluginHostModule,
+    adaptive: adaptive as NemoRelayAdaptiveModule,
   };
 };

@@ -1,24 +1,24 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for py types coverage in the NeMo Flow Python crate.
+//! Coverage tests for py types coverage in the NeMo Relay Python crate.
 
 use super::*;
 use std::ffi::CString;
 
-use nemo_flow::api::event::{
+use nemo_relay::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
-use nemo_flow::api::llm::{LlmAttributes, LlmHandle};
-use nemo_flow::api::llm::{LlmCallParams, llm_call, llm_call_end};
-use nemo_flow::api::scope::{PushScopeParams, pop_scope, push_scope};
-use nemo_flow::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
-use nemo_flow::api::tool::{ToolAttributes, ToolHandle};
-use nemo_flow::codec::request::{
+use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
+use nemo_relay::api::llm::{LlmCallParams, llm_call, llm_call_end};
+use nemo_relay::api::scope::{PushScopeParams, pop_scope, push_scope};
+use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
+use nemo_relay::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, Message, MessageContent,
 };
-use nemo_flow::codec::response::{
+use nemo_relay::codec::response::{
     AnnotatedLlmResponse as AnnotatedLLMResponse, ApiSpecificResponse, FinishReason,
     ResponseToolCall, Usage,
 };
@@ -342,7 +342,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         )
         .unwrap();
         llm_call_end(
-            nemo_flow::api::llm::LlmCallEndParams::builder()
+            nemo_relay::api::llm::LlmCallEndParams::builder()
                 .handle(&handle)
                 .response(json!({"content": "world"}))
                 .build(),
@@ -367,7 +367,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
         assert_eq!(cleared["steps"], json!([]));
 
         pop_scope(
-            nemo_flow::api::scope::PopScopeParams::builder()
+            nemo_relay::api::scope::PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
                 .build(),
         )
@@ -512,7 +512,7 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
     assert_eq!(llm_and.value(), PyLLMAttributes::STREAMING);
 
     Python::attach(|py| {
-        let stack = PyScopeStack(nemo_flow::api::runtime::create_scope_stack());
+        let stack = PyScopeStack(nemo_relay::api::runtime::create_scope_stack());
         assert_eq!(stack.__repr__(), "<ScopeStack>");
 
         let parent_uuid = Uuid::now_v7();
@@ -812,7 +812,7 @@ async def next_item(stream):
 
             let (tx_err, rx_err) = tokio::sync::mpsc::channel(1);
             tx_err
-                .blocking_send(Err(nemo_flow::error::FlowError::Internal(
+                .blocking_send(Err(nemo_relay::error::FlowError::Internal(
                     "stream boom".into(),
                 )))
                 .unwrap();
@@ -1254,7 +1254,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         );
 
         let chat_request = PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({
                     "model": "gpt-4o-mini",
@@ -1289,7 +1289,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         assert_eq!(chat_codec.__repr__(), "<OpenAIChatCodec>");
 
         let responses_request = PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({
                     "model": "gpt-4o-mini",
@@ -1333,7 +1333,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         assert_eq!(responses_codec.__repr__(), "<OpenAIResponsesCodec>");
 
         let anthropic_request = PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({
                     "model": "claude-sonnet-4-20250514",
@@ -1406,20 +1406,20 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     },
                 ],
                 model: Some("demo-model".into()),
-                params: Some(nemo_flow::codec::request::GenerationParams {
+                params: Some(nemo_relay::codec::request::GenerationParams {
                     temperature: Some(0.1),
                     max_tokens: Some(8),
                     ..Default::default()
                 }),
-                tools: Some(vec![nemo_flow::codec::request::ToolDefinition {
+                tools: Some(vec![nemo_relay::codec::request::ToolDefinition {
                     tool_type: "function".into(),
-                    function: nemo_flow::codec::request::FunctionDefinition {
+                    function: nemo_relay::codec::request::FunctionDefinition {
                         name: "lookup".into(),
                         description: None,
                         parameters: Some(json!({"type": "object"})),
                     },
                 }]),
-                tool_choice: Some(nemo_flow::codec::request::ToolChoice::Auto),
+                tool_choice: Some(nemo_relay::codec::request::ToolChoice::Auto),
                 store: None,
                 previous_response_id: None,
                 truncation: None,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for shared in the NeMo Flow core crate.
+//! Unit tests for shared in the NeMo Relay core crate.
 
 use super::*;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use serde_json::{Map, json};
 
 use crate::api::llm::LlmRequest;
 use crate::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use crate::api::scope::ScopeType;
@@ -75,7 +75,7 @@ fn reset_global() {
     {
         let ctx = global_context();
         let mut state = ctx.write().unwrap();
-        *state = NemoFlowContextState::new();
+        *state = NemoRelayContextState::new();
     }
     set_thread_scope_stack(create_scope_stack());
     let _ = deregister_llm_request_intercept("shared-none");

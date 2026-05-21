@@ -1,28 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for runtime features in the NeMo Flow adaptive crate.
+//! Unit tests for runtime features in the NeMo Relay adaptive crate.
 
 use super::*;
 
 use std::sync::Arc;
 
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::llm_request_intercepts;
-use nemo_flow::api::registry::{
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::llm_request_intercepts;
+use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, deregister_tool_execution_intercept,
     register_llm_execution_intercept, register_llm_request_intercept,
     register_llm_stream_execution_intercept, register_tool_execution_intercept,
 };
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::ToolExecutionNextFn;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::api::tool::tool_call_execute;
-use nemo_flow::error::FlowError;
-use nemo_flow::plugin::{ConfigPolicy, UnsupportedBehavior};
-use nemo_flow::plugin::{clear_plugin_configuration, rollback_registrations};
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::ToolExecutionNextFn;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::tool::tool_call_execute;
+use nemo_relay::error::FlowError;
+use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
+use nemo_relay::plugin::{clear_plugin_configuration, rollback_registrations};
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -40,7 +40,7 @@ fn reset_global() {
     let _ = clear_plugin_configuration();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 fn sample_plan(agent_id: &str) -> ExecutionPlan {
@@ -63,7 +63,7 @@ fn sample_plan(agent_id: &str) -> ExecutionPlan {
     }
 }
 
-fn assert_already_registered(result: nemo_flow::error::Result<()>, name: &str) {
+fn assert_already_registered(result: nemo_relay::error::Result<()>, name: &str) {
     match result {
         Err(FlowError::AlreadyExists(message)) => assert!(message.contains(name)),
         other => panic!("expected {name} to be registered, got {other:?}"),
@@ -425,7 +425,7 @@ async fn tool_parallelism_feature_registers_execution_intercept() {
 
     let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("search")
             .args(json!({"query": "coverage"}))
             .func(next)
@@ -565,7 +565,7 @@ async fn registration_context_registers_all_supported_callback_types() {
                     as Pin<
                         Box<
                             dyn tokio_stream::Stream<
-                                    Item = nemo_flow::error::Result<nemo_flow::json::Json>,
+                                    Item = nemo_relay::error::Result<nemo_relay::json::Json>,
                                 > + Send,
                         >,
                     >)

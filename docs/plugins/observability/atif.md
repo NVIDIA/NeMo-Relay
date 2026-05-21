@@ -42,17 +42,17 @@ This configuration writes a trajectory file such as
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Must be `true` to write trajectories. |
-| `agent_name` | `NeMo Flow` | Agent metadata written into the trajectory. |
-| `agent_version` | NeMo Flow crate version | Agent version metadata. |
+| `agent_name` | `NeMo Relay` | Agent metadata written into the trajectory. |
+| `agent_version` | NeMo Relay crate version | Agent version metadata. |
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files. |
-| `filename_template` | `nemo-flow-atif-{session_id}.json` | Must contain `{session_id}`. |
+| `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. |
 
 ## Expected Output
 
-The exporter translates NeMo Flow lifecycle events into ATIF v1.6 trajectory
+The exporter translates NeMo Relay lifecycle events into ATIF v1.6 trajectory
 data. LLM start and end events become model steps, tool events become tool
 calls and observations, and scope nesting contributes lineage metadata.
 
@@ -61,14 +61,14 @@ plugin is cleared while an agent is still open, teardown flushes the partial
 trajectory.
 
 To correlate ATIF with OpenTelemetry or OpenInference traces from the same run,
-join on NeMo Flow UUIDs. The plugin-managed ATIF `session_id` is the top-level
+join on NeMo Relay UUIDs. The plugin-managed ATIF `session_id` is the top-level
 agent scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
 and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
-same values as `nemo_flow.uuid` and `nemo_flow.parent_uuid` attributes.
+same values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Flow own the ATIF
+Use plugin configuration when the application should let NeMo Relay own the ATIF
 dispatcher lifecycle.
 
 :::::{tab-set}
@@ -78,8 +78,8 @@ dispatcher lifecycle.
 :sync: python
 
 ```python
-from nemo_flow import plugin
-from nemo_flow.observability import AtifConfig, ComponentSpec, ObservabilityConfig
+from nemo_relay import plugin
+from nemo_relay.observability import AtifConfig, ComponentSpec, ObservabilityConfig
 
 config = plugin.PluginConfig(
     components=[
@@ -116,8 +116,8 @@ finally:
 :sync: node
 
 ```js
-const plugin = require("nemo-flow-node/plugin");
-const observability = require("nemo-flow-node/observability");
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
 
 await plugin.initialize({
   version: 1,
@@ -149,10 +149,10 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::plugin_component::{
+use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, ComponentSpec, ObservabilityConfig,
 };
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atif: Some(AtifSectionConfig {
@@ -195,7 +195,7 @@ or one exporter object per run.
 :sync: python
 
 ```python
-from nemo_flow import AtifExporter
+from nemo_relay import AtifExporter
 
 exporter = AtifExporter("session-1", "agent", "1.0.0", model_name="demo-model")
 exporter.register("atif-exporter")
@@ -213,7 +213,7 @@ exporter.clear()
 :sync: node
 
 ```js
-const { AtifExporter } = require("nemo-flow-node");
+const { AtifExporter } = require("nemo-relay-node");
 
 const exporter = new AtifExporter("session-1", "agent", "1.0.0", "demo-model");
 exporter.register("atif-exporter");
@@ -235,8 +235,8 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::observability::atif::{AtifAgentInfo, AtifExporter};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 
 let exporter = AtifExporter::new(
     "session-1".to_string(),

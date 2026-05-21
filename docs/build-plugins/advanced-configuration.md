@@ -13,7 +13,7 @@ You will define the plugin's configuration contract, validation rules, advanced 
 
 ## Plugin Shape and Requirements
 
-A NeMo Flow plugin has four practical parts:
+A NeMo Relay plugin has four practical parts:
 
 | Part | Requirement |
 |---|---|
@@ -88,7 +88,7 @@ These patterns help plugin authors keep configuration stable as components evolv
 
 ### Component-Local Versioning
 
-Use a field such as `config.version` when the plugin's config schema needs independent compatibility handling. Keep the top-level `version` for the NeMo Flow plugin document itself.
+Use a field such as `config.version` when the plugin's config schema needs independent compatibility handling. Keep the top-level `version` for the NeMo Relay plugin document itself.
 
 ### Multiple Component Instances
 
@@ -105,7 +105,7 @@ When a plugin can be instantiated more than once, require explicit instance iden
 }
 ```
 
-Use the instance identity in logs, diagnostics, and downstream resource names. Let the NeMo Flow plugin system qualify runtime registration names; do not hand-build global names to avoid collisions.
+Use the instance identity in logs, diagnostics, and downstream resource names. Let the NeMo Relay plugin system qualify runtime registration names; do not hand-build global names to avoid collisions.
 
 ### Presets and Overrides
 

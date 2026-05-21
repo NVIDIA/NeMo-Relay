@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Architecture
 
-This page explains how NeMo Flow connects scopes, middleware, plugins, events,
+This page explains how NeMo Relay connects scopes, middleware, plugins, events,
 subscribers, and exporters.
 
 ## Architecture Diagram
@@ -81,7 +81,7 @@ Adaptive appears here as a built-in plugin component rather than a separate runt
 
 ## Runtime Model
 
-NeMo Flow combines a small number of runtime pieces into one shared execution model:
+NeMo Relay combines a small number of runtime pieces into one shared execution model:
 
 - The **scope stack** answers where work belongs
 - The **middleware registries** answer what should happen around that work
@@ -163,7 +163,7 @@ For the expanded request-to-response runtime path, including streaming and subsc
 
 ## Runtime Layers
 
-From bottom to top, NeMo Flow is organized as:
+From bottom to top, NeMo Relay is organized as:
 
 1. The Rust core runtime
 2. The plugin and adaptive layer
@@ -175,7 +175,7 @@ The details of a binding can vary, but the conceptual model stays the same acros
 
 ## Design Goal
 
-NeMo Flow is designed so that application developers, framework integrators, plugin authors, and observability consumers all reason about the same runtime semantics. One conceptual model should remain stable even when the binding or integration style changes.
+NeMo Relay is designed so that application developers, framework integrators, plugin authors, and observability consumers all reason about the same runtime semantics. One conceptual model should remain stable even when the binding or integration style changes.
 
 ## Related Concepts
 

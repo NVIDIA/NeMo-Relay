@@ -3,10 +3,10 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Flow Claude Code Observability
+# NeMo Relay Claude Code Observability
 
 This package contains Claude Code hook entries that forward canonical Claude
-Code hook JSON to `nemo-flow` at `/hooks/claude-code`.
+Code hook JSON to `nemo-relay` at `/hooks/claude-code`.
 
 Claude Code is the supported Claude integration target. Claude application,
 Claude web, and Claude desktop sessions are unsupported unless they expose the
@@ -16,7 +16,7 @@ same local hook and gateway controls as Claude Code.
 
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-flow hook-forward claude`.
+  `nemo-relay hook-forward claude`.
 
 ## Captured Events
 
@@ -28,12 +28,12 @@ provide private LLM correlation hints for gateway requests.
 
 ## Transparent Setup
 
-Build or install the gateway binary so `nemo-flow` is on `PATH`.
+Build or install the gateway binary so `nemo-relay` is on `PATH`.
 
 Run Claude Code through the wrapper:
 
 ```bash
-nemo-flow run -- claude
+nemo-relay run -- claude
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
@@ -44,7 +44,7 @@ when Claude exits.
 Inspect the launch without starting Claude Code:
 
 ```bash
-nemo-flow run \
+nemo-relay run \
   --dry-run \
   --print \
   -- claude
@@ -52,16 +52,16 @@ nemo-flow run \
 
 ## Shared Config
 
-Use `.nemo-flow/config.toml` for project defaults or
-`~/.config/nemo-flow/config.toml` for user defaults:
+Use `.nemo-relay/config.toml` for project defaults or
+`~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
 [agents.claude]
 command = "claude"
 ```
 
-Configure observability with `nemo-flow plugins edit --project` or
-`.nemo-flow/plugins.toml`:
+Configure observability with `nemo-relay plugins edit --project` or
+`.nemo-relay/plugins.toml`:
 
 ```toml
 version = 1
@@ -72,13 +72,13 @@ enabled = true
 
 [components.config.atif]
 enabled = true
-output_directory = ".nemo-flow/atif"
+output_directory = ".nemo-relay/atif"
 ```
 
 Then run:
 
 ```bash
-nemo-flow run --agent claude
+nemo-relay run --agent claude
 ```
 
 ## Standalone Gateway
@@ -87,7 +87,7 @@ Use the long-running gateway only when you do not want to launch Claude Code
 through the wrapper. Start the gateway in one terminal:
 
 ```bash
-nemo-flow --bind 127.0.0.1:4040
+nemo-relay --bind 127.0.0.1:4040
 ```
 
 Launch Claude Code from another terminal with the gateway environment:
@@ -106,7 +106,7 @@ Run a Claude Code session that starts, uses one simple tool, and ends. Confirm
 that ATIF was written:
 
 ```bash
-ls .nemo-flow/atif
+ls .nemo-relay/atif
 ```
 
 For a direct endpoint smoke test against a manually started gateway:
@@ -114,14 +114,14 @@ For a direct endpoint smoke test against a manually started gateway:
 ```bash
 curl -f http://127.0.0.1:4040/healthz
 printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
-  | NEMO_FLOW_GATEWAY_URL=http://127.0.0.1:4040 nemo-flow hook-forward claude --fail-closed
+  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward claude --fail-closed
 ```
 
 If hooks arrive but LLM spans are missing, confirm the Claude Code process was
-started by `nemo-flow run` or has `ANTHROPIC_BASE_URL` set to the
+started by `nemo-relay run` or has `ANTHROPIC_BASE_URL` set to the
 gateway URL.
 
 If LLM spans are present but attached to the top-level agent instead of a
-subagent, include `x-nemo-flow-subagent-id` on gateway requests or share
+subagent, include `x-nemo-relay-subagent-id` on gateway requests or share
 `conversation_id`, `generation_id`, or `request_id` values between hook payloads
 and provider requests.

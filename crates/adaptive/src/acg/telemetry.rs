@@ -10,7 +10,7 @@
 //! Populated by provider-specific normalization logic in Phase 9.
 
 use chrono::{DateTime, Utc};
-use nemo_flow::codec::response::Usage;
+use nemo_relay::codec::response::Usage;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

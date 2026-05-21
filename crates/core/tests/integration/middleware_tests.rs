@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Comprehensive middleware chain tests for the NeMo Flow core runtime.
+//! Comprehensive middleware chain tests for the NeMo Relay core runtime.
 //!
 //! These tests exercise the middleware pipeline mechanics: priority ordering,
 //! break_chain short-circuiting, execution intercept middleware chains (next()),
@@ -14,13 +14,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::{
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
     llm_stream_call_execute,
 };
-use nemo_flow::api::registry::{
+use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_stream_execution_intercept,
     deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
@@ -32,20 +32,20 @@ use nemo_flow::api::registry::{
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     scope_register_tool_execution_intercept, scope_register_tool_sanitize_request_guardrail,
 };
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_flow::api::scope::{ScopeHandle, ScopeType};
-use nemo_flow::api::scope::{pop_scope, push_scope};
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::api::tool::{
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::api::scope::{pop_scope, push_scope};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,
 };
-use nemo_flow::error::FlowError;
+use nemo_relay::error::FlowError;
 use serde_json::json;
 
 // All tests share the global context, so we serialize them.
@@ -58,7 +58,7 @@ fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCat
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 /// Helper: create a fresh scope stack on the current thread.
@@ -72,7 +72,7 @@ fn setup_isolated_thread() {
 fn setup_isolated_scope(name: &str) -> ScopeHandle {
     setup_isolated_thread();
     push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name(name)
             .scope_type(ScopeType::Agent)
             .build(),
@@ -132,7 +132,7 @@ fn test_sanitize_guardrail_priority_ordering() {
 
     // Trigger the chain via tool_call (which runs sanitize request guardrails)
     let _handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("test_tool")
             .args(json!({}))
             .build(),
@@ -426,7 +426,7 @@ async fn test_execution_intercept_calls_next() {
     });
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"value": 42}))
             .func(func)
@@ -475,7 +475,7 @@ async fn test_execution_intercept_skips_next() {
     });
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"value": 42}))
             .func(func)
@@ -545,7 +545,7 @@ async fn test_execution_intercept_chain_ordering() {
     });
 
     let _ = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -597,7 +597,7 @@ async fn test_execution_intercept_modifies_args() {
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"original": true}))
             .func(func)
@@ -635,7 +635,7 @@ async fn test_conditional_guardrail_rejects() {
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -668,7 +668,7 @@ async fn test_conditional_guardrail_allows() {
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"input": "data"}))
             .func(func)
@@ -712,7 +712,7 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let allowed = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"safe": true}))
             .func(func.clone())
@@ -723,7 +723,7 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
 
     deregister_tool_conditional_execution_guardrail("tool_scope_reject").unwrap();
     let allowed = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"safe": true}))
             .func(func)
@@ -799,7 +799,7 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -843,7 +843,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     // Dangerous tool is rejected
     let func1: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let err = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("dangerous_tool")
             .args(json!({}))
             .func(func1)
@@ -855,7 +855,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     // Safe tool is allowed
     let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let ok = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({}))
             .func(func2)
@@ -897,7 +897,7 @@ fn test_scope_local_guardrail_lifecycle() {
 
     // Invoke tool call -- guardrail should fire
     let _tool = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -911,7 +911,7 @@ fn test_scope_local_guardrail_lifecycle() {
 
     // Pop scope -- guardrail should be cleaned up
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -919,7 +919,7 @@ fn test_scope_local_guardrail_lifecycle() {
 
     // Invoke tool call again -- guardrail should NOT fire
     let _tool2 = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -956,7 +956,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     // Execute -- intercept should fire
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let _ = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -968,7 +968,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
 
     // Pop scope
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -977,7 +977,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     // Execute again -- intercept should NOT fire
     let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let _ = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func2)
@@ -1050,7 +1050,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     .unwrap();
 
     let _tool = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -1079,7 +1079,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     deregister_tool_sanitize_request_guardrail("global_g").unwrap();
     deregister_subscriber("merge_observer").unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -1137,7 +1137,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
     });
 
     let _ = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -1162,7 +1162,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
     // Cleanup
     deregister_tool_execution_intercept("global_exec").unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&handle.uuid)
             .build(),
     )
@@ -1205,7 +1205,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -1260,7 +1260,7 @@ async fn test_conditional_rejection_prevents_execution() {
     });
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({}))
             .func(func)
@@ -1334,7 +1334,7 @@ fn test_sanitize_guardrails_pipe_data() {
     .unwrap();
 
     let _tool = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -1391,7 +1391,7 @@ fn test_response_sanitize_guardrails_pipe() {
     .unwrap();
 
     let tool_handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -1399,7 +1399,7 @@ fn test_response_sanitize_guardrails_pipe() {
     .unwrap();
 
     tool_call_end(
-        nemo_flow::api::tool::ToolCallEndParams::builder()
+        nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .result(json!({"raw": true}))
             .build(),
@@ -1554,7 +1554,7 @@ fn test_concurrent_register_and_read() {
                     let stack = create_scope_stack();
                     set_thread_scope_stack(stack);
                     let _ = tool_call(
-                        nemo_flow::api::tool::ToolCallParams::builder()
+                        nemo_relay::api::tool::ToolCallParams::builder()
                             .name("tool")
                             .args(json!({}))
                             .build(),
@@ -1664,7 +1664,7 @@ async fn test_full_pipeline_integration() {
     });
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"data": "test"}))
             .func(func)
@@ -1799,7 +1799,7 @@ fn test_deregister_removes_from_chain() {
 
     // First call -- guardrail runs
     let _ = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -1813,7 +1813,7 @@ fn test_deregister_removes_from_chain() {
 
     // Second call -- guardrail should NOT run
     let _ = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool")
             .args(json!({}))
             .build(),
@@ -2338,7 +2338,7 @@ async fn test_empty_chain_passthrough() {
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
 
     let result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
             .args(json!({"value": "unchanged"}))
             .func(func)

@@ -20,7 +20,7 @@ pub(crate) fn owns_gateway_provider(provider: &str) -> bool {
     matches!(provider, "anthropic.messages" | "anthropic.count_tokens")
 }
 
-// Claude Code already has a stable session id header. Accept it after the explicit NeMo Flow
+// Claude Code already has a stable session id header. Accept it after the explicit NeMo Relay
 // header so existing Claude environments correlate without extra gateway-specific configuration.
 pub(crate) fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-claude-code-session-id")

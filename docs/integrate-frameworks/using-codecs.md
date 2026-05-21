@@ -5,14 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 
 # Using Codecs
 
-Use this guide when a framework integration needs typed application values at its public boundary while NeMo Flow still records JSON-compatible payloads.
+Use this guide when a framework integration needs typed application values at its public boundary while NeMo Relay still records JSON-compatible payloads.
 
 ## What You Build
 
 You will choose typed value codecs for framework-facing wrappers so that:
 
 - Application code can pass native objects to framework callbacks
-- NeMo Flow can emit JSON-compatible lifecycle payloads
+- NeMo Relay can emit JSON-compatible lifecycle payloads
 - Middleware and subscribers receive predictable serialized values
 - The framework callback still receives the application type it expects
 
@@ -29,14 +29,14 @@ You need:
 
 ## What Codecs Are
 
-A typed value codec is a pure data translator at the NeMo Flow boundary. It converts application-facing values to JSON before NeMo Flow emits events or runs JSON-based middleware, then converts JSON back into the type expected by the framework callback or caller.
+A typed value codec is a pure data translator at the NeMo Relay boundary. It converts application-facing values to JSON before NeMo Relay emits events or runs JSON-based middleware, then converts JSON back into the type expected by the framework callback or caller.
 
 Typed value codecs are different from provider codecs:
 
 | Codec Type | Purpose | Common Use |
 |---|---|---|
 | Typed value codec | Converts application values to and from JSON. | Dataclasses, Pydantic models, TypeScript object shapes, custom framework types. |
-| Provider codec | Converts provider-specific LLM requests and responses to annotated NeMo Flow request or response data. | OpenAI Chat, OpenAI Responses, Anthropic Messages, custom provider payloads. |
+| Provider codec | Converts provider-specific LLM requests and responses to annotated NeMo Relay request or response data. | OpenAI Chat, OpenAI Responses, Anthropic Messages, custom provider payloads. |
 
 Use this page for typed value codecs. Use [Provider Codecs](provider-codecs.md) when middleware needs normalized LLM messages, tools, model names, generation parameters, or provider response annotations.
 
@@ -44,8 +44,8 @@ Use this page for typed value codecs. Use [Provider Codecs](provider-codecs.md) 
 
 When a managed typed wrapper receives a codec:
 
-1. The wrapper converts the application input into JSON before entering the NeMo Flow runtime.
-2. NeMo Flow emits lifecycle events and runs middleware against JSON-compatible payloads.
+1. The wrapper converts the application input into JSON before entering the NeMo Relay runtime.
+2. NeMo Relay emits lifecycle events and runs middleware against JSON-compatible payloads.
 3. The wrapper converts JSON back into the callback type before invoking framework-owned code when needed.
 4. The wrapper converts the callback result back through the result codec before returning to the caller.
 
@@ -73,7 +73,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel
 
-from nemo_flow.typed import DataclassCodec, JsonPassthrough, PydanticCodec
+from nemo_relay.typed import DataclassCodec, JsonPassthrough, PydanticCodec
 
 
 @dataclass
@@ -95,7 +95,7 @@ passthrough = JsonPassthrough()
 :sync: node
 
 ```ts
-import { JsonPassthrough, type Codec, type JsonValue } from 'nemo-flow-node/typed';
+import { JsonPassthrough, type Codec, type JsonValue } from 'nemo-relay-node/typed';
 
 type SearchArgs = { query: string };
 
@@ -114,7 +114,7 @@ Use `BestEffortAnyCodec` only at boundary code where strict schemas are unavaila
 
 ## Example: Typed Tool Boundary
 
-Use typed value codecs when the framework wants native objects but NeMo Flow should emit JSON payloads.
+Use typed value codecs when the framework wants native objects but NeMo Relay should emit JSON payloads.
 
 ::::{tab-set}
 :sync-group: language
@@ -125,8 +125,8 @@ Use typed value codecs when the framework wants native objects but NeMo Flow sho
 ```python
 from dataclasses import dataclass
 
-import nemo_flow
-from nemo_flow.typed import DataclassCodec, JsonPassthrough, tool_execute
+import nemo_relay
+from nemo_relay.typed import DataclassCodec, JsonPassthrough, tool_execute
 
 
 @dataclass
@@ -152,7 +152,7 @@ result = await tool_execute(
 :sync: node
 
 ```ts
-import { JsonPassthrough, typedToolExecute, type Codec, type JsonValue } from 'nemo-flow-node/typed';
+import { JsonPassthrough, typedToolExecute, type Codec, type JsonValue } from 'nemo-relay-node/typed';
 
 type SearchArgs = { query: string };
 type SearchResult = { echo: string };

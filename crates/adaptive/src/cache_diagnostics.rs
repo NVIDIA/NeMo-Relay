@@ -11,7 +11,7 @@ use crate::acg::ir_builder::build_prompt_ir;
 use crate::acg::prompt_ir::PromptIR;
 use crate::acg::{CacheRequestFacts, CapabilityRegistry};
 use chrono::{DateTime, Utc};
-use nemo_flow::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 
 use crate::acg_profile::derive_acg_learning_key;
 use crate::types::cache::HotCache;

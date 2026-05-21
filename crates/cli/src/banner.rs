@@ -1,20 +1,20 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Slanted ANSI-Shadow "NeMo Flow" banner.
+//! Slanted ANSI-Shadow "NeMo Relay" banner.
 //!
 //! Static art: filled block letters in NVIDIA green, each row shifted one column right of the
 //! row above for an italic lean. The settled frame includes a small "vX.Y.Z" tag in green at
 //! the bottom-right.
 //!
 //! Three entry points:
-//! - [`print_intro`] — wizard intro / bare `nemo-flow`
+//! - [`print_intro`] — wizard intro / bare `nemo-relay`
 //! - [`print_doctor_header`] — settled static frame for `doctor`
 //! - [`render_frame`] — pure helper for tests
 
 use std::io::IsTerminal;
 
-/// Filled-block NeMo Flow figlet with a per-row right shift so the letters lean italic. Six
+/// Filled-block NeMo Relay figlet with a per-row right shift so the letters lean italic. Six
 /// content rows; the renderer prepends one blank row above and appends one below for spacing
 /// and the docked version tag.
 const BANNER_LINES: &[&str] = &[
@@ -265,7 +265,7 @@ pub(crate) fn print_doctor_header() {
 fn print_plain_header() {
     let version = env!("CARGO_PKG_VERSION");
     println!();
-    println!("  NeMo Flow v{version}");
+    println!("  NeMo Relay v{version}");
     println!();
 }
 

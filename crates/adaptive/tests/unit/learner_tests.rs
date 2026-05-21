@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for learner in the NeMo Flow adaptive crate.
+//! Unit tests for learner in the NeMo Relay adaptive crate.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};

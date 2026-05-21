@@ -18,7 +18,7 @@ gateway conflict rules, see
 [Plugin Configuration Files](../../build-plugins/plugin-configuration-files.md).
 
 :::{note}
-Observability plugin configuration uses the generic NeMo Flow plugin document
+Observability plugin configuration uses the generic NeMo Relay plugin document
 shape, so field names are `snake_case` in every binding. This differs from
 Node.js runtime classes such as `OpenTelemetrySubscriber`, which use
 Node-native `camelCase` option names outside the plugin system.
@@ -40,11 +40,11 @@ only when it includes `enabled: true`.
 component-local subscriber names and registers them under the observability
 plugin namespace:
 
-- Agent Trajectory Observability Format (ATOF): `__nemo_flow_plugin__observability__atof`
-- Agent Trajectory Interchange Format (ATIF) dispatcher: `__nemo_flow_plugin__observability__atif`
-- Per-agent ATIF scope subscriber: `__nemo_flow_plugin__observability__atif-{agent_scope_uuid}`
-- OpenTelemetry: `__nemo_flow_plugin__observability__opentelemetry`
-- OpenInference: `__nemo_flow_plugin__observability__openinference`
+- Agent Trajectory Observability Format (ATOF): `__nemo_relay_plugin__observability__atof`
+- Agent Trajectory Interchange Format (ATIF) dispatcher: `__nemo_relay_plugin__observability__atif`
+- Per-agent ATIF scope subscriber: `__nemo_relay_plugin__observability__atif-{agent_scope_uuid}`
+- OpenTelemetry: `__nemo_relay_plugin__observability__opentelemetry`
+- OpenInference: `__nemo_relay_plugin__observability__openinference`
 
 ## `plugins.toml` Example
 
@@ -73,10 +73,10 @@ filename_template = "trajectory-{session_id}.json"
 enabled = true
 transport = "http_binary"
 endpoint = "http://localhost:4318/v1/traces"
-service_name = "nemo-flow"
+service_name = "nemo-relay"
 service_namespace = "agent"
 service_version = "0.3.0"
-instrumentation_scope = "nemo-flow-observability"
+instrumentation_scope = "nemo-relay-observability"
 timeout_millis = 3000
 
 [components.config.opentelemetry.headers]
@@ -90,10 +90,10 @@ authorization = "Bearer <token>"
 enabled = true
 transport = "http_binary"
 endpoint = "http://localhost:6006/v1/traces"
-service_name = "nemo-flow"
+service_name = "nemo-relay"
 service_namespace = "agent"
 service_version = "0.3.0"
-instrumentation_scope = "nemo-flow-openinference"
+instrumentation_scope = "nemo-relay-openinference"
 timeout_millis = 3000
 
 [components.config.openinference.headers]
@@ -122,8 +122,8 @@ disable an inherited section.
 :sync: python
 
 ```python
-from nemo_flow import plugin, scope, ScopeType
-from nemo_flow.observability import (
+from nemo_relay import plugin, scope, ScopeType
+from nemo_relay.observability import (
     AtifConfig,
     AtofConfig,
     ComponentSpec,
@@ -149,19 +149,19 @@ config = plugin.PluginConfig(
                 opentelemetry=OtlpConfig(
                     enabled=True,
                     endpoint="http://localhost:4318/v1/traces",
-                    service_name="nemo-flow",
+                    service_name="nemo-relay",
                     service_namespace="agent",
                     service_version="0.3.0",
-                    instrumentation_scope="nemo-flow-observability",
+                    instrumentation_scope="nemo-relay-observability",
                     resource_attributes={"deployment.environment": "dev"},
                 ),
                 openinference=OtlpConfig(
                     enabled=True,
                     endpoint="http://localhost:6006/v1/traces",
-                    service_name="nemo-flow",
+                    service_name="nemo-relay",
                     service_namespace="agent",
                     service_version="0.3.0",
-                    instrumentation_scope="nemo-flow-openinference",
+                    instrumentation_scope="nemo-relay-openinference",
                     resource_attributes={"deployment.environment": "dev"},
                 ),
             )
@@ -187,8 +187,8 @@ finally:
 :sync: node
 
 ```js
-const plugin = require("nemo-flow-node/plugin");
-const observability = require("nemo-flow-node/observability");
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
 
 await plugin.initialize({
   version: 1,
@@ -209,10 +209,10 @@ await plugin.initialize({
       opentelemetry: observability.otlpConfig({
         enabled: true,
         endpoint: "http://localhost:4318/v1/traces",
-        service_name: "nemo-flow",
+        service_name: "nemo-relay",
         service_namespace: "agent",
         service_version: "0.3.0",
-        instrumentation_scope: "nemo-flow-observability",
+        instrumentation_scope: "nemo-relay-observability",
         resource_attributes: {
           "deployment.environment": "dev",
         },
@@ -220,10 +220,10 @@ await plugin.initialize({
       openinference: observability.otlpConfig({
         enabled: true,
         endpoint: "http://localhost:6006/v1/traces",
-        service_name: "nemo-flow",
+        service_name: "nemo-relay",
         service_namespace: "agent",
         service_version: "0.3.0",
-        instrumentation_scope: "nemo-flow-openinference",
+        instrumentation_scope: "nemo-relay-openinference",
         resource_attributes: {
           "deployment.environment": "dev",
         },
@@ -245,11 +245,11 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::plugin_component::{
+use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
     OtlpSectionConfig,
 };
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atof: Some(AtofSectionConfig {
@@ -267,20 +267,20 @@ let component = ComponentSpec::new(ObservabilityConfig {
     opentelemetry: Some(OtlpSectionConfig {
         enabled: true,
         endpoint: Some("http://localhost:4318/v1/traces".into()),
-        service_name: "nemo-flow".into(),
+        service_name: "nemo-relay".into(),
         service_namespace: Some("agent".into()),
         service_version: Some("0.3.0".into()),
-        instrumentation_scope: Some("nemo-flow-observability".into()),
+        instrumentation_scope: Some("nemo-relay-observability".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         ..OtlpSectionConfig::default()
     }),
     openinference: Some(OtlpSectionConfig {
         enabled: true,
         endpoint: Some("http://localhost:6006/v1/traces".into()),
-        service_name: "nemo-flow".into(),
+        service_name: "nemo-relay".into(),
         service_namespace: Some("agent".into()),
         service_version: Some("0.3.0".into()),
-        instrumentation_scope: Some("nemo-flow-openinference".into()),
+        instrumentation_scope: Some("nemo-relay-openinference".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         ..OtlpSectionConfig::default()
     }),

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for request surface in the NeMo Flow adaptive crate.
+//! Unit tests for request surface in the NeMo Relay adaptive crate.
 
 use chrono::Utc;
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 use serde_json::json;
 use uuid::Uuid;
 

@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Adding Scopes
 
-Use this guide when a framework needs a durable NeMo Flow ownership boundary for one request, agent run, workflow, or framework task.
+Use this guide when a framework needs a durable NeMo Relay ownership boundary for one request, agent run, workflow, or framework task.
 
 ## What You Build
 
-You will map framework start and end hooks to NeMo Flow scope start and end events. Tool and LLM wrappers can then attach child calls to that active scope, subscribers can group events by root scope UUID, and adaptive components can reason about complete request trajectories instead of isolated calls.
+You will map framework start and end hooks to NeMo Relay scope start and end events. Tool and LLM wrappers can then attach child calls to that active scope, subscribers can group events by root scope UUID, and adaptive components can reason about complete request trajectories instead of isolated calls.
 
 ## Why You Should Add Scopes
 
@@ -29,7 +29,7 @@ Prefer a wrapper or context manager when the framework gives you control around 
 
 The scope start hook should:
 
-- Create one NeMo Flow scope for the framework request or agent run
+- Create one NeMo Relay scope for the framework request or agent run
 - Store the returned handle in framework request state
 - Include only JSON-compatible request identifiers, tenant identifiers, or safe summary input
 
@@ -47,23 +47,23 @@ The scope end hook should:
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
 
 def on_request_start(request_state, request_id: str) -> None:
-    request_state.nemo_flow_scope = nemo_flow.scope.push(
+    request_state.nemo_relay_scope = nemo_relay.scope.push(
         "framework-request",
-        nemo_flow.ScopeType.Agent,
+        nemo_relay.ScopeType.Agent,
         input={"request_id": request_id},
     )
 
 
 def on_request_end(request_state, status: str) -> None:
-    handle = request_state.nemo_flow_scope
+    handle = request_state.nemo_relay_scope
     try:
-        nemo_flow.scope.pop(handle, output={"status": status})
+        nemo_relay.scope.pop(handle, output={"status": status})
     finally:
-        request_state.nemo_flow_scope = None
+        request_state.nemo_relay_scope = None
 ```
 :::
 
@@ -71,14 +71,14 @@ def on_request_end(request_state, status: str) -> None:
 :sync: node
 
 ```ts
-import { popScope, pushScope, ScopeType, type ScopeHandle } from 'nemo-flow-node';
+import { popScope, pushScope, ScopeType, type ScopeHandle } from 'nemo-relay-node';
 
 type RequestState = {
-  nemoFlowScope?: ScopeHandle;
+  nemoRelayScope?: ScopeHandle;
 };
 
 export function onRequestStart(state: RequestState, requestId: string): void {
-  state.nemoFlowScope = pushScope(
+  state.nemoRelayScope = pushScope(
     'framework-request',
     ScopeType.Agent,
     null,
@@ -90,7 +90,7 @@ export function onRequestStart(state: RequestState, requestId: string): void {
 }
 
 export function onRequestEnd(state: RequestState, status: string): void {
-  const handle = state.nemoFlowScope;
+  const handle = state.nemoRelayScope;
   if (!handle) {
     return;
   }
@@ -98,7 +98,7 @@ export function onRequestEnd(state: RequestState, status: string): void {
   try {
     popScope(handle, { status });
   } finally {
-    state.nemoFlowScope = undefined;
+    state.nemoRelayScope = undefined;
   }
 }
 ```
@@ -108,13 +108,13 @@ export function onRequestEnd(state: RequestState, status: string): void {
 :sync: rust
 
 ```rust
-use nemo_flow::api::scope::{
+use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use serde_json::json;
 
 struct RequestState {
-    nemo_flow_scope: Option<ScopeHandle>,
+    nemo_relay_scope: Option<ScopeHandle>,
 }
 
 fn on_request_start(state: &mut RequestState, request_id: &str) -> anyhow::Result<()> {
@@ -126,12 +126,12 @@ fn on_request_start(state: &mut RequestState, request_id: &str) -> anyhow::Resul
             .input(json!({"request_id": request_id}))
             .build(),
     )?;
-    state.nemo_flow_scope = Some(handle);
+    state.nemo_relay_scope = Some(handle);
     Ok(())
 }
 
 fn on_request_end(state: &mut RequestState, status: &str) -> anyhow::Result<()> {
-    if let Some(handle) = state.nemo_flow_scope.take() {
+    if let Some(handle) = state.nemo_relay_scope.take() {
         scope::pop_scope(
             PopScopeParams::builder()
                 .handle_uuid(&handle.uuid)

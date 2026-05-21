@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Adding Scopes and Marks
 
-Use this guide when you want NeMo Flow to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
+Use this guide when you want NeMo Relay to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
 
 ## What You Build
 
@@ -51,25 +51,25 @@ The examples below create one `agent-run` scope and emit two marks.
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
 
 def log_event(event) -> None:
     print(f"{event.kind} {event.name}")
 
 
-nemo_flow.subscribers.register("scope-check", log_event)
+nemo_relay.subscribers.register("scope-check", log_event)
 
 try:
-    with nemo_flow.scope.scope(
+    with nemo_relay.scope.scope(
         "agent-run",
-        nemo_flow.ScopeType.Agent,
+        nemo_relay.ScopeType.Agent,
         input={"request_id": "req-123"},
     ) as handle:
-        nemo_flow.scope.event("planning-started", handle=handle, data={"step": 1})
-        nemo_flow.scope.event("planning-finished", handle=handle, data={"step": 2})
+        nemo_relay.scope.event("planning-started", handle=handle, data={"step": 1})
+        nemo_relay.scope.event("planning-finished", handle=handle, data={"step": 2})
 finally:
-    nemo_flow.subscribers.deregister("scope-check")
+    nemo_relay.subscribers.deregister("scope-check")
 ```
 :::
 
@@ -83,7 +83,7 @@ const {
   event,
   registerSubscriber,
   withScope,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("scope-check", (runtimeEvent) => {
@@ -120,10 +120,10 @@ main().catch((error) => {
 :sync: rust
 
 ```rust
-use nemo_flow::api::scope::{
+use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 

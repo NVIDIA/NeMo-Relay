@@ -11,7 +11,7 @@ These pages are generated from the exported TypeScript declaration surfaces in `
 
 This summary lists the package identity and support status for the binding.
 
-- Package name: `nemo-flow-node`
+- Package name: `nemo-relay-node`
 - Runtime requirement: Node.js `>=20`
 - Local development path: `crates/node`
 
@@ -24,10 +24,10 @@ for typed helpers, plugin helpers, adaptive helpers, and observability helpers.
 These entry points are the primary APIs to use from this binding.
 
 - Package root: scope stack, event, tool, LLM, middleware, and subscriber APIs
-- `nemo-flow-node/typed`: typed wrappers and codec-aware execution helpers
-- `nemo-flow-node/plugin`: plugin-facing helpers and configuration types
-- `nemo-flow-node/adaptive`: adaptive helpers layered on top of the runtime
-- `nemo-flow-node/observability`: built-in observability plugin helpers
+- `nemo-relay-node/typed`: typed wrappers and codec-aware execution helpers
+- `nemo-relay-node/plugin`: plugin-facing helpers and configuration types
+- `nemo-relay-node/adaptive`: adaptive helpers layered on top of the runtime
+- `nemo-relay-node/observability`: built-in observability plugin helpers
 
 ## How To Read The Generated Pages
 

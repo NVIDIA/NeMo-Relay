@@ -18,7 +18,7 @@ Use an LLM request intercept when a plugin needs to inject tenant or routing met
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
 
 class HeaderPlugin:
@@ -39,7 +39,7 @@ class HeaderPlugin:
         context.register_llm_request_intercept("inject-header", 100, False, add_header)
 
 
-nemo_flow.plugin.register("header-plugin", HeaderPlugin())
+nemo_relay.plugin.register("header-plugin", HeaderPlugin())
 ```
 :::
 
@@ -47,7 +47,7 @@ nemo_flow.plugin.register("header-plugin", HeaderPlugin())
 :sync: node
 
 ```ts
-import * as plugin from 'nemo-flow-node/plugin';
+import * as plugin from 'nemo-relay-node/plugin';
 
 const headerPlugin: plugin.Plugin = {
   validate(pluginConfig) {
@@ -98,7 +98,7 @@ Use a subscriber-oriented plugin when the component should watch the full lifecy
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
 
 class OpenInferencePlugin:
@@ -120,7 +120,7 @@ class OpenInferencePlugin:
         context.register_subscriber("openinference-export", on_event)
 
 
-nemo_flow.plugin.register("openinference-export", OpenInferencePlugin())
+nemo_relay.plugin.register("openinference-export", OpenInferencePlugin())
 ```
 :::
 
@@ -128,7 +128,7 @@ nemo_flow.plugin.register("openinference-export", OpenInferencePlugin())
 :sync: node
 
 ```ts
-import * as plugin from 'nemo-flow-node/plugin';
+import * as plugin from 'nemo-relay-node/plugin';
 
 const openInferencePlugin: plugin.Plugin = {
   validate(pluginConfig) {

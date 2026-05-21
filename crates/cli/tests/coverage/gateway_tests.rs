@@ -286,7 +286,7 @@ fn gateway_session_id_prefers_headers_and_has_fallbacks() {
     );
 
     headers.insert(
-        "x-nemo-flow-session-id",
+        "x-nemo-relay-session-id",
         HeaderValue::from_static("explicit-session"),
     );
     assert_eq!(
@@ -325,7 +325,7 @@ fn gateway_session_id_prefers_headers_and_has_fallbacks() {
 fn gateway_identifiers_accept_headers_and_scalar_body_values() {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-nemo-flow-request-id",
+        "x-nemo-relay-request-id",
         HeaderValue::from_static("req-header"),
     );
     let body = json!({
@@ -339,7 +339,7 @@ fn gateway_identifiers_accept_headers_and_scalar_body_values() {
         gateway_identifier(
             &headers,
             &body,
-            "x-nemo-flow-request-id",
+            "x-nemo-relay-request-id",
             &[&["request", "id"]]
         )
         .as_deref(),
@@ -375,7 +375,7 @@ fn gateway_identifiers_accept_headers_and_scalar_body_values() {
 fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-nemo-flow-subagent-id",
+        "x-nemo-relay-subagent-id",
         HeaderValue::from_static("worker-1"),
     );
     headers.insert("x-request-id", HeaderValue::from_static("transport-req"));
@@ -821,13 +821,13 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
 #[tokio::test]
 async fn streaming_body_records_final_response_for_turn_output() {
     let subscriber_name = "gateway-stream-final-response-turn-output-test";
-    let _ = nemo_flow::api::subscriber::deregister_subscriber(subscriber_name);
+    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
     let captured_output = Arc::new(Mutex::new(None::<Value>));
     let captured = captured_output.clone();
-    nemo_flow::api::subscriber::register_subscriber(
+    nemo_relay::api::subscriber::register_subscriber(
         subscriber_name,
         Arc::new(move |event| {
-            if event.scope_category() == Some(nemo_flow::api::event::ScopeCategory::End)
+            if event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
                 && event.name() == "codex-turn"
                 && event
                     .metadata()
@@ -891,7 +891,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
         .unwrap();
 
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
-    nemo_flow::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
 }
 
 // `stream_response_records_preview_and_truncation` was removed when the gateway moved to

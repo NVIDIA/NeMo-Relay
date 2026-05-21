@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Concepts
 
-Use these pages to understand the NeMo Flow runtime model before applying it in a use-case workflow.
+Use these pages to understand the NeMo Relay runtime model before applying it in a use-case workflow.
 
 ::::{grid} 1 1 2 2
 :gutter: 3

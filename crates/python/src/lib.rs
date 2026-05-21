@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! PyO3 native extension module for NeMo Flow.
+//! PyO3 native extension module for NeMo Relay.
 //!
 //! This crate compiles to a `_native` Python C extension that is imported by the
-//! `nemo_flow` Python package. It exposes all core runtime types and API functions
+//! `nemo_relay` Python package. It exposes all core runtime types and API functions
 //! to Python via PyO3.
 //!
 //! ## Modules
@@ -20,8 +20,8 @@
 //! - `py_adaptive` — Python-facing adaptive helpers (`set_latency_sensitivity`)
 //! - `py_plugin` — Python-facing generic plugin config/registration helpers
 //! - `convert` — JSON ↔ Python conversion utilities
-use nemo_flow::shared_runtime::initialize_shared_runtime_binding;
-use nemo_flow_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use pyo3::prelude::*;
 
 mod convert;
@@ -44,7 +44,7 @@ mod test_support;
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_shared_runtime_binding("python").map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "failed to initialize NeMo Flow runtime ownership: {e}"
+            "failed to initialize NeMo Relay runtime ownership: {e}"
         ))
     })?;
     register_adaptive_component().map_err(|e| {

@@ -11,8 +11,8 @@ These pages are generated from the public Rust crates that back the core runtime
 
 This summary lists the package identity and support status for the binding.
 
-- Published crates: `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, and
-  `nemo-flow-cli`
+- Published crates: `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, and
+  `nemo-relay-cli`
 - Local development paths: `crates/core`, `crates/adaptive`, `crates/ffi`,
   and `crates/cli`
 - Primary audience: Rust consumers who want the native runtime surface directly
@@ -25,44 +25,44 @@ module tree.
 
 These entry points are the primary APIs to use from this binding.
 
-- `nemo-flow`: core runtime APIs for scopes, tools, LLMs, registries, subscribers, codecs, streams, observability exporters, and the built-in observability plugin
-- `nemo-flow-adaptive`: adaptive runtime helpers, learner implementations, storage backends, and adaptive configuration
-- `nemo-flow-cli`: binary gateway for coding-agent hooks and passthrough LLM observability
-- `nemo-flow-ffi`: raw C ABI used by downstream native bindings
+- `nemo-relay`: core runtime APIs for scopes, tools, LLMs, registries, subscribers, codecs, streams, observability exporters, and the built-in observability plugin
+- `nemo-relay-adaptive`: adaptive runtime helpers, learner implementations, storage backends, and adaptive configuration
+- `nemo-relay-cli`: binary gateway for coding-agent hooks and passthrough LLM observability
+- `nemo-relay-ffi`: raw C ABI used by downstream native bindings
 
-Within `nemo-flow`, most integrations start in `api`, especially the `scope`,
+Within `nemo-relay`, most integrations start in `api`, especially the `scope`,
 `tool`, `llm`, `registry`, and `subscriber` modules. Other important public
 modules include `codec`, `observability`, `stream`, `error`, and `json`. The
 `observability::plugin_component` module contains the built-in `observability`
 plugin config types.
 
-Within `nemo-flow-adaptive`, the main surfaces include adaptive configuration,
+Within `nemo-relay-adaptive`, the main surfaces include adaptive configuration,
 plugin components, storage abstractions, learners, trie-backed data
 structures, and optional Redis-backed helpers when the feature is enabled.
-`nemo-flow-cli` is a binary crate, so its end-user surface is documented in
-the NeMo Flow CLI guides rather than generated Rust API pages.
+`nemo-relay-cli` is a binary crate, so its end-user surface is documented in
+the NeMo Relay CLI guides rather than generated Rust API pages.
 
 ## How To Read The Generated Pages
 
 Use the crate pages first, then expand into the public modules under each crate:
 
-- `nemo-flow` for core runtime behavior
-- `nemo-flow-adaptive` for adaptive and learning-oriented behavior
-- `nemo-flow-cli` for coding-agent observability through hooks and the
+- `nemo-relay` for core runtime behavior
+- `nemo-relay-adaptive` for adaptive and learning-oriented behavior
+- `nemo-relay-cli` for coding-agent observability through hooks and the
   passthrough LLM gateway
 
 That structure matches how Rust consumers import items from the crates.
 
 Use the generated crate entry points when you need symbol-level detail:
 
-- {doc}`nemo_flow <_generated/nemo-flow/src>`
-- {doc}`nemo_flow_adaptive <_generated/nemo-flow-adaptive/src>`
+- {doc}`nemo_relay <_generated/nemo-relay/src>`
+- {doc}`nemo_relay_adaptive <_generated/nemo-relay-adaptive/src>`
 
 ```{toctree}
 :maxdepth: 1
 
-nemo-flow <_generated/nemo-flow/src>
-nemo-flow-adaptive <_generated/nemo-flow-adaptive/src>
+nemo-relay <_generated/nemo-relay/src>
+nemo-relay-adaptive <_generated/nemo-relay-adaptive/src>
 ```
 
 ## Related Guides
@@ -79,4 +79,4 @@ Use these links to continue from the API reference into task-focused guides.
 - [Observability Configuration](../../../plugins/observability/configuration.md)
 - [Typed Wrappers and Codecs](../../../integrate-frameworks/using-codecs.md)
 - [Framework Integration Surfaces](../../../integrate-frameworks/about.md)
-- [NeMo Flow CLI Basic Usage](../../../nemo-flow-cli/basic-usage.md)
+- [NeMo Relay CLI Basic Usage](../../../nemo-relay-cli/basic-usage.md)

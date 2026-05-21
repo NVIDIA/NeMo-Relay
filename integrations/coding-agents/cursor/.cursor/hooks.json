@@ -4,91 +4,91 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "preToolUse": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "beforeMCPExecution": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "postToolUse": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "afterShellExecution": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "subagentStart": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "subagentStop": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "afterAgentResponse": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "afterAgentThought": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "preCompact": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "stop": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ],
     "sessionEnd": [
       {
-        "command": "nemo-flow hook-forward cursor",
+        "command": "nemo-relay hook-forward cursor",
         "timeout": 30
       }
     ]

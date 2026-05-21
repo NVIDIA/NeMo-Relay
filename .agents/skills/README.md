@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Maintainer Skills
 
-This directory is the maintainer-only skill set for developing NeMo Flow
+This directory is the maintainer-only skill set for developing NeMo Relay
 itself.
 
 Use these skills for repository work such as:
@@ -15,5 +15,5 @@ Use these skills for repository work such as:
 - Extending middleware or observability internals
 - Validating library changes across bindings
 
-Consumer-facing NeMo Flow usage skills live in the top-level `skills/`
+Consumer-facing NeMo Relay usage skills live in the top-level `skills/`
 directory so they can be exported separately for integrators and end users.

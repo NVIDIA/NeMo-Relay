@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for callable extra in the NeMo Flow FFI crate.
+//! Integration tests for callable extra in the NeMo Relay FFI crate.
 
 use super::*;
 use std::ptr;
@@ -20,7 +20,7 @@ unsafe extern "C" fn tool_conditional_error_cb(
 unsafe extern "C" fn tool_exec_intercept_null_next_cb(
     _user_data: *mut libc::c_void,
     _args_json: *const c_char,
-    next_fn: NemoFlowToolExecNextFn,
+    next_fn: NemoRelayToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     unsafe { next_fn(ptr::null(), next_ctx) }
@@ -29,7 +29,7 @@ unsafe extern "C" fn tool_exec_intercept_null_next_cb(
 unsafe extern "C" fn llm_exec_intercept_null_next_cb(
     _user_data: *mut libc::c_void,
     _native_json: *const c_char,
-    next_fn: NemoFlowLlmExecNextFn,
+    next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     unsafe { next_fn(ptr::null(), next_ctx) }
@@ -42,8 +42,8 @@ unsafe extern "C" fn llm_request_intercept_status_error_cb(
     _annotated_json: *const c_char,
     _out_request: *mut *mut FfiLLMRequest,
     _out_annotated_json: *mut *mut c_char,
-) -> NemoFlowStatus {
-    NemoFlowStatus::Internal
+) -> NemoRelayStatus {
+    NemoRelayStatus::Internal
 }
 
 unsafe extern "C" fn llm_request_intercept_null_out_request_cb(
@@ -53,8 +53,8 @@ unsafe extern "C" fn llm_request_intercept_null_out_request_cb(
     _annotated_json: *const c_char,
     _out_request: *mut *mut FfiLLMRequest,
     _out_annotated_json: *mut *mut c_char,
-) -> NemoFlowStatus {
-    NemoFlowStatus::Ok
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn llm_request_intercept_invalid_annotated_cb(
@@ -64,12 +64,12 @@ unsafe extern "C" fn llm_request_intercept_invalid_annotated_cb(
     _annotated_json: *const c_char,
     out_request: *mut *mut FfiLLMRequest,
     out_annotated_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe {
         *out_request = Box::into_raw(Box::new(FfiLLMRequest((&*request).0.clone())));
         *out_annotated_json = CString::new("not-json").unwrap().into_raw();
     }
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn llm_request_passthrough_cb(

@@ -4,8 +4,8 @@
 """Shared import guards for LangGraph integration tests.
 
 All tests in this directory require:
-1. ``nemo_flow`` to be installed (the NeMo Flow Python bindings)
-2. ``langgraph`` to be installed with the NeMo Flow integration patch applied
+1. ``nemo_relay`` to be installed (the NeMo Relay Python bindings)
+2. ``langgraph`` to be installed with the NeMo Relay integration patch applied
 
 Tests are automatically skipped when either dependency is unavailable.
 """
@@ -16,9 +16,9 @@ import pytest
 
 
 def _langgraph_patched() -> bool:
-    """Return True if langgraph is installed with the NeMo Flow integration patch."""
+    """Return True if langgraph is installed with the NeMo Relay integration patch."""
     try:
-        from langgraph import _nemo_flow  # noqa: F401
+        from langgraph import _nemo_relay  # noqa: F401
 
         return True
     except ImportError:
@@ -31,5 +31,5 @@ if not _langgraph_patched():
 
 pytestmark = pytest.mark.skipif(
     not _langgraph_patched(),
-    reason="langgraph not installed or NeMo Flow integration patch not applied",
+    reason="langgraph not installed or NeMo Relay integration patch not applied",
 )

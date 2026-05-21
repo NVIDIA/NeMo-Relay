@@ -14,25 +14,25 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio_stream::Stream;
 
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::{
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
-use nemo_flow::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_flow::api::scope::ScopeType;
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::codec::request::AnnotatedLlmRequest;
-use nemo_flow::codec::request::MessageContent;
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::response::FinishReason;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::{FlowError, Result};
-use nemo_flow::json::Json;
+use nemo_relay::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::ScopeType;
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::MessageContent;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::response::FinishReason;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result};
+use nemo_relay::json::Json;
 
 // ---------------------------------------------------------------------------
 // Test isolation
@@ -47,7 +47,7 @@ fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCat
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 fn setup_isolated_thread() {

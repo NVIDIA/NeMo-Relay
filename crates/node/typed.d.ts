@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for NeMo Flow Node.js execute APIs.
+ * Typed wrappers for NeMo Relay Node.js execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute` and `llmCallExecute`
  * that use explicit `Codec<T>` objects to serialize/deserialize at the API
@@ -32,7 +32,7 @@ export interface LlmRequestShape {
  * A codec for annotating and unwrapping LLM JSON request payloads.
  *
  * Use when an LLM integration needs custom request parsing or normalization
- * before the raw payload is passed through the NeMo Flow LLM middleware
+ * before the raw payload is passed through the NeMo Relay LLM middleware
  * pipeline.
  */
 export interface LlmCodec {

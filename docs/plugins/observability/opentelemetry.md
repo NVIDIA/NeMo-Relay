@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # OpenTelemetry
 
-Use the `opentelemetry` section when you want NeMo Flow lifecycle events
+Use the `opentelemetry` section when you want NeMo Relay lifecycle events
 exported as generic OpenTelemetry Protocol (OTLP) trace spans.
 
 OpenTelemetry export is a good fit when your tracing backend already expects
-OTLP spans and you want NeMo Flow scopes, tool calls, LLM calls, and marks to
+OTLP spans and you want NeMo Relay scopes, tool calls, LLM calls, and marks to
 appear in the same tracing pipeline as the rest of the application.
 
 ## `plugins.toml` Example
@@ -31,7 +31,7 @@ endpoint = "http://localhost:4318/v1/traces"
 service_name = "agent-service"
 service_namespace = "nemo"
 service_version = "1.0.0"
-instrumentation_scope = "nemo-flow-otel"
+instrumentation_scope = "nemo-relay-otel"
 timeout_millis = 3000
 
 [components.config.opentelemetry.headers]
@@ -42,7 +42,7 @@ authorization = "Bearer <token>"
 ```
 
 This configuration registers a plugin-owned OpenTelemetry subscriber and sends
-NeMo Flow trace spans to the configured OTLP endpoint.
+NeMo Relay trace spans to the configured OTLP endpoint.
 
 ## Fields
 
@@ -53,7 +53,7 @@ NeMo Flow trace spans to the configured OTLP endpoint.
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `resource_attributes` | `{}` | String-to-string OTLP resource attributes. |
-| `service_name` | `nemo-flow` | `service.name` resource attribute. |
+| `service_name` | `nemo-relay` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
 | `instrumentation_scope` | Omitted | Optional instrumentation scope name. |
@@ -62,13 +62,13 @@ NeMo Flow trace spans to the configured OTLP endpoint.
 ## Expected Output
 
 The collector should receive OTLP trace export requests. The tracing backend
-should show spans for NeMo Flow scopes, tools, LLM calls, and marks grouped by
+should show spans for NeMo Relay scopes, tools, LLM calls, and marks grouped by
 root scope.
 
-Each lifecycle span includes `nemo_flow.uuid` and `nemo_flow.parent_uuid`
+Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and
 `step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
-the root agent span's `nemo_flow.uuid` also matches the ATIF `session_id`.
+the root agent span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
 Register the plugin before the first instrumented request, use stable service
@@ -77,7 +77,7 @@ graceful shutdown.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Flow own the
+Use plugin configuration when the application should let NeMo Relay own the
 OpenTelemetry subscriber lifecycle.
 
 :::::{tab-set}
@@ -87,8 +87,8 @@ OpenTelemetry subscriber lifecycle.
 :sync: python
 
 ```python
-from nemo_flow import plugin
-from nemo_flow.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
+from nemo_relay import plugin
+from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
 
 config = plugin.PluginConfig(
     components=[
@@ -101,7 +101,7 @@ config = plugin.PluginConfig(
                     service_name="agent-service",
                     service_namespace="nemo",
                     service_version="1.0.0",
-                    instrumentation_scope="nemo-flow-otel",
+                    instrumentation_scope="nemo-relay-otel",
                     resource_attributes={"deployment.environment": "dev"},
                     headers={"authorization": "Bearer <token>"},
                 )
@@ -128,8 +128,8 @@ finally:
 :sync: node
 
 ```js
-const plugin = require("nemo-flow-node/plugin");
-const observability = require("nemo-flow-node/observability");
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
 
 await plugin.initialize({
   version: 1,
@@ -143,7 +143,7 @@ await plugin.initialize({
         service_name: "agent-service",
         service_namespace: "nemo",
         service_version: "1.0.0",
-        instrumentation_scope: "nemo-flow-otel",
+        instrumentation_scope: "nemo-relay-otel",
         resource_attributes: {
           "deployment.environment": "dev",
         },
@@ -168,10 +168,10 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::plugin_component::{
+use nemo_relay::observability::plugin_component::{
     ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
 };
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     opentelemetry: Some(OtlpSectionConfig {
@@ -181,7 +181,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
         service_name: "agent-service".into(),
         service_namespace: Some("nemo".into()),
         service_version: Some("1.0.0".into()),
-        instrumentation_scope: Some("nemo-flow-otel".into()),
+        instrumentation_scope: Some("nemo-relay-otel".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         headers: [("authorization".into(), "Bearer <token>".into())].into(),
         ..OtlpSectionConfig::default()
@@ -217,7 +217,7 @@ direct `force_flush` control.
 :sync: python
 
 ```python
-from nemo_flow import OpenTelemetryConfig, OpenTelemetrySubscriber
+from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
 
 config = OpenTelemetryConfig()
 config.transport = "http_binary"
@@ -241,7 +241,7 @@ subscriber.shutdown()
 :sync: node
 
 ```js
-const { OpenTelemetrySubscriber } = require("nemo-flow-node");
+const { OpenTelemetrySubscriber } = require("nemo-relay-node");
 
 const subscriber = new OpenTelemetrySubscriber({
   transport: "http_binary",
@@ -269,7 +269,7 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
 let config = OpenTelemetryConfig::http_binary("agent-service")
     .with_endpoint("http://localhost:4318/v1/traces")

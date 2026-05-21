@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 Use this page when you want to configure the built-in Adaptive plugin component
 as a whole. The component kind is `adaptive`.
 
-Adaptive plugin configuration uses the generic NeMo Flow plugin document shape.
+Adaptive plugin configuration uses the generic NeMo Relay plugin document shape.
 Field names stay `snake_case` in every binding and in `plugins.toml`, even when
 language helper functions use language-native naming conventions.
 
@@ -102,33 +102,33 @@ requests can be observed without provider-specific cache translation.
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     agent_id="planner",
-    state=nemo_flow.adaptive.StateConfig(
-        backend=nemo_flow.adaptive.BackendSpec.in_memory(),
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
     ),
-    telemetry=nemo_flow.adaptive.TelemetryConfig(
+    telemetry=nemo_relay.adaptive.TelemetryConfig(
         subscriber_name="adaptive.telemetry",
         learners=["tool_parallelism"],
     ),
-    tool_parallelism=nemo_flow.adaptive.ToolParallelismConfig(mode="observe_only"),
-    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+    tool_parallelism=nemo_relay.adaptive.ToolParallelismConfig(mode="observe_only"),
+    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
     ),
-    acg=nemo_flow.adaptive.AcgConfig(provider="passthrough"),
+    acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
 )
 
-plugin_config = nemo_flow.plugin.PluginConfig(
-    components=[nemo_flow.adaptive.ComponentSpec(adaptive_config)]
+plugin_config = nemo_relay.plugin.PluginConfig(
+    components=[nemo_relay.adaptive.ComponentSpec(adaptive_config)]
 )
 
-report = nemo_flow.plugin.validate(plugin_config)
+report = nemo_relay.plugin.validate(plugin_config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-active = await nemo_flow.plugin.initialize(plugin_config)
+active = await nemo_relay.plugin.initialize(plugin_config)
 ```
 :::
 
@@ -136,8 +136,8 @@ active = await nemo_flow.plugin.initialize(plugin_config)
 :sync: node
 
 ```js
-const adaptive = require("nemo-flow-node/adaptive");
-const plugin = require("nemo-flow-node/plugin");
+const adaptive = require("nemo-relay-node/adaptive");
+const plugin = require("nemo-relay-node/plugin");
 
 const adaptiveConfig = adaptive.defaultConfig();
 adaptiveConfig.agent_id = "planner";
@@ -168,9 +168,9 @@ const active = await plugin.initialize(pluginConfig);
 :sync: rust
 
 ```rust
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
-use nemo_flow_adaptive::plugin_component::ComponentSpec;
-use nemo_flow_adaptive::{
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay_adaptive::plugin_component::ComponentSpec;
+use nemo_relay_adaptive::{
     AdaptiveConfig,
     BackendSpec,
     StateConfig,
@@ -223,25 +223,25 @@ directly instead of activating the top-level plugin component.
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-adaptive_config = nemo_flow.adaptive.AdaptiveConfig(
+adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     agent_id="planner",
-    state=nemo_flow.adaptive.StateConfig(
-        backend=nemo_flow.adaptive.BackendSpec.in_memory(),
+    state=nemo_relay.adaptive.StateConfig(
+        backend=nemo_relay.adaptive.BackendSpec.in_memory(),
     ),
-    telemetry=nemo_flow.adaptive.TelemetryConfig(
+    telemetry=nemo_relay.adaptive.TelemetryConfig(
         subscriber_name="adaptive.telemetry",
         learners=["tool_parallelism"],
     ),
-    tool_parallelism=nemo_flow.adaptive.ToolParallelismConfig(mode="observe_only"),
-    adaptive_hints=nemo_flow.adaptive.AdaptiveHintsConfig(
+    tool_parallelism=nemo_relay.adaptive.ToolParallelismConfig(mode="observe_only"),
+    adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
     ),
-    acg=nemo_flow.adaptive.AcgConfig(provider="passthrough"),
+    acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
 )
 
-runtime = nemo_flow.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
+runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
 await runtime.register()
 try:
     # Run instrumented application work here.
@@ -263,7 +263,7 @@ activating adaptive behavior from Node.js.
 :sync: rust
 
 ```rust
-use nemo_flow_adaptive::{
+use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
     BackendSpec, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
 };

@@ -40,7 +40,7 @@ JSON object per lifecycle event to `logs/events.jsonl`.
 |---|---|---|
 | `enabled` | `false` | Must be `true` to write events. |
 | `output_directory` | Current working directory | Directory containing the JSONL file. |
-| `filename` | Timestamped `nemo-flow-events-*.jsonl` | Explicit output filename. |
+| `filename` | Timestamped `nemo-relay-events-*.jsonl` | Explicit output filename. |
 | `mode` | `append` | `append` or `overwrite`. |
 
 ## Expected Output
@@ -54,7 +54,7 @@ shutdown so file handles flush.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Flow own the ATOF
+Use plugin configuration when the application should let NeMo Relay own the ATOF
 exporter lifecycle.
 
 :::::{tab-set}
@@ -64,8 +64,8 @@ exporter lifecycle.
 :sync: python
 
 ```python
-from nemo_flow import plugin
-from nemo_flow.observability import AtofConfig, ComponentSpec, ObservabilityConfig
+from nemo_relay import plugin
+from nemo_relay.observability import AtofConfig, ComponentSpec, ObservabilityConfig
 
 config = plugin.PluginConfig(
     components=[
@@ -100,8 +100,8 @@ finally:
 :sync: node
 
 ```js
-const plugin = require("nemo-flow-node/plugin");
-const observability = require("nemo-flow-node/observability");
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
 
 await plugin.initialize({
   version: 1,
@@ -131,10 +131,10 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::plugin_component::{
+use nemo_relay::observability::plugin_component::{
     AtofSectionConfig, ComponentSpec, ObservabilityConfig,
 };
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atof: Some(AtofSectionConfig {
@@ -174,7 +174,7 @@ subscriber name or explicit registration window.
 :sync: python
 
 ```python
-from nemo_flow import AtofExporter, AtofExporterConfig, AtofExporterMode
+from nemo_relay import AtofExporter, AtofExporterConfig, AtofExporterMode
 
 config = AtofExporterConfig()
 config.output_directory = "logs"
@@ -197,7 +197,7 @@ exporter.shutdown()
 :sync: node
 
 ```js
-const { AtofExporter } = require("nemo-flow-node");
+const { AtofExporter } = require("nemo-relay-node");
 
 const exporter = new AtofExporter({
   outputDirectory: "logs",
@@ -222,7 +222,7 @@ try {
 :sync: rust
 
 ```rust
-use nemo_flow::observability::atof::{
+use nemo_relay::observability::atof::{
     AtofExporter, AtofExporterConfig, AtofExporterMode,
 };
 

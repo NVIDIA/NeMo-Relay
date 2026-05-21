@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! `nemo-flow doctor` — environment + config + agent + observability health check.
+//! `nemo-relay doctor` — environment + config + agent + observability health check.
 //!
 //! Split into three layers so the data path can be unit-tested without real I/O:
 //!
@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
-use nemo_flow::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
+use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::time::timeout;
@@ -173,15 +173,15 @@ fn collect_configuration(
     configured_agents: Vec<String>,
 ) -> ConfigurationInfo {
     let workspace_path = cwd
-        .map(|p| p.join(".nemo-flow").join("config.toml"))
-        .unwrap_or_else(|| PathBuf::from(".nemo-flow/config.toml"));
+        .map(|p| p.join(".nemo-relay").join("config.toml"))
+        .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
-    // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-flow`.
+    // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
     let global_path = crate::config::user_config_dir()
         .map(|dir| dir.join("config.toml"))
-        .or_else(|| home.map(|h| h.join(".config").join("nemo-flow").join("config.toml")))
-        .unwrap_or_else(|| PathBuf::from("~/.config/nemo-flow/config.toml"));
-    let system_path = PathBuf::from("/etc/nemo-flow/config.toml");
+        .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
+        .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
+    let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
 
     ConfigurationInfo {
         workspace: layer_status(&workspace_path),
@@ -383,7 +383,7 @@ fn hook_status(
             ),
             None if readiness_required => (
                 Status::Fail,
-                "hooks: not installed; run `nemo-flow config hermes`".into(),
+                "hooks: not installed; run `nemo-relay config hermes`".into(),
             ),
             None => (Status::Info, "hooks: not configured".into()),
         },
@@ -415,11 +415,11 @@ fn hook_file_status(
         ),
         Ok(_) if readiness_required => (
             Status::Fail,
-            format!("{label}: missing NeMo Flow hook in {}", path.display()),
+            format!("{label}: missing NeMo Relay hook in {}", path.display()),
         ),
         Ok(_) => (
             Status::Info,
-            format!("{label}: no NeMo Flow hook in {}", path.display()),
+            format!("{label}: no NeMo Relay hook in {}", path.display()),
         ),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && readiness_required => {
             (Status::Fail, format!("{label}: missing {}", path.display()))
@@ -445,12 +445,12 @@ fn cursor_hook_file_status(
         if readiness_required {
             return (
                 Status::Fail,
-                format!("{label}: missing NeMo Flow hook in {}", path.display()),
+                format!("{label}: missing NeMo Relay hook in {}", path.display()),
             );
         }
         return (
             Status::Info,
-            format!("{label}: no NeMo Flow hook in {}", path.display()),
+            format!("{label}: no NeMo Relay hook in {}", path.display()),
         );
     }
 
@@ -500,7 +500,7 @@ fn cursor_hook_file_status(
         return (
             Status::Fail,
             format!(
-                "{label}: Cursor hook file {} has no direct NeMo Flow command entries",
+                "{label}: Cursor hook file {} has no direct NeMo Relay command entries",
                 path.display()
             ),
         );
@@ -807,13 +807,13 @@ fn collect_completions(home: Option<&std::path::Path>) -> Vec<Check> {
         return checks;
     };
     let likely_path = match shell_name.as_str() {
-        "zsh" => Some(home.join(".zfunc").join("_nemo-flow")),
-        "bash" => Some(home.join(".bash_completion.d").join("nemo-flow")),
+        "zsh" => Some(home.join(".zfunc").join("_nemo-relay")),
+        "bash" => Some(home.join(".bash_completion.d").join("nemo-relay")),
         "fish" => Some(
             home.join(".config")
                 .join("fish")
                 .join("completions")
-                .join("nemo-flow.fish"),
+                .join("nemo-relay.fish"),
         ),
         _ => None,
     };
@@ -827,14 +827,14 @@ fn collect_completions(home: Option<&std::path::Path>) -> Vec<Check> {
             name: "Completions",
             status: Status::Info,
             details: format!(
-                "{shell_name}: not installed (run `nemo-flow completions {shell_name} > {}`)",
+                "{shell_name}: not installed (run `nemo-relay completions {shell_name} > {}`)",
                 path.display()
             ),
         }),
         None => checks.push(Check {
             name: "Completions",
             status: Status::Info,
-            details: format!("{shell_name}: no known completion path; run `nemo-flow completions <shell>` to generate"),
+            details: format!("{shell_name}: no known completion path; run `nemo-relay completions <shell>` to generate"),
         }),
     }
     checks
@@ -889,7 +889,7 @@ fn report_has_warn(report: &DoctorReport) -> bool {
 /// pure formatter stays banner-free for tests.
 pub(crate) fn format_human(report: &DoctorReport) -> String {
     let mut out = String::new();
-    out.push_str(&format!("\n  NeMo Flow {}\n", report.binary_version));
+    out.push_str(&format!("\n  NeMo Relay {}\n", report.binary_version));
     out.push_str("  ─────────────────────────────────────────────\n");
     if let Some(agent) = &report.target_agent {
         out.push_str(&format!("  Target agent  {agent}\n\n"));
@@ -1051,7 +1051,7 @@ pub(crate) fn format_agents_json(agents: &[AgentInfo]) -> Result<String, CliErro
         .map_err(|err| CliError::Config(format!("could not serialize agents report: {err}")))
 }
 
-/// Top-level entry point invoked by `nemo-flow doctor`. Emits to stdout and returns the
+/// Top-level entry point invoked by `nemo-relay doctor`. Emits to stdout and returns the
 /// appropriate process exit code (0 on pass-or-warn, 1 on any failure).
 pub(crate) async fn run_doctor(
     target_agent: Option<CodingAgent>,
@@ -1072,7 +1072,7 @@ pub(crate) async fn run_doctor(
     }
 }
 
-/// Top-level entry point invoked by `nemo-flow agents`. Always exits 0; the data drives caller
+/// Top-level entry point invoked by `nemo-relay agents`. Always exits 0; the data drives caller
 /// decisions (e.g., CI gating on JSON output).
 pub(crate) async fn run_agents(json: bool) -> Result<std::process::ExitCode, CliError> {
     let agents = agents_report().await;

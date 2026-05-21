@@ -1,35 +1,36 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for api in the NeMo Flow FFI crate.
+//! Unit tests for api in the NeMo Relay FFI crate.
 
 use super::*;
 use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
 
-use nemo_flow::plugin::PluginRegistrationContext;
+use nemo_relay::plugin::PluginRegistrationContext;
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
-use crate::callable::{NemoFlowLlmExecNextFn, NemoFlowToolExecNextFn};
-use crate::convert::nemo_flow_string_free;
-use crate::error::{NemoFlowStatus, nemo_flow_last_error};
+use crate::callable::{NemoRelayLlmExecNextFn, NemoRelayToolExecNextFn};
+use crate::convert::nemo_relay_string_free;
+use crate::error::{NemoRelayStatus, nemo_relay_last_error};
 use crate::types::{
     FfiAtifExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest, FfiOpenTelemetrySubscriber,
-    FfiScopeStack, FfiToolHandle, nemo_flow_atif_exporter_free, nemo_flow_event_data,
-    nemo_flow_event_input, nemo_flow_event_metadata, nemo_flow_event_model_name,
-    nemo_flow_event_name, nemo_flow_event_output, nemo_flow_event_parent_uuid,
-    nemo_flow_event_scope_type, nemo_flow_event_timestamp, nemo_flow_event_tool_call_id,
-    nemo_flow_event_uuid, nemo_flow_llm_handle_attributes, nemo_flow_llm_handle_free,
-    nemo_flow_llm_handle_name, nemo_flow_llm_handle_parent_uuid, nemo_flow_llm_handle_uuid,
-    nemo_flow_llm_request_content, nemo_flow_llm_request_free, nemo_flow_llm_request_headers,
-    nemo_flow_llm_request_new, nemo_flow_otel_subscriber_free, nemo_flow_scope_handle_attributes,
-    nemo_flow_scope_handle_data, nemo_flow_scope_handle_free, nemo_flow_scope_handle_metadata,
-    nemo_flow_scope_handle_name, nemo_flow_scope_handle_parent_uuid,
-    nemo_flow_scope_handle_scope_type, nemo_flow_scope_handle_uuid, nemo_flow_scope_stack_free,
-    nemo_flow_tool_handle_attributes, nemo_flow_tool_handle_free, nemo_flow_tool_handle_name,
-    nemo_flow_tool_handle_parent_uuid, nemo_flow_tool_handle_uuid,
+    FfiScopeStack, FfiToolHandle, nemo_relay_atif_exporter_free, nemo_relay_event_data,
+    nemo_relay_event_input, nemo_relay_event_metadata, nemo_relay_event_model_name,
+    nemo_relay_event_name, nemo_relay_event_output, nemo_relay_event_parent_uuid,
+    nemo_relay_event_scope_type, nemo_relay_event_timestamp, nemo_relay_event_tool_call_id,
+    nemo_relay_event_uuid, nemo_relay_llm_handle_attributes, nemo_relay_llm_handle_free,
+    nemo_relay_llm_handle_name, nemo_relay_llm_handle_parent_uuid, nemo_relay_llm_handle_uuid,
+    nemo_relay_llm_request_content, nemo_relay_llm_request_free, nemo_relay_llm_request_headers,
+    nemo_relay_llm_request_new, nemo_relay_otel_subscriber_free,
+    nemo_relay_scope_handle_attributes, nemo_relay_scope_handle_data, nemo_relay_scope_handle_free,
+    nemo_relay_scope_handle_metadata, nemo_relay_scope_handle_name,
+    nemo_relay_scope_handle_parent_uuid, nemo_relay_scope_handle_scope_type,
+    nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free, nemo_relay_tool_handle_attributes,
+    nemo_relay_tool_handle_free, nemo_relay_tool_handle_name, nemo_relay_tool_handle_parent_uuid,
+    nemo_relay_tool_handle_uuid,
 };
 use crate::{api, callable, types};
 
@@ -68,18 +69,18 @@ fn cstring(s: &str) -> CString {
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn nemo_flow_push_scope(
+unsafe fn nemo_relay_push_scope(
     name: *const c_char,
-    scope_type: NemoFlowScopeType,
+    scope_type: NemoRelayScopeType,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     input_json: *const c_char,
     out: *mut *mut FfiScopeHandle,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe {
-        api::nemo_flow_push_scope(
+        api::nemo_relay_push_scope(
             name,
             scope_type,
             parent,
@@ -93,24 +94,24 @@ unsafe fn nemo_flow_push_scope(
     }
 }
 
-unsafe fn nemo_flow_pop_scope(
+unsafe fn nemo_relay_pop_scope(
     handle: *const FfiScopeHandle,
     output_json: *const c_char,
-) -> NemoFlowStatus {
-    unsafe { api::nemo_flow_pop_scope(handle, output_json, ptr::null()) }
+) -> NemoRelayStatus {
+    unsafe { api::nemo_relay_pop_scope(handle, output_json, ptr::null()) }
 }
 
-unsafe fn nemo_flow_event(
+unsafe fn nemo_relay_event(
     name: *const c_char,
     parent: *const FfiScopeHandle,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NemoFlowStatus {
-    unsafe { api::nemo_flow_event(name, parent, data_json, metadata_json, ptr::null()) }
+) -> NemoRelayStatus {
+    unsafe { api::nemo_relay_event(name, parent, data_json, metadata_json, ptr::null()) }
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn nemo_flow_tool_call(
+unsafe fn nemo_relay_tool_call(
     name: *const c_char,
     args_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -119,9 +120,9 @@ unsafe fn nemo_flow_tool_call(
     metadata_json: *const c_char,
     tool_call_id: *const c_char,
     out: *mut *mut FfiToolHandle,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe {
-        api::nemo_flow_tool_call(
+        api::nemo_relay_tool_call(
             name,
             args_json,
             parent,
@@ -135,19 +136,19 @@ unsafe fn nemo_flow_tool_call(
     }
 }
 
-unsafe fn nemo_flow_tool_call_end(
+unsafe fn nemo_relay_tool_call_end(
     handle: *const FfiToolHandle,
     result_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe {
-        api::nemo_flow_tool_call_end(handle, result_json, data_json, metadata_json, ptr::null())
+        api::nemo_relay_tool_call_end(handle, result_json, data_json, metadata_json, ptr::null())
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-unsafe fn nemo_flow_llm_call(
+unsafe fn nemo_relay_llm_call(
     name: *const c_char,
     native_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -156,9 +157,9 @@ unsafe fn nemo_flow_llm_call(
     metadata_json: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiLLMHandle,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe {
-        api::nemo_flow_llm_call(
+        api::nemo_relay_llm_call(
             name,
             native_json,
             parent,
@@ -172,14 +173,14 @@ unsafe fn nemo_flow_llm_call(
     }
 }
 
-unsafe fn nemo_flow_llm_call_end(
+unsafe fn nemo_relay_llm_call_end(
     handle: *const FfiLLMHandle,
     response_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe {
-        api::nemo_flow_llm_call_end(handle, response_json, data_json, metadata_json, ptr::null())
+        api::nemo_relay_llm_call_end(handle, response_json, data_json, metadata_json, ptr::null())
     }
 }
 
@@ -190,12 +191,12 @@ unsafe fn take_string(ptr: *mut c_char) -> Option<String> {
     let s = unsafe { CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned();
-    unsafe { nemo_flow_string_free(ptr) };
+    unsafe { nemo_relay_string_free(ptr) };
     Some(s)
 }
 
 unsafe fn read_last_error() -> Option<String> {
-    let ptr = nemo_flow_last_error();
+    let ptr = nemo_relay_last_error();
     if ptr.is_null() {
         None
     } else {
@@ -214,13 +215,13 @@ unsafe fn returned_json(ptr: *mut c_char) -> Json {
 unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
     let mut stack = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_flow_scope_stack_create(&mut stack) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_scope_stack_create(&mut stack) },
+        NemoRelayStatus::Ok
     );
     assert!(!stack.is_null());
     assert_eq!(
-        unsafe { nemo_flow_scope_stack_set_thread(stack) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_scope_stack_set_thread(stack) },
+        NemoRelayStatus::Ok
     );
     stack
 }
@@ -234,24 +235,24 @@ fn reset_globals() {
 
 unsafe extern "C" fn subscriber_cb(_user_data: *mut libc::c_void, event: *const FfiEvent) {
     let payload = json!({
-        "uuid": unsafe { take_string(nemo_flow_event_uuid(event)) }.unwrap_or_default(),
-        "name": unsafe { take_string(nemo_flow_event_name(event)) }.unwrap_or_default(),
-        "kind": unsafe { take_string(crate::types::nemo_flow_event_kind(event)) }.unwrap_or_default(),
-        "json": unsafe { take_string(crate::types::nemo_flow_event_json(event)) }
+        "uuid": unsafe { take_string(nemo_relay_event_uuid(event)) }.unwrap_or_default(),
+        "name": unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default(),
+        "kind": unsafe { take_string(crate::types::nemo_relay_event_kind(event)) }.unwrap_or_default(),
+        "json": unsafe { take_string(crate::types::nemo_relay_event_json(event)) }
             .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-        "data": unsafe { take_string(nemo_flow_event_data(event)) }
+        "data": unsafe { take_string(nemo_relay_event_data(event)) }
             .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-        "metadata": unsafe { take_string(nemo_flow_event_metadata(event)) }
+        "metadata": unsafe { take_string(nemo_relay_event_metadata(event)) }
             .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-        "timestamp": unsafe { take_string(nemo_flow_event_timestamp(event)) }.unwrap_or_default(),
-        "input": unsafe { take_string(nemo_flow_event_input(event)) }
+        "timestamp": unsafe { take_string(nemo_relay_event_timestamp(event)) }.unwrap_or_default(),
+        "input": unsafe { take_string(nemo_relay_event_input(event)) }
             .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-        "output": unsafe { take_string(nemo_flow_event_output(event)) }
+        "output": unsafe { take_string(nemo_relay_event_output(event)) }
             .map(|s| serde_json::from_str::<Json>(&s).unwrap()),
-        "model_name": unsafe { take_string(nemo_flow_event_model_name(event)) },
-        "tool_call_id": unsafe { take_string(nemo_flow_event_tool_call_id(event)) },
-        "parent_uuid": unsafe { take_string(nemo_flow_event_parent_uuid(event)) },
-        "scope_type": unsafe { take_string(nemo_flow_event_scope_type(event)) },
+        "model_name": unsafe { take_string(nemo_relay_event_model_name(event)) },
+        "tool_call_id": unsafe { take_string(nemo_relay_event_tool_call_id(event)) },
+        "parent_uuid": unsafe { take_string(nemo_relay_event_parent_uuid(event)) },
+        "scope_type": unsafe { take_string(nemo_relay_event_scope_type(event)) },
     });
     lock_unpoisoned(event_log()).push(payload);
 }
@@ -321,7 +322,7 @@ unsafe extern "C" fn tool_exec_fail_cb(
 unsafe extern "C" fn tool_exec_intercept_cb(
     _user_data: *mut libc::c_void,
     args_json: *const c_char,
-    next_fn: NemoFlowToolExecNextFn,
+    next_fn: NemoRelayToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     unsafe { next_fn(args_json, next_ctx) }
@@ -375,9 +376,9 @@ unsafe extern "C" fn llm_request_intercept_cb(
     _annotated_json: *const c_char,
     out_request: *mut *mut FfiLLMRequest,
     _out_annotated_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     unsafe { *out_request = llm_request_cb(ptr::null_mut(), request) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn llm_request_intercept_fail_cb(
@@ -387,9 +388,9 @@ unsafe extern "C" fn llm_request_intercept_fail_cb(
     _annotated_json: *const c_char,
     _out_request: *mut *mut FfiLLMRequest,
     _out_annotated_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     crate::error::set_last_error("llm request intercept callback failed");
-    NemoFlowStatus::Internal
+    NemoRelayStatus::Internal
 }
 
 unsafe extern "C" fn llm_exec_cb(
@@ -519,7 +520,7 @@ unsafe extern "C" fn codec_encode_cb(
 unsafe extern "C" fn llm_exec_intercept_cb(
     _user_data: *mut libc::c_void,
     native_json: *const c_char,
-    next_fn: NemoFlowLlmExecNextFn,
+    next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     unsafe { next_fn(native_json, next_ctx) }
@@ -584,10 +585,10 @@ unsafe extern "C" fn plugin_register_subscriber(
     _user_data: *mut libc::c_void,
     _plugin_config_json: *const c_char,
     ctx: *mut FfiPluginContext,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     let name = CString::new("subscriber").unwrap();
     unsafe {
-        nemo_flow_plugin_context_register_subscriber(
+        nemo_relay_plugin_context_register_subscriber(
             ctx,
             name.as_ptr(),
             subscriber_cb,
@@ -601,17 +602,17 @@ unsafe extern "C" fn plugin_register_fail(
     _user_data: *mut libc::c_void,
     _plugin_config_json: *const c_char,
     _ctx: *mut FfiPluginContext,
-) -> NemoFlowStatus {
-    NemoFlowStatus::Internal
+) -> NemoRelayStatus {
+    NemoRelayStatus::Internal
 }
 
 unsafe extern "C" fn plugin_register_fail_with_last_error(
     _user_data: *mut libc::c_void,
     _plugin_config_json: *const c_char,
     _ctx: *mut FfiPluginContext,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     set_last_error("plugin register callback set last error explicitly");
-    NemoFlowStatus::Internal
+    NemoRelayStatus::Internal
 }
 
 #[path = "api/core_tests.rs"]

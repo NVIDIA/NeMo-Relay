@@ -6,7 +6,7 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use nemo_flow::codec::request::{
+use nemo_relay::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolCall, ToolDefinition,
 };
 

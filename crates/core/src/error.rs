@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Error types for the NeMo Flow runtime.
+//! Error types for the NeMo Relay runtime.
 //!
 //! All fallible operations in the runtime return [`Result<T>`], which uses
 //! [`FlowError`] as the error type. Errors are categorized by cause
@@ -9,7 +9,7 @@
 
 use thiserror::Error;
 
-/// The error type for all NeMo Flow runtime operations.
+/// The error type for all NeMo Relay runtime operations.
 ///
 /// Each variant represents a distinct failure mode that callers can match on
 /// to determine the appropriate recovery strategy.
@@ -58,7 +58,7 @@ pub enum FlowError {
     Internal(String),
 }
 
-/// A specialized [`Result`](std::result::Result) type for NeMo Flow operations.
+/// A specialized [`Result`](std::result::Result) type for NeMo Relay operations.
 pub type Result<T> = std::result::Result<T, FlowError>;
 
 #[cfg(test)]

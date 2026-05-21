@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Register Plugin Behavior
 
-Use this guide when plugin config validation is in place and you need the plugin to install real NeMo Flow runtime behavior.
+Use this guide when plugin config validation is in place and you need the plugin to install real NeMo Relay runtime behavior.
 
 ## What You Build
 
@@ -41,20 +41,20 @@ Use the plugin APIs in this order:
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-config = nemo_flow.plugin.PluginConfig()
+config = nemo_relay.plugin.PluginConfig()
 config.components = [
-    nemo_flow.plugin.ComponentSpec(
+    nemo_relay.plugin.ComponentSpec(
         kind="header-plugin",
         config={"header_name": "x-tenant", "value": "tenant-a"},
     )
 ]
 
-report = nemo_flow.plugin.validate(config)
-active_report = await nemo_flow.plugin.initialize(config)
-kinds = nemo_flow.plugin.list_kinds()
-nemo_flow.plugin.clear()
+report = nemo_relay.plugin.validate(config)
+active_report = await nemo_relay.plugin.initialize(config)
+kinds = nemo_relay.plugin.list_kinds()
+nemo_relay.plugin.clear()
 ```
 
 :::
@@ -63,7 +63,7 @@ nemo_flow.plugin.clear()
 :sync: node
 
 ```ts
-import * as plugin from 'nemo-flow-node/plugin';
+import * as plugin from 'nemo-relay-node/plugin';
 
 const config = plugin.defaultConfig();
 config.components = [
@@ -86,7 +86,7 @@ plugin.clear();
 :sync: rust
 
 ```rust
-use nemo_flow::plugin::{
+use nemo_relay::plugin::{
     clear_plugin_configuration, initialize_plugins, list_plugin_kinds, validate_plugin_config,
     PluginComponentSpec, PluginConfig,
 };
@@ -118,7 +118,7 @@ The same model applies in every binding: validate component-local config, then i
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
 
 class HeaderPlugin:
@@ -139,7 +139,7 @@ class HeaderPlugin:
         context.register_llm_request_intercept("inject-header", 100, False, add_header)
 
 
-nemo_flow.plugin.register("header-plugin", HeaderPlugin())
+nemo_relay.plugin.register("header-plugin", HeaderPlugin())
 ```
 
 :::
@@ -148,7 +148,7 @@ nemo_flow.plugin.register("header-plugin", HeaderPlugin())
 :sync: node
 
 ```ts
-import * as plugin from 'nemo-flow-node/plugin';
+import * as plugin from 'nemo-relay-node/plugin';
 
 const headerPlugin: plugin.Plugin = {
   validate(pluginConfig) {
@@ -184,7 +184,7 @@ plugin.register('header-plugin', headerPlugin);
 :sync: rust
 
 ```rust
-use nemo_flow::plugin::{
+use nemo_relay::plugin::{
     register_plugin, ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext,
     Result as PluginResult,
 };

@@ -3,21 +3,21 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Flow)](https://github.com/NVIDIA/NeMo-Flow/blob/main/LICENSE)
-[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Flow/)
-[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Flow?color=green)](https://github.com/NVIDIA/NeMo-Flow/releases)
-[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Flow/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Flow)
-[![PyPI](https://img.shields.io/pypi/v/nemo-flow?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-flow/)
-[![npm node](https://img.shields.io/npm/v/nemo-flow-node?label=nemo-flow-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
+[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
+[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Relay?color=green)](https://github.com/NVIDIA/NeMo-Relay/releases)
+[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
+[![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
+[![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
+[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
 
-# NeMo Flow
+# NeMo Relay
 
-`nemo-flow-node` is the NeMo Flow package for Node.js applications. It gives
+`nemo-relay-node` is the NeMo Relay package for Node.js applications. It gives
 JavaScript and TypeScript code access to the same execution scopes, middleware,
 plugins, lifecycle events, and observability model used by the Rust runtime.
 
@@ -45,16 +45,16 @@ should install it from npm rather than depend on the Rust crate directly.
 - ✅ **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries.
 - ✅ **Observability exporters**: Subscriber and exporter support for common
   runtime telemetry flows.
-- ✅ **Additional entry points**: `nemo-flow-node/typed`,
-  `nemo-flow-node/plugin`, `nemo-flow-node/adaptive`, and
-  `nemo-flow-node/observability`.
+- ✅ **Additional entry points**: `nemo-relay-node/typed`,
+  `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
+  `nemo-relay-node/observability`.
 
 ## Installation
 
 Install the npm package in a Node.js 20 or newer project:
 
 ```bash
-npm install nemo-flow-node
+npm install nemo-relay-node
 ```
 
 ## Getting Started
@@ -68,7 +68,7 @@ const {
   event,
   registerSubscriber,
   withScope,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("printer", (runtimeEvent) => {
@@ -89,10 +89,10 @@ main().catch((error) => {
 });
 ```
 
-The main runtime API is exported from `nemo-flow-node`. Additional entry points
-are available at `nemo-flow-node/typed`, `nemo-flow-node/plugin`,
-`nemo-flow-node/adaptive`, and `nemo-flow-node/observability`.
+The main runtime API is exported from `nemo-relay-node`. Additional entry points
+are available at `nemo-relay-node/typed`, `nemo-relay-node/plugin`,
+`nemo-relay-node/adaptive`, and `nemo-relay-node/observability`.
 
 ## Documentation
 
-NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow
+NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay

@@ -11,7 +11,7 @@ const {
   clearPluginConfiguration,
   activePluginReport,
   listPluginKinds,
-} = require('./nemo_flow_wasm.js');
+} = require('./nemo_relay_wasm.js');
 
 /**
  * Create an empty plugin configuration.

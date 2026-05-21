@@ -24,8 +24,8 @@ impl PyScopeEvent {
     #[getter]
     pub(crate) fn scope_category(&self) -> &'static str {
         match self.inner.scope_category {
-            nemo_flow::api::event::ScopeCategory::Start => "start",
-            nemo_flow::api::event::ScopeCategory::End => "end",
+            nemo_relay::api::event::ScopeCategory::Start => "start",
+            nemo_relay::api::event::ScopeCategory::End => "end",
         }
     }
 
@@ -112,7 +112,7 @@ impl PyScopeEvent {
 
     /// Return this event as the canonical subscriber JSON dictionary.
     pub(crate) fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let event = nemo_flow::api::event::Event::Scope(self.inner.clone());
+        let event = nemo_relay::api::event::Event::Scope(self.inner.clone());
         let value = event
             .try_to_json_value()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -121,7 +121,7 @@ impl PyScopeEvent {
 
     /// Return this event as canonical subscriber JSON.
     pub(crate) fn to_json(&self) -> PyResult<String> {
-        let event = nemo_flow::api::event::Event::Scope(self.inner.clone());
+        let event = nemo_relay::api::event::Event::Scope(self.inner.clone());
         event
             .to_json_string()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -200,7 +200,7 @@ impl PyMarkEvent {
 
     /// Return this event as the canonical subscriber JSON dictionary.
     pub(crate) fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let event = nemo_flow::api::event::Event::Mark(self.inner.clone());
+        let event = nemo_relay::api::event::Event::Mark(self.inner.clone());
         let value = event
             .try_to_json_value()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -209,7 +209,7 @@ impl PyMarkEvent {
 
     /// Return this event as canonical subscriber JSON.
     pub(crate) fn to_json(&self) -> PyResult<String> {
-        let event = nemo_flow::api::event::Event::Mark(self.inner.clone());
+        let event = nemo_relay::api::event::Event::Mark(self.inner.clone());
         event
             .to_json_string()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))

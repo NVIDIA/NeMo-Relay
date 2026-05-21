@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for openai plugin in the NeMo Flow adaptive crate.
+//! Unit tests for openai plugin in the NeMo Relay adaptive crate.
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use crate::acg::types::{
     ModelRoutingIntent, OptimizationIntent, OptimizationIntentBundle, ReasonCode, RetentionIntent,
     RetentionTier, SharingScope, TranslationStatus,
 };
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 
 use super::OpenAICachePlugin;
 

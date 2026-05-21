@@ -8,16 +8,16 @@
  * requester key, or child key depending on the hook. This module canonicalizes
  * those identifiers and owns the root `openclaw.session` scope lifecycle.
  */
-import type { NemoFlowHookBackendConfig } from "../config.js";
-import { evictExpiredRecords, tupleKey as tupleKeyFromCorrelation } from "./correlation.js";
+import type { NemoRelayHookBackendConfig } from '../config.js';
+import { evictExpiredRecords, tupleKey as tupleKeyFromCorrelation } from './correlation.js';
 import type {
   PluginHookAgentContext,
   PluginHookLlmOutputEvent,
   PluginHookModelCallEndedEvent,
-} from "../openclaw-hook-types.js";
-import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import type { JsonObject as JsonRecord } from "nemo-flow-node/typed";
-import type { NemoFlowRuntimeModule } from "../modules.js";
+} from '../openclaw-hook-types.js';
+import type { PluginLogger } from 'openclaw/plugin-sdk/plugin-entry';
+import type { JsonObject as JsonRecord } from 'nemo-relay-node/typed';
+import type { NemoRelayRuntimeModule } from '../modules.js';
 
 export type SessionLookupInput = {
   sessionId?: string | undefined;
@@ -29,7 +29,7 @@ export type SessionLookupInput = {
 
 export type EnsureSessionInput = SessionLookupInput & {
   agentId?: string | undefined;
-  source: "session_start" | "lazy_session";
+  source: 'session_start' | 'lazy_session';
   resumedFrom?: string | undefined;
   timestamp?: number | undefined;
 };
@@ -38,7 +38,7 @@ export type SessionState = {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
-  source: "session_start" | "lazy_session";
+  source: 'session_start' | 'lazy_session';
   resumedFrom?: string;
   finalOutput?: JsonRecord;
   trajectoryReplayedRuns?: Set<string>;
@@ -49,8 +49,8 @@ export type SessionState = {
   >;
   messageWrites?: unknown[];
   assistantMessageWrites?: AssistantMessageRecord[];
-  stack: ReturnType<NemoFlowRuntimeModule["createScopeStack"]>;
-  rootHandle?: ReturnType<NemoFlowRuntimeModule["pushScope"]>;
+  stack: ReturnType<NemoRelayRuntimeModule['createScopeStack']>;
+  rootHandle?: ReturnType<NemoRelayRuntimeModule['pushScope']>;
 };
 
 export type PendingLlmOutputRecord = {
@@ -106,9 +106,9 @@ export type ModelCallRecord = {
   startedAtMs?: number | undefined;
   endedAtMs?: number | undefined;
   durationMs?: number | undefined;
-  outcome?: PluginHookModelCallEndedEvent["outcome"] | undefined;
+  outcome?: PluginHookModelCallEndedEvent['outcome'] | undefined;
   errorCategory?: string | undefined;
-  failureKind?: PluginHookModelCallEndedEvent["failureKind"] | undefined;
+  failureKind?: PluginHookModelCallEndedEvent['failureKind'] | undefined;
   requestPayloadBytes?: number | undefined;
   responseStreamBytes?: number | undefined;
   timeToFirstByteMs?: number | undefined;
@@ -135,16 +135,13 @@ export type HookReplayBackendState = {
 };
 
 export type SessionManager = {
-  nf: NemoFlowRuntimeModule;
-  config: NemoFlowHookBackendConfig;
+  nf: NemoRelayRuntimeModule;
+  config: NemoRelayHookBackendConfig;
   logger: PluginLogger;
   state: HookReplayBackendState;
   agentVersion: string;
   emitCapturedUnderSession: (label: string, session: SessionState, emit: () => void) => void;
-  replayPendingLlmOutputsForSession: (
-    session: SessionState,
-    options: { allowPlaceholderRequest: boolean },
-  ) => void;
+  replayPendingLlmOutputsForSession: (session: SessionState, options: { allowPlaceholderRequest: boolean }) => void;
   emitUnpairedModelCallTimingMarks: (session: SessionState) => void;
   logBoundedWarn: (key: string, message: string) => void;
 };
@@ -152,22 +149,19 @@ export type SessionManager = {
 /** Return all keys that may identify an existing OpenClaw session. */
 export function lookupSessionKeys(input: SessionLookupInput): string[] {
   return [input.sessionId, input.sessionKey, input.requesterSessionKey, input.childSessionKey, input.runId].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
+    (value): value is string => typeof value === 'string' && value.length > 0,
   );
 }
 
 /** Return keys that should alias to a canonical session once it is known. */
 export function aliasSessionKeys(input: SessionLookupInput): string[] {
   return [input.sessionId, input.sessionKey, input.requesterSessionKey, input.runId].filter(
-    (value): value is string => typeof value === "string" && value.length > 0,
+    (value): value is string => typeof value === 'string' && value.length > 0,
   );
 }
 
 /** Resolve a hook's session identity to the canonical session id used in replay state. */
-export function resolveSessionKey(
-  state: HookReplayBackendState,
-  input: SessionLookupInput,
-): string | undefined {
+export function resolveSessionKey(state: HookReplayBackendState, input: SessionLookupInput): string | undefined {
   for (const key of lookupSessionKeys(input)) {
     const canonical = state.sessionAliases.get(key);
     if (canonical) {
@@ -213,7 +207,7 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
   const key = resolveSessionKey(manager.state, input);
   if (!key) {
     manager.state.counters.skippedEvents += 1;
-    manager.logBoundedWarn("missing-session-key", "nemo-flow skipped replay because no session/run key was available");
+    manager.logBoundedWarn('missing-session-key', 'nemo-relay skipped replay because no session/run key was available');
     return undefined;
   }
 
@@ -269,12 +263,12 @@ export function closeSessionRoot(
   rootOutput: JsonRecord = summary,
   timestamp?: number,
 ): void {
-  manager.emitCapturedUnderSession("session_end", session, () => {
+  manager.emitCapturedUnderSession('session_end', session, () => {
     if (!session.rootHandle) {
       return;
     }
 
-    manager.nf.event("openclaw.session_end", session.rootHandle, summary, null, timestamp ?? null);
+    manager.nf.event('openclaw.session_end', session.rootHandle, summary, null, timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
     manager.nf.popScope(session.rootHandle, rootOutput, timestamp ?? null);
     delete session.rootHandle;
@@ -287,12 +281,7 @@ export function deleteSession(state: HookReplayBackendState, session: SessionSta
 }
 
 /** Insert a correlation record while bounding retained entries per key. */
-export function insertBoundedRecord<T>(
-  map: Map<string, T[]>,
-  key: string,
-  record: T,
-  maxRecordsPerKey: number,
-): void {
+export function insertBoundedRecord<T>(map: Map<string, T[]>, key: string, record: T, maxRecordsPerKey: number): void {
   const records = map.get(key) ?? [];
   records.push(record);
   while (records.length > maxRecordsPerKey) {
@@ -314,7 +303,7 @@ export function evictExpiredCorrelationRecords(state: HookReplayBackendState, no
   evictExpiredRecords(state.modelTimingsByLlmKey, nowMs, ttlMs);
 }
 
-/** Open the root NeMo Flow scope for one OpenClaw session and emit session_start. */
+/** Open the root NeMo Relay scope for one OpenClaw session and emit session_start. */
 function openSessionRoot(manager: SessionManager, session: SessionState, input: EnsureSessionInput): void {
   const data: JsonRecord = {
     sessionId: session.sessionId,
@@ -325,9 +314,9 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
     ...(session.resumedFrom === undefined ? {} : { resumedFrom: session.resumedFrom }),
   };
 
-  manager.emitCapturedUnderSession("session_start", session, () => {
+  manager.emitCapturedUnderSession('session_start', session, () => {
     session.rootHandle = manager.nf.pushScope(
-      "openclaw.session",
+      'openclaw.session',
       agentScopeType(manager.nf),
       null,
       null,
@@ -336,7 +325,7 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
       null,
       input.timestamp ?? null,
     );
-    manager.nf.event("openclaw.session_start", session.rootHandle, data, null, input.timestamp ?? null);
+    manager.nf.event('openclaw.session_start', session.rootHandle, data, null, input.timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
   });
 }
@@ -380,11 +369,7 @@ function evictFromRecordMap<T extends { sessionKey: string }>(map: Map<string, T
 }
 
 /** Evict pending LLM outputs and clear their grace timers when their TTL expires. */
-function evictExpiredPendingLlmOutputs(
-  map: Map<string, PendingLlmOutputRecord[]>,
-  nowMs: number,
-  ttlMs: number,
-): void {
+function evictExpiredPendingLlmOutputs(map: Map<string, PendingLlmOutputRecord[]>, nowMs: number, ttlMs: number): void {
   for (const [key, records] of map) {
     const retained: PendingLlmOutputRecord[] = [];
     for (const record of records) {
@@ -406,6 +391,6 @@ function evictExpiredPendingLlmOutputs(
 }
 
 /** Resolve the runtime's Agent scope enum while tolerating older Node bindings. */
-function agentScopeType(nf: NemoFlowRuntimeModule): Parameters<NemoFlowRuntimeModule["pushScope"]>[1] {
-  return (nf.ScopeType?.Agent ?? 0) as Parameters<NemoFlowRuntimeModule["pushScope"]>[1];
+function agentScopeType(nf: NemoRelayRuntimeModule): Parameters<NemoRelayRuntimeModule['pushScope']>[1] {
+  return (nf.ScopeType?.Agent ?? 0) as Parameters<NemoRelayRuntimeModule['pushScope']>[1];
 }

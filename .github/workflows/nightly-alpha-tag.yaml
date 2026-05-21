@@ -54,13 +54,13 @@ jobs:
 
       - name: Create nightly alpha tag
         env:
-          NEMO_FLOW_NIGHTLY_BRANCH: ${{ matrix.branch }}
-          NEMO_FLOW_NIGHTLY_TAG_TOKEN: ${{ secrets.NEMO_FLOW_NIGHTLY_TAG_TOKEN }}
+          NEMO_RELAY_NIGHTLY_BRANCH: ${{ matrix.branch }}
+          NEMO_RELAY_NIGHTLY_TAG_TOKEN: ${{ secrets.NEMO_RELAY_NIGHTLY_TAG_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [[ -z "$NEMO_FLOW_NIGHTLY_TAG_TOKEN" ]]; then
-            echo "Error: NEMO_FLOW_NIGHTLY_TAG_TOKEN is required so the tag push can trigger tag CI." >&2
+          if [[ -z "$NEMO_RELAY_NIGHTLY_TAG_TOKEN" ]]; then
+            echo "Error: NEMO_RELAY_NIGHTLY_TAG_TOKEN is required so the tag push can trigger tag CI." >&2
             exit 1
           fi
 
@@ -83,10 +83,10 @@ jobs:
               existing_sha="$(git ls-remote --tags origin "refs/tags/${tag}" | awk '{print $1}' || true)"
             fi
             if [[ "$existing_sha" == "$target_sha" ]]; then
-              echo "Nightly alpha tag already exists for ${NEMO_FLOW_NIGHTLY_BRANCH}: ${tag}"
+              echo "Nightly alpha tag already exists for ${NEMO_RELAY_NIGHTLY_BRANCH}: ${tag}"
               exit 0
             fi
-            echo "Error: nightly alpha tag ${tag} already exists at ${existing_sha}, not ${NEMO_FLOW_NIGHTLY_BRANCH} HEAD ${target_sha}" >&2
+            echo "Error: nightly alpha tag ${tag} already exists at ${existing_sha}, not ${NEMO_RELAY_NIGHTLY_BRANCH} HEAD ${target_sha}" >&2
             exit 1
           fi
 
@@ -94,9 +94,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag \
             --annotate \
-            --message "NeMo Flow ${version} Nightly ${tag_date}" \
+            --message "NeMo Relay ${version} Nightly ${tag_date}" \
             "$tag" \
             "$target_sha"
-          git remote set-url origin "https://x-access-token:${NEMO_FLOW_NIGHTLY_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git remote set-url origin "https://x-access-token:${NEMO_RELAY_NIGHTLY_TAG_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "refs/tags/${tag}"
-          echo "Created nightly alpha tag for ${NEMO_FLOW_NIGHTLY_BRANCH}: ${tag}"
+          echo "Created nightly alpha tag for ${NEMO_RELAY_NIGHTLY_BRANCH}: ${tag}"

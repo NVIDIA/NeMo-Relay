@@ -14,9 +14,9 @@ const SPDX_HEADER = [
 ];
 
 const REQUIRED_SPHINX_ENV = [
-  'NEMO_FLOW_SPHINX_JS_MAIN_TS',
-  'NEMO_FLOW_SPHINX_JS_IMPORT_HOOK',
-  'NEMO_FLOW_SPHINX_JS_TSX_TSCONFIG',
+  'NEMO_RELAY_SPHINX_JS_MAIN_TS',
+  'NEMO_RELAY_SPHINX_JS_IMPORT_HOOK',
+  'NEMO_RELAY_SPHINX_JS_TSX_TSCONFIG',
 ];
 
 const MODULES = [
@@ -99,7 +99,8 @@ const DECLARATION_REWRITES = new Map([
         replacement: 'type Json = import("./index").Json;',
       },
       {
-        original: "import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';\n\nexport { ConfigPolicy, ConfigDiagnostic, ConfigReport };",
+        original:
+          "import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';\n\nexport { ConfigPolicy, ConfigDiagnostic, ConfigReport };",
         replacement: [
           'export type ConfigPolicy = import("./plugin").ConfigPolicy;',
           'export type ConfigDiagnostic = import("./plugin").ConfigDiagnostic;',
@@ -124,7 +125,8 @@ const DECLARATION_REWRITES = new Map([
         replacement: 'type Json = import("./index").Json;',
       },
       {
-        original: "import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';\n\nexport { ConfigPolicy, ConfigDiagnostic, ConfigReport };",
+        original:
+          "import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';\n\nexport { ConfigPolicy, ConfigDiagnostic, ConfigReport };",
         replacement: [
           'export type ConfigPolicy = import("./plugin").ConfigPolicy;',
           'export type ConfigDiagnostic = import("./plugin").ConfigDiagnostic;',
@@ -145,11 +147,13 @@ const DECLARATION_REWRITES = new Map([
 
 const PUBLIC_NAME_REWRITES = new Map([['ComponentSpecShape', 'ComponentSpec']]);
 
-const repoRoot = process.env.NEMO_FLOW_DOCS_REPO_ROOT
-  ? path.resolve(process.env.NEMO_FLOW_DOCS_REPO_ROOT)
+const repoRoot = process.env.NEMO_RELAY_DOCS_REPO_ROOT
+  ? path.resolve(process.env.NEMO_RELAY_DOCS_REPO_ROOT)
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const nodePackageDir = path.join(repoRoot, 'crates', 'node');
-const docsDir = process.env.NEMO_FLOW_DOCS_DIR ? path.resolve(process.env.NEMO_FLOW_DOCS_DIR) : path.join(repoRoot, 'docs');
+const docsDir = process.env.NEMO_RELAY_DOCS_DIR
+  ? path.resolve(process.env.NEMO_RELAY_DOCS_DIR)
+  : path.join(repoRoot, 'docs');
 const nodeDocsGeneratedDir = path.join(docsDir, 'reference', 'api', 'nodejs', '_generated');
 const nodeDocsSourceDir = path.join(nodeDocsGeneratedDir, 'source');
 const nodeDocsDeclDir = path.join(nodeDocsSourceDir, 'declarations');
@@ -263,7 +267,7 @@ function writeModuleEntrypoints(modules) {
 function writeDocsPackageManifest() {
   writeUtf8(
     path.join(nodeDocsSourceDir, 'package.json'),
-    `${JSON.stringify({ name: 'nemo-flow-node-api-docs', private: true }, null, 2)}\n`,
+    `${JSON.stringify({ name: 'nemo-relay-node-api-docs', private: true }, null, 2)}\n`,
   );
 }
 
@@ -396,7 +400,9 @@ function publicName(name) {
 }
 
 function renderType(items) {
-  const value = renderInline(items).trim().replaceAll(/\bComponentSpecShape\b/g, 'ComponentSpec');
+  const value = renderInline(items)
+    .trim()
+    .replaceAll(/\bComponentSpecShape\b/g, 'ComponentSpec');
   return value ? `\`${value}\`` : '`unknown`';
 }
 

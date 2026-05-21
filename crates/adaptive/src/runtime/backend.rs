@@ -26,7 +26,7 @@ pub async fn build_backend(
                 .config
                 .get("key_prefix")
                 .and_then(|value| value.as_str())
-                .unwrap_or("nemo_flow:");
+                .unwrap_or("nemo_relay:");
             Ok(Arc::new(RedisBackend::new(url, key_prefix).await.map_err(
                 |error| AdaptiveError::Storage(error.to_string()),
             )?))

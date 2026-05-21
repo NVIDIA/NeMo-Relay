@@ -1,30 +1,30 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration test support for the NeMo Flow FFI crate.
+//! Integration test support for the NeMo Relay FFI crate.
 
 use libc::c_char;
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
-use nemo_flow::api::tool::{ToolAttributes, ToolHandle};
-use nemo_flow::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_flow::error::{FlowError, Result};
-use nemo_flow_ffi::api::*;
-use nemo_flow_ffi::callable::*;
-use nemo_flow_ffi::convert::*;
-use nemo_flow_ffi::error::*;
-use nemo_flow_ffi::types::*;
-use nemo_flow_ffi::{api, convert, error};
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
+use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay::error::{FlowError, Result};
+use nemo_relay_ffi::api::*;
+use nemo_relay_ffi::callable::*;
+use nemo_relay_ffi::convert::*;
+use nemo_relay_ffi::error::*;
+use nemo_relay_ffi::types::*;
+use nemo_relay_ffi::{api, convert, error};
 use serde_json::{Value as Json, json};
 use std::ffi::{CStr, CString};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::Stream;
 
-unsafe fn nemo_flow_string_free_internal(ptr: *mut c_char) {
-    unsafe { nemo_flow_string_free(ptr) };
+unsafe fn nemo_relay_string_free_internal(ptr: *mut c_char) {
+    unsafe { nemo_relay_string_free(ptr) };
 }
 
 mod api_tests;

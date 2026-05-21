@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Instrument a Tool Call
 
-Use this guide when you have an application tool callback and want NeMo Flow to emit lifecycle events, apply middleware, and preserve the active agent scope around the call.
+Use this guide when you have an application tool callback and want NeMo Relay to emit lifecycle events, apply middleware, and preserve the active agent scope around the call.
 
 ## What You Build
 
@@ -53,7 +53,7 @@ The examples below wrap a `search` callback and print emitted events.
 ```python
 import asyncio
 
-import nemo_flow
+import nemo_relay
 
 
 def log_event(event) -> None:
@@ -63,16 +63,16 @@ def log_event(event) -> None:
 async def search(args):
     return {
         "query": args["query"],
-        "hits": [{"title": "NeMo Flow"}],
+        "hits": [{"title": "NeMo Relay"}],
     }
 
 
 async def main() -> None:
-    nemo_flow.subscribers.register("instrumentation-check", log_event)
+    nemo_relay.subscribers.register("instrumentation-check", log_event)
 
     try:
-        with nemo_flow.scope.scope("agent-run", nemo_flow.ScopeType.Agent) as handle:
-            result = await nemo_flow.tools.execute(
+        with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
+            result = await nemo_relay.tools.execute(
                 "search",
                 {"query": "runtime instrumentation"},
                 search,
@@ -80,7 +80,7 @@ async def main() -> None:
             )
             print(result)
     finally:
-        nemo_flow.subscribers.deregister("instrumentation-check")
+        nemo_relay.subscribers.deregister("instrumentation-check")
 
 
 asyncio.run(main())
@@ -97,7 +97,7 @@ const {
   registerSubscriber,
   toolCallExecute,
   withScope,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("instrumentation-check", (event) => {
@@ -111,7 +111,7 @@ async function main() {
         { query: "runtime instrumentation" },
         async (args) => ({
           query: args.query,
-          hits: [{ title: "NeMo Flow" }],
+          hits: [{ title: "NeMo Relay" }],
         }),
         handle,
         null,
@@ -137,11 +137,11 @@ main().catch((error) => {
 :sync: rust
 
 ```rust
-use nemo_flow::api::scope::{
+use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::api::tool::{tool_call_execute, ToolCallExecuteParams};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -171,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Box::pin(async move {
                     Ok(json!({
                         "query": args["query"],
-                        "hits": [{"title": "NeMo Flow"}]
+                        "hits": [{"title": "NeMo Relay"}]
                     }))
                 })
             }))

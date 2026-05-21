@@ -16,15 +16,15 @@ const jsWrapperFiles = ['typed.js', 'plugin.js', 'adaptive.js', 'observability.j
 const typeWrapperFiles = ['typed.d.ts', 'plugin.d.ts', 'adaptive.d.ts', 'observability.d.ts'];
 const wrapperFiles = [...rootJsFiles, ...jsWrapperFiles, ...typeWrapperFiles];
 const packageMetadata = {
-  description: 'WebAssembly bindings for the NeMo Flow agent runtime.',
-  keywords: ['agents', 'ai', 'llm', 'middleware', 'nemo-flow', 'observability', 'runtime', 'tools', 'wasm'],
-  homepage: 'https://github.com/NVIDIA/NeMo-Flow#readme',
+  description: 'WebAssembly bindings for the NeMo Relay agent runtime.',
+  keywords: ['agents', 'ai', 'llm', 'middleware', 'nemo-relay', 'observability', 'runtime', 'tools', 'wasm'],
+  homepage: 'https://github.com/NVIDIA/NeMo-Relay#readme',
   bugs: {
-    url: 'https://github.com/NVIDIA/NeMo-Flow/issues',
+    url: 'https://github.com/NVIDIA/NeMo-Relay/issues',
   },
   repository: {
     type: 'git',
-    url: 'git+https://github.com/NVIDIA/NeMo-Flow.git',
+    url: 'git+https://github.com/NVIDIA/NeMo-Relay.git',
     directory: 'crates/wasm',
   },
   author: 'NVIDIA Corporation & Affiliates',
@@ -35,8 +35,8 @@ const packageMetadata = {
 // point at the package-local wasm entrypoint inside pkg/.
 const replacements = [
   ['./pkg/index.js', './index.js'],
-  ['./pkg/nemo_flow_wasm.js', './nemo_flow_wasm.js'],
-  ['./pkg/nemo_flow_wasm', './nemo_flow_wasm'],
+  ['./pkg/nemo_relay_wasm.js', './nemo_relay_wasm.js'],
+  ['./pkg/nemo_relay_wasm', './nemo_relay_wasm'],
 ];
 
 function copyWithReplacements(sourcePath, destinationPath) {
@@ -68,7 +68,7 @@ function writeJsWrapperFiles(manifest) {
 function updatePackageManifest(manifest) {
   const manifestPath = path.join(pkgDir, 'package.json');
   const existingFiles = Array.isArray(manifest.files) ? manifest.files : [];
-  const rootTypes = 'nemo_flow_wasm.d.ts';
+  const rootTypes = 'nemo_relay_wasm.d.ts';
 
   Object.assign(manifest, packageMetadata);
 

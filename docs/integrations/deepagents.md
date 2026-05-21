@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Flow Deep Agents Integration
+# NeMo Relay Deep Agents Integration
 
-Use the `nemo_flow.integrations.deepagents` package to add NeMo Flow
+Use the `nemo_relay.integrations.deepagents` package to add NeMo Relay
 observability to Deep Agents applications through the LangChain and LangGraph
 integration surfaces that Deep Agents builds on.
 
@@ -21,7 +21,7 @@ Install the Deep Agents integration extra in your application environment.
 :sync: uv
 
 ```bash
-uv add "nemo-flow[deepagents]"
+uv add "nemo-relay[deepagents]"
 ```
 :::
 
@@ -29,7 +29,7 @@ uv add "nemo-flow[deepagents]"
 :sync: pip
 
 ```bash
-pip install "nemo-flow[deepagents]"
+pip install "nemo-relay[deepagents]"
 ```
 :::
 
@@ -46,7 +46,7 @@ extra too if you want to run the example as written:
 :sync: uv
 
 ```bash
-uv add "nemo-flow[deepagents,langchain-nvidia]"
+uv add "nemo-relay[deepagents,langchain-nvidia]"
 ```
 :::
 
@@ -54,7 +54,7 @@ uv add "nemo-flow[deepagents,langchain-nvidia]"
 :sync: pip
 
 ```bash
-pip install "nemo-flow[deepagents,langchain-nvidia]"
+pip install "nemo-relay[deepagents,langchain-nvidia]"
 ```
 :::
 
@@ -63,15 +63,15 @@ pip install "nemo-flow[deepagents,langchain-nvidia]"
 ## Usage Example
 
 ```python
-import nemo_flow
+import nemo_relay
 from deepagents import create_deep_agent
-from nemo_flow.integrations.deepagents import (
-    NemoFlowDeepAgentsCallbackHandler,
-    add_nemo_flow_integration,
+from nemo_relay.integrations.deepagents import (
+    NemoRelayDeepAgentsCallbackHandler,
+    add_nemo_relay_integration,
 )
 
 agent = create_deep_agent(
-    **add_nemo_flow_integration(
+    **add_nemo_relay_integration(
         model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
         tools=[],
         skills=["/skills/research/"],
@@ -88,10 +88,10 @@ input_payload = {
     ]
 }
 
-with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
+with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
     result = agent.invoke(
         input_payload,
-        config={"callbacks": [NemoFlowDeepAgentsCallbackHandler()]},
+        config={"callbacks": [NemoRelayDeepAgentsCallbackHandler()]},
     )
 
 final_message = result["messages"][-1]
@@ -100,21 +100,21 @@ print(f"Final response: {final_message.content}")
 
 ## Observability
 
-The integration composes the existing NeMo Flow LangChain and LangGraph hooks,
+The integration composes the existing NeMo Relay LangChain and LangGraph hooks,
 then emits Deep Agents-specific marks for configured skills, subagents, and
 human-in-the-loop lifecycle events.
 
 It captures:
 
-- LangChain model and tool calls through NeMo Flow managed execution.
+- LangChain model and tool calls through NeMo Relay managed execution.
 - LangGraph run scopes through callbacks.
 - Human-in-the-loop interrupt and resume marks.
 - Configured skills and subagent summaries at agent-run start.
-- In-process dictionary-style subagents with the same NeMo Flow middleware, so
+- In-process dictionary-style subagents with the same NeMo Relay middleware, so
   their model and tool calls are captured when Deep Agents invokes them.
 
-Remote graphs or processes still need NeMo Flow instrumentation in that graph
+Remote graphs or processes still need NeMo Relay instrumentation in that graph
 or process to capture their internal model and tool calls.
 
 Refer to [Observability](../plugins/observability/about.md)
-for details on exporting NeMo Flow observability data to third-party systems.
+for details on exporting NeMo Relay observability data to third-party systems.

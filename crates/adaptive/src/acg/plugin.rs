@@ -23,7 +23,7 @@
 //!   in concurrent contexts.
 //! - **Object-safe**: The trait is designed to be used as a trait object.
 
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 
 use crate::acg::capability::BackendCapabilities;
 use crate::acg::prompt_ir::PromptIR;

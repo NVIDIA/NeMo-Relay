@@ -9,8 +9,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::scope::ScopeType;
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::scope::ScopeType;
 use uuid::Uuid;
 
 use crate::learner::traits::Learner;
@@ -180,7 +180,7 @@ async fn store_run(
     completed_run: &RunRecord,
 ) -> bool {
     if let Err(error) = backend.store_run_dyn(completed_run).await {
-        eprintln!("nemo-flow-adaptive drain: store_run failed: {error}");
+        eprintln!("nemo-relay-adaptive drain: store_run failed: {error}");
         return false;
     }
     true
@@ -197,7 +197,7 @@ async fn run_learners(
             .process_run(completed_run, backend.as_ref(), hot_cache)
             .await
         {
-            eprintln!("nemo-flow-adaptive drain: learner failed: {error}");
+            eprintln!("nemo-relay-adaptive drain: learner failed: {error}");
         }
     }
 }
@@ -213,7 +213,7 @@ async fn refresh_hot_cache_plan(
                 guard.plan = plan;
             }
         }
-        Err(error) => eprintln!("nemo-flow-adaptive drain: load_plan failed: {error}"),
+        Err(error) => eprintln!("nemo-relay-adaptive drain: load_plan failed: {error}"),
     }
 }
 

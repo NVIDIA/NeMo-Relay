@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Handle Non-Serializable Data
 
-Use this guide when a framework exposes SDK clients, streams, callbacks, file handles, or custom classes at the same boundary where you need NeMo Flow instrumentation.
+Use this guide when a framework exposes SDK clients, streams, callbacks, file handles, or custom classes at the same boundary where you need NeMo Relay instrumentation.
 
 ## What You Build
 
-You will keep non-serializable framework objects in framework-owned storage and pass only stable JSON projections through NeMo Flow middleware and event payloads.
+You will keep non-serializable framework objects in framework-owned storage and pass only stable JSON projections through NeMo Relay middleware and event payloads.
 
 ## Before You Start
 
@@ -21,21 +21,21 @@ You need:
 
 ## The Constraint
 
-NeMo Flow middleware surfaces operate on JSON-compatible data. Frameworks do not always expose tool or model requests in that form.
+NeMo Relay middleware surfaces operate on JSON-compatible data. Frameworks do not always expose tool or model requests in that form.
 
 ## Recommended Strategies
 
 These strategies keep provider and framework data JSON-compatible before it reaches NeMo
 Flow.
 
-- Convert provider payloads into a stable request shape before NeMo Flow sees them.
+- Convert provider payloads into a stable request shape before NeMo Relay sees them.
 - Preserve opaque framework objects outside the middleware path and pass only the serializable projection into the runtime.
-- Store external object references in framework-owned maps keyed by request IDs, not inside NeMo Flow event payloads.
+- Store external object references in framework-owned maps keyed by request IDs, not inside NeMo Relay event payloads.
 - Use typed wrappers for your application boundary, then serialize at the last responsible moment.
 
 ## Concrete Projection Pattern
 
-Keep framework objects in your own map, but send only the JSON projection through NeMo Flow.
+Keep framework objects in your own map, but send only the JSON projection through NeMo Relay.
 
 ::::{tab-set}
 :sync-group: language
@@ -46,7 +46,7 @@ Keep framework objects in your own map, but send only the JSON projection throug
 ```python
 from typing import TypedDict
 
-import nemo_flow
+import nemo_relay
 
 
 class SearchArgs(TypedDict):
@@ -64,11 +64,11 @@ framework_clients["client-1"] = object()
 
 async def invoke(args: SearchArgs) -> SearchResult:
     client = framework_clients[args["client_id"]]
-    _ = client  # framework-owned object stays outside NeMo Flow payloads
+    _ = client  # framework-owned object stays outside NeMo Relay payloads
     return {"hits": 2}
 
 
-result = await nemo_flow.tools.execute(
+result = await nemo_relay.tools.execute(
     "search",
     SearchArgs(client_id="client-1", query="weather"),
     invoke,
@@ -80,7 +80,7 @@ result = await nemo_flow.tools.execute(
 :sync: node
 
 ```ts
-import { toolCallExecute } from 'nemo-flow-node';
+import { toolCallExecute } from 'nemo-relay-node';
 
 type SearchArgs = { clientId: string; query: string };
 type SearchResult = { hits: number };
@@ -106,7 +106,7 @@ const result = await toolCallExecute(
 :sync: rust
 
 ```rust
-use nemo_flow::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -164,7 +164,7 @@ observe.
 
 ## Practical Workarounds
 
-Use these workarounds when framework data cannot be passed directly through NeMo Flow.
+Use these workarounds when framework data cannot be passed directly through NeMo Relay.
 
 - Replace large objects with IDs and look them up later.
 - Emit summarized metadata instead of full request bodies.

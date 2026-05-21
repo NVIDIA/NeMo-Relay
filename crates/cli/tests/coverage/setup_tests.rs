@@ -164,7 +164,7 @@ fn save_config_writes_project_scope_to_workspace_dir() {
     let written = save_config(&doc, ConfigScope::Project, temp.path(), home.path(), None).unwrap();
 
     assert_eq!(written.len(), 1);
-    assert_eq!(written[0], temp.path().join(".nemo-flow/config.toml"));
+    assert_eq!(written[0], temp.path().join(".nemo-relay/config.toml"));
     let contents = std::fs::read_to_string(&written[0]).unwrap();
     assert!(!contents.contains("[exporters]"));
     assert!(contents.contains("[agents.claude]"));
@@ -177,7 +177,7 @@ fn save_config_scoped_merge_preserves_other_agents() {
     // upstream survive while claude is updated and observability is written fresh.
     let temp = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let project_dir = temp.path().join(".nemo-flow");
+    let project_dir = temp.path().join(".nemo-relay");
     std::fs::create_dir_all(&project_dir).unwrap();
     let existing_path = project_dir.join("config.toml");
     std::fs::write(
@@ -270,12 +270,12 @@ fn config_scope_labels_are_user_facing_and_stable() {
     assert!(
         ConfigScope::Project
             .label()
-            .contains(".nemo-flow/config.toml")
+            .contains(".nemo-relay/config.toml")
     );
     assert!(
         ConfigScope::Global
             .label()
-            .contains(".config/nemo-flow/config.toml")
+            .contains(".config/nemo-relay/config.toml")
     );
     assert!(
         ConfigScope::Both
@@ -367,14 +367,14 @@ fn install_hermes_hooks_writes_yaml_and_merges_existing() {
 
     assert_eq!(written.len(), 2);
     let project_yaml = std::fs::read_to_string(cwd.path().join(".hermes/config.yaml")).unwrap();
-    assert!(project_yaml.contains("nemo-flow hook-forward hermes"));
+    assert!(project_yaml.contains("nemo-relay hook-forward hermes"));
     assert!(project_yaml.contains("api_request_error"));
     assert!(
         project_yaml.contains("provider: auto"),
         "existing model block must survive merge"
     );
     let home_yaml = std::fs::read_to_string(home.path().join(".hermes/config.yaml")).unwrap();
-    assert!(home_yaml.contains("nemo-flow hook-forward hermes"));
+    assert!(home_yaml.contains("nemo-relay hook-forward hermes"));
 }
 
 #[test]
@@ -409,7 +409,7 @@ enabled = true
 fn reset_removes_whole_project_config_or_one_agent() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(temp.path());
-    let config_dir = temp.path().join(".nemo-flow");
+    let config_dir = temp.path().join(".nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");
     std::fs::write(
@@ -439,7 +439,7 @@ command = "codex"
 fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(temp.path());
-    let config_dir = temp.path().join(".nemo-flow");
+    let config_dir = temp.path().join(".nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");
     std::fs::write(&path, "agents = \"not-a-table\"\n").unwrap();

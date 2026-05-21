@@ -33,13 +33,13 @@ Python accepts timezone-aware `datetime` values, Node.js and WebAssembly accept 
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-handle = nemo_flow.tools.call("search", {"query": "weather"}, data={"attempt": 1})
+handle = nemo_relay.tools.call("search", {"query": "weather"}, data={"attempt": 1})
 try:
     result = {"hits": 2}
 finally:
-    nemo_flow.tools.call_end(handle, result)
+    nemo_relay.tools.call_end(handle, result)
 ```
 :::
 
@@ -47,7 +47,7 @@ finally:
 :sync: node
 
 ```ts
-import { toolCall, toolCallEnd } from 'nemo-flow-node';
+import { toolCall, toolCallEnd } from 'nemo-relay-node';
 
 const handle = toolCall('search', { query: 'weather' }, null, null, { attempt: 1 }, null, null);
 const result = { hits: 2 };
@@ -59,7 +59,7 @@ toolCallEnd(handle, result, null, null);
 :sync: rust
 
 ```rust
-use nemo_flow::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
+use nemo_relay::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
 use serde_json::json;
 
 let handle = tool_call(
@@ -83,7 +83,7 @@ tool_call_end(
 
 ## Managed LLM Execution
 
-Use managed execution when NeMo Flow should run the full middleware pipeline around the provider call.
+Use managed execution when NeMo Relay should run the full middleware pipeline around the provider call.
 
 ::::{tab-set}
 :sync-group: language
@@ -92,8 +92,8 @@ Use managed execution when NeMo Flow should run the full middleware pipeline aro
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
+import nemo_relay
+from nemo_relay import LLMRequest
 
 request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
 
@@ -102,7 +102,7 @@ async def invoke(req: LLMRequest):
     return {"text": "hi", "request": req.content}
 
 
-response = await nemo_flow.llm.execute(
+response = await nemo_relay.llm.execute(
     "demo-provider",
     request,
     invoke,
@@ -115,7 +115,7 @@ response = await nemo_flow.llm.execute(
 :sync: node
 
 ```ts
-import { LlmRequest, llmCallExecute } from 'nemo-flow-node';
+import { LlmRequest, llmCallExecute } from 'nemo-relay-node';
 
 const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
 
@@ -136,7 +136,7 @@ const response = await llmCallExecute(
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -173,8 +173,8 @@ Use the streaming helper when subscribers need chunk collection plus one final r
 ```python
 from dataclasses import dataclass
 
-from nemo_flow import LLMRequest
-from nemo_flow.typed import DataclassCodec, llm_stream_execute
+from nemo_relay import LLMRequest
+from nemo_relay.typed import DataclassCodec, llm_stream_execute
 
 
 @dataclass
@@ -211,8 +211,8 @@ stream = await llm_stream_execute(
 :sync: node
 
 ```ts
-import { LlmRequest } from 'nemo-flow-node';
-import { typedLlmStreamExecute, type Codec } from 'nemo-flow-node/typed';
+import { LlmRequest } from 'nemo-relay-node';
+import { typedLlmStreamExecute, type Codec } from 'nemo-relay-node/typed';
 
 type Chunk = { delta: string };
 type FinalResponse = { text: string };
@@ -247,7 +247,7 @@ const stream = await typedLlmStreamExecute(
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{
+use nemo_relay::api::llm::{
     llm_stream_call_execute, LlmAttributes, LlmRequest, LlmStreamCallExecuteParams,
 };
 use serde_json::json;
@@ -286,15 +286,15 @@ These helpers are useful when framework code cannot use managed execution but st
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
+import nemo_relay
+from nemo_relay import LLMRequest
 
-tool_args = nemo_flow.tools.request_intercepts("search", {"query": "weather"})
-nemo_flow.tools.conditional_execution("search", tool_args)
+tool_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
+nemo_relay.tools.conditional_execution("search", tool_args)
 
 llm_request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
-llm_request = nemo_flow.llm.request_intercepts("demo-provider", llm_request)
-nemo_flow.llm.conditional_execution(llm_request)
+llm_request = nemo_relay.llm.request_intercepts("demo-provider", llm_request)
+nemo_relay.llm.conditional_execution(llm_request)
 ```
 :::
 
@@ -308,7 +308,7 @@ import {
   llmRequestIntercepts,
   toolConditionalExecution,
   toolRequestIntercepts,
-} from 'nemo-flow-node';
+} from 'nemo-relay-node';
 
 const toolArgs = await toolRequestIntercepts('search', { query: 'weather' });
 await toolConditionalExecution('search', toolArgs);
@@ -323,8 +323,8 @@ await llmConditionalExecution(rewritten);
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
-use nemo_flow::api::tool::{tool_conditional_execution, tool_request_intercepts};
+use nemo_relay::api::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
+use nemo_relay::api::tool::{tool_conditional_execution, tool_request_intercepts};
 use serde_json::json;
 
 let tool_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
@@ -354,15 +354,15 @@ Use normal scope helpers first. Reach for explicit stack helpers only when work 
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-import nemo_flow
+import nemo_relay
 
-with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
-    nemo_flow.scope.event("started", data={"ok": True})
-    shared = nemo_flow.propagate_scope_to_thread()
+with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+    nemo_relay.scope.event("started", data={"ok": True})
+    shared = nemo_relay.propagate_scope_to_thread()
 
     def worker() -> None:
-        nemo_flow.set_thread_scope_stack(shared)
-        nemo_flow.scope.event("worker-ran")
+        nemo_relay.set_thread_scope_stack(shared)
+        nemo_relay.scope.event("worker-ran")
 
     with ThreadPoolExecutor() as pool:
         pool.submit(worker).result()
@@ -373,7 +373,7 @@ with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
 :sync: node
 
 ```ts
-import { ScopeType, createScopeStack, event, setThreadScopeStack, withScope } from 'nemo-flow-node';
+import { ScopeType, createScopeStack, event, setThreadScopeStack, withScope } from 'nemo-relay-node';
 
 const workerStack = createScopeStack();
 setThreadScopeStack(workerStack);
@@ -388,8 +388,8 @@ await withScope('request', ScopeType.Agent, async (handle) => {
 :sync: rust
 
 ```rust
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK};
-use nemo_flow::api::scope::{event, EmitMarkEventParams};
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK};
+use nemo_relay::api::scope::{event, EmitMarkEventParams};
 use serde_json::json;
 
 let stack = create_scope_stack();
@@ -401,7 +401,7 @@ TASK_SCOPE_STACK
 
 std::thread::spawn(move || {
     set_thread_scope_stack(stack);
-    // NeMo Flow calls in this thread attach to the same explicit stack.
+    // NeMo Relay calls in this thread attach to the same explicit stack.
 })
 .join()
 .unwrap();
@@ -423,10 +423,10 @@ The runtime exposes the same registration families for tool and LLM calls:
 
 Every family also has a scope-local surface:
 
-- Python: `nemo_flow.scope_local.register_*`
+- Python: `nemo_relay.scope_local.register_*`
 - Node.js: `scopeRegister*`
 - Rust: middleware `scope_register_*` functions under
-  `nemo_flow::api::registry`; subscriber scope registration under
-  `nemo_flow::api::subscriber`
+  `nemo_relay::api::registry`; subscriber scope registration under
+  `nemo_relay::api::subscriber`
 
 Use [Add Middleware](advanced-guide.md) for an end-to-end policy example and [API Reference](../reference/api/index.md) for symbol-level details.

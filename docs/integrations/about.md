@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # About
 
 Use this section when your application already uses a supported framework or
-agent harness and you want the maintained NeMo Flow integration path for that
+agent harness and you want the maintained NeMo Relay integration path for that
 surface.
 
 Supported integrations are end-user entry points. They use public framework or
@@ -28,12 +28,12 @@ Use these guide links to move from the support matrix into setup and usage
 instructions.
 
 - [OpenClaw Plugin Guide](openclaw-plugin.md) covers configuring the OpenClaw
-  plugin, mapping OpenClaw hooks to NeMo Flow telemetry, and understanding
+  plugin, mapping OpenClaw hooks to NeMo Relay telemetry, and understanding
   current LLM replay fidelity boundaries.
 - [LangChain Integration Guide](langchain.md) covers installing the LangChain
-  extra and adding NeMo Flow middleware and callbacks to LangChain agents.
+  extra and adding NeMo Relay middleware and callbacks to LangChain agents.
 - [LangGraph Integration Guide](langgraph.md) covers installing the LangGraph
-  extra and adding NeMo Flow callbacks to LangGraph workflows.
+  extra and adding NeMo Relay callbacks to LangGraph workflows.
 - [Deep Agents Integration Guide](deepagents.md) covers installing the Deep
   Agents extra and capturing Deep Agents-specific marks, skills, subagents, and
   human-in-the-loop lifecycle events.

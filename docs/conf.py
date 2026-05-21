@@ -14,7 +14,7 @@ from pathlib import Path
 import sphinx_js
 from packaging.version import InvalidVersion, Version
 
-project = "NVIDIA NeMo Flow"
+project = "NVIDIA NeMo Relay"
 copyright = "Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved."
 author = "NVIDIA CORPORATION & AFFILIATES"
 
@@ -77,7 +77,7 @@ myst_enable_extensions = [
 myst_fence_as_directive = ["mermaid"]
 myst_heading_anchors = 3
 
-autoapi_dirs = ["../python/nemo_flow"]
+autoapi_dirs = ["../python/nemo_relay"]
 autoapi_file_patterns = ["*.py", "*.pyi"]
 autoapi_root = "reference/api/python/_generated"
 autoapi_add_toctree_entry = False
@@ -102,8 +102,8 @@ napoleon_numpy_docstring = False
 napoleon_attr_annotations = True
 
 rust_crates = {
-    "nemo-flow": str(RUST_API_SOURCE_DIR / "core"),
-    "nemo-flow-adaptive": str(RUST_API_SOURCE_DIR / "adaptive"),
+    "nemo-relay": str(RUST_API_SOURCE_DIR / "core"),
+    "nemo-relay-adaptive": str(RUST_API_SOURCE_DIR / "adaptive"),
 }
 rust_doc_dir = str(RUST_API_GENERATED_DIR)
 rust_rustdoc_fmt = "md"
@@ -112,7 +112,7 @@ rust_visibility = "pub"
 rust_generate_mode = "always"
 
 html_theme = "nvidia_sphinx_theme"
-html_title = "NVIDIA NeMo Flow"
+html_title = "NVIDIA NeMo Relay"
 html_static_path = ["_static"]
 html_css_files = ["extra.css"]
 html_js_files = ["version-switcher.js"]
@@ -129,7 +129,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/NVIDIA/NeMo-Flow",
+            "url": "https://github.com/NVIDIA/NeMo-Relay",
             "icon": "fa-brands fa-github",
         }
     ],
@@ -364,10 +364,10 @@ def _resolve_runtime_paths(source_docs_dir: Path) -> None:
 
 
 def _wire_runtime_config(config) -> None:
-    config.autoapi_dirs = [str(REPO_ROOT / "python" / "nemo_flow")]
+    config.autoapi_dirs = [str(REPO_ROOT / "python" / "nemo_relay")]
     config.rust_crates = {
-        "nemo-flow": str(RUST_API_SOURCE_DIR / "core"),
-        "nemo-flow-adaptive": str(RUST_API_SOURCE_DIR / "adaptive"),
+        "nemo-relay": str(RUST_API_SOURCE_DIR / "core"),
+        "nemo-relay-adaptive": str(RUST_API_SOURCE_DIR / "adaptive"),
     }
     config.rust_doc_dir = str(RUST_API_GENERATED_DIR)
 
@@ -439,9 +439,9 @@ def _prepare_patched_sphinx_js_runtime() -> None:
 def _configure_sphinx_js_environment() -> None:
     # The Node artifact builder launches sphinx-js through `tsx`, so it reads
     # these paths from the environment instead of importing Python directly.
-    os.environ["NEMO_FLOW_SPHINX_JS_MAIN_TS"] = str(SPHINX_JS_WORK_DIR / "main.ts")
-    os.environ["NEMO_FLOW_SPHINX_JS_IMPORT_HOOK"] = str(SPHINX_JS_WORK_DIR / "registerImportHook.mjs")
-    os.environ["NEMO_FLOW_SPHINX_JS_TSX_TSCONFIG"] = str(SPHINX_JS_WORK_DIR / "tsconfig.json")
+    os.environ["NEMO_RELAY_SPHINX_JS_MAIN_TS"] = str(SPHINX_JS_WORK_DIR / "main.ts")
+    os.environ["NEMO_RELAY_SPHINX_JS_IMPORT_HOOK"] = str(SPHINX_JS_WORK_DIR / "registerImportHook.mjs")
+    os.environ["NEMO_RELAY_SPHINX_JS_TSX_TSCONFIG"] = str(SPHINX_JS_WORK_DIR / "tsconfig.json")
 
 
 def _patch_autoapi_summary_signature_normalization() -> None:
@@ -453,19 +453,19 @@ def _patch_autoapi_summary_signature_normalization() -> None:
         return
 
     original_mangle_signature = autoapi_directives.mangle_signature
-    if getattr(original_mangle_signature, "_nemo_flow_normalizes_unicode_arrow", False):
+    if getattr(original_mangle_signature, "_nemo_relay_normalizes_unicode_arrow", False):
         return
 
-    def _nemo_flow_mangle_signature(sig: str, *args, **kwargs) -> str:
+    def _nemo_relay_mangle_signature(sig: str, *args, **kwargs) -> str:
         normalized = sig.replace(" \u2192 ", " -> ")
         return original_mangle_signature(normalized, *args, **kwargs)
 
-    _nemo_flow_mangle_signature._nemo_flow_normalizes_unicode_arrow = True
-    autoapi_directives.mangle_signature = _nemo_flow_mangle_signature
+    _nemo_relay_mangle_signature._nemo_relay_normalizes_unicode_arrow = True
+    autoapi_directives.mangle_signature = _nemo_relay_mangle_signature
 
 
 def _skip_imported_type_aliases(_app, what, _name, obj, skip, _options):
-    if what == "module" and getattr(obj, "id", None) == "nemo_flow._native":
+    if what == "module" and getattr(obj, "id", None) == "nemo_relay._native":
         return False
 
     if skip:
@@ -485,8 +485,8 @@ def _run_node_docs_artifact_builder() -> None:
         cwd=CONFIG_REPO_ROOT,
         env={
             **os.environ,
-            "NEMO_FLOW_DOCS_REPO_ROOT": str(REPO_ROOT),
-            "NEMO_FLOW_DOCS_DIR": str(DOCS_DIR),
+            "NEMO_RELAY_DOCS_REPO_ROOT": str(REPO_ROOT),
+            "NEMO_RELAY_DOCS_DIR": str(DOCS_DIR),
         },
     )
 

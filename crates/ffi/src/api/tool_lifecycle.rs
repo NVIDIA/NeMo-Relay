@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    Arc, FfiScopeHandle, FfiToolHandle, NemoFlowFreeFn, NemoFlowStatus, NemoFlowToolExecCb,
+    Arc, FfiScopeHandle, FfiToolHandle, NemoRelayFreeFn, NemoRelayStatus, NemoRelayToolExecCb,
     TASK_SCOPE_STACK, ToolAttributes, ToolExecutionNextFn, c_char, c_str_to_json,
     c_str_to_opt_json, c_str_to_string, clear_last_error, core_tool_api, current_scope_stack,
     json_to_c_string, set_last_error, status_from_error, tokio_runtime,
@@ -17,7 +17,7 @@ use super::{
 ///
 /// This emits a tool Start event after applying sanitize-request guardrails to
 /// the observability payload. Request and execution intercepts only run through
-/// `nemo_flow_tool_call_execute`.
+/// `nemo_relay_tool_call_execute`.
 ///
 /// # Parameters
 /// - `name`: Null-terminated tool name.
@@ -35,7 +35,7 @@ use super::{
 /// - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the
 ///   handle start time and start event, or null to use the current UTC time.
 /// - `out`: On success, receives a heap-allocated `FfiToolHandle` that must be
-///   freed with `nemo_flow_tool_handle_free`.
+///   freed with `nemo_relay_tool_handle_free`.
 ///
 /// # Errors
 /// Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when
@@ -46,7 +46,7 @@ use super::{
 /// Optional pointer arguments may be null; when non-null, they must be valid
 /// for reads for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_call(
+pub unsafe extern "C" fn nemo_relay_tool_call(
     name: *const c_char,
     args_json: *const c_char,
     parent: *const FfiScopeHandle,
@@ -56,11 +56,11 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
     tool_call_id: *const c_char,
     timestamp_unix_micros: *const i64,
     out: *mut *mut FfiToolHandle,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -68,7 +68,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let parent_ref = if parent.is_null() {
         None
@@ -78,11 +78,11 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
     let attrs = ToolAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let tool_call_id_opt = if tool_call_id.is_null() {
         None
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
     };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidArg,
+        None => return NemoRelayStatus::InvalidArg,
     };
 
     match core_tool_api::tool_call(
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
     ) {
         Ok(h) => {
             unsafe { *out = Box::into_raw(Box::new(FfiToolHandle(h))) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }
@@ -121,10 +121,10 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
 ///
 /// This emits a tool End event after applying sanitize-response guardrails to
 /// the observability payload. Response intercepts only run through
-/// `nemo_flow_tool_call_execute`.
+/// `nemo_relay_tool_call_execute`.
 ///
 /// # Parameters
-/// - `handle`: The tool handle from `nemo_flow_tool_call`.
+/// - `handle`: The tool handle from `nemo_relay_tool_call`.
 /// - `result_json`: Tool result as a null-terminated JSON C string. This
 ///   result becomes the end-event data after sanitize-response guardrails unless
 ///   it sanitizes to JSON null.
@@ -144,33 +144,33 @@ pub unsafe extern "C" fn nemo_flow_tool_call(
 /// pointer arguments may be null; when non-null, they must be valid for reads
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_call_end(
+pub unsafe extern "C" fn nemo_relay_tool_call_end(
     handle: *const FfiToolHandle,
     result_json: *const c_char,
     data_json: *const c_char,
     metadata_json: *const c_char,
     timestamp_unix_micros: *const i64,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let result = match c_str_to_json(result_json) {
         Some(r) => r,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
-        None => return NemoFlowStatus::InvalidArg,
+        None => return NemoRelayStatus::InvalidArg,
     };
 
     match core_tool_api::tool_call_end(
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call_end(
             .timestamp_opt(timestamp)
             .build(),
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -205,27 +205,27 @@ pub unsafe extern "C" fn nemo_flow_tool_call_end(
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
 /// - `out`: On success, receives the result as a JSON C string. Caller must free
-///   with `nemo_flow_string_free`.
+///   with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_call_execute(
+pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     name: *const c_char,
     args_json: *const c_char,
-    func: NemoFlowToolExecCb,
+    func: NemoRelayToolExecCb,
     func_user_data: *mut libc::c_void,
-    func_free: NemoFlowFreeFn,
+    func_free: NemoRelayFreeFn,
     parent: *const FfiScopeHandle,
     attributes: u32,
     data_json: *const c_char,
     metadata_json: *const c_char,
     out: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call_execute(
     };
     let args = match c_str_to_json(args_json) {
         Some(a) => a,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let parent_handle = if parent.is_null() {
         None
@@ -243,11 +243,11 @@ pub unsafe extern "C" fn nemo_flow_tool_call_execute(
     let attrs = ToolAttributes::from_bits_truncate(attributes);
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
 
     let exec_fn = wrap_tool_exec_fn(func, func_user_data, func_free);
@@ -272,7 +272,7 @@ pub unsafe extern "C" fn nemo_flow_tool_call_execute(
     match result {
         Ok(json) => {
             unsafe { *out = json_to_c_string(&json) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
     }

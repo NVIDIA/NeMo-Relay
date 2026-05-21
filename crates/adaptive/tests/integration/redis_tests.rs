@@ -4,31 +4,31 @@
 //! Redis integration tests for [`RedisBackend`].
 //!
 //! These tests require a running Redis instance at `redis://127.0.0.1/`
-//! and only run when `NEMO_FLOW_RUN_REDIS_TESTS=1` is set.
+//! and only run when `NEMO_RELAY_RUN_REDIS_TESTS=1` is set.
 
 #![cfg(feature = "redis-backend")]
 
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
-use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_flow_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
-use nemo_flow_adaptive::acg_learner::AcgLearner;
-use nemo_flow_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
-use nemo_flow_adaptive::learner::traits::Learner;
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
+use nemo_relay_adaptive::acg_learner::AcgLearner;
+use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
+use nemo_relay_adaptive::learner::traits::Learner;
 use uuid::Uuid;
 
-use nemo_flow_adaptive::redis::RedisBackend;
-use nemo_flow_adaptive::storage::traits::{StorageBackend, StorageBackendDyn};
-use nemo_flow_adaptive::trie::accumulator::{AccumulatorState, NodeAccumulators, RunningStats};
-use nemo_flow_adaptive::trie::data_models::PredictionTrieNode;
-use nemo_flow_adaptive::trie::serialization::TrieEnvelope;
-use nemo_flow_adaptive::types::cache::HotCache;
-use nemo_flow_adaptive::types::metadata::MetadataEnvelope;
-use nemo_flow_adaptive::types::plan::ExecutionPlan;
-use nemo_flow_adaptive::types::records::{CallKind, CallRecord, RunRecord};
+use nemo_relay_adaptive::redis::RedisBackend;
+use nemo_relay_adaptive::storage::traits::{StorageBackend, StorageBackendDyn};
+use nemo_relay_adaptive::trie::accumulator::{AccumulatorState, NodeAccumulators, RunningStats};
+use nemo_relay_adaptive::trie::data_models::PredictionTrieNode;
+use nemo_relay_adaptive::trie::serialization::TrieEnvelope;
+use nemo_relay_adaptive::types::cache::HotCache;
+use nemo_relay_adaptive::types::metadata::MetadataEnvelope;
+use nemo_relay_adaptive::types::plan::ExecutionPlan;
+use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
 
-const REDIS_TEST_ENV: &str = "NEMO_FLOW_RUN_REDIS_TESTS";
+const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -485,7 +485,7 @@ async fn redis_integration_persists_runtime_seed_entries_and_manifest_cleanup() 
     let manifest = std::fs::read_to_string(format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR")))
         .expect("adaptive manifest should be readable");
     assert!(
-        !manifest.contains("nemo-flow-acg"),
+        !manifest.contains("nemo-relay-acg"),
         "adaptive manifest should not depend directly on the compatibility shim"
     );
 }

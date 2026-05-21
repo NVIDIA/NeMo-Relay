@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for acg profile in the NeMo Flow adaptive crate.
+//! Unit tests for acg profile in the NeMo Relay adaptive crate.
 
-use nemo_flow::codec::request::{
+use nemo_relay::codec::request::{
     AnnotatedLlmRequest, ContentPart, FunctionDefinition, Message, MessageContent, OpenAiImageUrl,
     ToolDefinition,
 };

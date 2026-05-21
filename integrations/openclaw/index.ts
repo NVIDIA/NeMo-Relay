@@ -7,20 +7,17 @@
  * This file should stay small: it declares the public plugin metadata and hands
  * registration to the runtime-state module, where lifecycle and hook wiring live.
  */
-import {
-  definePluginEntry,
-  type OpenClawPluginApi,
-} from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type OpenClawPluginApi } from 'openclaw/plugin-sdk/plugin-entry';
 
-import { nemoFlowConfigSchema } from "./src/config.js";
-import { registerNemoFlowPlugin } from "./src/runtime-state.js";
+import { nemoRelayConfigSchema } from './src/config.js';
+import { registerNemoRelayPlugin } from './src/runtime-state.js';
 
 export default definePluginEntry({
-  id: "nemo-flow",
-  name: "NeMo Flow Observability",
-  description: "ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Flow",
-  configSchema: nemoFlowConfigSchema,
+  id: 'nemo-relay',
+  name: 'NeMo Relay Observability',
+  description: 'ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Relay',
+  configSchema: nemoRelayConfigSchema,
   register(api: OpenClawPluginApi) {
-    registerNemoFlowPlugin(api);
+    registerNemoRelayPlugin(api);
   },
 });

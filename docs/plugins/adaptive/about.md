@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Adaptive
 
-Use the Adaptive plugin when you want NeMo Flow to collect runtime signals and
+Use the Adaptive plugin when you want NeMo Relay to collect runtime signals and
 activate measured adaptive behavior through the shared plugin system.
 
 Adaptive is a first-party plugin component with kind `adaptive`. It uses the
-same runtime model as the rest of NeMo Flow: scopes and managed calls emit
+same runtime model as the rest of NeMo Relay: scopes and managed calls emit
 lifecycle events, subscribers and learners observe those events, intercepts can
 add guidance, and plugin configuration controls what is active.
 

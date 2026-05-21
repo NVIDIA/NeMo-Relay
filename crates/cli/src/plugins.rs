@@ -13,9 +13,9 @@ use std::path::Path;
 use console::{Key, Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
-use nemo_flow::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
-use nemo_flow::observability::plugin_component::ObservabilityConfig;
-use nemo_flow_adaptive::AdaptiveConfig;
+use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
+use nemo_relay::observability::plugin_component::ObservabilityConfig;
+use nemo_relay_adaptive::AdaptiveConfig;
 use serde_json::{Value, json};
 
 use crate::config::PluginsEditCommand;
@@ -733,7 +733,7 @@ fn edit_value_section(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
     default: Option<Value>,
 ) -> Result<bool, CliError> {
     ensure_object(value);
@@ -776,7 +776,7 @@ fn edit_value_section(
 
 fn value_section_menu_items(
     value: &Value,
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
     default: Option<&Value>,
 ) -> Result<Vec<MenuItem>, CliError> {
     let mut items = schema
@@ -813,7 +813,7 @@ fn edit_selected_value_item(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
     default: Option<&Value>,
     selection: usize,
 ) -> Result<bool, CliError> {
@@ -903,7 +903,7 @@ fn edit_value_field(
 
 fn reset_value_section_item(
     value: &mut Value,
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
     default: Option<&Value>,
     selected: usize,
 ) {
@@ -917,7 +917,7 @@ fn reset_value_section_item(
 
 fn clear_value_field(
     value: &mut Value,
-    schema: &nemo_flow::config_editor::EditorSchema,
+    schema: &nemo_relay::config_editor::EditorSchema,
     selected: usize,
 ) -> bool {
     let Some(field) = schema.fields.get(selected) else {

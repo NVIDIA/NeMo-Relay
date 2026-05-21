@@ -4,7 +4,7 @@
 //! Priority-sorted named registry.
 //!
 //! [`SortedRegistry`] is the backbone data structure for all guardrail and
-//! intercept registries in the NeMo Flow runtime. It stores self-describing
+//! intercept registries in the NeMo Relay runtime. It stores self-describing
 //! entries by unique name and provides iteration in ascending priority order,
 //! with eager re-sorting on every mutation.
 

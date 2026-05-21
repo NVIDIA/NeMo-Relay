@@ -3,7 +3,7 @@
 
 """Unit tests for LangGraph edge traversal event emission.
 
-Validates that emit_edge_write in _nemo_flow.py emits correct NeMo Flow Mark events
+Validates that emit_edge_write in _nemo_relay.py emits correct NeMo Relay Mark events
 with the expected name, data fields, and source_node extraction behavior.
 """
 
@@ -13,7 +13,7 @@ import threading
 from typing import Any
 
 import pytest
-from langgraph._nemo_flow import (  # type: ignore[import-untyped]
+from langgraph._nemo_relay import (  # type: ignore[import-untyped]
     available,
     emit_edge_write,
     pop_graph_scope,
@@ -22,8 +22,8 @@ from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     push_node_scope,
 )
 
-import nemo_flow
-from nemo_flow import create_scope_stack, set_thread_scope_stack
+import nemo_relay
+from nemo_relay import create_scope_stack, set_thread_scope_stack
 
 
 def _is_mark_event(event: Any, name: str) -> bool:
@@ -44,9 +44,9 @@ class TestEdgeWriteEvents:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nemo_flow.subscribers.register("test-edge-collector", lambda e: collected.append(e))
+        nemo_relay.subscribers.register("test-edge-collector", lambda e: collected.append(e))
         yield collected
-        nemo_flow.subscribers.deregister("test-edge-collector")
+        nemo_relay.subscribers.deregister("test-edge-collector")
 
     def test_edge_write_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
         """emit_edge_write emits a Mark event with correct name and data fields."""

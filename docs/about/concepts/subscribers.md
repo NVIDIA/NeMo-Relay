@@ -10,7 +10,7 @@ execution.
 
 ## What Subscribers Are
 
-Subscribers are consumers of the NeMo Flow event stream. They receive emitted
+Subscribers are consumers of the NeMo Relay event stream. They receive emitted
 lifecycle events and use them for observation, forwarding, export, or analysis.
 
 ## How Subscribers Relate to Events
@@ -69,9 +69,9 @@ attributes. Python subscribers can call `event.to_dict()` or `event.to_json()`
 from the callback while still using the normal subscriber registration API.
 
 This pattern is useful when an agent runtime, framework adapter, or plugin host
-already has its own lifecycle hooks but wants NeMo Flow to be the shared
-telemetry representation. The host integration maps those hooks into NeMo Flow
-scopes, LLM calls, tool calls, or marks. NeMo Flow emits the canonical ATOF event
+already has its own lifecycle hooks but wants NeMo Relay to be the shared
+telemetry representation. The host integration maps those hooks into NeMo Relay
+scopes, LLM calls, tool calls, or marks. NeMo Relay emits the canonical ATOF event
 stream, and each subscriber chooses whether to consume the native event object,
 the canonical JSON helper, or an exporter-specific translation.
 
@@ -79,7 +79,7 @@ the canonical JSON helper, or an exporter-specific translation.
 flowchart
     Host[Host Integration]
 
-    subgraph NeMoFlow[NeMo Flow]
+    subgraph NeMoFlow[NeMo Relay]
         direction TB
         Binding[Binding API]
         Core[Rust Core Runtime]

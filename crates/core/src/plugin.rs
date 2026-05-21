@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Generic plugin infrastructure for NeMo Flow runtimes.
+//! Generic plugin infrastructure for NeMo Relay runtimes.
 //!
 //! This module owns:
 //! - config diagnostics and policy enums used by plugin systems
@@ -284,7 +284,7 @@ impl PluginRegistration {
 /// Context provided to plugin handlers during runtime registration.
 ///
 /// Each `register_*` call both installs the middleware/subscriber into the
-/// NeMo Flow runtime and records the inverse deregistration closure so the host
+/// NeMo Relay runtime and records the inverse deregistration closure so the host
 /// can roll back partial setup on failure.
 #[derive(Default)]
 pub struct PluginRegistrationContext {
@@ -1097,9 +1097,9 @@ fn plugin_component_totals(config: &PluginConfig) -> HashMap<&str, usize> {
 
 fn component_namespace(kind: &str, ordinal: usize, total: usize) -> String {
     if total > 1 {
-        format!("__nemo_flow_plugin__{kind}__{ordinal}__")
+        format!("__nemo_relay_plugin__{kind}__{ordinal}__")
     } else {
-        format!("__nemo_flow_plugin__{kind}__")
+        format!("__nemo_relay_plugin__{kind}__")
     }
 }
 

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for error in the NeMo Flow adaptive crate.
+//! Coverage tests for error in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_flow::plugin::PluginError;
+use nemo_relay::plugin::PluginError;
 
 #[test]
 fn test_not_found_display() {

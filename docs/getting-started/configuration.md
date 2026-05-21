@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Configuration
 
-NeMo Flow runtime behavior is configured through API objects and registration calls rather than a global configuration file.
+NeMo Relay runtime behavior is configured through API objects and registration calls rather than a global configuration file.
 
 ## Core Runtime Setup
 
-Most applications configure NeMo Flow by:
+Most applications configure NeMo Relay by:
 
 1. Creating or reusing a scope stack.
 2. Registering guardrails, intercepts, or subscribers.
@@ -28,7 +28,7 @@ Plugins use a structured plugin configuration with:
 
 Start with [Define a Plugin](../build-plugins/basic-guide.md) when you need reusable middleware, subscribers, or adaptive behavior.
 
-The `nemo-flow` CLI gateway reads plugin files named `plugins.toml`. See
+The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. See
 [Plugin Configuration Files](../build-plugins/plugin-configuration-files.md)
 for file locations, precedence, merge behavior, editor controls, and validation
 rules.
@@ -44,7 +44,7 @@ plugin component to own standard exporter setup and teardown. See
 and [Observability](../plugins/observability/about.md)
 for the supported export paths.
 
-NeMo Flow does not require application-level environment variables for normal
+NeMo Relay does not require application-level environment variables for normal
 runtime use. Configure most behavior through API objects, registration calls, or
 plugin configuration.
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderValue;
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 use serde_json::Map;
 
 use super::*;
@@ -110,7 +110,7 @@ fn gateway_session_id_uses_explicit_claude_then_codex_fallbacks() {
     );
 
     headers.insert(
-        "x-nemo-flow-session-id",
+        "x-nemo-relay-session-id",
         HeaderValue::from_static("explicit-thread"),
     );
     assert_eq!(
@@ -123,11 +123,11 @@ fn gateway_session_id_uses_explicit_claude_then_codex_fallbacks() {
 fn gateway_subagent_and_identifier_helpers_respect_header_precedence() {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-nemo-flow-subagent-id",
+        "x-nemo-relay-subagent-id",
         HeaderValue::from_static("worker-1"),
     );
     headers.insert(
-        "x-nemo-flow-request-id",
+        "x-nemo-relay-request-id",
         HeaderValue::from_static("request-header"),
     );
     let body = json!({
@@ -141,7 +141,7 @@ fn gateway_subagent_and_identifier_helpers_respect_header_precedence() {
         gateway_identifier(
             &headers,
             &body,
-            "x-nemo-flow-request-id",
+            "x-nemo-relay-request-id",
             &[&["request", "id"]]
         )
         .as_deref(),

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Flow Python type bindings."""
+"""Tests for NeMo Relay Python type bindings."""
 
 import http.server
 import json
@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from nemo_flow import (
+from nemo_relay import (
     AtifExporter,
     AtofExporter,
     AtofExporterConfig,
@@ -449,7 +449,7 @@ class TestAtofExporterType:
         config = AtofExporterConfig()
 
         assert config.mode == AtofExporterMode.Append
-        assert config.filename.startswith("nemo-flow-events-")
+        assert config.filename.startswith("nemo-relay-events-")
         assert config.filename.endswith(".jsonl")
         assert "AtofExporterConfig" in repr(config)
 
@@ -518,8 +518,8 @@ class TestOpenTelemetryTypes:
 
         assert config.transport == "http_binary"
         assert config.endpoint is None
-        assert config.service_name == "nemo-flow"
-        assert config.instrumentation_scope == "nemo-flow-otel"
+        assert config.service_name == "nemo-relay"
+        assert config.instrumentation_scope == "nemo-relay-otel"
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}
@@ -607,8 +607,8 @@ class TestOpenInferenceTypes:
 
         assert config.transport == "http_binary"
         assert config.endpoint is None
-        assert config.service_name == "nemo-flow"
-        assert config.instrumentation_scope == "nemo-flow-openinference"
+        assert config.service_name == "nemo-relay"
+        assert config.instrumentation_scope == "nemo-relay-openinference"
         assert config.timeout_millis == 3000
         assert config.headers == {}
         assert config.resource_attributes == {}

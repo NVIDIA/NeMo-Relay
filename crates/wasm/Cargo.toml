@@ -2,24 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-wasm"
+name = "nemo-relay-wasm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "WebAssembly bindings for NeMo Flow targeting JavaScript bundlers and browsers."
+description = "WebAssembly bindings for NeMo Relay targeting JavaScript bundlers and browsers."
 readme = "README.md"
 
 [lints]
 workspace = true
 
 [lib]
-name = "nemo_flow_wasm"
+name = "nemo_relay_wasm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-nemo-flow = { workspace = true, features = ["otel", "openinference"] }
-nemo-flow-adaptive.workspace = true
+nemo-relay = { workspace = true, features = ["otel", "openinference"] }
+nemo-relay-adaptive.workspace = true
 chrono = "0.4"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

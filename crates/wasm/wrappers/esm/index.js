@@ -94,4 +94,4 @@ export {
   toolRequestIntercepts,
   validatePluginConfig,
   withScope,
-} from './pkg/nemo_flow_wasm.js';
+} from './pkg/nemo_relay_wasm.js';

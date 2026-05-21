@@ -3,8 +3,8 @@
 
 """Integration tests for LangGraph lifecycle event emission.
 
-Validates that the four lifecycle event helper functions in ``_nemo_flow.py``
-emit correct NeMo Flow Mark events with the expected names, event types, and data
+Validates that the four lifecycle event helper functions in ``_nemo_relay.py``
+emit correct NeMo Relay Mark events with the expected names, event types, and data
 fields, and that guard behavior prevents spurious events when no scope stack
 is active.
 
@@ -18,7 +18,7 @@ from collections import namedtuple
 from typing import Any
 
 import pytest
-from langgraph._nemo_flow import (  # type: ignore[import-untyped]
+from langgraph._nemo_relay import (  # type: ignore[import-untyped]
     available,
     emit_checkpoint_restore,
     emit_checkpoint_save,
@@ -28,8 +28,8 @@ from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     push_graph_scope,
 )
 
-import nemo_flow
-from nemo_flow import create_scope_stack, set_thread_scope_stack
+import nemo_relay
+from nemo_relay import create_scope_stack, set_thread_scope_stack
 
 
 def _is_mark_event(event: Any, name: str) -> bool:
@@ -50,9 +50,9 @@ class TestCheckpointEvents:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nemo_flow.subscribers.register("test-lifecycle-collector", lambda e: collected.append(e))
+        nemo_relay.subscribers.register("test-lifecycle-collector", lambda e: collected.append(e))
         yield collected
-        nemo_flow.subscribers.deregister("test-lifecycle-collector")
+        nemo_relay.subscribers.deregister("test-lifecycle-collector")
 
     # -------------------------------------------------------------------
     # Checkpoint Save events
@@ -147,9 +147,9 @@ class TestInterruptEvents:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nemo_flow.subscribers.register("test-interrupt-collector", lambda e: collected.append(e))
+        nemo_relay.subscribers.register("test-interrupt-collector", lambda e: collected.append(e))
         yield collected
-        nemo_flow.subscribers.deregister("test-interrupt-collector")
+        nemo_relay.subscribers.deregister("test-interrupt-collector")
 
     # -------------------------------------------------------------------
     # Graph Interrupt events

@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for coverage sweeps in the NeMo Flow FFI crate.
+//! Unit tests for coverage sweeps in the NeMo Relay FFI crate.
 
 use super::*;
 
-const RUNTIME_OWNER_ENV: &str = "NEMO_FLOW_RUNTIME_OWNER";
-const BINDING_KIND_ENV: &str = "NEMO_FLOW_BINDING_KIND";
+const RUNTIME_OWNER_ENV: &str = "NEMO_RELAY_RUNTIME_OWNER";
+const BINDING_KIND_ENV: &str = "NEMO_RELAY_BINDING_KIND";
 
 struct EnvGuard {
     key: &'static str,
@@ -43,23 +43,23 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
 
     macro_rules! assert_already_exists {
         ($expr:expr) => {
-            assert_eq!($expr, NemoFlowStatus::AlreadyExists);
+            assert_eq!($expr, NemoRelayStatus::AlreadyExists);
         };
     }
 
     unsafe {
         let tool_san_req = cstring(&unique_name("dup_tool_san_req_extra"));
         assert_eq!(
-            nemo_flow_register_tool_sanitize_request_guardrail(
+            nemo_relay_register_tool_sanitize_request_guardrail(
                 tool_san_req.as_ptr(),
                 1,
                 tool_request_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_register_tool_sanitize_request_guardrail(
+        assert_already_exists!(nemo_relay_register_tool_sanitize_request_guardrail(
             tool_san_req.as_ptr(),
             1,
             tool_request_cb,
@@ -67,22 +67,22 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             None,
         ));
         assert_eq!(
-            nemo_flow_deregister_tool_sanitize_request_guardrail(tool_san_req.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_tool_sanitize_request_guardrail(tool_san_req.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let tool_san_resp = cstring(&unique_name("dup_tool_san_resp_extra"));
         assert_eq!(
-            nemo_flow_register_tool_sanitize_response_guardrail(
+            nemo_relay_register_tool_sanitize_response_guardrail(
                 tool_san_resp.as_ptr(),
                 1,
                 tool_request_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_register_tool_sanitize_response_guardrail(
+        assert_already_exists!(nemo_relay_register_tool_sanitize_response_guardrail(
             tool_san_resp.as_ptr(),
             1,
             tool_request_cb,
@@ -90,22 +90,22 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             None,
         ));
         assert_eq!(
-            nemo_flow_deregister_tool_sanitize_response_guardrail(tool_san_resp.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_tool_sanitize_response_guardrail(tool_san_resp.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let tool_exec = cstring(&unique_name("dup_tool_exec_extra"));
         assert_eq!(
-            nemo_flow_register_tool_execution_intercept(
+            nemo_relay_register_tool_execution_intercept(
                 tool_exec.as_ptr(),
                 1,
                 tool_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_register_tool_execution_intercept(
+        assert_already_exists!(nemo_relay_register_tool_execution_intercept(
             tool_exec.as_ptr(),
             1,
             tool_exec_intercept_cb,
@@ -113,22 +113,22 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             None,
         ));
         assert_eq!(
-            nemo_flow_deregister_tool_execution_intercept(tool_exec.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_tool_execution_intercept(tool_exec.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let llm_san_req = cstring(&unique_name("dup_llm_san_req_extra"));
         assert_eq!(
-            nemo_flow_register_llm_sanitize_request_guardrail(
+            nemo_relay_register_llm_sanitize_request_guardrail(
                 llm_san_req.as_ptr(),
                 1,
                 llm_request_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_register_llm_sanitize_request_guardrail(
+        assert_already_exists!(nemo_relay_register_llm_sanitize_request_guardrail(
             llm_san_req.as_ptr(),
             1,
             llm_request_cb,
@@ -136,22 +136,22 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             None,
         ));
         assert_eq!(
-            nemo_flow_deregister_llm_sanitize_request_guardrail(llm_san_req.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_llm_sanitize_request_guardrail(llm_san_req.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let llm_exec = cstring(&unique_name("dup_llm_exec_extra"));
         assert_eq!(
-            nemo_flow_register_llm_execution_intercept(
+            nemo_relay_register_llm_execution_intercept(
                 llm_exec.as_ptr(),
                 1,
                 llm_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_register_llm_execution_intercept(
+        assert_already_exists!(nemo_relay_register_llm_execution_intercept(
             llm_exec.as_ptr(),
             1,
             llm_exec_intercept_cb,
@@ -159,22 +159,22 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             None,
         ));
         assert_eq!(
-            nemo_flow_deregister_llm_execution_intercept(llm_exec.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_llm_execution_intercept(llm_exec.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let llm_stream_exec = cstring(&unique_name("dup_llm_stream_exec_extra"));
         assert_eq!(
-            nemo_flow_register_llm_stream_execution_intercept(
+            nemo_relay_register_llm_stream_execution_intercept(
                 llm_stream_exec.as_ptr(),
                 1,
                 llm_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_register_llm_stream_execution_intercept(
+        assert_already_exists!(nemo_relay_register_llm_stream_execution_intercept(
             llm_stream_exec.as_ptr(),
             1,
             llm_exec_intercept_cb,
@@ -182,8 +182,8 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_global_wrappers
             None,
         ));
         assert_eq!(
-            nemo_flow_deregister_llm_stream_execution_intercept(llm_stream_exec.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_llm_stream_execution_intercept(llm_stream_exec.as_ptr()),
+            NemoRelayStatus::Ok
         );
     }
 }
@@ -196,9 +196,9 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
         let scope_uuid = cstring(
-            &take_string(nemo_flow_scope_handle_uuid(parent)).expect("scope uuid should exist"),
+            &take_string(nemo_relay_scope_handle_uuid(parent)).expect("scope uuid should exist"),
         );
 
         let tool_name = cstring("ffi_runtime_owner_tool");
@@ -211,7 +211,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
 
         let mut tool_handle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 parent,
@@ -221,12 +221,12 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 ptr::null(),
                 &mut tool_handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let mut llm_handle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 llm_request.as_ptr(),
                 parent,
@@ -236,18 +236,18 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 ptr::null(),
                 &mut llm_handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let malformed_request = cstring(r#"{"headers":[],"content":"bad"}"#);
         let mut transformed_out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_llm_request_intercepts(
+            nemo_relay_llm_request_intercepts(
                 llm_name.as_ptr(),
                 malformed_request.as_ptr(),
                 &mut transformed_out,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -255,8 +255,8 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 .contains("failed to parse native_json as LlmRequest")
         );
         assert_eq!(
-            nemo_flow_llm_conditional_execution(malformed_request.as_ptr()),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_llm_conditional_execution(malformed_request.as_ptr()),
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -276,12 +276,12 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
 
         let mut out_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_request_intercepts(
+            nemo_relay_tool_request_intercepts(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 &mut out_json
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -290,12 +290,12 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
         );
 
         assert_eq!(
-            nemo_flow_llm_request_intercepts(
+            nemo_relay_llm_request_intercepts(
                 llm_name.as_ptr(),
                 llm_request.as_ptr(),
                 &mut out_json
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -304,8 +304,8 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
         );
 
         assert_eq!(
-            nemo_flow_llm_conditional_execution(llm_request.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_llm_conditional_execution(llm_request.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -315,8 +315,8 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
 
         let mut conflict_scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_get_handle(&mut conflict_scope),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_get_handle(&mut conflict_scope),
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -324,9 +324,9 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 .contains(conflict_fragment)
         );
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 tool_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 parent,
                 0,
                 ptr::null(),
@@ -334,7 +334,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 ptr::null(),
                 &mut conflict_scope,
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -342,8 +342,8 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 .contains(conflict_fragment)
         );
         assert_eq!(
-            nemo_flow_event(tool_name.as_ptr(), parent, ptr::null(), ptr::null()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_event(tool_name.as_ptr(), parent, ptr::null(), ptr::null()),
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -353,7 +353,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
 
         let mut conflict_tool_handle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 parent,
@@ -363,7 +363,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 ptr::null(),
                 &mut conflict_tool_handle,
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -371,8 +371,8 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 .contains(conflict_fragment)
         );
         assert_eq!(
-            nemo_flow_tool_call_end(tool_handle, tool_result.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_tool_call_end(tool_handle, tool_result.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -381,7 +381,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
         );
 
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 llm_request.as_ptr(),
                 parent,
@@ -391,7 +391,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 ptr::null(),
                 &mut llm_handle,
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -399,8 +399,8 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
                 .contains(conflict_fragment)
         );
         assert_eq!(
-            nemo_flow_llm_call_end(llm_handle, llm_response.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_llm_call_end(llm_handle, llm_response.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::InvalidArg
         );
         assert!(
             read_last_error()
@@ -410,130 +410,130 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
 
         let global_name = cstring("conflict-global");
         assert_eq!(
-            nemo_flow_deregister_tool_sanitize_request_guardrail(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_tool_sanitize_request_guardrail(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_tool_conditional_execution_guardrail(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_tool_conditional_execution_guardrail(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_tool_request_intercept(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_tool_request_intercept(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_tool_execution_intercept(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_tool_execution_intercept(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_llm_sanitize_request_guardrail(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_llm_sanitize_request_guardrail(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_llm_sanitize_response_guardrail(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_llm_sanitize_response_guardrail(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_llm_conditional_execution_guardrail(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_llm_conditional_execution_guardrail(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_llm_request_intercept(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_llm_request_intercept(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_llm_execution_intercept(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_llm_execution_intercept(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_llm_stream_execution_intercept(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_llm_stream_execution_intercept(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_deregister_subscriber(global_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_deregister_subscriber(global_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
 
         let scope_name = cstring("conflict-scope");
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_request_intercept(
+            nemo_relay_scope_deregister_tool_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr()
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_execution_intercept(
+            nemo_relay_scope_deregister_tool_execution_intercept(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
+            nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_llm_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_llm_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_request_intercept(
+            nemo_relay_scope_deregister_llm_request_intercept(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_execution_intercept(
+            nemo_relay_scope_deregister_llm_execution_intercept(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_stream_execution_intercept(
+            nemo_relay_scope_deregister_llm_stream_execution_intercept(
                 scope_uuid.as_ptr(),
                 scope_name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidArg
+            NemoRelayStatus::InvalidArg
         );
         assert_eq!(
-            nemo_flow_scope_deregister_subscriber(scope_uuid.as_ptr(), scope_name.as_ptr()),
-            NemoFlowStatus::InvalidArg
+            nemo_relay_scope_deregister_subscriber(scope_uuid.as_ptr(), scope_name.as_ptr()),
+            NemoRelayStatus::InvalidArg
         );
 
-        nemo_flow_tool_handle_free(tool_handle);
-        nemo_flow_llm_handle_free(llm_handle);
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_tool_handle_free(tool_handle);
+        nemo_relay_llm_handle_free(llm_handle);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -544,7 +544,7 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
 
     macro_rules! assert_already_exists {
         ($expr:expr) => {
-            assert_eq!($expr, NemoFlowStatus::AlreadyExists);
+            assert_eq!($expr, NemoRelayStatus::AlreadyExists);
         };
     }
 
@@ -553,9 +553,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
         let scope_name = cstring("dup_scope_extra");
         let mut scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -563,13 +563,13 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let scope_uuid = cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
 
         let tool_san_req = cstring(&unique_name("dup_scope_tool_san_req_extra"));
         assert_eq!(
-            nemo_flow_scope_register_tool_sanitize_request_guardrail(
+            nemo_relay_scope_register_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 tool_san_req.as_ptr(),
                 1,
@@ -577,9 +577,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_tool_sanitize_request_guardrail(
+        assert_already_exists!(nemo_relay_scope_register_tool_sanitize_request_guardrail(
             scope_uuid.as_ptr(),
             tool_san_req.as_ptr(),
             1,
@@ -588,16 +588,16 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 tool_san_req.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let tool_san_resp = cstring(&unique_name("dup_scope_tool_san_resp_extra"));
         assert_eq!(
-            nemo_flow_scope_register_tool_sanitize_response_guardrail(
+            nemo_relay_scope_register_tool_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 tool_san_resp.as_ptr(),
                 1,
@@ -605,9 +605,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_tool_sanitize_response_guardrail(
+        assert_already_exists!(nemo_relay_scope_register_tool_sanitize_response_guardrail(
             scope_uuid.as_ptr(),
             tool_san_resp.as_ptr(),
             1,
@@ -616,16 +616,16 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 tool_san_resp.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let tool_exec = cstring(&unique_name("dup_scope_tool_exec_extra"));
         assert_eq!(
-            nemo_flow_scope_register_tool_execution_intercept(
+            nemo_relay_scope_register_tool_execution_intercept(
                 scope_uuid.as_ptr(),
                 tool_exec.as_ptr(),
                 1,
@@ -633,9 +633,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_tool_execution_intercept(
+        assert_already_exists!(nemo_relay_scope_register_tool_execution_intercept(
             scope_uuid.as_ptr(),
             tool_exec.as_ptr(),
             1,
@@ -644,16 +644,16 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_tool_execution_intercept(
+            nemo_relay_scope_deregister_tool_execution_intercept(
                 scope_uuid.as_ptr(),
                 tool_exec.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let llm_san_req = cstring(&unique_name("dup_scope_llm_san_req_extra"));
         assert_eq!(
-            nemo_flow_scope_register_llm_sanitize_request_guardrail(
+            nemo_relay_scope_register_llm_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 llm_san_req.as_ptr(),
                 1,
@@ -661,9 +661,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_llm_sanitize_request_guardrail(
+        assert_already_exists!(nemo_relay_scope_register_llm_sanitize_request_guardrail(
             scope_uuid.as_ptr(),
             llm_san_req.as_ptr(),
             1,
@@ -672,16 +672,16 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
+            nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 llm_san_req.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let llm_san_resp = cstring(&unique_name("dup_scope_llm_san_resp_extra"));
         assert_eq!(
-            nemo_flow_scope_register_llm_sanitize_response_guardrail(
+            nemo_relay_scope_register_llm_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 llm_san_resp.as_ptr(),
                 1,
@@ -689,9 +689,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_llm_sanitize_response_guardrail(
+        assert_already_exists!(nemo_relay_scope_register_llm_sanitize_response_guardrail(
             scope_uuid.as_ptr(),
             llm_san_resp.as_ptr(),
             1,
@@ -700,16 +700,16 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_llm_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 llm_san_resp.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let llm_exec = cstring(&unique_name("dup_scope_llm_exec_extra"));
         assert_eq!(
-            nemo_flow_scope_register_llm_execution_intercept(
+            nemo_relay_scope_register_llm_execution_intercept(
                 scope_uuid.as_ptr(),
                 llm_exec.as_ptr(),
                 1,
@@ -717,9 +717,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_llm_execution_intercept(
+        assert_already_exists!(nemo_relay_scope_register_llm_execution_intercept(
             scope_uuid.as_ptr(),
             llm_exec.as_ptr(),
             1,
@@ -728,16 +728,16 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_llm_execution_intercept(
+            nemo_relay_scope_deregister_llm_execution_intercept(
                 scope_uuid.as_ptr(),
                 llm_exec.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let llm_stream_exec = cstring(&unique_name("dup_scope_llm_stream_exec_extra"));
         assert_eq!(
-            nemo_flow_scope_register_llm_stream_execution_intercept(
+            nemo_relay_scope_register_llm_stream_execution_intercept(
                 scope_uuid.as_ptr(),
                 llm_stream_exec.as_ptr(),
                 1,
@@ -745,9 +745,9 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_already_exists!(nemo_flow_scope_register_llm_stream_execution_intercept(
+        assert_already_exists!(nemo_relay_scope_register_llm_stream_execution_intercept(
             scope_uuid.as_ptr(),
             llm_stream_exec.as_ptr(),
             1,
@@ -756,16 +756,19 @@ fn test_ffi_additional_duplicate_registration_sweeps_for_missing_scope_wrappers(
             None,
         ));
         assert_eq!(
-            nemo_flow_scope_deregister_llm_stream_execution_intercept(
+            nemo_relay_scope_deregister_llm_stream_execution_intercept(
                 scope_uuid.as_ptr(),
                 llm_stream_exec.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
-        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -779,49 +782,49 @@ fn test_ffi_global_tool_registration_invalid_utf8_name_sweep() {
 
     unsafe {
         assert_eq!(
-            nemo_flow_register_tool_sanitize_request_guardrail(
+            nemo_relay_register_tool_sanitize_request_guardrail(
                 invalid,
                 1,
                 tool_request_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_tool_sanitize_request_guardrail(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_tool_sanitize_request_guardrail(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_tool_sanitize_response_guardrail(
+            nemo_relay_register_tool_sanitize_response_guardrail(
                 invalid,
                 1,
                 tool_request_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_tool_sanitize_response_guardrail(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_tool_sanitize_response_guardrail(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_tool_conditional_execution_guardrail(
+            nemo_relay_register_tool_conditional_execution_guardrail(
                 invalid,
                 1,
                 tool_allow_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_tool_conditional_execution_guardrail(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_tool_conditional_execution_guardrail(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_tool_request_intercept(
+            nemo_relay_register_tool_request_intercept(
                 invalid,
                 1,
                 false,
@@ -829,25 +832,25 @@ fn test_ffi_global_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_tool_request_intercept(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_tool_request_intercept(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_tool_execution_intercept(
+            nemo_relay_register_tool_execution_intercept(
                 invalid,
                 1,
                 tool_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_tool_execution_intercept(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_tool_execution_intercept(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
     }
 }
@@ -862,49 +865,49 @@ fn test_ffi_global_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
 
     unsafe {
         assert_eq!(
-            nemo_flow_register_llm_sanitize_request_guardrail(
+            nemo_relay_register_llm_sanitize_request_guardrail(
                 invalid,
                 1,
                 llm_request_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_llm_sanitize_request_guardrail(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_llm_sanitize_request_guardrail(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_llm_sanitize_response_guardrail(
+            nemo_relay_register_llm_sanitize_response_guardrail(
                 invalid,
                 1,
                 llm_response_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_llm_sanitize_response_guardrail(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_llm_sanitize_response_guardrail(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_llm_conditional_execution_guardrail(
+            nemo_relay_register_llm_conditional_execution_guardrail(
                 invalid,
                 1,
                 llm_allow_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_llm_conditional_execution_guardrail(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_llm_conditional_execution_guardrail(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_llm_request_intercept(
+            nemo_relay_register_llm_request_intercept(
                 invalid,
                 1,
                 false,
@@ -912,47 +915,47 @@ fn test_ffi_global_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_llm_request_intercept(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_llm_request_intercept(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_llm_execution_intercept(
+            nemo_relay_register_llm_execution_intercept(
                 invalid,
                 1,
                 llm_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_llm_execution_intercept(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_llm_execution_intercept(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_llm_stream_execution_intercept(
+            nemo_relay_register_llm_stream_execution_intercept(
                 invalid,
                 1,
                 llm_exec_intercept_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_llm_stream_execution_intercept(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_llm_stream_execution_intercept(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_register_subscriber(invalid, subscriber_cb, ptr::null_mut(), None),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_register_subscriber(invalid, subscriber_cb, ptr::null_mut(), None),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_deregister_subscriber(invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_deregister_subscriber(invalid),
+            NemoRelayStatus::InvalidUtf8
         );
     }
 }
@@ -968,7 +971,7 @@ fn test_ffi_scope_tool_registration_invalid_utf8_scope_uuid_sweep() {
 
     unsafe {
         assert_eq!(
-            nemo_flow_scope_register_tool_sanitize_request_guardrail(
+            nemo_relay_scope_register_tool_sanitize_request_guardrail(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -976,17 +979,17 @@ fn test_ffi_scope_tool_registration_invalid_utf8_scope_uuid_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
                 invalid_scope,
                 name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_sanitize_response_guardrail(
+            nemo_relay_scope_register_tool_sanitize_response_guardrail(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -994,17 +997,17 @@ fn test_ffi_scope_tool_registration_invalid_utf8_scope_uuid_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_response_guardrail(
                 invalid_scope,
                 name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_conditional_execution_guardrail(
+            nemo_relay_scope_register_tool_conditional_execution_guardrail(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1012,17 +1015,17 @@ fn test_ffi_scope_tool_registration_invalid_utf8_scope_uuid_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
                 invalid_scope,
                 name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_request_intercept(
+            nemo_relay_scope_register_tool_request_intercept(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1031,14 +1034,14 @@ fn test_ffi_scope_tool_registration_invalid_utf8_scope_uuid_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_request_intercept(invalid_scope, name.as_ptr()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_tool_request_intercept(invalid_scope, name.as_ptr()),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_execution_intercept(
+            nemo_relay_scope_register_tool_execution_intercept(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1046,11 +1049,11 @@ fn test_ffi_scope_tool_registration_invalid_utf8_scope_uuid_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_execution_intercept(invalid_scope, name.as_ptr()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_tool_execution_intercept(invalid_scope, name.as_ptr()),
+            NemoRelayStatus::InvalidUtf8
         );
     }
 }
@@ -1066,7 +1069,7 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
 
     unsafe {
         assert_eq!(
-            nemo_flow_scope_register_llm_sanitize_request_guardrail(
+            nemo_relay_scope_register_llm_sanitize_request_guardrail(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1074,14 +1077,17 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_request_guardrail(invalid_scope, name.as_ptr(),),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
+                invalid_scope,
+                name.as_ptr(),
+            ),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_sanitize_response_guardrail(
+            nemo_relay_scope_register_llm_sanitize_response_guardrail(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1089,17 +1095,17 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_llm_sanitize_response_guardrail(
                 invalid_scope,
                 name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_conditional_execution_guardrail(
+            nemo_relay_scope_register_llm_conditional_execution_guardrail(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1107,17 +1113,17 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_llm_conditional_execution_guardrail(
                 invalid_scope,
                 name.as_ptr(),
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_request_intercept(
+            nemo_relay_scope_register_llm_request_intercept(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1126,14 +1132,14 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_request_intercept(invalid_scope, name.as_ptr()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_request_intercept(invalid_scope, name.as_ptr()),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_execution_intercept(
+            nemo_relay_scope_register_llm_execution_intercept(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1141,14 +1147,14 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_execution_intercept(invalid_scope, name.as_ptr()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_execution_intercept(invalid_scope, name.as_ptr()),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_stream_execution_intercept(
+            nemo_relay_scope_register_llm_stream_execution_intercept(
                 invalid_scope,
                 name.as_ptr(),
                 1,
@@ -1156,25 +1162,28 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_scope_uuid_sweep(
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_stream_execution_intercept(invalid_scope, name.as_ptr()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_stream_execution_intercept(
+                invalid_scope,
+                name.as_ptr()
+            ),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_subscriber(
+            nemo_relay_scope_register_subscriber(
                 invalid_scope,
                 name.as_ptr(),
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_subscriber(invalid_scope, name.as_ptr()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_subscriber(invalid_scope, name.as_ptr()),
+            NemoRelayStatus::InvalidUtf8
         );
     }
 }
@@ -1189,9 +1198,9 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
         let scope_name = cstring("scope-tool-invalid-name");
         let mut scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -1199,14 +1208,14 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let scope_uuid = cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
         let invalid_utf8 = [0xffu8, 0];
         let invalid = invalid_utf8.as_ptr() as *const c_char;
 
         assert_eq!(
-            nemo_flow_scope_register_tool_sanitize_request_guardrail(
+            nemo_relay_scope_register_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1214,17 +1223,17 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_sanitize_response_guardrail(
+            nemo_relay_scope_register_tool_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1232,17 +1241,17 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 invalid
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_conditional_execution_guardrail(
+            nemo_relay_scope_register_tool_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1250,17 +1259,17 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_request_intercept(
+            nemo_relay_scope_register_tool_request_intercept(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1269,14 +1278,14 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_request_intercept(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_tool_request_intercept(scope_uuid.as_ptr(), invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_tool_execution_intercept(
+            nemo_relay_scope_register_tool_execution_intercept(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1284,16 +1293,19 @@ fn test_ffi_scope_tool_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_tool_execution_intercept(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_tool_execution_intercept(scope_uuid.as_ptr(), invalid),
+            NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1307,9 +1319,9 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
         let scope_name = cstring("scope-llm-invalid-name");
         let mut scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -1317,14 +1329,14 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let scope_uuid = cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
         let invalid_utf8 = [0xffu8, 0];
         let invalid = invalid_utf8.as_ptr() as *const c_char;
 
         assert_eq!(
-            nemo_flow_scope_register_llm_sanitize_request_guardrail(
+            nemo_relay_scope_register_llm_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1332,14 +1344,17 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_request_guardrail(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
+                scope_uuid.as_ptr(),
+                invalid
+            ),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_sanitize_response_guardrail(
+            nemo_relay_scope_register_llm_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1347,17 +1362,17 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
+            nemo_relay_scope_deregister_llm_sanitize_response_guardrail(
                 scope_uuid.as_ptr(),
                 invalid
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_conditional_execution_guardrail(
+            nemo_relay_scope_register_llm_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1365,17 +1380,17 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_llm_conditional_execution_guardrail(
                 scope_uuid.as_ptr(),
                 invalid,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_request_intercept(
+            nemo_relay_scope_register_llm_request_intercept(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1384,14 +1399,14 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_request_intercept(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_request_intercept(scope_uuid.as_ptr(), invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_execution_intercept(
+            nemo_relay_scope_register_llm_execution_intercept(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1399,14 +1414,14 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_execution_intercept(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_execution_intercept(scope_uuid.as_ptr(), invalid),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_llm_stream_execution_intercept(
+            nemo_relay_scope_register_llm_stream_execution_intercept(
                 scope_uuid.as_ptr(),
                 invalid,
                 1,
@@ -1414,30 +1429,36 @@ fn test_ffi_scope_llm_and_subscriber_registration_invalid_utf8_name_sweep() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_llm_stream_execution_intercept(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_llm_stream_execution_intercept(
+                scope_uuid.as_ptr(),
+                invalid
+            ),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_register_subscriber(
+            nemo_relay_scope_register_subscriber(
                 scope_uuid.as_ptr(),
                 invalid,
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_subscriber(scope_uuid.as_ptr(), invalid),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_subscriber(scope_uuid.as_ptr(), invalid),
+            NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1449,7 +1470,7 @@ fn test_ffi_scope_and_event_parent_and_utf8_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let scope_name = cstring("ffi_child_scope_with_parent");
         let data = cstring(r#"{"scope":"child"}"#);
@@ -1460,9 +1481,9 @@ fn test_ffi_scope_and_event_parent_and_utf8_paths() {
         let mut child = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 parent,
                 3,
                 data.as_ptr(),
@@ -1470,13 +1491,13 @@ fn test_ffi_scope_and_event_parent_and_utf8_paths() {
                 ptr::null(),
                 &mut child,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert!(take_string(nemo_flow_scope_handle_parent_uuid(child)).is_some());
+        assert!(take_string(nemo_relay_scope_handle_parent_uuid(child)).is_some());
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 invalid,
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 parent,
                 0,
                 ptr::null(),
@@ -1484,12 +1505,12 @@ fn test_ffi_scope_and_event_parent_and_utf8_paths() {
                 ptr::null(),
                 &mut child,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 parent,
                 0,
                 invalid_json.as_ptr(),
@@ -1497,12 +1518,12 @@ fn test_ffi_scope_and_event_parent_and_utf8_paths() {
                 ptr::null(),
                 &mut child,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 parent,
                 0,
                 ptr::null(),
@@ -1510,46 +1531,49 @@ fn test_ffi_scope_and_event_parent_and_utf8_paths() {
                 ptr::null(),
                 &mut child,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
         let event_name = cstring("ffi_event_with_parent");
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 event_name.as_ptr(),
                 parent,
                 data.as_ptr(),
                 metadata.as_ptr()
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_event(invalid, parent, ptr::null(), ptr::null()),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_event(invalid, parent, ptr::null(), ptr::null()),
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 event_name.as_ptr(),
                 parent,
                 invalid_json.as_ptr(),
                 ptr::null()
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 event_name.as_ptr(),
                 parent,
                 ptr::null(),
                 invalid_json.as_ptr()
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
-        assert_eq!(nemo_flow_pop_scope(child, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(child);
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        assert_eq!(
+            nemo_relay_pop_scope(child, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(child);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1561,7 +1585,7 @@ fn test_ffi_tool_call_parent_tool_call_id_and_utf8_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let name = cstring("ffi_tool_call_utf8");
         let args = cstring(r#"{"value":1}"#);
@@ -1575,7 +1599,7 @@ fn test_ffi_tool_call_parent_tool_call_id_and_utf8_paths() {
         let mut handle = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 name.as_ptr(),
                 args.as_ptr(),
                 parent,
@@ -1585,11 +1609,11 @@ fn test_ffi_tool_call_parent_tool_call_id_and_utf8_paths() {
                 tool_call_id.as_ptr(),
                 &mut handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert!(take_string(nemo_flow_tool_handle_parent_uuid(handle)).is_some());
+        assert!(take_string(nemo_relay_tool_handle_parent_uuid(handle)).is_some());
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 invalid,
                 args.as_ptr(),
                 parent,
@@ -1599,10 +1623,10 @@ fn test_ffi_tool_call_parent_tool_call_id_and_utf8_paths() {
                 ptr::null(),
                 &mut handle
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 name.as_ptr(),
                 args.as_ptr(),
                 parent,
@@ -1612,20 +1636,20 @@ fn test_ffi_tool_call_parent_tool_call_id_and_utf8_paths() {
                 invalid,
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_tool_call_end(handle, result.as_ptr(), ptr::null(), invalid_json.as_ptr()),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_tool_call_end(handle, result.as_ptr(), ptr::null(), invalid_json.as_ptr()),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_tool_call_end(handle, result.as_ptr(), data.as_ptr(), metadata.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_tool_call_end(handle, result.as_ptr(), data.as_ptr(), metadata.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
-        nemo_flow_tool_handle_free(handle);
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_tool_handle_free(handle);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1637,7 +1661,7 @@ fn test_ffi_llm_call_parent_model_and_utf8_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let name = cstring("ffi_llm_call_utf8");
         let request = cstring(
@@ -1653,7 +1677,7 @@ fn test_ffi_llm_call_parent_model_and_utf8_paths() {
         let mut handle = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 parent,
@@ -1663,11 +1687,11 @@ fn test_ffi_llm_call_parent_model_and_utf8_paths() {
                 model_name.as_ptr(),
                 &mut handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert!(take_string(nemo_flow_llm_handle_parent_uuid(handle)).is_some());
+        assert!(take_string(nemo_relay_llm_handle_parent_uuid(handle)).is_some());
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 invalid,
                 request.as_ptr(),
                 parent,
@@ -1677,10 +1701,10 @@ fn test_ffi_llm_call_parent_model_and_utf8_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 parent,
@@ -1690,25 +1714,25 @@ fn test_ffi_llm_call_parent_model_and_utf8_paths() {
                 invalid,
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_llm_call_end(
+            nemo_relay_llm_call_end(
                 handle,
                 response.as_ptr(),
                 ptr::null(),
                 invalid_json.as_ptr()
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call_end(handle, response.as_ptr(), data.as_ptr(), metadata.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_llm_call_end(handle, response.as_ptr(), data.as_ptr(), metadata.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
-        nemo_flow_llm_handle_free(handle);
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_llm_handle_free(handle);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1725,7 +1749,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
         );
 
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -1743,11 +1767,11 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         let mut out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 invalid_shape.as_ptr(),
                 llm_exec_cb,
@@ -1765,7 +1789,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null(),
                 &mut out,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -1774,7 +1798,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
         );
 
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -1794,11 +1818,11 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         let mut stream = ptr::null_mut();
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 invalid_shape.as_ptr(),
                 llm_exec_cb,
@@ -1818,7 +1842,7 @@ fn test_ffi_llm_execute_and_stream_shape_and_out_error_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -1834,7 +1858,7 @@ fn test_ffi_stream_next_reports_error_items() {
     reset_globals();
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tx.blocking_send(Err(nemo_flow::error::FlowError::Internal(
+    tx.blocking_send(Err(nemo_relay::error::FlowError::Internal(
         "ffi stream failed".to_string(),
     )))
     .expect("expected error payload to be queued");
@@ -1846,14 +1870,14 @@ fn test_ffi_stream_next_reports_error_items() {
 
     unsafe {
         let mut chunk = ptr::null_mut();
-        assert_eq!(nemo_flow_stream_next(stream, &mut chunk), -1);
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), -1);
         assert!(chunk.is_null());
         assert!(
             read_last_error()
                 .unwrap_or_default()
                 .contains("ffi stream failed")
         );
-        nemo_flow_stream_free(stream);
+        nemo_relay_stream_free(stream);
     }
 }
 
@@ -1871,8 +1895,8 @@ fn test_ffi_llm_helper_invalid_shape_and_intercept_failure_paths() {
         let mut out = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_llm_request_intercepts(name.as_ptr(), invalid_shape.as_ptr(), &mut out),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_llm_request_intercepts(name.as_ptr(), invalid_shape.as_ptr(), &mut out),
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -1881,8 +1905,8 @@ fn test_ffi_llm_helper_invalid_shape_and_intercept_failure_paths() {
         );
 
         assert_eq!(
-            nemo_flow_llm_conditional_execution(invalid_shape.as_ptr()),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_llm_conditional_execution(invalid_shape.as_ptr()),
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -1892,7 +1916,7 @@ fn test_ffi_llm_helper_invalid_shape_and_intercept_failure_paths() {
 
         let intercept_name = cstring(&unique_name("ffi_llm_request_intercept_fail"));
         assert_eq!(
-            nemo_flow_register_llm_request_intercept(
+            nemo_relay_register_llm_request_intercept(
                 intercept_name.as_ptr(),
                 1,
                 false,
@@ -1900,11 +1924,11 @@ fn test_ffi_llm_helper_invalid_shape_and_intercept_failure_paths() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_llm_request_intercepts(name.as_ptr(), valid_request.as_ptr(), &mut out),
-            NemoFlowStatus::Internal
+            nemo_relay_llm_request_intercepts(name.as_ptr(), valid_request.as_ptr(), &mut out),
+            NemoRelayStatus::Internal
         );
         assert!(
             read_last_error()
@@ -1912,11 +1936,11 @@ fn test_ffi_llm_helper_invalid_shape_and_intercept_failure_paths() {
                 .contains("llm request intercept callback failed")
         );
         assert_eq!(
-            nemo_flow_deregister_llm_request_intercept(intercept_name.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_llm_request_intercept(intercept_name.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1928,7 +1952,7 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let tool_name = cstring("ffi_tool_failure_sweep");
         let tool_args = cstring(r#"{"value":9}"#);
@@ -1939,7 +1963,7 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
 
         let tool_intercept = cstring(&unique_name("ffi_tool_helper_fail"));
         assert_eq!(
-            nemo_flow_register_tool_request_intercept(
+            nemo_relay_register_tool_request_intercept(
                 tool_intercept.as_ptr(),
                 1,
                 false,
@@ -1947,16 +1971,16 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let mut tool_out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_request_intercepts(
+            nemo_relay_tool_request_intercepts(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 &mut tool_out
             ),
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         );
         assert!(
             read_last_error()
@@ -1964,13 +1988,13 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 .contains("tool sanitize callback failed")
         );
         assert_eq!(
-            nemo_flow_deregister_tool_request_intercept(tool_intercept.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_tool_request_intercept(tool_intercept.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let llm_intercept = cstring(&unique_name("ffi_llm_helper_fail"));
         assert_eq!(
-            nemo_flow_register_llm_request_intercept(
+            nemo_relay_register_llm_request_intercept(
                 llm_intercept.as_ptr(),
                 1,
                 false,
@@ -1978,12 +2002,16 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let mut llm_out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_llm_request_intercepts(llm_name.as_ptr(), llm_request.as_ptr(), &mut llm_out),
-            NemoFlowStatus::Internal
+            nemo_relay_llm_request_intercepts(
+                llm_name.as_ptr(),
+                llm_request.as_ptr(),
+                &mut llm_out
+            ),
+            NemoRelayStatus::Internal
         );
         assert!(
             read_last_error()
@@ -1991,13 +2019,13 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 .contains("llm request intercept callback failed")
         );
         assert_eq!(
-            nemo_flow_deregister_llm_request_intercept(llm_intercept.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_llm_request_intercept(llm_intercept.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let mut llm_handle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 llm_request.as_ptr(),
                 parent,
@@ -2007,17 +2035,17 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null(),
                 &mut llm_handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_llm_call_end(llm_handle, llm_response.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_llm_call_end(llm_handle, llm_response.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_llm_handle_free(llm_handle);
+        nemo_relay_llm_handle_free(llm_handle);
 
         let mut tool_handle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 parent,
@@ -2027,22 +2055,22 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null(),
                 &mut tool_handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let tool_result = cstring(r#"{"done":true}"#);
         assert_eq!(
-            nemo_flow_tool_call_end(tool_handle, tool_result.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_tool_call_end(tool_handle, tool_result.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_tool_handle_free(tool_handle);
+        nemo_relay_tool_handle_free(tool_handle);
 
         let invalid_utf8 = [0xffu8, 0];
         let invalid_name = invalid_utf8.as_ptr() as *const c_char;
         let invalid_json = cstring("{");
         let mut exec_out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_call_execute(
+            nemo_relay_tool_call_execute(
                 invalid_name,
                 tool_args.as_ptr(),
                 tool_exec_cb,
@@ -2054,10 +2082,10 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null(),
                 &mut exec_out,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_tool_call_execute(
+            nemo_relay_tool_call_execute(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 tool_exec_cb,
@@ -2069,11 +2097,11 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
                 ptr::null(),
                 &mut exec_out,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -2091,9 +2119,9 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
         let invalid_name = invalid_utf8.as_ptr() as *const c_char;
 
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -2101,7 +2129,7 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert!(
             read_last_error()
@@ -2111,11 +2139,11 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
 
         macro_rules! assert_missing_scope {
             ($expr:expr) => {
-                assert_eq!($expr, NemoFlowStatus::NotFound);
+                assert_eq!($expr, NemoRelayStatus::NotFound);
             };
         }
 
-        assert_missing_scope!(nemo_flow_scope_register_tool_sanitize_request_guardrail(
+        assert_missing_scope!(nemo_relay_scope_register_tool_sanitize_request_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2123,24 +2151,26 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_tool_sanitize_request_guardrail(
+        assert_missing_scope!(nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
-        assert_missing_scope!(nemo_flow_scope_register_tool_sanitize_response_guardrail(
+        assert_missing_scope!(nemo_relay_scope_register_tool_sanitize_response_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
             tool_request_cb,
             ptr::null_mut(),
             None,
-        ));
-        assert_missing_scope!(nemo_flow_scope_deregister_tool_sanitize_response_guardrail(
-            missing_scope_uuid.as_ptr(),
-            valid_name.as_ptr(),
         ));
         assert_missing_scope!(
-            nemo_flow_scope_register_tool_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_tool_sanitize_response_guardrail(
+                missing_scope_uuid.as_ptr(),
+                valid_name.as_ptr(),
+            )
+        );
+        assert_missing_scope!(
+            nemo_relay_scope_register_tool_conditional_execution_guardrail(
                 missing_scope_uuid.as_ptr(),
                 valid_name.as_ptr(),
                 1,
@@ -2150,12 +2180,12 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             )
         );
         assert_missing_scope!(
-            nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
                 missing_scope_uuid.as_ptr(),
                 valid_name.as_ptr(),
             )
         );
-        assert_missing_scope!(nemo_flow_scope_register_tool_request_intercept(
+        assert_missing_scope!(nemo_relay_scope_register_tool_request_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2164,11 +2194,11 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_tool_request_intercept(
+        assert_missing_scope!(nemo_relay_scope_deregister_tool_request_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
-        assert_missing_scope!(nemo_flow_scope_register_tool_execution_intercept(
+        assert_missing_scope!(nemo_relay_scope_register_tool_execution_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2176,12 +2206,12 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_tool_execution_intercept(
+        assert_missing_scope!(nemo_relay_scope_deregister_tool_execution_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
 
-        assert_missing_scope!(nemo_flow_scope_register_llm_sanitize_request_guardrail(
+        assert_missing_scope!(nemo_relay_scope_register_llm_sanitize_request_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2189,11 +2219,11 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
+        assert_missing_scope!(nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
-        assert_missing_scope!(nemo_flow_scope_register_llm_sanitize_response_guardrail(
+        assert_missing_scope!(nemo_relay_scope_register_llm_sanitize_response_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2201,12 +2231,12 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
+        assert_missing_scope!(nemo_relay_scope_deregister_llm_sanitize_response_guardrail(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
         assert_missing_scope!(
-            nemo_flow_scope_register_llm_conditional_execution_guardrail(
+            nemo_relay_scope_register_llm_conditional_execution_guardrail(
                 missing_scope_uuid.as_ptr(),
                 valid_name.as_ptr(),
                 1,
@@ -2216,12 +2246,12 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             )
         );
         assert_missing_scope!(
-            nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
+            nemo_relay_scope_deregister_llm_conditional_execution_guardrail(
                 missing_scope_uuid.as_ptr(),
                 valid_name.as_ptr(),
             )
         );
-        assert_missing_scope!(nemo_flow_scope_register_llm_request_intercept(
+        assert_missing_scope!(nemo_relay_scope_register_llm_request_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2230,23 +2260,11 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_llm_request_intercept(
+        assert_missing_scope!(nemo_relay_scope_deregister_llm_request_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
-        assert_missing_scope!(nemo_flow_scope_register_llm_execution_intercept(
-            missing_scope_uuid.as_ptr(),
-            valid_name.as_ptr(),
-            1,
-            llm_exec_intercept_cb,
-            ptr::null_mut(),
-            None,
-        ));
-        assert_missing_scope!(nemo_flow_scope_deregister_llm_execution_intercept(
-            missing_scope_uuid.as_ptr(),
-            valid_name.as_ptr(),
-        ));
-        assert_missing_scope!(nemo_flow_scope_register_llm_stream_execution_intercept(
+        assert_missing_scope!(nemo_relay_scope_register_llm_execution_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             1,
@@ -2254,27 +2272,39 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_llm_stream_execution_intercept(
+        assert_missing_scope!(nemo_relay_scope_deregister_llm_execution_intercept(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
-        assert_missing_scope!(nemo_flow_scope_register_subscriber(
+        assert_missing_scope!(nemo_relay_scope_register_llm_stream_execution_intercept(
+            missing_scope_uuid.as_ptr(),
+            valid_name.as_ptr(),
+            1,
+            llm_exec_intercept_cb,
+            ptr::null_mut(),
+            None,
+        ));
+        assert_missing_scope!(nemo_relay_scope_deregister_llm_stream_execution_intercept(
+            missing_scope_uuid.as_ptr(),
+            valid_name.as_ptr(),
+        ));
+        assert_missing_scope!(nemo_relay_scope_register_subscriber(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
             subscriber_cb,
             ptr::null_mut(),
             None,
         ));
-        assert_missing_scope!(nemo_flow_scope_deregister_subscriber(
+        assert_missing_scope!(nemo_relay_scope_deregister_subscriber(
             missing_scope_uuid.as_ptr(),
             valid_name.as_ptr(),
         ));
 
         let mut scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -2282,25 +2312,28 @@ fn test_ffi_scope_registry_missing_scope_and_null_out_sweeps() {
                 ptr::null(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let scope_uuid = cstring(&take_string(nemo_flow_scope_handle_uuid(scope)).unwrap());
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
 
         assert_eq!(
-            nemo_flow_scope_deregister_llm_stream_execution_intercept(
+            nemo_relay_scope_deregister_llm_stream_execution_intercept(
                 scope_uuid.as_ptr(),
                 invalid_name,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_scope_deregister_subscriber(scope_uuid.as_ptr(), invalid_name),
-            NemoFlowStatus::InvalidUtf8
+            nemo_relay_scope_deregister_subscriber(scope_uuid.as_ptr(), invalid_name),
+            NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -2312,7 +2345,7 @@ fn test_ffi_llm_lifecycle_additional_error_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let name = cstring("ffi_llm_lifecycle_extra");
         let request = cstring(
@@ -2323,7 +2356,7 @@ fn test_ffi_llm_lifecycle_additional_error_paths() {
         let mut handle = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 parent,
@@ -2333,10 +2366,10 @@ fn test_ffi_llm_lifecycle_additional_error_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 parent,
@@ -2346,11 +2379,11 @@ fn test_ffi_llm_lifecycle_additional_error_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 parent,
@@ -2360,25 +2393,25 @@ fn test_ffi_llm_lifecycle_additional_error_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_llm_call_end(
+            nemo_relay_llm_call_end(
                 handle,
                 response.as_ptr(),
                 invalid_json.as_ptr(),
                 ptr::null()
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call_end(handle, response.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_llm_call_end(handle, response.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
 
-        nemo_flow_llm_handle_free(handle);
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_llm_handle_free(handle);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -2390,7 +2423,7 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut parent), NemoFlowStatus::Ok);
+        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let name = cstring("ffi_llm_execute_extra");
         let request = cstring(
@@ -2402,13 +2435,13 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
         let invalid_utf8 = [0xffu8, 0];
         let invalid_name = invalid_utf8.as_ptr() as *const c_char;
         let invalid_model_name = invalid_utf8.as_ptr() as *const c_char;
-        let response_codec = api::nemo_flow_openai_chat_codec_new();
+        let response_codec = api::nemo_relay_openai_chat_codec_new();
         let mut out_json = ptr::null_mut();
         let mut stream = ptr::null_mut();
         let mut chunk = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 invalid_name,
                 request.as_ptr(),
                 llm_exec_cb,
@@ -2426,10 +2459,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut out_json,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 invalid_json.as_ptr(),
                 llm_exec_cb,
@@ -2447,10 +2480,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut out_json,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -2468,10 +2501,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut out_json,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_openai_chat_cb,
@@ -2489,14 +2522,14 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 response_codec,
                 &mut out_json,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let decoded = returned_json(out_json);
         assert_eq!(decoded["id"], json!("chatcmpl-ffi"));
         assert_eq!(decoded["model"], json!("codec-model"));
 
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 invalid_name,
                 request.as_ptr(),
                 llm_exec_cb,
@@ -2516,10 +2549,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 invalid_json.as_ptr(),
                 llm_exec_cb,
@@ -2539,10 +2572,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -2562,10 +2595,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -2585,10 +2618,10 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::InvalidUtf8
+            NemoRelayStatus::InvalidUtf8
         );
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -2608,15 +2641,15 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_eq!(nemo_flow_stream_next(stream, &mut chunk), 1);
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
         assert_eq!(returned_json(chunk)["content"], json!("hello from ffi"));
-        assert_eq!(nemo_flow_stream_next(stream, &mut chunk), 0);
-        nemo_flow_stream_free(stream);
+        assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
+        nemo_relay_stream_free(stream);
 
-        types::nemo_flow_codec_free(response_codec);
-        nemo_flow_scope_handle_free(parent);
-        nemo_flow_scope_stack_free(stack);
+        types::nemo_relay_codec_free(response_codec);
+        nemo_relay_scope_handle_free(parent);
+        nemo_relay_scope_stack_free(stack);
     }
 }

@@ -22,8 +22,8 @@ The primary documentation track covers Rust, Python, and Node.js. Go, WebAssembl
 Clone the repository when you need local source builds or contribution workflows:
 
 ```bash
-git clone https://github.com/NVIDIA/NeMo-Flow.git
-cd NeMo-Flow
+git clone https://github.com/NVIDIA/NeMo-Relay.git
+cd NeMo-Relay
 ```
 
 Install development dependencies for Python and docs workflows:

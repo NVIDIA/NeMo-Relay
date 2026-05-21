@@ -5,10 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # About
 
-Use this section when you want to contribute to NeMo Flow source code, bindings,
+Use this section when you want to contribute to NeMo Relay source code, bindings,
 documentation, examples, tests, or third-party integration patches.
 
-Contributing to NeMo Flow often means working across the Rust core, generated and
+Contributing to NeMo Relay often means working across the Rust core, generated and
 hand-written language bindings, plugin surfaces, adaptive components,
 observability exporters, and documentation. The contribution workflow keeps
 those surfaces aligned so public behavior does not drift between supported
@@ -25,7 +25,7 @@ Use these signals to decide whether this documentation path matches your current
 - Preparing a pull request for review
 - Looking for contribution workflow details beyond user-facing product docs
 
-If you are only consuming NeMo Flow packages, start with [Getting Started](../getting-started/quick-start.md) instead.
+If you are only consuming NeMo Relay packages, start with [Getting Started](../getting-started/quick-start.md) instead.
 
 ## Guides
 

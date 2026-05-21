@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoFlowEventSubscriberCb, NemoFlowFreeFn, NemoFlowJsonCb, NemoFlowLlmConditionalCb,
-    NemoFlowLlmExecInterceptCb, NemoFlowLlmRequestCb, NemoFlowLlmRequestInterceptCb,
-    NemoFlowStatus, NemoFlowToolConditionalCb, NemoFlowToolExecInterceptCb, NemoFlowToolSanitizeCb,
-    c_char, c_str_to_string, clear_last_error, core_registry_api, core_subscriber_api,
-    set_last_error, status_from_error, wrap_event_subscriber, wrap_llm_conditional_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
-    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb,
+    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb,
+    NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
+    NemoRelayToolSanitizeCb, c_char, c_str_to_string, clear_last_error, core_registry_api,
+    core_subscriber_api, set_last_error, status_from_error, wrap_event_subscriber,
+    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
+    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
+    wrap_tool_sanitize_fn,
 };
 
 // ---------------------------------------------------------------------------
@@ -17,11 +18,11 @@ use super::{
 // ---------------------------------------------------------------------------
 
 /// Helper to parse a scope UUID from a C string.
-fn parse_scope_uuid(scope_uuid: *const c_char) -> Result<uuid::Uuid, NemoFlowStatus> {
+fn parse_scope_uuid(scope_uuid: *const c_char) -> Result<uuid::Uuid, NemoRelayStatus> {
     let uuid_str = c_str_to_string(scope_uuid)?;
     uuid::Uuid::parse_str(&uuid_str).map_err(|e| {
         set_last_error(&format!("invalid scope UUID: {e}"));
-        NemoFlowStatus::InvalidArg
+        NemoRelayStatus::InvalidArg
     })
 }
 
@@ -35,10 +36,10 @@ macro_rules! ffi_scope_guardrail_tool_api {
             scope_uuid: *const c_char,
             name: *const c_char,
             priority: i32,
-            cb: NemoFlowToolSanitizeCb,
+            cb: NemoRelayToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NemoFlowFreeFn,
-        ) -> NemoFlowStatus {
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -50,7 +51,7 @@ macro_rules! ffi_scope_guardrail_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&uuid, &name, priority, wrapped) {
-                Ok(()) => NemoFlowStatus::Ok,
+                Ok(()) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -60,7 +61,7 @@ macro_rules! ffi_scope_guardrail_tool_api {
         pub unsafe extern "C" fn $deregister_name(
             scope_uuid: *const c_char,
             name: *const c_char,
-        ) -> NemoFlowStatus {
+        ) -> NemoRelayStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -71,7 +72,7 @@ macro_rules! ffi_scope_guardrail_tool_api {
                 Err(status) => return status,
             };
             match $core_deregister(&uuid, &name) {
-                Ok(_) => NemoFlowStatus::Ok,
+                Ok(_) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -91,12 +92,12 @@ ffi_scope_guardrail_tool_api!(
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nemo_flow_scope_register_tool_sanitize_request_guardrail,
+    nemo_relay_scope_register_tool_sanitize_request_guardrail,
     /// Deregister a scope-local tool request sanitization guardrail by name.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
-    nemo_flow_scope_deregister_tool_sanitize_request_guardrail,
+    nemo_relay_scope_deregister_tool_sanitize_request_guardrail,
     core_registry_api::scope_register_tool_sanitize_request_guardrail,
     core_registry_api::scope_deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
@@ -115,12 +116,12 @@ ffi_scope_guardrail_tool_api!(
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nemo_flow_scope_register_tool_sanitize_response_guardrail,
+    nemo_relay_scope_register_tool_sanitize_response_guardrail,
     /// Deregister a scope-local tool response sanitization guardrail by name.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
-    nemo_flow_scope_deregister_tool_sanitize_response_guardrail,
+    nemo_relay_scope_deregister_tool_sanitize_response_guardrail,
     core_registry_api::scope_register_tool_sanitize_response_guardrail,
     core_registry_api::scope_deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
@@ -137,20 +138,20 @@ ffi_scope_guardrail_tool_api!(
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_relay_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_register_tool_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowToolConditionalCb,
+    cb: NemoRelayToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -164,7 +165,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_tool_conditional_execution_gua
     match core_registry_api::scope_register_tool_conditional_execution_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -174,10 +175,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_tool_conditional_execution_gua
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_tool_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -188,7 +189,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_conditional_execution_g
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_tool_conditional_execution_guardrail(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -208,10 +209,10 @@ macro_rules! ffi_scope_intercept_tool_api {
             name: *const c_char,
             priority: i32,
             break_chain: bool,
-            cb: NemoFlowToolSanitizeCb,
+            cb: NemoRelayToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NemoFlowFreeFn,
-        ) -> NemoFlowStatus {
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -223,7 +224,7 @@ macro_rules! ffi_scope_intercept_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&uuid, &name, priority, break_chain, wrapped) {
-                Ok(()) => NemoFlowStatus::Ok,
+                Ok(()) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -233,7 +234,7 @@ macro_rules! ffi_scope_intercept_tool_api {
         pub unsafe extern "C" fn $deregister_name(
             scope_uuid: *const c_char,
             name: *const c_char,
-        ) -> NemoFlowStatus {
+        ) -> NemoRelayStatus {
             clear_last_error();
             let uuid = match parse_scope_uuid(scope_uuid) {
                 Ok(u) => u,
@@ -244,7 +245,7 @@ macro_rules! ffi_scope_intercept_tool_api {
                 Err(status) => return status,
             };
             match $core_deregister(&uuid, &name) {
-                Ok(_) => NemoFlowStatus::Ok,
+                Ok(_) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -264,16 +265,16 @@ ffi_scope_intercept_tool_api!(
     /// - `free_fn`: Optional destructor for `user_data`.
     ///
     /// The callback is fallible. To signal failure, call
-    /// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
+    /// [`crate::error::nemo_relay_set_last_error_message`] from C and return null.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
-    nemo_flow_scope_register_tool_request_intercept,
+    nemo_relay_scope_register_tool_request_intercept,
     /// Deregister a scope-local tool request intercept by name.
     ///
     /// # Safety
     /// `scope_uuid` and `name` must be valid C strings.
-    nemo_flow_scope_deregister_tool_request_intercept,
+    nemo_relay_scope_deregister_tool_request_intercept,
     core_registry_api::scope_register_tool_request_intercept,
     core_registry_api::scope_deregister_tool_request_intercept,
     wrap_tool_request_intercept_fn
@@ -293,14 +294,14 @@ ffi_scope_intercept_tool_api!(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_tool_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_register_tool_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    exec_cb: NemoFlowToolExecInterceptCb,
+    exec_cb: NemoRelayToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    exec_free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -312,7 +313,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_tool_execution_intercept(
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
     match core_registry_api::scope_register_tool_execution_intercept(&uuid, &name, priority, exec) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -322,10 +323,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_tool_execution_intercept(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_tool_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -336,7 +337,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_execution_intercept(
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_tool_execution_intercept(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -358,14 +359,14 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_tool_execution_intercept(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_register_llm_sanitize_request_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowLlmRequestCb,
+    cb: NemoRelayLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -379,7 +380,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_request_guardrail
     match core_registry_api::scope_register_llm_sanitize_request_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -389,10 +390,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_request_guardrail
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -403,7 +404,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_request_guardra
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_llm_sanitize_request_guardrail(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -421,14 +422,14 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_request_guardra
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_response_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_register_llm_sanitize_response_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowJsonCb,
+    cb: NemoRelayJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -442,7 +443,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_response_guardrai
     match core_registry_api::scope_register_llm_sanitize_response_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -452,10 +453,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_sanitize_response_guardrai
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_response_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_sanitize_response_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -466,7 +467,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_response_guardr
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_llm_sanitize_response_guardrail(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -482,20 +483,20 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_sanitize_response_guardr
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_relay_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_register_llm_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowLlmConditionalCb,
+    cb: NemoRelayLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -509,7 +510,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_conditional_execution_guar
     match core_registry_api::scope_register_llm_conditional_execution_guardrail(
         &uuid, &name, priority, wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -519,10 +520,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_conditional_execution_guar
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_conditional_execution_guardrail(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -533,7 +534,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_conditional_execution_gu
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_llm_conditional_execution_guardrail(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -554,20 +555,20 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_conditional_execution_gu
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal failure, call
-/// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
+/// [`crate::error::nemo_relay_set_last_error_message`] from C and return null.
 ///
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_llm_request_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_register_llm_request_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NemoFlowLlmRequestInterceptCb,
+    cb: NemoRelayLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -585,7 +586,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_request_intercept(
         break_chain,
         wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -595,10 +596,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_request_intercept(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_request_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_request_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -609,7 +610,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_request_intercept(
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_llm_request_intercept(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -628,14 +629,14 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_request_intercept(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_llm_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_register_llm_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    exec_cb: NemoFlowLlmExecInterceptCb,
+    exec_cb: NemoRelayLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    exec_free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -647,7 +648,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_execution_intercept(
     };
     let exec = wrap_llm_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
     match core_registry_api::scope_register_llm_execution_intercept(&uuid, &name, priority, exec) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -657,10 +658,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_execution_intercept(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -671,7 +672,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_execution_intercept(
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_llm_execution_intercept(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -690,14 +691,14 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_execution_intercept(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. Callback pointers must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_register_llm_stream_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
     priority: i32,
-    exec_cb: NemoFlowLlmExecInterceptCb,
+    exec_cb: NemoRelayLlmExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    exec_free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -711,7 +712,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_stream_execution_intercept
     match core_registry_api::scope_register_llm_stream_execution_intercept(
         &uuid, &name, priority, exec,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -721,10 +722,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_llm_stream_execution_intercept
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_llm_stream_execution_intercept(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -735,7 +736,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_stream_execution_interce
         Err(status) => return status,
     };
     match core_registry_api::scope_deregister_llm_stream_execution_intercept(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -756,13 +757,13 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_llm_stream_execution_interce
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_register_subscriber(
+pub unsafe extern "C" fn nemo_relay_scope_register_subscriber(
     scope_uuid: *const c_char,
     name: *const c_char,
-    cb: NemoFlowEventSubscriberCb,
+    cb: NemoRelayEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -774,7 +775,7 @@ pub unsafe extern "C" fn nemo_flow_scope_register_subscriber(
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
     match core_subscriber_api::scope_register_subscriber(&uuid, &name, wrapped) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -784,10 +785,10 @@ pub unsafe extern "C" fn nemo_flow_scope_register_subscriber(
 /// # Safety
 /// `scope_uuid` and `name` must be valid C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_deregister_subscriber(
+pub unsafe extern "C" fn nemo_relay_scope_deregister_subscriber(
     scope_uuid: *const c_char,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(u) => u,
@@ -798,7 +799,7 @@ pub unsafe extern "C" fn nemo_flow_scope_deregister_subscriber(
         Err(status) => return status,
     };
     match core_subscriber_api::scope_deregister_subscriber(&uuid, &name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }

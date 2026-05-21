@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for otel in the NeMo Flow core crate.
+//! Unit tests for otel in the NeMo Relay core crate.
 
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     tool_attributes_to_strings,
 };
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
@@ -27,7 +27,7 @@ use uuid::Uuid;
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
-    *context.write().unwrap() = NemoFlowContextState::new();
+    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 fn make_provider() -> (
@@ -277,8 +277,8 @@ fn config_defaults_and_builder_overrides_are_applied() {
 
     let defaults = OpenTelemetryConfig::default();
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
-    assert_eq!(defaults.service_name, "nemo-flow");
-    assert_eq!(defaults.instrumentation_scope, "nemo-flow-otel");
+    assert_eq!(defaults.service_name, "nemo-relay");
+    assert_eq!(defaults.instrumentation_scope, "nemo-relay-otel");
     assert_eq!(defaults.timeout, Duration::from_secs(3));
     assert!(defaults.headers.is_empty());
     assert!(defaults.resource_attributes.is_empty());
@@ -371,21 +371,21 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_flow.start.data_json"),
+        attributes.get("nemo_relay.start.data_json"),
         Some(&"{\"task\":\"scope-start\"}".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_flow.start.metadata_json"),
+        attributes.get("nemo_relay.start.metadata_json"),
         Some(&"{\"phase\":\"start\"}".to_string())
     );
 
     let event_attributes = attr_map(&span.events.events[0].attributes);
     assert_eq!(
-        event_attributes.get("nemo_flow.mark.data_json"),
+        event_attributes.get("nemo_relay.mark.data_json"),
         Some(&"{\"step\":1}".to_string())
     );
     assert_eq!(
-        event_attributes.get("nemo_flow.mark.metadata_json"),
+        event_attributes.get("nemo_relay.mark.metadata_json"),
         Some(&"{\"source\":\"rust-test\"}".to_string())
     );
 }
@@ -481,15 +481,15 @@ fn records_span_start_mark_and_end() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_flow.uuid"),
+        attributes.get("nemo_relay.uuid"),
         Some(&root_uuid.to_string())
     );
     assert_eq!(
-        attributes.get("nemo_flow.start.input_json"),
+        attributes.get("nemo_relay.start.input_json"),
         Some(&"{\"query\":\"hello\"}".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_flow.end.output_json"),
+        attributes.get("nemo_relay.end.output_json"),
         Some(&"{\"result\":\"ok\"}".to_string())
     );
 }
@@ -609,15 +609,15 @@ fn atif_lineage_correlates_with_otel_span_attributes() {
     let llm_attributes = attr_map(&llm_span.attributes);
 
     assert_eq!(
-        agent_attributes.get("nemo_flow.uuid"),
+        agent_attributes.get("nemo_relay.uuid"),
         Some(&agent_uuid.to_string())
     );
     assert_eq!(
-        llm_attributes.get("nemo_flow.uuid"),
+        llm_attributes.get("nemo_relay.uuid"),
         Some(&llm_uuid.to_string())
     );
     assert_eq!(
-        llm_attributes.get("nemo_flow.parent_uuid"),
+        llm_attributes.get("nemo_relay.parent_uuid"),
         Some(&agent_uuid.to_string())
     );
 
@@ -631,7 +631,7 @@ fn atif_lineage_correlates_with_otel_span_attributes() {
     let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
 
     assert_eq!(
-        llm_attributes.get("nemo_flow.uuid"),
+        llm_attributes.get("nemo_relay.uuid"),
         Some(&extra.ancestry.function_id)
     );
     assert_eq!(extra.ancestry.parent_id, Some(trajectory.session_id));
@@ -654,7 +654,7 @@ fn orphan_marks_become_zero_duration_spans() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_flow.mark.orphan"),
+        attributes.get("nemo_relay.mark.orphan"),
         Some(&"true".to_string())
     );
 }
@@ -742,7 +742,7 @@ fn helper_functions_cover_additional_otel_branches() {
     );
     let llm_attributes = attr_map(&common_attributes(&llm_event));
     assert_eq!(
-        llm_attributes.get("nemo_flow.model_name"),
+        llm_attributes.get("nemo_relay.model_name"),
         Some(&"demo-model".to_string())
     );
 
@@ -759,17 +759,17 @@ fn helper_functions_cover_additional_otel_branches() {
     ));
     let tool_attributes = attr_map(&common_attributes(&tool_event));
     assert_eq!(
-        tool_attributes.get("nemo_flow.tool_call_id"),
+        tool_attributes.get("nemo_relay.tool_call_id"),
         Some(&"call-123".to_string())
     );
 
     let start_attributes = attr_map(&start_attributes(&tool_event));
     assert_eq!(
-        start_attributes.get("nemo_flow.start.input_json"),
+        start_attributes.get("nemo_relay.start.input_json"),
         Some(&"{\"query\":\"hello\"}".to_string())
     );
     assert_eq!(
-        start_attributes.get("nemo_flow.start.metadata_json"),
+        start_attributes.get("nemo_relay.start.metadata_json"),
         Some(&"{\"meta\":true}".to_string())
     );
 
@@ -785,7 +785,7 @@ fn helper_functions_cover_additional_otel_branches() {
         Some(CategoryProfile::builder().tool_call_id("call-456").build()),
     ))));
     assert_eq!(
-        end_attributes.get("nemo_flow.end.output_json"),
+        end_attributes.get("nemo_relay.end.output_json"),
         Some(&"{\"result\":true}".to_string())
     );
 
@@ -801,11 +801,11 @@ fn helper_functions_cover_additional_otel_branches() {
     ));
     let mark_attributes = attr_map(&mark_attributes(&mark));
     assert_eq!(
-        mark_attributes.get("nemo_flow.mark.data_json"),
+        mark_attributes.get("nemo_relay.mark.data_json"),
         Some(&"{\"kind\":\"aux\"}".to_string())
     );
     assert_eq!(
-        mark_attributes.get("nemo_flow.mark.metadata_json"),
+        mark_attributes.get("nemo_relay.mark.metadata_json"),
         Some(&"{\"source\":\"unit\"}".to_string())
     );
 

@@ -24,19 +24,19 @@ fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
 fn session_config_prefers_headers_and_parses_json() {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-nemo-flow-config-profile",
+        "x-nemo-relay-config-profile",
         HeaderValue::from_static("profile-a"),
     );
     headers.insert(
-        "x-nemo-flow-session-metadata",
+        "x-nemo-relay-session-metadata",
         HeaderValue::from_static(r#"{"team":"obs"}"#),
     );
     headers.insert(
-        "x-nemo-flow-plugin-config",
+        "x-nemo-relay-plugin-config",
         HeaderValue::from_static(r#"{"components":[]}"#),
     );
     headers.insert(
-        "x-nemo-flow-gateway-mode",
+        "x-nemo-relay-gateway-mode",
         HeaderValue::from_static("required"),
     );
 
@@ -52,7 +52,7 @@ fn session_config_prefers_headers_and_parses_json() {
 fn session_config_uses_defaults_and_ignores_bad_json() {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-nemo-flow-session-metadata",
+        "x-nemo-relay-session-metadata",
         HeaderValue::from_static("not-json"),
     );
     headers.insert("x-empty", HeaderValue::from_static(""));
@@ -190,7 +190,7 @@ fn legacy_observability_config_sections_fail_clearly() {
         assert!(error.contains("legacy observability config"));
         assert!(error.contains(expected));
         assert!(error.contains("plugins.toml"));
-        assert!(error.contains("nemo-flow plugins edit"));
+        assert!(error.contains("nemo-relay plugins edit"));
     }
 }
 
@@ -274,32 +274,32 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
 
     let project = temp.path().join("workspace");
     let nested = project.join("a/b/c");
-    std::fs::create_dir_all(project.join(".nemo-flow")).unwrap();
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
-    let plugin_path = project.join(".nemo-flow/plugins.toml");
+    let plugin_path = project.join(".nemo-relay/plugins.toml");
     std::fs::write(&plugin_path, "version = 1").unwrap();
-    let user_config = temp.path().join("xdg/nemo-flow");
+    let user_config = temp.path().join("xdg/nemo-relay");
 
     assert_eq!(find_project_plugin_config(&nested), Some(plugin_path));
     assert_eq!(
         project_plugin_config_path(&nested),
-        project.join(".nemo-flow/plugins.toml")
+        project.join(".nemo-relay/plugins.toml")
     );
     assert_eq!(
         implicit_plugin_config_paths(Some(&nested), Some(user_config.clone())),
         vec![
-            PathBuf::from("/etc/nemo-flow/plugins.toml"),
-            project.join(".nemo-flow/plugins.toml"),
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            project.join(".nemo-relay/plugins.toml"),
             user_config.join("plugins.toml"),
         ]
     );
 
-    std::fs::remove_file(project.join(".nemo-flow/plugins.toml")).unwrap();
-    std::fs::write(project.join(".nemo-flow/config.toml"), "").unwrap();
+    std::fs::remove_file(project.join(".nemo-relay/plugins.toml")).unwrap();
+    std::fs::write(project.join(".nemo-relay/config.toml"), "").unwrap();
     assert_eq!(find_project_plugin_config(&nested), None);
     assert_eq!(
         project_plugin_config_path(&nested),
-        project.join(".nemo-flow/plugins.toml")
+        project.join(".nemo-relay/plugins.toml")
     );
 }
 

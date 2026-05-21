@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
-from nemo_flow import MarkEvent, ScopeEvent, ScopeType, scope, subscribers
+from nemo_relay import MarkEvent, ScopeEvent, ScopeType, scope, subscribers
 
 
 def _subscriber_name(prefix: str) -> str:

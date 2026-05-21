@@ -345,7 +345,7 @@ jobs:
 
           (
             cd release-assets
-            cli_assets=(nemo-flow-cli-*)
+            cli_assets=(nemo-relay-cli-*)
             sha256sum "${cli_assets[@]}" > SHA256SUMS
             sha256sum --check SHA256SUMS
 
@@ -418,7 +418,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: |
           set -euo pipefail
-          for package in nemo-flow nemo-flow-adaptive nemo-flow-ffi nemo-flow-cli; do
+          for package in nemo-relay nemo-relay-adaptive nemo-relay-ffi nemo-relay-cli; do
             cargo publish --package "$package" --no-verify --allow-dirty
           done
 
@@ -491,7 +491,7 @@ jobs:
           if [[ "${{ github.ref_name }}" =~ -(alpha|beta|rc)\.[0-9]+$ ]]; then
             npm_tag="next"
           fi
-          printf 'NEMO_FLOW_NPM_DIST_TAG=%s\n' "$npm_tag" >> "$GITHUB_ENV"
+          printf 'NEMO_RELAY_NPM_DIST_TAG=%s\n' "$npm_tag" >> "$GITHUB_ENV"
 
       - name: Publish Node.js package to npm
         run: |
@@ -499,14 +499,14 @@ jobs:
           unzip -q ./consolidated.zip -d combined
           echo "Platform binaries included:"
           ls -la combined/package/*.node
-          npm publish ./combined/package --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
+          npm publish ./combined/package --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
 
       - name: Publish OpenClaw plugin package to npm
         run: |
           set -euo pipefail
           for pkg in ./openclaw-package/*.tgz; do
             echo "Publishing ${pkg}..."
-            npm publish "${pkg}" --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
+            npm publish "${pkg}" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           done
 
       - name: Publish WebAssembly package to npm
@@ -514,5 +514,5 @@ jobs:
           set -e
           for pkg in ./wasm-package/*.tgz; do
             echo "Publishing ${pkg}..."
-            npm publish "${pkg}" --access public --tag "${NEMO_FLOW_NPM_DIST_TAG}"
+            npm publish "${pkg}" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           done

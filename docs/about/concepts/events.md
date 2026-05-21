@@ -10,7 +10,7 @@ and subscribers.
 
 ## What Events Represent
 
-Events are the runtime record of what happened. NeMo Flow uses Agent
+Events are the runtime record of what happened. NeMo Relay uses Agent
 Trajectory Observability Format (ATOF) `0.1` as the canonical event format for
 scopes, managed execution helpers, manual lifecycle APIs, subscribers, and
 exporters.
@@ -75,7 +75,7 @@ ATOF uses one `data` field. For scope events, `data` is the semantic input on
 
 ### Category Profiles
 
-Category-specific fields live under `category_profile`. NeMo Flow uses
+Category-specific fields live under `category_profile`. NeMo Relay uses
 `model_name` for LLM events, `tool_call_id` for tool events, and `subtype` for
 custom-category events. LLM codec annotations, when present, are serialized
 under `category_profile.annotated_request` on LLM start events and

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for convert in the NeMo Flow Python crate.
+//! Unit tests for convert in the NeMo Relay Python crate.
 
 use super::*;
 use serde_json::json;

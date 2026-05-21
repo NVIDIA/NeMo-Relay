@@ -67,7 +67,7 @@ component_management:
     - component_id: go_binding
       name: Go Binding
       paths:
-        - "go/nemo_flow"
+        - "go/nemo_relay"
         - "crates/ffi/src"
       statuses:
         - type: project
@@ -78,7 +78,7 @@ component_management:
     - component_id: python_binding
       name: Python Binding
       paths:
-        - "python/nemo_flow"
+        - "python/nemo_relay"
         - "crates/python/src"
       statuses:
         - type: project
@@ -135,7 +135,7 @@ ignore:
   - "target/"
   - "**/*.d.ts"
   - "**/*.pyi"
-  - "python/nemo_flow/lib_native*.dylib.dSYM/**"
+  - "python/nemo_relay/lib_native*.dylib.dSYM/**"
   # WebAssembly Rust wrappers are covered through wasm-pack execution and
   # reported through generated package JavaScript coverage.
   - "crates/wasm/src/"

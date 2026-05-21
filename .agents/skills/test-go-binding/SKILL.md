@@ -1,6 +1,6 @@
 ---
 name: test-go-binding
-description: Build and test the NeMo Flow Go binding; use this for go/nemo_flow changes or Go-facing integration checks
+description: Build and test the NeMo Relay Go binding; use this for go/nemo_relay changes or Go-facing integration checks
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when the change is primarily in `go/nemo_flow` or the Go
+Use this skill when the change is primarily in `go/nemo_relay` or the Go
 binding behavior it depends on.
 
 ## Important Constraint
@@ -25,7 +25,7 @@ you want an explicit build-only pass or need the artifact for other work.
 
 ## Default Path
 
-1. Format changed Go packages with `cd go/nemo_flow && go fmt ./...`.
+1. Format changed Go packages with `cd go/nemo_relay && go fmt ./...`.
 2. Run Go tests with `just test-go`.
 3. If any Rust files changed as part of the Go work, also run
    `cargo fmt --all`, `just test-rust`, and
@@ -41,7 +41,7 @@ you want an explicit build-only pass or need the artifact for other work.
 just test-go
 
 # Format Go files
-cd go/nemo_flow && go fmt ./...
+cd go/nemo_relay && go fmt ./...
 
 # Required when the Go change also touched Rust code
 cargo fmt --all
@@ -70,8 +70,8 @@ directory before running the raw `go test` command directly.
 
 ## References
 
-- `go/nemo_flow/go.mod`
-- `go/nemo_flow/nemo_flow.go`
+- `go/nemo_relay/go.mod`
+- `go/nemo_relay/nemo_relay.go`
 - `README.md`
 - `docs/getting-started/installation.md`
 - `validate-change`

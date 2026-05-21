@@ -3,23 +3,23 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Flow)](https://github.com/NVIDIA/NeMo-Flow/blob/main/LICENSE)
-[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Flow/)
-[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Flow?color=green)](https://github.com/NVIDIA/NeMo-Flow/releases)
-[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Flow/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Flow)
-[![PyPI](https://img.shields.io/pypi/v/nemo-flow?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-flow/)
-[![npm node](https://img.shields.io/npm/v/nemo-flow-node?label=nemo-flow-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
+[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
+[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Relay?color=green)](https://github.com/NVIDIA/NeMo-Relay/releases)
+[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
+[![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
+[![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
+[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
 
-# NeMo Flow
+# NeMo Relay
 
-## What Is NeMo Flow?
+## What Is NeMo Relay?
 
-NeMo Flow is a portable execution runtime for agent systems that already have a
+NeMo Relay is a portable execution runtime for agent systems that already have a
 framework, model provider, policy layer, or observability backend. It gives those
 systems one consistent way to describe, control, and observe what happens when an
 agent crosses a request, tool, or LLM boundary.
@@ -30,7 +30,7 @@ harness code, NeMo Guardrails, tracing systems, and evaluation pipelines. NeMo
 Flow sits underneath those choices as the shared runtime contract for scopes,
 middleware, plugins, lifecycle events, adaptive behavior, and observability.
 
-Built as a Rust core with primary Rust, Python, and Node.js bindings, NeMo Flow
+Built as a Rust core with primary Rust, Python, and Node.js bindings, NeMo Relay
 lets applications keep their orchestration model while runtime behavior stays
 consistent across frameworks and languages.
 
@@ -45,7 +45,7 @@ consistent across frameworks and languages.
 - 📡 **Emit one lifecycle stream**: Subscribers consume canonical runtime events
   in-process or export them as [ATIF v1.6](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
   trajectories, OpenTelemetry traces, or OpenInference-compatible traces.
-- 🧩 **Integrate without a framework migration**: NeMo Flow can sit below NeMo
+- 🧩 **Integrate without a framework migration**: NeMo Relay can sit below NeMo
   ecosystem components, third-party agent frameworks, provider adapters, or
   direct application code.
 - ⚙️ **Install reusable runtime behavior**: Plugins configure middleware,
@@ -75,7 +75,7 @@ consistent across frameworks and languages.
 flowchart LR
     App[Application or Framework]
 
-    subgraph Runtime[NeMo Flow Runtime]
+    subgraph Runtime[NeMo Relay Runtime]
         direction TB
         Scopes[Scopes]
         Middleware[Middleware]
@@ -99,31 +99,31 @@ Install the published package for your language:
 
 ```bash
 # Rust
-cargo add nemo-flow
+cargo add nemo-relay
 
 # Python
-uv add nemo-flow
+uv add nemo-relay
 
 # Node.js
-npm install nemo-flow-node
+npm install nemo-relay-node
 ```
 
-The NeMo Flow CLI is offered as a separate crate:
+The NeMo Relay CLI is offered as a separate crate:
 
 ```bash
-cargo install nemo-flow-cli
+cargo install nemo-relay-cli
 ```
 
 For source builds, testing, and contribution workflow, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentation
 
-End-user documentation lives at [nvidia.github.io/NeMo-Flow](https://nvidia.github.io/NeMo-Flow/).
+End-user documentation lives at [nvidia.github.io/NeMo-Relay](https://nvidia.github.io/NeMo-Relay/).
 
 The primary documentation track covers Rust, Python, and Node.js.
 
 The Go, WebAssembly, and raw FFI surfaces are currently experimental and remain source-first under
-`go/nemo_flow`, `crates/wasm`, and `crates/ffi`.
+`go/nemo_relay`, `crates/wasm`, and `crates/ffi`.
 
 ## Binding Status
 
@@ -134,15 +134,15 @@ The table below summarizes the support level for each binding surface.
 | Python | ✅ Fully Supported | Fully documented with Quick Start and Guides |
 | Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
 | Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
-| NeMo Flow CLI | 🚧 Experimental | Install with `cargo install nemo-flow-cli`. |
-| Go | 🚧 Experimental | Source-first under `go/nemo_flow`. |
+| NeMo Relay CLI | 🚧 Experimental | Install with `cargo install nemo-relay-cli`. |
+| Go | 🚧 Experimental | Source-first under `go/nemo_relay`. |
 | WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
 
 ## Agent Harness Support
 
-NeMo Flow CLI offers experimental support for several agent harnesses.
-Refer to the NeMo Flow CLI documentation for additional information.
+NeMo Relay CLI offers experimental support for several agent harnesses.
+Refer to the NeMo Relay CLI documentation for additional information.
 
 Below is our support matrix for agent harnesses.
 
@@ -162,7 +162,7 @@ sample integrations are maintained as patch sets against upstream projects.
 
 Some integrations can be implemented using public APIs without patching. Public
 API-based integrations live under language-specific integration packages such as
-`python/nemo_flow/integrations/` and `integrations/`.
+`python/nemo_relay/integrations/` and `integrations/`.
 
 Below is the support matrix for our public API integrations.
 
@@ -175,19 +175,19 @@ Below is the support matrix for our public API integrations.
 
 #### LangChain
 
-The Python `nemo-flow` package ships several extras that offer comprehensive
+The Python `nemo-relay` package ships several extras that offer comprehensive
 middleware support for the following packages:
 
 - LangChain
 - LangGraph
 - Deep Agents
 
-See the [Python package README](python/nemo_flow/README.md) for more information.
+See the [Python package README](python/nemo_relay/README.md) for more information.
 
 #### OpenClaw
 
-An OpenClaw plugin is available as a Node package `nemo-flow-openclaw`.
-It relies on OpenClaw public plugin hooks plus the generic NeMo Flow plugin
+An OpenClaw plugin is available as a Node package `nemo-relay-openclaw`.
+It relies on OpenClaw public plugin hooks plus the generic NeMo Relay plugin
 configuration shape to export telemetry. See the
 [OpenClaw package README](integrations/openclaw/README.md) for more information.
 
@@ -218,4 +218,4 @@ The following roadmap outlines planned features and integrations for upcoming re
 
 ## License
 
-NeMo Flow is licensed under the [Apache License 2.0](LICENSE).
+NeMo Relay is licensed under the [Apache License 2.0](LICENSE).

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! `nemo-flow completions install` — write a shell completion script to the standard fpath /
+//! `nemo-relay completions install` — write a shell completion script to the standard fpath /
 //! completions directory for the user's current `$SHELL`. Mirrors the file layout used by
 //! `scripts/install.sh` so curl-pipe installs and `cargo install` installs land in the same
 //! place.
@@ -31,7 +31,7 @@ pub(crate) fn install(shell: Option<Shell>) -> Result<PathBuf, CliError> {
     }
     let mut clap_command = <Cli as clap::CommandFactory>::command();
     let mut buffer = Vec::new();
-    clap_complete::generate(shell, &mut clap_command, "nemo-flow", &mut buffer);
+    clap_complete::generate(shell, &mut clap_command, "nemo-relay", &mut buffer);
     write_atomic(&target, &buffer)?;
     Ok(target)
 }
@@ -49,23 +49,23 @@ fn completion_path(
             let base = zdotdir.or(home).ok_or_else(|| {
                 CliError::Config("cannot resolve $ZDOTDIR or $HOME for zsh completion".into())
             })?;
-            Ok(PathBuf::from(base).join(".zfunc/_nemo-flow"))
+            Ok(PathBuf::from(base).join(".zfunc/_nemo-relay"))
         }
         Shell::Bash => {
             let home = home.ok_or_else(|| {
                 CliError::Config("cannot resolve $HOME for bash completion".into())
             })?;
-            Ok(PathBuf::from(home).join(".bash_completion.d/nemo-flow"))
+            Ok(PathBuf::from(home).join(".bash_completion.d/nemo-relay"))
         }
         Shell::Fish => {
             let home = home.ok_or_else(|| {
                 CliError::Config("cannot resolve $HOME for fish completion".into())
             })?;
-            Ok(PathBuf::from(home).join(".config/fish/completions/nemo-flow.fish"))
+            Ok(PathBuf::from(home).join(".config/fish/completions/nemo-relay.fish"))
         }
         other => Err(CliError::Config(format!(
-            "`nemo-flow completions install` does not support {other} — \
-             run `nemo-flow completions {other}` and redirect manually"
+            "`nemo-relay completions install` does not support {other} — \
+             run `nemo-relay completions {other}` and redirect manually"
         ))),
     }
 }
@@ -76,7 +76,7 @@ fn completion_path(
 fn detect_shell(shell_env: Option<OsString>) -> Result<Shell, CliError> {
     let raw = shell_env.ok_or_else(|| {
         CliError::Config(
-            "$SHELL is not set; pass an explicit shell, e.g. `nemo-flow completions install zsh`"
+            "$SHELL is not set; pass an explicit shell, e.g. `nemo-relay completions install zsh`"
                 .into(),
         )
     })?;
@@ -90,7 +90,7 @@ fn detect_shell(shell_env: Option<OsString>) -> Result<Shell, CliError> {
         "fish" => Ok(Shell::Fish),
         _ => Err(CliError::Config(format!(
             "unsupported $SHELL `{name}` — \
-             run `nemo-flow completions <bash|zsh|fish>` and redirect manually"
+             run `nemo-relay completions <bash|zsh|fish>` and redirect manually"
         ))),
     }
 }
@@ -102,7 +102,7 @@ fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), CliError> {
     let file_name = target
         .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or("nemo-flow");
+        .unwrap_or("nemo-relay");
     let temp = parent.join(format!(".{file_name}.tmp"));
     let mut handle = std::fs::File::create(&temp)?;
     handle.write_all(bytes)?;

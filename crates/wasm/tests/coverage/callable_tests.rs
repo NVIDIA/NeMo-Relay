@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for callable in the NeMo Flow WebAssembly crate.
+//! Coverage tests for callable in the NeMo Relay WebAssembly crate.
 
 use super::*;
-use nemo_flow::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;
 use wasm_bindgen::JsCast;
@@ -86,8 +86,8 @@ async fn native_async_wrapper_fallbacks_return_errors_or_defaults() {
     assert_eq!(finalizer(), Json::Null);
 
     let subscriber = wrap_js_event_subscriber(dummy_function());
-    subscriber(&Event::Mark(nemo_flow::api::event::MarkEvent::new(
-        nemo_flow::api::event::BaseEvent::builder()
+    subscriber(&Event::Mark(nemo_relay::api::event::MarkEvent::new(
+        nemo_relay::api::event::BaseEvent::builder()
             .name("native-mark")
             .build(),
         None,

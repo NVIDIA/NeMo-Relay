@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Apply NeMo Flow integration patches to local third-party checkouts.
+# Apply NeMo Relay integration patches to local third-party checkouts.
 #
 # Usage:
 #   ./scripts/third-party/apply-patches.sh          # apply all patches

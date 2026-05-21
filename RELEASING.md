@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Releasing NeMo Flow
+# Releasing NeMo Relay
 
-This document is the maintainer playbook for cutting NeMo Flow releases. It
+This document is the maintainer playbook for cutting NeMo Relay releases. It
 describes the release contract, the version files that must be updated, the tag
 format that CI accepts, the package surfaces that are published, and the checks
 to run before and after a tag push.
@@ -30,9 +30,9 @@ The release pipeline publishes these package surfaces from a tag push:
 
 | Ecosystem | Published Surface |
 |---|---|
-| crates.io | `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, `nemo-flow-cli` |
-| PyPI | `nemo-flow` |
-| npm | `nemo-flow-node`, `nemo-flow-openclaw`, `nemo-flow-wasm` |
+| crates.io | `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, `nemo-relay-cli` |
+| PyPI | `nemo-relay` |
+| npm | `nemo-relay-node`, `nemo-relay-openclaw`, `nemo-relay-wasm` |
 | GitHub Pages | The documentation site, including the versioned docs build |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -44,13 +44,13 @@ pipeline schedule.
 
 ## Version Model
 
-NeMo Flow versions are anchored on the workspace SemVer in the repository root
+NeMo Relay versions are anchored on the workspace SemVer in the repository root
 `Cargo.toml`.
 
 - The root `Cargo.toml` `workspace.package.version` is the canonical release
   version for the Rust workspace.
 - The root `Cargo.toml` `workspace.dependencies` entries for
-  `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, and `nemo-flow-cli` must
+  `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, and `nemo-relay-cli` must
   stay aligned with that same version.
 - `crates/node/package.json` carries the base npm version for the Node.js
   package. The repository-root `package-lock.json` carries the npm workspace
@@ -92,7 +92,7 @@ latest `main` commit. Name the branch from the target release major and minor
 version:
 
 These examples assume `upstream` is the NVIDIA repository remote
-(`NVIDIA/NeMo-Flow`). The `origin` remote is usually a maintainer's personal
+(`NVIDIA/NeMo-Relay`). The `origin` remote is usually a maintainer's personal
 fork.
 
 ```bash
@@ -131,8 +131,8 @@ Before you create a release tag, confirm the following:
 3. The working tree you use for local validation is clean or disposable.
 4. Registry credentials and repository settings are in place:
    - GitHub Actions `id-token: write` access for the top-level crates.io publish job
-   - crates.io trusted publishers for `nemo-flow`, `nemo-flow-adaptive`,
-     `nemo-flow-ffi`, and `nemo-flow-cli` are configured for the top-level
+   - crates.io trusted publishers for `nemo-relay`, `nemo-relay-adaptive`,
+     `nemo-relay-ffi`, and `nemo-relay-cli` are configured for the top-level
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
@@ -152,7 +152,7 @@ The helper updates:
 
 1. The root [`Cargo.toml`](Cargo.toml) workspace version.
 2. The root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions for
-   `nemo-flow`, `nemo-flow-adaptive`, `nemo-flow-ffi`, and `nemo-flow-cli`.
+   `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, and `nemo-relay-cli`.
 3. [`crates/node/package.json`](crates/node/package.json) and the `crates/node`
    entry in the root [`package-lock.json`](package-lock.json) to the same
    release version.
@@ -240,8 +240,8 @@ The release pipeline then:
 5. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
-     runs `cargo publish --package` for `nemo-flow`, `nemo-flow-adaptive`,
-     `nemo-flow-ffi`, and `nemo-flow-cli` through trusted publishing from
+     runs `cargo publish --package` for `nemo-relay`, `nemo-relay-adaptive`,
+     `nemo-relay-ffi`, and `nemo-relay-cli` through trusted publishing from
      the top-level workflow
    - `publish-python` uploads the wheel artifacts to PyPI with trusted
      publishing from the top-level workflow
@@ -278,8 +278,8 @@ NVIDIA Artifactory publication for the same tag:
 npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
-- Because this repository publishes `nemo-flow-node`, `nemo-flow-openclaw`, and
-  `nemo-flow-wasm`, configure trusted publishers for all three packages before
+- Because this repository publishes `nemo-relay-node`, `nemo-relay-openclaw`, and
+  `nemo-relay-wasm`, configure trusted publishers for all three packages before
   pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
@@ -309,8 +309,8 @@ for that tag.
 After the release is live, verify:
 
 1. The expected crates are visible on crates.io.
-2. The `nemo-flow` wheel is visible on PyPI.
-3. The `nemo-flow-node`, `nemo-flow-openclaw`, and `nemo-flow-wasm` packages
+2. The `nemo-relay` wheel is visible on PyPI.
+3. The `nemo-relay-node`, `nemo-relay-openclaw`, and `nemo-relay-wasm` packages
    are visible on npm.
 4. The GitHub Pages deployment completed successfully.
 5. The GitHub Release page is complete and accurate.

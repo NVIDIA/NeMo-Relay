@@ -3,10 +3,10 @@
 
 //! Error handling for the FFI layer.
 //!
-//! This module defines the [`NemoFlowStatus`] enum returned by every exported
+//! This module defines the [`NemoRelayStatus`] enum returned by every exported
 //! FFI function, along with thread-local storage for human-readable error
 //! messages. After any non-`Ok` return, the caller should invoke
-//! [`nemo_flow_last_error`] on the same thread to obtain a diagnostic string.
+//! [`nemo_relay_last_error`] on the same thread to obtain a diagnostic string.
 //! The error message remains valid until the next FFI call on that thread clears
 //! it via [`clear_last_error`].
 
@@ -16,17 +16,17 @@ use std::ffi::CString;
 
 use libc::c_char;
 
-use nemo_flow::error::FlowError;
-use nemo_flow::plugin::PluginError;
+use nemo_relay::error::FlowError;
+use nemo_relay::plugin::PluginError;
 
 /// Status codes returned by all FFI functions.
 ///
-/// Every `extern "C"` function in this library returns an `NemoFlowStatus`.
-/// On non-`Ok` returns, call [`nemo_flow_last_error`] on the same thread to
+/// Every `extern "C"` function in this library returns an `NemoRelayStatus`.
+/// On non-`Ok` returns, call [`nemo_relay_last_error`] on the same thread to
 /// retrieve a human-readable error message.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NemoFlowStatus {
+pub enum NemoRelayStatus {
     /// Operation completed successfully.
     Ok = 0,
     /// A resource with the given name already exists.
@@ -83,7 +83,7 @@ pub fn last_error_message() -> Option<String> {
 /// until the next FFI call on the same thread. Do **not** free the returned
 /// pointer.
 #[unsafe(no_mangle)]
-pub extern "C" fn nemo_flow_last_error() -> *const c_char {
+pub extern "C" fn nemo_relay_last_error() -> *const c_char {
     LAST_ERROR.with(|cell| {
         cell.borrow()
             .as_ref()
@@ -101,7 +101,7 @@ pub extern "C" fn nemo_flow_last_error() -> *const c_char {
 /// `msg` must be either null or a valid, null-terminated C string for the
 /// duration of this call.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_set_last_error_message(msg: *const c_char) {
+pub unsafe extern "C" fn nemo_relay_set_last_error_message(msg: *const c_char) {
     if msg.is_null() {
         set_last_error("unknown callback error");
         return;
@@ -112,34 +112,36 @@ pub unsafe extern "C" fn nemo_flow_set_last_error_message(msg: *const c_char) {
     }
 }
 
-impl From<&FlowError> for NemoFlowStatus {
+impl From<&FlowError> for NemoRelayStatus {
     fn from(e: &FlowError) -> Self {
         match e {
-            FlowError::AlreadyExists(_) => NemoFlowStatus::AlreadyExists,
-            FlowError::NotFound(_) => NemoFlowStatus::NotFound,
-            FlowError::InvalidArgument(_) => NemoFlowStatus::InvalidArg,
-            FlowError::ScopeStackEmpty => NemoFlowStatus::ScopeStackEmpty,
-            FlowError::GuardrailRejected(_) => NemoFlowStatus::GuardrailRejected,
-            FlowError::Internal(_) => NemoFlowStatus::Internal,
+            FlowError::AlreadyExists(_) => NemoRelayStatus::AlreadyExists,
+            FlowError::NotFound(_) => NemoRelayStatus::NotFound,
+            FlowError::InvalidArgument(_) => NemoRelayStatus::InvalidArg,
+            FlowError::ScopeStackEmpty => NemoRelayStatus::ScopeStackEmpty,
+            FlowError::GuardrailRejected(_) => NemoRelayStatus::GuardrailRejected,
+            FlowError::Internal(_) => NemoRelayStatus::Internal,
         }
     }
 }
 
-/// Convert an `FlowError` to an `NemoFlowStatus`, storing the error message
+/// Convert an `FlowError` to an `NemoRelayStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_error(e: &FlowError) -> NemoFlowStatus {
+pub fn status_from_error(e: &FlowError) -> NemoRelayStatus {
     set_last_error(&e.to_string());
-    NemoFlowStatus::from(e)
+    NemoRelayStatus::from(e)
 }
 
-/// Convert a `PluginError` to an `NemoFlowStatus`, storing the error message
+/// Convert a `PluginError` to an `NemoRelayStatus`, storing the error message
 /// in thread-local storage.
-pub fn status_from_plugin_error(e: &PluginError) -> NemoFlowStatus {
+pub fn status_from_plugin_error(e: &PluginError) -> NemoRelayStatus {
     set_last_error(&e.to_string());
     match e {
-        PluginError::NotFound(_) => NemoFlowStatus::NotFound,
-        PluginError::InvalidConfig(_) | PluginError::Serialization(_) => NemoFlowStatus::InvalidArg,
-        PluginError::Internal(_) | PluginError::RegistrationFailed(_) => NemoFlowStatus::Internal,
+        PluginError::NotFound(_) => NemoRelayStatus::NotFound,
+        PluginError::InvalidConfig(_) | PluginError::Serialization(_) => {
+            NemoRelayStatus::InvalidArg
+        }
+        PluginError::Internal(_) | PluginError::RegistrationFailed(_) => NemoRelayStatus::Internal,
     }
 }
 

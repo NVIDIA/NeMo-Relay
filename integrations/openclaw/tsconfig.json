@@ -7,16 +7,10 @@
     "rootDir": ".",
     "noEmit": true,
     "resolveJsonModule": true,
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": [
-    "index.ts",
-    "src/**/*.ts",
-    "src/**/*.d.ts"
-  ]
+  "include": ["index.ts", "src/**/*.ts", "src/**/*.d.ts"]
 }

@@ -1,5 +1,5 @@
 {
-  "name": "nemo-flow-workspace",
+  "name": "nemo-relay-workspace",
   "private": true,
   "engines": {
     "node": ">=20.0.0"

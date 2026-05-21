@@ -3,8 +3,8 @@
 
 """Unit tests for LangGraph superstep boundary event emission.
 
-Validates that emit_superstep_start and emit_superstep_end in _nemo_flow.py
-emit correct NeMo Flow Mark events with expected name, step, and task_count fields.
+Validates that emit_superstep_start and emit_superstep_end in _nemo_relay.py
+emit correct NeMo Relay Mark events with expected name, step, and task_count fields.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import threading
 from typing import Any
 
 import pytest
-from langgraph._nemo_flow import (  # type: ignore[import-untyped]
+from langgraph._nemo_relay import (  # type: ignore[import-untyped]
     available,
     emit_superstep_end,
     emit_superstep_start,
@@ -21,8 +21,8 @@ from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     push_graph_scope,
 )
 
-import nemo_flow
-from nemo_flow import create_scope_stack, set_thread_scope_stack
+import nemo_relay
+from nemo_relay import create_scope_stack, set_thread_scope_stack
 
 
 def _is_mark_event(event: Any, name: str) -> bool:
@@ -43,9 +43,9 @@ class TestSuperstepEvents:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nemo_flow.subscribers.register("test-superstep-collector", lambda e: collected.append(e))
+        nemo_relay.subscribers.register("test-superstep-collector", lambda e: collected.append(e))
         yield collected
-        nemo_flow.subscribers.deregister("test-superstep-collector")
+        nemo_relay.subscribers.deregister("test-superstep-collector")
 
     def test_superstep_start_emits_event(self, scope_stack: Any, events: list[Any]) -> None:
         """emit_superstep_start emits a Mark event with correct name and data fields."""

@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for callable in the NeMo Flow FFI crate.
+//! Unit tests for callable in the NeMo Relay FFI crate.
 
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::{LlmAttributes, LlmHandle};
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -82,7 +82,7 @@ unsafe extern "C" fn tool_exec_error_cb(
 unsafe extern "C" fn tool_exec_intercept_cb(
     _user_data: *mut libc::c_void,
     args_json: *const c_char,
-    next_fn: NemoFlowToolExecNextFn,
+    next_fn: NemoRelayToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     let result_ptr = unsafe { next_fn(args_json, next_ctx) };
@@ -91,7 +91,7 @@ unsafe extern "C" fn tool_exec_intercept_cb(
     }
     let mut result: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
-    unsafe { nemo_flow_string_free_internal(result_ptr) };
+    unsafe { nemo_relay_string_free_internal(result_ptr) };
     result["intercepted"] = json!(true);
     CString::new(result.to_string()).unwrap().into_raw()
 }
@@ -105,7 +105,7 @@ unsafe extern "C" fn llm_request_intercept_cb(
     annotated_json: *const c_char,
     out_request: *mut *mut FfiLLMRequest,
     out_annotated_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     let mut req = unsafe { (&*request).0.clone() };
     req.content["intercepted"] = json!(true);
     unsafe { *out_request = Box::into_raw(Box::new(FfiLLMRequest(req))) };
@@ -117,7 +117,7 @@ unsafe extern "C" fn llm_request_intercept_cb(
             .into_owned();
         unsafe { *out_annotated_json = CString::new(s).unwrap().into_raw() };
     }
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn llm_request_null_cb(
@@ -169,7 +169,7 @@ unsafe extern "C" fn llm_exec_error_cb(
 unsafe extern "C" fn llm_exec_intercept_cb(
     _user_data: *mut libc::c_void,
     native_json: *const c_char,
-    next_fn: NemoFlowLlmExecNextFn,
+    next_fn: NemoRelayLlmExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     let result_ptr = unsafe { next_fn(native_json, next_ctx) };
@@ -178,7 +178,7 @@ unsafe extern "C" fn llm_exec_intercept_cb(
     }
     let mut value: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
-    unsafe { nemo_flow_string_free_internal(result_ptr) };
+    unsafe { nemo_relay_string_free_internal(result_ptr) };
     value["intercepted"] = json!(true);
     CString::new(value.to_string()).unwrap().into_raw()
 }
@@ -186,7 +186,7 @@ unsafe extern "C" fn llm_exec_intercept_cb(
 unsafe extern "C" fn llm_exec_short_circuit_cb(
     _user_data: *mut libc::c_void,
     native_json: *const c_char,
-    _next_fn: NemoFlowLlmExecNextFn,
+    _next_fn: NemoRelayLlmExecNextFn,
     _next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
     let request: Json =
@@ -317,7 +317,7 @@ fn test_wrap_llm_request_response_and_conditional_callbacks() {
 fn test_wrap_llm_request_intercept_with_annotated_input() {
     let request_intercept =
         wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
-    let annotated = nemo_flow::codec::request::AnnotatedLlmRequest {
+    let annotated = nemo_relay::codec::request::AnnotatedLlmRequest {
         messages: vec![],
         model: Some("test-model".into()),
         params: None,
@@ -422,15 +422,15 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
 
     let (user_data, seen) = user_data_counter();
     let subscriber = wrap_event_subscriber(subscriber_cb, user_data, Some(free_arc_counter));
-    let event = Event::Scope(nemo_flow::api::event::ScopeEvent::new(
-        nemo_flow::api::event::BaseEvent::builder()
+    let event = Event::Scope(nemo_relay::api::event::ScopeEvent::new(
+        nemo_relay::api::event::BaseEvent::builder()
             .name("ffi-event")
             .build(),
-        nemo_flow::api::event::ScopeCategory::Start,
+        nemo_relay::api::event::ScopeCategory::Start,
         Vec::new(),
-        nemo_flow::api::event::EventCategory::llm(),
+        nemo_relay::api::event::EventCategory::llm(),
         Some(
-            nemo_flow::api::event::CategoryProfile::builder()
+            nemo_relay::api::event::CategoryProfile::builder()
                 .model_name("test-model")
                 .build(),
         ),

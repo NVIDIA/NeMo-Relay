@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 This page summarizes the notable capabilities in the current release documentation set.
 
-## NeMo Flow 0.3
+## NeMo Relay 0.3
 
-This release of NeMo Flow release introduces several new components and capabilities.
-The complete changelog and release notes can be viewed on [GitHub](https://github.com/NVIDIA/NeMo-Flow/releases).
+This release of NeMo Relay release introduces several new components and capabilities.
+The complete changelog and release notes can be viewed on [GitHub](https://github.com/NVIDIA/NeMo-Relay/releases).

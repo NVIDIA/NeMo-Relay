@@ -5,7 +5,7 @@
 //! Flow.
 //!
 //! The [`AtofExporter`] registers as an event subscriber and writes each
-//! canonical NeMo Flow Agent Trajectory Observability Format (ATOF) event as
+//! canonical NeMo Relay Agent Trajectory Observability Format (ATOF) event as
 //! one JSON object per JSONL line.
 
 use std::fs::{File, OpenOptions};
@@ -227,7 +227,7 @@ impl AtofExporter {
 
 fn default_filename() -> String {
     format!(
-        "nemo-flow-events-{}.jsonl",
+        "nemo-relay-events-{}.jsonl",
         Utc::now().format("%Y-%m-%d-%H.%M.%S")
     )
 }

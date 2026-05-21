@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for types in the NeMo Flow adaptive crate.
+//! Unit tests for types in the NeMo Relay adaptive crate.
 
 use std::collections::HashMap;
 
@@ -159,7 +159,7 @@ fn acg_storage_and_hot_cache_sources_use_canonical_acg_types() {
 
     for (path, source, canonical_patterns) in canonical_sources {
         assert!(
-            !source.contains("nemo_flow_acg::"),
+            !source.contains("nemo_relay_acg::"),
             "{path} should not point back at the shim-owned namespace",
         );
         for canonical_pattern in canonical_patterns {

@@ -26,8 +26,8 @@ defaults:
 env:
   GH_TOKEN: "${{ github.token }}"
   GIT_COMMIT: "${{ github.sha }}"
-  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
-  NEMO_FLOW_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
+  NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+          cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
@@ -66,7 +66,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-flow-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -82,40 +82,40 @@ jobs:
           tool: just@${{ steps.ci-config.outputs.just_version }},sphinx-rustdocgen@1.0.1
 
       - name: Install Documentation Dependencies
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv sync --no-default-groups --group docs --no-install-project
 
       - name: Install Node.js Documentation Dependencies
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: npm ci --ignore-scripts
 
       - name: Materialize Main Branch For Versioned Docs
         if: ${{ inputs.ref_type == 'tag' }}
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: git fetch --force origin +refs/heads/main:refs/heads/main
 
       - name: Check Documentation Links
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
-          NEMO_FLOW_DOCS_DEPS_READY: "1"
+          NEMO_RELAY_DOCS_DEPS_READY: "1"
         run: just docs-linkcheck
 
       - name: Build Documentation Site
         if: ${{ startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' }}
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
-          NEMO_FLOW_DOCS_DEPS_READY: "1"
+          NEMO_RELAY_DOCS_DEPS_READY: "1"
         run: just docs
 
       - name: Build Versioned Documentation Site
         if: ${{ inputs.publish_docs }}
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
-          NEMO_FLOW_DOCS_DEPS_READY: "1"
+          NEMO_RELAY_DOCS_DEPS_READY: "1"
         run: just docs-github-pages
 
       - name: Upload GitHub Pages Artifact
         if: ${{ inputs.publish_docs }}
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
-          path: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/docs/_build/pages
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/docs/_build/pages

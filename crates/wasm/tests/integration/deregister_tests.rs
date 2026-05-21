@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for deregister in the NeMo Flow WebAssembly crate.
+//! Integration tests for deregister in the NeMo Relay WebAssembly crate.
 
 use wasm_bindgen_test::*;
 
-use nemo_flow_wasm::api::*;
+use nemo_relay_wasm::api::*;
 
 // ===========================================================================
 // Deregister nonexistent

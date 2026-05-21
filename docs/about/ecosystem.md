@@ -5,36 +5,36 @@ SPDX-License-Identifier: Apache-2.0
 
 # Ecosystem
 
-NeMo Flow is the agent execution runtime layer in the NVIDIA NeMo ecosystem. It
+NeMo Relay is the agent execution runtime layer in the NVIDIA NeMo ecosystem. It
 does not replace an agent framework, model provider, guardrail authoring system,
 or deployment platform. Instead, it gives those systems one shared way to model
 execution scopes, lifecycle events, middleware, plugins, adaptive behavior, and
 observability around tool and LLM calls.
 
-Use this page to understand where NeMo Flow fits:
+Use this page to understand where NeMo Relay fits:
 
 - Inside the NVIDIA NeMo software stack
 - Inside agent frameworks, harnesses, and provider adapters
 - Across the Rust, Python, Node.js, Go, WebAssembly, and C FFI surfaces in this
   repository
 
-## How NeMo Flow Fits In The NVIDIA NeMo Ecosystem
+## How NeMo Relay Fits In The NVIDIA NeMo Ecosystem
 
 The NVIDIA NeMo ecosystem spans model development, agent construction,
-guardrailing, inference, optimization, and runtime operations. NeMo Flow has a
+guardrailing, inference, optimization, and runtime operations. NeMo Relay has a
 narrower responsibility: it is the portable execution substrate that agent
 systems can call when actual work crosses a scope, tool, or model boundary.
 
-| Layer | Typical Responsibility | NeMo Flow Relationship |
+| Layer | Typical Responsibility | NeMo Relay Relationship |
 |---|---|---|
-| NeMo model, inference, and deployment components | Provide or serve the models an agent uses. | NeMo Flow records and controls LLM execution boundaries, but it does not train, host, or route model inference by itself. |
-| NeMo Agent Toolkit and agent application frameworks | Build, run, profile, and optimize agent workflows across tools, data sources, and framework choices. | NeMo Flow can sit below these systems as the shared runtime contract for scopes, middleware, lifecycle events, subscribers, and plugins. |
-| NeMo Guardrails and policy systems | Define safety, control, and compliance behavior for LLM applications. | NeMo Flow can host runtime guardrails and intercepts around managed tool and LLM calls, while higher-level guardrail systems can still own policy authoring and orchestration. |
-| Application harnesses and workflow code | Decide the agent pattern, planner, memory, retries, scheduling, and user-facing behavior. | NeMo Flow instruments the execution boundaries that the harness already owns. |
-| Observability and evaluation backends | Store traces, trajectories, metrics, and analysis data. | NeMo Flow emits lifecycle events and exports them to in-process subscribers, Agent Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF), OpenTelemetry, OpenInference-compatible traces, or other backends. |
+| NeMo model, inference, and deployment components | Provide or serve the models an agent uses. | NeMo Relay records and controls LLM execution boundaries, but it does not train, host, or route model inference by itself. |
+| NeMo Agent Toolkit and agent application frameworks | Build, run, profile, and optimize agent workflows across tools, data sources, and framework choices. | NeMo Relay can sit below these systems as the shared runtime contract for scopes, middleware, lifecycle events, subscribers, and plugins. |
+| NeMo Guardrails and policy systems | Define safety, control, and compliance behavior for LLM applications. | NeMo Relay can host runtime guardrails and intercepts around managed tool and LLM calls, while higher-level guardrail systems can still own policy authoring and orchestration. |
+| Application harnesses and workflow code | Decide the agent pattern, planner, memory, retries, scheduling, and user-facing behavior. | NeMo Relay instruments the execution boundaries that the harness already owns. |
+| Observability and evaluation backends | Store traces, trajectories, metrics, and analysis data. | NeMo Relay emits lifecycle events and exports them to in-process subscribers, Agent Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF), OpenTelemetry, OpenInference-compatible traces, or other backends. |
 
-In practical terms, NeMo Flow answers a different question than higher-level
-agent products. A framework asks, "What should the agent do next?" NeMo Flow
+In practical terms, NeMo Relay answers a different question than higher-level
+agent products. A framework asks, "What should the agent do next?" NeMo Relay
 asks, "When the agent does work, which scope owns it, which middleware applies,
 what events are emitted, and which subscribers can consume the result?"
 
@@ -43,7 +43,7 @@ flowchart TB
     User[User / Application]
     Framework[Agent Framework or Harness]
     Toolkit[NeMo Agent Toolkit / Framework Integrations]
-    Flow[NeMo Flow Runtime]
+    Flow[NeMo Relay Runtime]
     Provider[Model, Tool, or Provider SDK]
     Obs[Subscribers and Observability Backends]
     Policy[Guardrails, Intercepts, and Plugins]
@@ -64,19 +64,19 @@ flowchart TB
     class Policy green-lightest;
 ```
 
-The dotted path matters. An application or custom harness can call NeMo Flow
+The dotted path matters. An application or custom harness can call NeMo Relay
 directly without adopting a higher-level framework. A framework integration can
-also call NeMo Flow on behalf of application code when the framework owns the
+also call NeMo Relay on behalf of application code when the framework owns the
 tool or provider boundary.
 
-## How NeMo Flow Fits Agent Frameworks And Harnesses
+## How NeMo Relay Fits Agent Frameworks And Harnesses
 
 The agent framework and harness landscape is intentionally mixed. A team might
 use NeMo Agent Toolkit, LangChain, LangGraph, an internal orchestration layer, a
-provider SDK, or direct application code. NeMo Flow is designed to meet those
+provider SDK, or direct application code. NeMo Relay is designed to meet those
 systems at stable execution boundaries instead of requiring one framework shape.
 
-| Integration Point | Use NeMo Flow For | Keep In The Framework Or Harness |
+| Integration Point | Use NeMo Relay For | Keep In The Framework Or Harness |
 |---|---|---|
 | Request, run, workflow, or agent lifecycle hooks | Create scopes, emit scope start and end events, and isolate concurrent work. | Scheduling, routing, retry policy, planner choice, memory, and user session state. |
 | Tool invocation callbacks | Run managed tool execution, apply tool middleware, emit tool lifecycle events, and preserve parent scope context. | Tool discovery, tool schema presentation, framework-specific callback signatures, and application-visible result handling. |
@@ -85,17 +85,17 @@ systems at stable execution boundaries instead of requiring one framework shape.
 | Cross-cutting behavior | Package middleware, subscribers, adaptive behavior, and reusable policy as plugins. | Framework configuration, agent definitions, deployment topology, and business logic. |
 
 Prefer a managed execution wrapper when a framework exposes a stable callback
-that NeMo Flow can own. Use explicit lifecycle calls or standalone helpers when
+that NeMo Relay can own. Use explicit lifecycle calls or standalone helpers when
 the framework owns the callback internally but exposes reliable start, finish, or
 request transformation hooks.
 
-This lets NeMo Flow provide consistent runtime semantics without forcing a
+This lets NeMo Relay provide consistent runtime semantics without forcing a
 framework migration:
 
 - Applications keep their existing agent orchestration model
 - Framework adapters preserve public behavior and callback signatures
 - Non-serializable provider objects stay in framework-owned storage
-- NeMo Flow receives JSON-compatible payloads for middleware and events
+- NeMo Relay receives JSON-compatible payloads for middleware and events
 - Subscribers see a consistent scope, tool, and LLM event stream across integrations
 
 ## Related Topics

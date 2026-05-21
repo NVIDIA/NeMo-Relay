@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! OpenInference subscriber support for NeMo Flow.
+//! OpenInference subscriber support for NeMo Relay.
 //!
-//! This crate adapts NeMo Flow lifecycle events into OpenInference trace spans:
+//! This crate adapts NeMo Relay lifecycle events into OpenInference trace spans:
 //!
 //! - scope/tool/LLM `Start` events open spans
 //! - matching `End` events close spans
@@ -13,7 +13,7 @@
 //! The public API is intentionally small:
 //!
 //! - [`OpenInferenceConfig`] configures the OTLP exporter and OpenInference metadata
-//! - [`OpenInferenceSubscriber`] exposes a NeMo Flow [`EventSubscriberFn`] and
+//! - [`OpenInferenceSubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
 //!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
 
 use std::collections::HashMap;
@@ -123,10 +123,10 @@ impl Default for OpenInferenceConfig {
             endpoint: None,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
-            service_name: "nemo-flow".to_string(),
+            service_name: "nemo-relay".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nemo-flow-openinference".to_string(),
+            instrumentation_scope: "nemo-relay-openinference".to_string(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
         }
@@ -198,7 +198,7 @@ impl OpenInferenceConfig {
     }
 }
 
-/// OpenInference-backed NeMo Flow subscriber.
+/// OpenInference-backed NeMo Relay subscriber.
 #[derive(Clone)]
 pub struct OpenInferenceSubscriber {
     inner: Arc<Inner>,
@@ -263,12 +263,12 @@ impl OpenInferenceSubscriber {
         }
     }
 
-    /// Returns the raw NeMo Flow subscriber callback for custom registration flows.
+    /// Returns the raw NeMo Relay subscriber callback for custom registration flows.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
     }
 
-    /// Registers this subscriber globally with the NeMo Flow runtime.
+    /// Registers this subscriber globally with the NeMo Relay runtime.
     pub fn register(&self, name: &str) -> Result<()> {
         register_subscriber(name, self.subscriber()).map_err(Into::into)
     }
@@ -288,7 +288,7 @@ impl OpenInferenceSubscriber {
 
     /// Shuts down the underlying tracer provider.
     ///
-    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Flow.
+    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
     pub fn shutdown(&self) -> Result<()> {
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenInferenceError::Provider("the subscriber state lock was poisoned".to_string())
@@ -573,7 +573,7 @@ impl OpenInferenceEventProcessor {
             oi::OPENINFERENCE_SPAN_KIND,
             OpenInferenceSpanKind::Chain,
         ));
-        span_attributes.push(KeyValue::new("nemo_flow.mark.orphan", true));
+        span_attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         span.set_attributes(span_attributes);
         span.end_with_timestamp(timestamp);
     }
@@ -643,7 +643,7 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
     if handle_attributes.is_some_and(|attributes| !attributes.is_empty()) {
         push_serialized(
             &mut attributes,
-            "nemo_flow.handle_attributes_json",
+            "nemo_relay.handle_attributes_json",
             handle_attributes,
         );
     }
@@ -651,7 +651,11 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
         .category()
         .is_none_or(|category| category.as_str() != "llm")
     {
-        push_serialized(&mut attributes, "nemo_flow.start.input_json", event.input());
+        push_serialized(
+            &mut attributes,
+            "nemo_relay.start.input_json",
+            event.input(),
+        );
     }
     if event
         .category()
@@ -681,7 +685,11 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
-    push_serialized(&mut attributes, "nemo_flow.end.output_json", event.output());
+    push_serialized(
+        &mut attributes,
+        "nemo_relay.end.output_json",
+        event.output(),
+    );
     if let Some((output, mime_type)) = openinference_output_value(event) {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));
@@ -836,9 +844,9 @@ fn first_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     let handle_attributes = event.attributes();
     let mut attributes = vec![
-        KeyValue::new("nemo_flow.mark.uuid", event.uuid().to_string()),
+        KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
-            "nemo_flow.mark.parent_uuid",
+            "nemo_relay.mark.parent_uuid",
             event
                 .parent_uuid()
                 .map(|uuid| uuid.to_string())
@@ -847,13 +855,13 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     ];
     push_serialized(
         &mut attributes,
-        "nemo_flow.mark.attributes_json",
+        "nemo_relay.mark.attributes_json",
         handle_attributes,
     );
-    push_serialized(&mut attributes, "nemo_flow.mark.data_json", event.data());
+    push_serialized(&mut attributes, "nemo_relay.mark.data_json", event.data());
     push_serialized(
         &mut attributes,
-        "nemo_flow.mark.metadata_json",
+        "nemo_relay.mark.metadata_json",
         event.metadata(),
     );
     attributes
@@ -865,16 +873,16 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
             oi::OPENINFERENCE_SPAN_KIND,
             openinference_span_kind(semantic_scope_type(event)),
         ),
-        KeyValue::new("nemo_flow.uuid", event.uuid().to_string()),
+        KeyValue::new("nemo_relay.uuid", event.uuid().to_string()),
         KeyValue::new(
-            "nemo_flow.parent_uuid",
+            "nemo_relay.parent_uuid",
             event
                 .parent_uuid()
                 .map(|uuid| uuid.to_string())
                 .unwrap_or_default(),
         ),
         KeyValue::new(
-            "nemo_flow.scope_type",
+            "nemo_relay.scope_type",
             scope_type_name(semantic_scope_type(event)),
         ),
     ];

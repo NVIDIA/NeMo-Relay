@@ -14,7 +14,7 @@ const observability = require('../observability.js');
 const { ScopeType, pushScope, popScope, event } = require('../index.js');
 
 function tempDir(prefix) {
-  return mkdtempSync(join(tmpdir(), `nemo-flow-${prefix}-`));
+  return mkdtempSync(join(tmpdir(), `nemo-relay-${prefix}-`));
 }
 
 describe('observability plugin helpers', () => {
@@ -23,16 +23,16 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(observability.atofConfig(), { enabled: false, mode: 'append' });
     assert.deepEqual(observability.atifConfig(), {
       enabled: false,
-      agent_name: 'NeMo Flow',
+      agent_name: 'NeMo Relay',
       model_name: 'unknown',
-      filename_template: 'nemo-flow-atif-{session_id}.json',
+      filename_template: 'nemo-relay-atif-{session_id}.json',
     });
     assert.deepEqual(observability.otlpConfig(), {
       enabled: false,
       transport: 'http_binary',
       headers: {},
       resource_attributes: {},
-      service_name: 'nemo-flow',
+      service_name: 'nemo-relay',
       timeout_millis: 3000,
     });
 
@@ -53,10 +53,7 @@ describe('observability plugin helpers', () => {
         }),
       ],
     });
-    assert.deepEqual(
-      report.diagnostics.map((diagnostic) => diagnostic.field).sort(),
-      ['filename_template', 'mode'],
-    );
+    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'mode']);
   });
 
   it('activates ATOF and ATIF file sinks', async () => {
@@ -99,7 +96,10 @@ describe('observability plugin helpers', () => {
     }
 
     const records = readFileSync(join(outputDirectory, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-    assert.deepEqual(records.map((record) => record.kind), ['scope', 'mark', 'scope']);
+    assert.deepEqual(
+      records.map((record) => record.kind),
+      ['scope', 'mark', 'scope'],
+    );
 
     const trajectory = JSON.parse(readFileSync(join(outputDirectory, `trajectory-${records[0].uuid}.json`), 'utf8'));
     assert.equal(trajectory.agent.name, 'node-agent');

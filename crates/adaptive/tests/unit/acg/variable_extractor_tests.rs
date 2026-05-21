@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for variable extractor in the NeMo Flow adaptive crate.
+//! Unit tests for variable extractor in the NeMo Relay adaptive crate.
 
 use regex::Regex;
 

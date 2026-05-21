@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    NemoFlowFreeFn, NemoFlowStatus, NemoFlowToolConditionalCb, NemoFlowToolExecInterceptCb,
-    NemoFlowToolSanitizeCb, c_char, c_str_to_string, clear_last_error, core_registry_api,
+    NemoRelayFreeFn, NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
+    NemoRelayToolSanitizeCb, c_char, c_str_to_string, clear_last_error, core_registry_api,
     status_from_error, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
     wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
@@ -21,10 +21,10 @@ macro_rules! ffi_guardrail_tool_api {
         pub unsafe extern "C" fn $register_name(
             name: *const c_char,
             priority: i32,
-            cb: NemoFlowToolSanitizeCb,
+            cb: NemoRelayToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NemoFlowFreeFn,
-        ) -> NemoFlowStatus {
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
@@ -32,7 +32,7 @@ macro_rules! ffi_guardrail_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&name, priority, wrapped) {
-                Ok(()) => NemoFlowStatus::Ok,
+                Ok(()) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -41,14 +41,14 @@ macro_rules! ffi_guardrail_tool_api {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $deregister_name(
             name: *const c_char,
-        ) -> NemoFlowStatus {
+        ) -> NemoRelayStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
                 Err(status) => return status,
             };
             match $core_deregister(&name) {
-                Ok(_) => NemoFlowStatus::Ok,
+                Ok(_) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -68,12 +68,12 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nemo_flow_register_tool_sanitize_request_guardrail,
+    nemo_relay_register_tool_sanitize_request_guardrail,
     /// Deregister a tool request sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nemo_flow_deregister_tool_sanitize_request_guardrail,
+    nemo_relay_deregister_tool_sanitize_request_guardrail,
     core_registry_api::register_tool_sanitize_request_guardrail,
     core_registry_api::deregister_tool_sanitize_request_guardrail,
     wrap_tool_sanitize_fn
@@ -92,12 +92,12 @@ ffi_guardrail_tool_api!(
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nemo_flow_register_tool_sanitize_response_guardrail,
+    nemo_relay_register_tool_sanitize_response_guardrail,
     /// Deregister a tool response sanitization guardrail by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nemo_flow_deregister_tool_sanitize_response_guardrail,
+    nemo_relay_deregister_tool_sanitize_response_guardrail,
     core_registry_api::register_tool_sanitize_response_guardrail,
     core_registry_api::deregister_tool_sanitize_response_guardrail,
     wrap_tool_sanitize_fn
@@ -114,19 +114,19 @@ ffi_guardrail_tool_api!(
 /// - `free_fn`: Optional destructor for `user_data`.
 ///
 /// The callback is fallible. To signal an internal callback failure instead of
-/// allow/reject, call [`crate::error::nemo_flow_set_last_error_message`] from C
+/// allow/reject, call [`crate::error::nemo_relay_set_last_error_message`] from C
 /// and return null.
 ///
 /// # Safety
 /// `name` must be a valid C string. `cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_register_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_register_tool_conditional_execution_guardrail(
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowToolConditionalCb,
+    cb: NemoRelayToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -135,7 +135,7 @@ pub unsafe extern "C" fn nemo_flow_register_tool_conditional_execution_guardrail
     let wrapped = wrap_tool_conditional_fn(cb, user_data, free_fn);
     match core_registry_api::register_tool_conditional_execution_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -145,16 +145,16 @@ pub unsafe extern "C" fn nemo_flow_register_tool_conditional_execution_guardrail
 /// # Safety
 /// `name` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_deregister_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_deregister_tool_conditional_execution_guardrail(
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     match core_registry_api::deregister_tool_conditional_execution_guardrail(&name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -173,10 +173,10 @@ macro_rules! ffi_intercept_tool_api {
             name: *const c_char,
             priority: i32,
             break_chain: bool,
-            cb: NemoFlowToolSanitizeCb,
+            cb: NemoRelayToolSanitizeCb,
             user_data: *mut libc::c_void,
-            free_fn: NemoFlowFreeFn,
-        ) -> NemoFlowStatus {
+            free_fn: NemoRelayFreeFn,
+        ) -> NemoRelayStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
@@ -184,7 +184,7 @@ macro_rules! ffi_intercept_tool_api {
             };
             let wrapped = $wrapper(cb, user_data, free_fn);
             match $core_register(&name, priority, break_chain, wrapped) {
-                Ok(()) => NemoFlowStatus::Ok,
+                Ok(()) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -193,14 +193,14 @@ macro_rules! ffi_intercept_tool_api {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $deregister_name(
             name: *const c_char,
-        ) -> NemoFlowStatus {
+        ) -> NemoRelayStatus {
             clear_last_error();
             let name = match c_str_to_string(name) {
                 Ok(s) => s,
                 Err(status) => return status,
             };
             match $core_deregister(&name) {
-                Ok(_) => NemoFlowStatus::Ok,
+                Ok(_) => NemoRelayStatus::Ok,
                 Err(e) => status_from_error(&e),
             }
         }
@@ -221,16 +221,16 @@ ffi_intercept_tool_api!(
     /// - `free_fn`: Optional destructor for `user_data`.
     ///
     /// The callback is fallible. To signal failure, call
-    /// [`crate::error::nemo_flow_set_last_error_message`] from C and return null.
+    /// [`crate::error::nemo_relay_set_last_error_message`] from C and return null.
     ///
     /// # Safety
     /// `name` must be a valid C string. `cb` must be a valid function pointer.
-    nemo_flow_register_tool_request_intercept,
+    nemo_relay_register_tool_request_intercept,
     /// Deregister a tool request intercept by name.
     ///
     /// # Safety
     /// `name` must be a valid C string.
-    nemo_flow_deregister_tool_request_intercept,
+    nemo_relay_deregister_tool_request_intercept,
     core_registry_api::register_tool_request_intercept,
     core_registry_api::deregister_tool_request_intercept,
     wrap_tool_request_intercept_fn
@@ -251,13 +251,13 @@ ffi_intercept_tool_api!(
 /// # Safety
 /// `name` must be a valid C string. Callback pointers must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_register_tool_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_register_tool_execution_intercept(
     name: *const c_char,
     priority: i32,
-    exec_cb: NemoFlowToolExecInterceptCb,
+    exec_cb: NemoRelayToolExecInterceptCb,
     exec_user_data: *mut libc::c_void,
-    exec_free: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    exec_free: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -265,7 +265,7 @@ pub unsafe extern "C" fn nemo_flow_register_tool_execution_intercept(
     };
     let exec = wrap_tool_exec_intercept_fn(exec_cb, exec_user_data, exec_free);
     match core_registry_api::register_tool_execution_intercept(&name, priority, exec) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -275,16 +275,16 @@ pub unsafe extern "C" fn nemo_flow_register_tool_execution_intercept(
 /// # Safety
 /// `name` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_deregister_tool_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_deregister_tool_execution_intercept(
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     match core_registry_api::deregister_tool_execution_intercept(&name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }

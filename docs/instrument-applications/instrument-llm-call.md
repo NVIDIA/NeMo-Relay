@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Instrument an LLM Call
 
-Use this guide when you own the model-provider callback and want NeMo Flow to emit lifecycle events, apply LLM middleware, and preserve the active agent scope around the call.
+Use this guide when you own the model-provider callback and want NeMo Relay to emit lifecycle events, apply LLM middleware, and preserve the active agent scope around the call.
 
 ## What You Build
 
@@ -28,11 +28,11 @@ Complete one binding Quick Start guide first:
 
 Create a scope for the active request or agent run before adding LLM instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](adding-scopes-and-marks.md).
 
-The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Flow.
+The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Relay.
 
 ## Integration Pattern
 
-Follow these steps to route the provider invocation through NeMo Flow:
+Follow these steps to route the provider invocation through NeMo Relay:
 
 1. Identify the stable provider invocation boundary in your application.
 2. Create or inherit a scope for the current agent run, request, or workflow.
@@ -55,14 +55,14 @@ The examples below wrap a demo provider callback and print emitted events.
 ```python
 import asyncio
 
-import nemo_flow
+import nemo_relay
 
 
 def log_event(event) -> None:
     print(f"{event.kind} {event.name}")
 
 
-async def call_provider(request: nemo_flow.LLMRequest):
+async def call_provider(request: nemo_relay.LLMRequest):
     return {
         "text": "hello",
         "messages": request.content["messages"],
@@ -70,15 +70,15 @@ async def call_provider(request: nemo_flow.LLMRequest):
 
 
 async def main() -> None:
-    nemo_flow.subscribers.register("llm-check", log_event)
+    nemo_relay.subscribers.register("llm-check", log_event)
 
     try:
-        with nemo_flow.scope.scope("agent-run", nemo_flow.ScopeType.Agent) as handle:
-            request = nemo_flow.LLMRequest(
+        with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
+            request = nemo_relay.LLMRequest(
                 {},
                 {"messages": [{"role": "user", "content": "hello"}]},
             )
-            result = await nemo_flow.llm.execute(
+            result = await nemo_relay.llm.execute(
                 "demo-provider",
                 request,
                 call_provider,
@@ -87,7 +87,7 @@ async def main() -> None:
             )
             print(result)
     finally:
-        nemo_flow.subscribers.deregister("llm-check")
+        nemo_relay.subscribers.deregister("llm-check")
 
 
 asyncio.run(main())
@@ -106,7 +106,7 @@ const {
   llmCallExecute,
   registerSubscriber,
   withScope,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("llm-check", (event) => {
@@ -152,11 +152,11 @@ main().catch((error) => {
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_flow::api::scope::{
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 

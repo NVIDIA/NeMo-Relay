@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for tool parallelism plan in the NeMo Flow adaptive crate.
+//! Integration tests for tool parallelism plan in the NeMo Relay adaptive crate.
 
 use std::sync::{Arc, RwLock};
 
@@ -9,14 +9,14 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
-use nemo_flow_adaptive::{
+use nemo_relay_adaptive::{
     InMemoryBackend, StorageBackend, StorageBackendDyn, ToolParallelismLearner,
 };
-use nemo_flow_adaptive::learner::traits::Learner;
-use nemo_flow_adaptive::types::cache::HotCache;
-use nemo_flow_adaptive::types::metadata::{MetadataEnvelope, ParallelHint};
-use nemo_flow_adaptive::types::plan::{ExecutionPlan, ParallelGroup};
-use nemo_flow_adaptive::types::records::{CallKind, CallRecord, RunRecord};
+use nemo_relay_adaptive::learner::traits::Learner;
+use nemo_relay_adaptive::types::cache::HotCache;
+use nemo_relay_adaptive::types::metadata::{MetadataEnvelope, ParallelHint};
+use nemo_relay_adaptive::types::plan::{ExecutionPlan, ParallelGroup};
+use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
 
 fn make_hot_cache() -> Arc<RwLock<HotCache>> {
     Arc::new(RwLock::new(HotCache {

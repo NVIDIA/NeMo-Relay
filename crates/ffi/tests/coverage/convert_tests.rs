@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for convert in the NeMo Flow FFI crate.
+//! Coverage tests for convert in the NeMo Relay FFI crate.
 
 use super::*;
 use std::ffi::CString;
@@ -42,14 +42,14 @@ fn test_string_to_c_string_round_trip_and_validation() {
         serde_json::from_str::<Json>(&json_text).unwrap(),
         json!({"ok": true})
     );
-    unsafe { nemo_flow_string_free(json_ptr) };
+    unsafe { nemo_relay_string_free(json_ptr) };
 
     let string_ptr = str_to_c_string("ffi-string");
     assert_eq!(
         unsafe { CStr::from_ptr(string_ptr) }.to_str().unwrap(),
         "ffi-string"
     );
-    unsafe { nemo_flow_string_free(string_ptr) };
+    unsafe { nemo_relay_string_free(string_ptr) };
 
     clear_last_error();
     assert_eq!(
@@ -58,16 +58,16 @@ fn test_string_to_c_string_round_trip_and_validation() {
     );
     assert_eq!(
         c_str_to_string(std::ptr::null()),
-        Err(NemoFlowStatus::NullPointer)
+        Err(NemoRelayStatus::NullPointer)
     );
     assert_eq!(last_error_message(), Some("null string pointer".into()));
 
     let invalid_utf8 = [0xffu8, 0];
     assert_eq!(
         c_str_to_string(invalid_utf8.as_ptr() as *const c_char),
-        Err(NemoFlowStatus::InvalidUtf8)
+        Err(NemoRelayStatus::InvalidUtf8)
     );
     assert!(last_error_message().unwrap().contains("invalid UTF-8"));
 
-    unsafe { nemo_flow_string_free(std::ptr::null_mut()) };
+    unsafe { nemo_relay_string_free(std::ptr::null_mut()) };
 }

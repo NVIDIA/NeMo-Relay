@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Wrap LLM Calls
 
-Use this guide when a framework, SDK, or provider adapter owns model invocation and you need NeMo Flow to observe and control those provider calls.
+Use this guide when a framework, SDK, or provider adapter owns model invocation and you need NeMo Relay to observe and control those provider calls.
 
 ## What You Build
 
-You will place a managed NeMo Flow LLM execution wrapper at the provider boundary. The wrapper emits LLM lifecycle events, runs LLM middleware, attaches the call to the active scope, records the `model_name`, and returns the provider response to the framework.
+You will place a managed NeMo Relay LLM execution wrapper at the provider boundary. The wrapper emits LLM lifecycle events, runs LLM middleware, attaches the call to the active scope, records the `model_name`, and returns the provider response to the framework.
 
 ## Before You Start
 
@@ -45,8 +45,8 @@ The examples below wrap one provider call and attach it to the active parent sco
 ```python
 from typing import TypedDict
 
-import nemo_flow
-from nemo_flow import LLMRequest
+import nemo_relay
+from nemo_relay import LLMRequest
 
 
 class LlmResponse(TypedDict):
@@ -55,13 +55,13 @@ class LlmResponse(TypedDict):
 
 
 async def framework_llm(provider_name: str, payload: object) -> LlmResponse:
-    parent = nemo_flow.scope.get_handle()
+    parent = nemo_relay.scope.get_handle()
     request = LLMRequest({}, payload)
 
     async def invoke(req: LLMRequest) -> LlmResponse:
         return {"text": "hi", "request": req.content}
 
-    return await nemo_flow.llm.execute(
+    return await nemo_relay.llm.execute(
         provider_name,
         request,
         invoke,
@@ -75,7 +75,7 @@ async def framework_llm(provider_name: str, payload: object) -> LlmResponse:
 :sync: node
 
 ```ts
-import { getHandle, LlmRequest, llmCallExecute, type ScopeHandle } from 'nemo-flow-node';
+import { getHandle, LlmRequest, llmCallExecute, type ScopeHandle } from 'nemo-relay-node';
 
 type LlmResponse = { text: string; request: unknown };
 
@@ -101,8 +101,8 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_flow::api::scope::get_handle;
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::api::scope::get_handle;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -135,7 +135,7 @@ async fn run_provider_call() -> anyhow::Result<serde_json::Value> {
 
 ## Streaming Providers
 
-Use the LLM stream execute helper when the framework exposes a stream boundary that NeMo Flow can own. Stream wrappers preserve the same scope and middleware model while letting subscribers observe the completed response after chunks are collected.
+Use the LLM stream execute helper when the framework exposes a stream boundary that NeMo Relay can own. Stream wrappers preserve the same scope and middleware model while letting subscribers observe the completed response after chunks are collected.
 
 If the framework owns the stream internally, emit explicit start and end lifecycle events around the provider stream and use mark events for retry, queue, and partial-output milestones.
 
@@ -155,8 +155,8 @@ Check these symptoms first when the workflow does not behave as expected.
 
 - **The LLM appears outside the request trace**: Pass the active scope handle or run the provider call inside the framework request scope.
 - **The model name is missing**: Pass `model_name` from the provider payload, model client, or framework run configuration.
-- **Request middleware receives provider objects**: Convert provider payloads into `LLMRequest` with JSON-compatible content before calling NeMo Flow.
-- **Stream output is incomplete**: Use the stream execute helper when NeMo Flow owns the stream boundary, or emit explicit lifecycle events when it does not.
+- **Request middleware receives provider objects**: Convert provider payloads into `LLMRequest` with JSON-compatible content before calling NeMo Relay.
+- **Stream output is incomplete**: Use the stream execute helper when NeMo Relay owns the stream boundary, or emit explicit lifecycle events when it does not.
 
 ## Next Steps
 

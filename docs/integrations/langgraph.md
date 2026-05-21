@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Flow LangGraph Integration
+# NeMo Relay LangGraph Integration
 
-Use the `nemo_flow.integrations.langgraph` package to add NeMo Flow
+Use the `nemo_relay.integrations.langgraph` package to add NeMo Relay
 observability to [LangGraph](https://www.langchain.com/langgraph) workflows through public LangGraph APIs.
 
 ## Setup
@@ -20,7 +20,7 @@ Install the LangGraph integration extra in your application environment.
 :sync: uv
 
 ```bash
-uv add "nemo-flow[langgraph]"
+uv add "nemo-relay[langgraph]"
 ```
 :::
 
@@ -28,7 +28,7 @@ uv add "nemo-flow[langgraph]"
 :sync: pip
 
 ```bash
-pip install "nemo-flow[langgraph]"
+pip install "nemo-relay[langgraph]"
 ```
 :::
 
@@ -42,9 +42,9 @@ dependencies.
 ```python
 from typing_extensions import TypedDict
 
-import nemo_flow
+import nemo_relay
 from langgraph.graph import END, START, StateGraph
-from nemo_flow.integrations.langgraph import NemoFlowCallbackHandler
+from nemo_relay.integrations.langgraph import NemoRelayCallbackHandler
 
 
 class State(TypedDict):
@@ -62,28 +62,28 @@ builder.add_edge("increment", END)
 
 graph = builder.compile()
 
-with nemo_flow.scope.scope("langgraph-request", nemo_flow.ScopeType.Agent):
+with nemo_relay.scope.scope("langgraph-request", nemo_relay.ScopeType.Agent):
     result = graph.invoke(
         {"value": 1},
-        config={"callbacks": [NemoFlowCallbackHandler()]},
+        config={"callbacks": [NemoRelayCallbackHandler()]},
     )
 
 print(result)
 ```
 
-For LangChain agents inside a LangGraph workflow, use `NemoFlowMiddleware` from
+For LangChain agents inside a LangGraph workflow, use `NemoRelayMiddleware` from
 this package the same way as the LangChain integration and pass the LangGraph
 `config` into the nested agent call:
 
 ```python
 from langchain.agents import create_agent
 from langchain_core.runnables import RunnableConfig
-from nemo_flow.integrations.langgraph import NemoFlowMiddleware
+from nemo_relay.integrations.langgraph import NemoRelayMiddleware
 
 agent = create_agent(
     model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
     tools=[],
-    middleware=[NemoFlowMiddleware()],
+    middleware=[NemoRelayMiddleware()],
 )
 
 
@@ -102,7 +102,7 @@ example as written:
 :sync: uv
 
 ```bash
-uv add "nemo-flow[langgraph,langchain-nvidia]"
+uv add "nemo-relay[langgraph,langchain-nvidia]"
 ```
 :::
 
@@ -110,7 +110,7 @@ uv add "nemo-flow[langgraph,langchain-nvidia]"
 :sync: pip
 
 ```bash
-pip install "nemo-flow[langgraph,langchain-nvidia]"
+pip install "nemo-relay[langgraph,langchain-nvidia]"
 ```
 :::
 
@@ -118,4 +118,4 @@ pip install "nemo-flow[langgraph,langchain-nvidia]"
 
 ## Observability
 
-Refer to [Observability](../plugins/observability/about.md) for details on exporting NeMo Flow observability data to third-party systems.
+Refer to [Observability](../plugins/observability/about.md) for details on exporting NeMo Relay observability data to third-party systems.

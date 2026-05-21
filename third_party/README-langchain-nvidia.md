@@ -5,25 +5,25 @@ SPDX-License-Identifier: Apache-2.0
 
 # LangChain NVIDIA Patch Setup
 
-This directory contains the NeMo Flow integration patch for
+This directory contains the NeMo Relay integration patch for
 `third_party/langchain-nvidia`, specifically the `libs/ai-endpoints`
 `langchain_nvidia_ai_endpoints` package.
 
-The patch adds optional NeMo Flow LLM execution wrappers for ChatNVIDIA. The
-integration stays inactive unless `nemo_flow` is importable and a NeMo Flow
+The patch adds optional NeMo Relay LLM execution wrappers for ChatNVIDIA. The
+integration stays inactive unless `nemo_relay` is importable and a NeMo Relay
 scope stack is already active.
 
 ## Setup
 
-From the NeMo Flow repository root:
+From the NeMo Relay repository root:
 
 ```bash
 ./scripts/bootstrap-third-party.sh
 ./scripts/apply-patches.sh --check
-git -C third_party/langchain-nvidia apply ../../patches/langchain-nvidia/0001-add-nemo-flow-integration.patch
+git -C third_party/langchain-nvidia apply ../../patches/langchain-nvidia/0001-add-nemo-relay-integration.patch
 ```
 
-For local runtime validation, install the NeMo Flow Python package and the
+For local runtime validation, install the NeMo Relay Python package and the
 patched LangChain NVIDIA package into the same environment:
 
 ```bash
@@ -35,18 +35,18 @@ uv pip install -e third_party/langchain-nvidia/libs/ai-endpoints
 
 ## Usage Example
 
-Use ChatNVIDIA inside an active NeMo Flow scope. The patched package detects
-the active scope stack and routes the request through `nemo_flow.llm.execute`
-or `nemo_flow.llm.stream_execute`; otherwise it falls back to the vanilla
+Use ChatNVIDIA inside an active NeMo Relay scope. The patched package detects
+the active scope stack and routes the request through `nemo_relay.llm.execute`
+or `nemo_relay.llm.stream_execute`; otherwise it falls back to the vanilla
 ChatNVIDIA path.
 
 ```python
-import nemo_flow
+import nemo_relay
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
-with nemo_flow.scope.scope("langchain-nvidia-request", nemo_flow.ScopeType.Agent):
+with nemo_relay.scope.scope("langchain-nvidia-request", nemo_relay.ScopeType.Agent):
     model = ChatNVIDIA(model="meta/llama-3.1-70b-instruct")
-    response = model.invoke("Summarize NeMo Flow in one sentence.")
+    response = model.invoke("Summarize NeMo Relay in one sentence.")
     print(response.content)
 ```
 
@@ -60,7 +60,7 @@ Run a structural syntax check for the patched files:
 
 ```bash
 uv run python -m py_compile \
-  third_party/langchain-nvidia/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nemo_flow.py \
+  third_party/langchain-nvidia/libs/ai-endpoints/langchain_nvidia_ai_endpoints/_nemo_relay.py \
   third_party/langchain-nvidia/libs/ai-endpoints/langchain_nvidia_ai_endpoints/chat_models.py
 ```
 

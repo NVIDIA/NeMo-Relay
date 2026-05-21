@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-adaptive"
+name = "nemo-relay-adaptive"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Adaptive runtime primitives and Redis-backed learning components for NeMo Flow."
+description = "Adaptive runtime primitives and Redis-backed learning components for NeMo Relay."
 readme = "README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
-nemo-flow.workspace = true
+nemo-relay.workspace = true
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

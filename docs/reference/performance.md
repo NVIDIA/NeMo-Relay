@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Performance
 
-NeMo Flow keeps runtime overhead focused around the work that is active for the current scope and call.
+NeMo Relay keeps runtime overhead focused around the work that is active for the current scope and call.
 
 ## Runtime Model
 

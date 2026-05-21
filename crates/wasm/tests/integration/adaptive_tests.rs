@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for adaptive in the NeMo Flow WebAssembly crate.
+//! Integration tests for adaptive in the NeMo Relay WebAssembly crate.
 
 use serde_json::json;
 use wasm_bindgen_test::*;
 
-use nemo_flow_wasm::api::{
+use nemo_relay_wasm::api::{
     clear_plugin_configuration, deregister_plugin, initialize_plugins, register_plugin,
     validate_plugin_config,
 };

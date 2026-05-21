@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for plugin in the NeMo Flow core crate.
+//! Unit tests for plugin in the NeMo Relay core crate.
 
 use super::*;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::api::llm::LlmRequest;
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::tool::tool_conditional_execution;
 use crate::error::FlowError;
@@ -57,7 +57,7 @@ fn expect_registration_failed(result: Result<()>, message_fragment: &str) {
 fn set_conflicting_runtime_owner_for_tests() {
     unsafe {
         std::env::set_var(
-            "NEMO_FLOW_RUNTIME_OWNER",
+            "NEMO_RELAY_RUNTIME_OWNER",
             format!(
                 "pid={};binding=python;version={}",
                 std::process::id(),
@@ -297,7 +297,7 @@ fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
     clear_plugin_configuration().unwrap();
     recorded_names().lock().unwrap().clear();
     PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
@@ -596,11 +596,11 @@ fn test_plugin_component_helpers_and_serialization_error_variant() {
     assert_eq!(totals.get("beta.plugin"), Some(&1));
     assert_eq!(
         component_namespace("alpha.plugin", 1, totals["alpha.plugin"]),
-        "__nemo_flow_plugin__alpha.plugin__1__"
+        "__nemo_relay_plugin__alpha.plugin__1__"
     );
     assert_eq!(
         component_namespace("beta.plugin", 1, totals["beta.plugin"]),
-        "__nemo_flow_plugin__beta.plugin__"
+        "__nemo_relay_plugin__beta.plugin__"
     );
 
     let parse_error = serde_json::from_str::<PluginConfig>("{").unwrap_err();
@@ -776,8 +776,8 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     assert_eq!(
         names,
         vec![
-            "__nemo_flow_plugin__recording.plugin__subscriber",
-            "__nemo_flow_plugin__recording.plugin__subscriber",
+            "__nemo_relay_plugin__recording.plugin__subscriber",
+            "__nemo_relay_plugin__recording.plugin__subscriber",
         ]
     );
     reset_global();
@@ -840,8 +840,8 @@ fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_ins
     assert_eq!(
         names,
         vec![
-            "__nemo_flow_plugin__recording.plugin__1__subscriber",
-            "__nemo_flow_plugin__recording.plugin__2__subscriber",
+            "__nemo_relay_plugin__recording.plugin__1__subscriber",
+            "__nemo_relay_plugin__recording.plugin__2__subscriber",
         ]
     );
     reset_global();

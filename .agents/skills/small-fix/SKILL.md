@@ -1,6 +1,6 @@
 ---
 name: small-fix
-description: Make a small, reviewable NeMo Flow bug fix without widening scope unnecessarily
+description: Make a small, reviewable NeMo Relay bug fix without widening scope unnecessarily
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---

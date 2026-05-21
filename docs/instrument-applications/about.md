@@ -5,9 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # About
 
-Use this section when you own an application, agent harness, or workflow and can route tool and LLM calls through NeMo Flow directly.
+Use this section when you own an application, agent harness, or workflow and can route tool and LLM calls through NeMo Relay directly.
 
-Direct instrumentation puts NeMo Flow at the boundaries where work happens.
+Direct instrumentation puts NeMo Relay at the boundaries where work happens.
 Scopes define request and agent ownership, managed execution helpers wrap tool
 and LLM calls, middleware applies policy and transformation, and subscribers
 receive lifecycle events. This path gives the runtime a complete view of agent

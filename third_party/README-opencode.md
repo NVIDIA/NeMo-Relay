@@ -5,23 +5,23 @@ SPDX-License-Identifier: Apache-2.0
 
 # opencode Patch Setup
 
-This directory contains the NeMo Flow integration patch for
+This directory contains the NeMo Relay integration patch for
 `third_party/opencode`.
 
-The patch adds optional NeMo Flow tracing, LLM stream wrapping, tool execution
+The patch adds optional NeMo Relay tracing, LLM stream wrapping, tool execution
 wrapping, raw ATOF JSONL export, and optional direct ATIF export support to the
-opencode package. The patch also wires opencode to the local NeMo Flow Node
+opencode package. The patch also wires opencode to the local NeMo Relay Node
 package with an optional `file:` dependency so the patched workspace can load
-`nemo-flow-node` when NeMo Flow tracing is enabled.
+`nemo-relay-node` when NeMo Relay tracing is enabled.
 
 ## Setup
 
-From the NeMo Flow repository root:
+From the NeMo Relay repository root:
 
 ```bash
 ./scripts/bootstrap-third-party.sh
 ./scripts/apply-patches.sh --check
-git -C third_party/opencode apply ../../patches/opencode/0001-add-nemo-flow-integration.patch
+git -C third_party/opencode apply ../../patches/opencode/0001-add-nemo-relay-integration.patch
 ```
 
 Install opencode dependencies with Bun:
@@ -31,8 +31,8 @@ cd third_party/opencode
 bun install --frozen-lockfile
 ```
 
-For runtime smoke tests that load `nemo-flow-node`, build the Node binding from
-the NeMo Flow repository root first:
+For runtime smoke tests that load `nemo-relay-node`, build the Node binding from
+the NeMo Relay repository root first:
 
 ```bash
 cd ../../crates/node
@@ -40,17 +40,17 @@ npm install
 npm run build
 ```
 
-Enable the integration at runtime with either `NEMO_FLOW_ENABLED=1` or the
-opencode experimental `nemo_flow` config flag. If the native addon is missing,
+Enable the integration at runtime with either `NEMO_RELAY_ENABLED=1` or the
+opencode experimental `nemo_relay` config flag. If the native addon is missing,
 the integration logs a warning and disables itself.
 
 ## Usage Example
 
-Run opencode with the NeMo Flow integration enabled by environment variable:
+Run opencode with the NeMo Relay integration enabled by environment variable:
 
 ```bash
 cd third_party/opencode
-NEMO_FLOW_ENABLED=1 bun --cwd packages/opencode run dev
+NEMO_RELAY_ENABLED=1 bun --cwd packages/opencode run dev
 ```
 
 Alternatively, enable the patched experimental config flag:
@@ -58,23 +58,23 @@ Alternatively, enable the patched experimental config flag:
 ```json
 {
   "experimental": {
-    "nemo_flow": true
+    "nemo_relay": true
   }
 }
 ```
 
-When enabled, opencode creates NeMo Flow scopes for agents and batched tool
+When enabled, opencode creates NeMo Relay scopes for agents and batched tool
 execution, wraps LLM streams and tool calls, and registers a raw ATOF JSONL
-subscriber. Set `NEMO_FLOW_ATOF_DIR` to control where `events.jsonl` is written;
+subscriber. Set `NEMO_RELAY_ATOF_DIR` to control where `events.jsonl` is written;
 otherwise it defaults to the opencode data directory's `atof` subdirectory.
 
-Direct ATIF export is optional comparison output. Set `NEMO_FLOW_ATIF_DIR` to
+Direct ATIF export is optional comparison output. Set `NEMO_RELAY_ATIF_DIR` to
 control where exported ATIF JSON files are written when a session becomes idle;
 otherwise it defaults to the opencode data directory's `atif` subdirectory.
 
 The tool wrapper keeps opencode's execution on original JavaScript values while
-passing JSON-safe snapshots to the NeMo Flow native observer. This avoids
-`structuredClone()` failures in opencode while still preserving NeMo Flow tool
+passing JSON-safe snapshots to the NeMo Relay native observer. This avoids
+`structuredClone()` failures in opencode while still preserving NeMo Relay tool
 events.
 
 ## Validation
@@ -86,12 +86,12 @@ cd third_party/opencode/packages/opencode
 bun run typecheck
 ```
 
-Also rerun the patch applicability check from the NeMo Flow repository root:
+Also rerun the patch applicability check from the NeMo Relay repository root:
 
 ```bash
 ./scripts/apply-patches.sh --check
 ```
 
-For an end-to-end smoke, run an opencode task with `NEMO_FLOW_ENABLED=1` and
-verify that the configured `NEMO_FLOW_ATOF_DIR` contains an `events.jsonl` file
+For an end-to-end smoke, run an opencode task with `NEMO_RELAY_ENABLED=1` and
+verify that the configured `NEMO_RELAY_ATOF_DIR` contains an `events.jsonl` file
 with scope and tool/LLM events.

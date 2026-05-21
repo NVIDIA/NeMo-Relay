@@ -1,6 +1,6 @@
 ---
 name: validate-change
-description: Choose and run the right NeMo Flow validation matrix for a change instead of using one fixed test list
+description: Choose and run the right NeMo Relay validation matrix for a change instead of using one fixed test list
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -89,17 +89,17 @@ uv run pytest -k "<pattern>"
 # Go
 just build-go
 just test-go
-cd go/nemo_flow && go fmt ./...
+cd go/nemo_relay && go fmt ./...
 
 # Node
 just build-node
 just test-node
-npm run format --workspace=nemo-flow-node
+npm run format --workspace=nemo-relay-node
 
 # WebAssembly
 just build-wasm
 just test-wasm
-npm run precommit:format --workspace=nemo-flow-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
+npm run precommit:format --workspace=nemo-relay-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
 
 # Third-party patches
 ./scripts/bootstrap-third-party.sh

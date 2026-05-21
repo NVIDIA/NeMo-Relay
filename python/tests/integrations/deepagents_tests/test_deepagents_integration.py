@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the Deep Agents NeMo Flow integration."""
+"""Tests for the Deep Agents NeMo Relay integration."""
 
 from __future__ import annotations
 
@@ -13,17 +13,17 @@ from uuid import uuid4
 
 import pytest
 
-import nemo_flow
+import nemo_relay
 
 if TYPE_CHECKING:
     from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
-    import nemo_flow.integrations.deepagents as deepagents_integration
+    import nemo_relay.integrations.deepagents as deepagents_integration
 
 
 @pytest.fixture(name="deepagents_integration_module", scope="session")
 def deepagents_integration_module_fixture() -> types.ModuleType:
-    import nemo_flow.integrations.deepagents as deepagents_integration
+    import nemo_relay.integrations.deepagents as deepagents_integration
 
     return deepagents_integration
 
@@ -31,8 +31,8 @@ def deepagents_integration_module_fixture() -> types.ModuleType:
 @pytest.fixture(name="callback_handler")
 def callback_handler_fixture(
     deepagents_integration_module: types.ModuleType,
-) -> deepagents_integration.NemoFlowDeepAgentsCallbackHandler:
-    return deepagents_integration_module.NemoFlowDeepAgentsCallbackHandler()
+) -> deepagents_integration.NemoRelayDeepAgentsCallbackHandler:
+    return deepagents_integration_module.NemoRelayDeepAgentsCallbackHandler()
 
 
 def _mock_deepagents_chat_model(responses: list[Any]) -> FakeMessagesListChatModel:
@@ -47,32 +47,32 @@ def _mock_deepagents_chat_model(responses: list[Any]) -> FakeMessagesListChatMod
     return _MockDeepAgentsChatModel(responses=responses)
 
 
-def _filter_mark_events(events: list[nemo_flow.Event]) -> list[nemo_flow.MarkEvent]:
-    return [event for event in events if isinstance(event, nemo_flow.MarkEvent)]
+def _filter_mark_events(events: list[nemo_relay.Event]) -> list[nemo_relay.MarkEvent]:
+    return [event for event in events if isinstance(event, nemo_relay.MarkEvent)]
 
 
-def _mark_data(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
+def _mark_data(mark: nemo_relay.MarkEvent) -> dict[str, Any]:
     assert isinstance(mark.data, dict)
     return cast(dict[str, Any], mark.data)
 
 
-def _mark_metadata(mark: nemo_flow.MarkEvent) -> dict[str, Any]:
+def _mark_metadata(mark: nemo_relay.MarkEvent) -> dict[str, Any]:
     assert isinstance(mark.metadata, dict)
     return cast(dict[str, Any], mark.metadata)
 
 
 def test_before_agent_emits_configuration_mark(
-    subscribed_events: list[nemo_flow.Event],
+    subscribed_events: list[nemo_relay.Event],
     deepagents_integration_module: types.ModuleType,
 ):
-    middleware = deepagents_integration_module.NemoFlowDeepAgentsMiddleware(
+    middleware = deepagents_integration_module.NemoRelayDeepAgentsMiddleware(
         agent_name="main-agent",
         skills=["/skills/research/"],
         subagents=[{"name": "researcher"}],
         backend_name="StateBackend",
     )
 
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
         middleware.before_agent(MagicMock(name="mock_state"), MagicMock(name="mock_runtime"))
 
     marks = _filter_mark_events(subscribed_events)
@@ -84,8 +84,8 @@ def test_before_agent_emits_configuration_mark(
 
 
 def test_callback_handler_emits_human_in_the_loop_marks(
-    subscribed_events: list[nemo_flow.Event],
-    callback_handler: deepagents_integration.NemoFlowDeepAgentsCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
 ):
     from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
     from langgraph.types import Interrupt
@@ -102,7 +102,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(
         "review_configs": [{"action_name": "edit_file", "allowed_decisions": ["approve", "reject"]}],
     }
 
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
         callback_handler.on_interrupt(
             GraphInterruptEvent(
                 run_id=run_id,
@@ -132,15 +132,15 @@ def test_callback_handler_emits_human_in_the_loop_marks(
 
 
 def test_callback_handler_falls_back_for_non_hitl_interrupt(
-    subscribed_events: list[nemo_flow.Event],
-    callback_handler: deepagents_integration.NemoFlowDeepAgentsCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
 ):
     from langgraph.callbacks import GraphInterruptEvent, GraphResumeEvent
     from langgraph.types import Interrupt
 
     run_id = uuid4()
 
-    with nemo_flow.scope.scope("request", nemo_flow.ScopeType.Agent):
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
         callback_handler.on_interrupt(
             GraphInterruptEvent(
                 run_id=run_id,
@@ -165,10 +165,10 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(
     assert "deepagents_kind" not in _mark_metadata(marks[0])
 
 
-def test_add_nemo_flow_integration_preserves_backend(deepagents_integration_module: types.ModuleType):
+def test_add_nemo_relay_integration_preserves_backend(deepagents_integration_module: types.ModuleType):
     mock_backend = MagicMock(name="mock_backend")
     mock_compiled_subagent = MagicMock(name="mock_compiled_subagent")
-    kwargs = deepagents_integration_module.add_nemo_flow_integration(
+    kwargs = deepagents_integration_module.add_nemo_relay_integration(
         model="mock-model",
         name="main-agent",
         skills=["/skills/main/"],
@@ -182,10 +182,10 @@ def test_add_nemo_flow_integration_preserves_backend(deepagents_integration_modu
 
     assert kwargs["backend"] is mock_backend
     assert any(
-        isinstance(item, deepagents_integration_module.NemoFlowDeepAgentsMiddleware) for item in kwargs["middleware"]
+        isinstance(item, deepagents_integration_module.NemoRelayDeepAgentsMiddleware) for item in kwargs["middleware"]
     )
     assert any(
-        isinstance(item, deepagents_integration_module.NemoFlowDeepAgentsMiddleware)
+        isinstance(item, deepagents_integration_module.NemoRelayDeepAgentsMiddleware)
         for item in kwargs["subagents"][0]["middleware"]
     )
     assert kwargs["subagents"][1] is mock_compiled_subagent
@@ -193,7 +193,7 @@ def test_add_nemo_flow_integration_preserves_backend(deepagents_integration_modu
 
 def test_e2e_agent(
     tmp_path: Path,
-    subscribed_events: list[nemo_flow.Event],
+    subscribed_events: list[nemo_relay.Event],
     deepagents_integration_module: types.ModuleType,
 ):
     from deepagents import create_deep_agent
@@ -234,7 +234,7 @@ def test_e2e_agent(
             AIMessage(content="created turtle after reviewer verified turtle"),
         ]
     )
-    kwargs = deepagents_integration_module.add_nemo_flow_integration(
+    kwargs = deepagents_integration_module.add_nemo_relay_integration(
         model=model,
         tools=[],
         name="main-agent",
@@ -251,7 +251,7 @@ def test_e2e_agent(
     )
     agent = create_deep_agent(**kwargs)
 
-    with nemo_flow.scope.scope("deepagents-request", nemo_flow.ScopeType.Agent):
+    with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
         result = agent.invoke({"messages": [{"role": "user", "content": "Create a file named turtle."}]})
 
     assert (tmp_path / "turtle").read_text() == "shell"

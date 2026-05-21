@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Type definitions for the NeMo Flow Node.js NAPI bindings.
+//! Type definitions for the NeMo Relay Node.js NAPI bindings.
 //!
 //! Contains enums, handle wrappers, request/response structures, event types,
 //! and attribute constants that are exposed to JavaScript/TypeScript consumers.
 //! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts`.
 
 use napi_derive::napi;
-use nemo_flow::api::runtime::{ScopeStackHandle, create_scope_stack};
+use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::Serialize;
 use serde_json::Value as Json;
 
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
-use nemo_flow::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
-use nemo_flow::api::tool::ToolHandle as CoreToolHandle;
-use nemo_flow::codec::request::AnnotatedLlmRequest;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
+use nemo_relay::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
+use nemo_relay::api::tool::ToolHandle as CoreToolHandle;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -338,9 +338,9 @@ impl OpenAIChatCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow::codec::openai_chat::OpenAIChatCodec),
+            inner_codec: std::sync::Arc::new(nemo_relay::codec::openai_chat::OpenAIChatCodec),
             inner_response_codec: std::sync::Arc::new(
-                nemo_flow::codec::openai_chat::OpenAIChatCodec,
+                nemo_relay::codec::openai_chat::OpenAIChatCodec,
             ),
         }
     }
@@ -398,10 +398,10 @@ impl OpenAIResponsesCodec {
     pub fn new() -> Self {
         Self {
             inner_codec: std::sync::Arc::new(
-                nemo_flow::codec::openai_responses::OpenAIResponsesCodec,
+                nemo_relay::codec::openai_responses::OpenAIResponsesCodec,
             ),
             inner_response_codec: std::sync::Arc::new(
-                nemo_flow::codec::openai_responses::OpenAIResponsesCodec,
+                nemo_relay::codec::openai_responses::OpenAIResponsesCodec,
             ),
         }
     }
@@ -458,9 +458,9 @@ impl AnthropicMessagesCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_flow::codec::anthropic::AnthropicMessagesCodec),
+            inner_codec: std::sync::Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
             inner_response_codec: std::sync::Arc::new(
-                nemo_flow::codec::anthropic::AnthropicMessagesCodec,
+                nemo_relay::codec::anthropic::AnthropicMessagesCodec,
             ),
         }
     }

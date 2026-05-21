@@ -30,7 +30,7 @@ Disabled components are still validated. This lets operators detect config probl
 :sync: python
 
 ```python
-from nemo_flow.plugin import ComponentSpec, ConfigPolicy, PluginConfig
+from nemo_relay.plugin import ComponentSpec, ConfigPolicy, PluginConfig
 
 config = PluginConfig(
     version=1,
@@ -54,7 +54,7 @@ config = PluginConfig(
 :sync: node
 
 ```ts
-import type { PluginConfig } from 'nemo-flow-node/plugin';
+import type { PluginConfig } from 'nemo-relay-node/plugin';
 
 const config: PluginConfig = {
   version: 1,
@@ -78,7 +78,7 @@ const config: PluginConfig = {
 :sync: rust
 
 ```rust
-use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 
 let mut component = PluginComponentSpec::new("header-plugin");
 component.enabled = true;
@@ -139,9 +139,9 @@ Use the validation API before initialization and fail deployment if the report c
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
-report = nemo_flow.plugin.validate(config)
+report = nemo_relay.plugin.validate(config)
 has_errors = any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"])
 if has_errors:
     raise RuntimeError(report["diagnostics"])
@@ -152,7 +152,7 @@ if has_errors:
 :sync: node
 
 ```ts
-import * as plugin from 'nemo-flow-node/plugin';
+import * as plugin from 'nemo-relay-node/plugin';
 
 const report = plugin.validate(config);
 const hasErrors = report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
@@ -166,7 +166,7 @@ if (hasErrors) {
 :sync: rust
 
 ```rust
-use nemo_flow::plugin::validate_plugin_config;
+use nemo_relay::plugin::validate_plugin_config;
 
 let report = validate_plugin_config(&config);
 if report.has_errors() {

@@ -7,7 +7,7 @@ use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
 };
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -22,7 +22,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("nemo-flow-{prefix}-{id}"));
+    let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -30,7 +30,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
-    *context.write().unwrap() = NemoFlowContextState::new();
+    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 fn make_mark_event(name: &str) -> Event {
@@ -117,11 +117,11 @@ fn default_config_uses_cwd_append_and_timestamped_filename() {
 
     assert_eq!(config.output_directory, std::env::current_dir().unwrap());
     assert_eq!(config.mode, AtofExporterMode::Append);
-    assert!(config.filename.starts_with("nemo-flow-events-"));
+    assert!(config.filename.starts_with("nemo-relay-events-"));
     assert!(config.filename.ends_with(".jsonl"));
     assert_eq!(
         config.filename.len(),
-        "nemo-flow-events-YYYY-MM-DD-HH.MM.SS.jsonl".len()
+        "nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl".len()
     );
 }
 

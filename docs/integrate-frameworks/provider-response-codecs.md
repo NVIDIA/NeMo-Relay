@@ -9,7 +9,7 @@ Use this guide when subscribers, exporters, or diagnostics need a provider-neutr
 
 ## What You Build
 
-You will attach a response codec to a managed LLM wrapper so NeMo Flow can decode provider responses into `AnnotatedLLMResponse` data for LLM end events.
+You will attach a response codec to a managed LLM wrapper so NeMo Relay can decode provider responses into `AnnotatedLLMResponse` data for LLM end events.
 
 Response codecs are observability-only:
 
@@ -66,9 +66,9 @@ shapes.
 :sync: python
 
 ```python
-import nemo_flow
-from nemo_flow import LLMRequest
-from nemo_flow.codecs import OpenAIChatCodec
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay.codecs import OpenAIChatCodec
 
 
 async def invoke_provider(request: LLMRequest):
@@ -86,7 +86,7 @@ async def invoke_provider(request: LLMRequest):
 
 
 codec = OpenAIChatCodec()
-response = await nemo_flow.llm.execute(
+response = await nemo_relay.llm.execute(
     "openai-chat",
     LLMRequest({}, {"model": "gpt-4o-mini", "messages": []}),
     invoke_provider,
@@ -100,8 +100,8 @@ response = await nemo_flow.llm.execute(
 :sync: node
 
 ```ts
-import { OpenAIChatCodec } from 'nemo-flow-node';
-import { JsonPassthrough, typedLlmExecute } from 'nemo-flow-node/typed';
+import { OpenAIChatCodec } from 'nemo-relay-node';
+import { JsonPassthrough, typedLlmExecute } from 'nemo-relay-node/typed';
 
 const codec = new OpenAIChatCodec();
 
@@ -132,9 +132,9 @@ const response = await typedLlmExecute(
 :sync: rust
 
 ```rust
-use nemo_flow::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_flow::codec::openai_chat::OpenAIChatCodec;
-use nemo_flow::codec::traits::LlmResponseCodec;
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::traits::LlmResponseCodec;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -187,7 +187,7 @@ Subscribers can inspect `annotated_response` on LLM end events. The exact event 
 :sync: python
 
 ```python
-import nemo_flow
+import nemo_relay
 
 
 def on_event(event):
@@ -200,7 +200,7 @@ def on_event(event):
     print("usage", annotated.usage)
 
 
-nemo_flow.subscribers.register("response-debugger", on_event)
+nemo_relay.subscribers.register("response-debugger", on_event)
 ```
 :::
 
@@ -208,7 +208,7 @@ nemo_flow.subscribers.register("response-debugger", on_event)
 :sync: node
 
 ```ts
-import { registerSubscriber } from 'nemo-flow-node';
+import { registerSubscriber } from 'nemo-relay-node';
 
 registerSubscriber('response-debugger', (event) => {
   const annotated = event.category_profile?.annotated_response;
@@ -232,7 +232,7 @@ Use a custom response codec when the provider or framework response does not mat
 In Python, a custom response codec can route to built-in codecs and return their native `AnnotatedLLMResponse` values:
 
 ```python
-from nemo_flow.codecs import OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_relay.codecs import OpenAIChatCodec, OpenAIResponsesCodec
 
 
 class OpenAIRoutingResponseCodec:
@@ -249,7 +249,7 @@ class OpenAIRoutingResponseCodec:
 In Node.js, implement `decodeResponse` and return the normalized response JSON shape:
 
 ```ts
-import type { JsonValue, LlmResponseCodec } from 'nemo-flow-node/typed';
+import type { JsonValue, LlmResponseCodec } from 'nemo-relay-node/typed';
 
 const frameworkResponseCodec: LlmResponseCodec = {
   decodeResponse(response: JsonValue): JsonValue {
@@ -286,10 +286,10 @@ const frameworkResponseCodec: LlmResponseCodec = {
 In Rust, implement `LlmResponseCodec` directly:
 
 ```rust
-use nemo_flow::codec::request::MessageContent;
-use nemo_flow::codec::response::{AnnotatedLlmResponse, FinishReason, Usage};
-use nemo_flow::codec::traits::LlmResponseCodec;
-use nemo_flow::error::{FlowError, Result};
+use nemo_relay::codec::request::MessageContent;
+use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, Usage};
+use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::error::{FlowError, Result};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 

@@ -1,12 +1,12 @@
 ---
 name: prepare-pr
-description: Prepare, open, create, publish, update, or edit a NeMo Flow pull request or PR body with the right tests, docs, contributor hygiene, and repository pull request template
+description: Prepare, open, create, publish, update, or edit a NeMo Relay pull request or PR body with the right tests, docs, contributor hygiene, and repository pull request template
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
 
 
-# Prepare A PR For NeMo Flow
+# Prepare A PR For NeMo Relay
 
 ## Companion Guidance
 
@@ -16,7 +16,7 @@ before editing.
 
 Use this skill at the end of a contributor or maintainer change before opening a
 pull request. Also use it whenever a user asks to create, open, publish, update,
-or edit a NeMo Flow pull request, pull request description, or PR body.
+or edit a NeMo Relay pull request, pull request description, or PR body.
 
 If this repo-local guidance conflicts with generic GitHub publishing, connector,
 or plugin guidance, this skill wins for PR body format, validation language, and
