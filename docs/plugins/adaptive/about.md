@@ -5,12 +5,6 @@ SPDX-License-Identifier: Apache-2.0
 
 # Adaptive
 
-## Phase 2: Tune Performance
-
-Start here after baseline instrumentation and observability are working.
-Adaptive behavior should be rolled out from measured runtime events, with a
-baseline, comparison, and rollback path.
-
 Use the Adaptive plugin when you want NeMo Flow to collect runtime signals and
 activate measured adaptive behavior through the shared plugin system.
 

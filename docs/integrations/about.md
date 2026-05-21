@@ -11,11 +11,11 @@ surface.
 
 Supported integrations are end-user entry points. They use public framework or
 plugin APIs where available and document the support level for observability,
-security middleware, and adaptive tuning.
+security middleware, and optimization features.
 
 ## Support Matrix
 
-| Agent / Library | Observability | Security | Adaptive Tuning | Notes |
+| Agent / Library | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
 | LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
 | LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |

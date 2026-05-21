@@ -35,7 +35,7 @@ If you are instrumenting an application or framework directly, use
 
 NeMo Flow CLI support is experimental and observability-focused.
 
-| Agent | Observability | Security | Adaptive Tuning | Notes |
+| Agent | Observability | Security | Optimization | Notes |
 | --- | --- | --- | --- | --- |
 | Claude Code | ✅ Yes | ❌ No | ❌ No | Observability only; no known issues. |
 | Codex | ✅ Yes | ❌ No | ❌ No | Observability only; some hooks needed for full feature coverage are missing. |

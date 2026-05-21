@@ -1,6 +1,6 @@
 ---
 name: nemo-flow-tune-performance
-description: Plan a Phase 2 NeMo Flow adaptive tuning rollout after baseline scopes, tool calls, LLM calls, and observability are working; use this skill to improve latency, tool parallelism, prompt-cache behavior, or model-request behavior from runtime signals
+description: Plan a measured NeMo Flow adaptive tuning rollout after baseline scopes, tool calls, LLM calls, and observability are working; use this skill to improve latency, tool parallelism, prompt-cache behavior, or model-request behavior from runtime signals
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -21,8 +21,8 @@ Do not use this skill when the application is not instrumented yet. Start with
 
 ## Default Guidance
 
-- Treat adaptive tuning as Phase 2: observe first, compare against a baseline,
-  then enable one behavior change at a time.
+- Observe first, compare against a baseline, then enable one behavior change at
+  a time.
 - Use the adaptive plugin component rather than inventing a separate optimizer
   object or hand-registering adaptive behavior at every call site.
 - Start with in-memory state and telemetry-only behavior for local development.
