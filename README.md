@@ -15,7 +15,7 @@ SPDX-License-Identifier: Apache-2.0
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
 
-# NeMo Relay
+# NVIDIA NeMo Relay
 
 ## What Is NeMo Relay?
 
@@ -218,4 +218,4 @@ The following roadmap outlines planned features and integrations for upcoming re
 
 ## License
 
-NeMo Relay is licensed under the [Apache License 2.0](LICENSE).
+NVIDIA NeMo Relay is licensed under the [Apache License 2.0](LICENSE).
