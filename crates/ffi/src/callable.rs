@@ -268,7 +268,7 @@ pub fn wrap_tool_conditional_fn(
     free_fn: NemoFlowFreeFn,
 ) -> ToolConditionalFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |name: &str, args: &Json| {
+    Arc::new(move |name: &str, args: &Json| {
         clear_last_error();
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(args);
@@ -685,7 +685,7 @@ pub fn wrap_llm_conditional_fn(
     free_fn: NemoFlowFreeFn,
 ) -> LlmConditionalFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |request: &LlmRequest| {
+    Arc::new(move |request: &LlmRequest| {
         clear_last_error();
         let ffi_req = FfiLLMRequest(request.clone());
         let result_ptr = unsafe { cb(ud.ptr, &ffi_req) };

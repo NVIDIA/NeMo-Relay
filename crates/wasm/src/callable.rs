@@ -177,13 +177,13 @@ pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send 
 /// Wrap a JS function `(name, args) => string | null` for tool conditional guardrails.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_tool_conditional_fn(_func: Function) -> ToolConditionalFn {
-    Box::new(move |_name: &str, _args: &Json| Ok(None))
+    Arc::new(move |_name: &str, _args: &Json| Ok(None))
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
     let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: &Json| {
+    Arc::new(move |name: &str, args: &Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(args);
         let result = func
@@ -375,13 +375,13 @@ pub fn wrap_js_llm_sanitize_request_fn(
 /// Wrap a JS function for LLM conditional guardrails: `(request) => string | null`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_llm_conditional_fn(_func: Function) -> LlmConditionalFn {
-    Box::new(move |_request: &LlmRequest| Ok(None))
+    Arc::new(move |_request: &LlmRequest| Ok(None))
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
     let func = SendWrapper::new(func);
-    Box::new(move |request: &LlmRequest| {
+    Arc::new(move |request: &LlmRequest| {
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         let result = func

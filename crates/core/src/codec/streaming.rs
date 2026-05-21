@@ -3,19 +3,20 @@
 
 //! Streaming response codecs for the managed LLM execution pipeline.
 //!
-//! [`LlmResponseCodec`] (in [`crate::codec::traits`]) decodes a complete provider response into a
+//! [`crate::codec::traits::LlmResponseCodec`] decodes a complete provider response into a
 //! normalized [`AnnotatedLlmResponse`]. For streaming providers, the analogous job is to:
 //!
 //! 1. consume per-chunk events as they arrive on a streaming HTTP response, and
 //! 2. assemble a single non-streaming-shape JSON payload at end of stream.
 //!
-//! Once assembled, the payload can be fed back through the matching [`LlmResponseCodec`] to produce
-//! an [`AnnotatedLlmResponse`] — meaning streaming and non-streaming requests converge on the same
-//! observability output without per-route shape duplication.
+//! Once assembled, the payload can be fed back through the matching
+//! [`crate::codec::traits::LlmResponseCodec`] to produce an [`AnnotatedLlmResponse`] — meaning
+//! streaming and non-streaming requests converge on the same observability output without
+//! per-route shape duplication.
 //!
 //! [`StreamingCodec`] is the trait that bundles the two functions
-//! ([`LlmCollectorFn`](crate::api::runtime::LlmCollectorFn),
-//! [`LlmFinalizerFn`](crate::api::runtime::LlmFinalizerFn)) used by
+//! ([`LlmCollectorFn`],
+//! [`LlmFinalizerFn`]) used by
 //! [`crate::api::llm::llm_stream_call_execute`]. Each provider supplies one impl whose internal
 //! state holds whatever incremental information is needed to materialize the final payload.
 //!

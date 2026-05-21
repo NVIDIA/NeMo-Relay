@@ -312,6 +312,10 @@ pub fn set_thread_scope_stack(handle: ScopeStackHandle) {
 /// This is intended for foreign runtimes that temporarily bind a scope stack to
 /// an OS thread and need to restore the exact previous state before releasing
 /// that thread back to their scheduler.
+///
+/// # Returns
+/// A [`ThreadScopeStackBinding`] containing the current thread-local stack and
+/// explicit-binding flag.
 pub fn capture_thread_scope_stack() -> ThreadScopeStackBinding {
     let stack = THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone());
     let explicit = THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.get());
@@ -319,6 +323,12 @@ pub fn capture_thread_scope_stack() -> ThreadScopeStackBinding {
 }
 
 /// Restore a previously captured thread-local scope stack binding.
+///
+/// # Parameters
+/// - `binding`: Captured binding to restore on the current thread.
+///
+/// # Returns
+/// `()`.
 pub fn restore_thread_scope_stack(binding: ThreadScopeStackBinding) {
     THREAD_SCOPE_STACK.with(|stack| *stack.borrow_mut() = binding.stack);
     THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.set(binding.explicit));

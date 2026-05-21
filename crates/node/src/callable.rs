@@ -128,7 +128,7 @@ pub fn wrap_js_tool_conditional_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> ToolConditionalFn {
     let func = Arc::new(func);
-    Box::new(move |name: &str, args: &Json| {
+    Arc::new(move |name: &str, args: &Json| {
         let func = func.clone();
         let name = name.to_string();
         let args = args.clone();
@@ -341,7 +341,7 @@ pub fn wrap_js_llm_conditional_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> LlmConditionalFn {
     let func = Arc::new(func);
-    Box::new(move |request: &LlmRequest| {
+    Arc::new(move |request: &LlmRequest| {
         let func = func.clone();
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();

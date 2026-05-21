@@ -702,7 +702,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
         &handle.uuid,
         "tool_blocker",
         1,
-        Box::new(|name, _args| {
+        Arc::new(|name, _args| {
             if name == "banned_tool" {
                 Ok(Some("banned_tool is not allowed in this scope".to_string()))
             } else {

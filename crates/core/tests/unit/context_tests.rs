@@ -201,6 +201,8 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
 #[test]
 fn context_state_supports_extensions_events_and_builders() {
     let mut state = NemoFlowContextState::new();
+    assert!(state.extensions.is_empty());
+
     let key = format!("ext-{}", Uuid::now_v7());
     state.set_extension(&key, vec![1_u32, 2]);
     state.get_extension_mut::<Vec<u32>>(&key).unwrap().push(3);

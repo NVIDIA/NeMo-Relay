@@ -4,7 +4,7 @@
 //! Typed configuration editor metadata.
 //!
 //! This module provides a small compile-time reflection surface for interactive
-//! configuration editors. Config structs use [`editor_config!`] to expose
+//! configuration editors. Config structs use `editor_config!` to expose
 //! ordered field metadata without making editor UIs depend on JSON Schema.
 
 use serde_json::Value as Json;

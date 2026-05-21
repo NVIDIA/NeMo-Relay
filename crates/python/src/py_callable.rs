@@ -209,7 +209,7 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Sen
 
 /// Wrap a Python callable `(str, Json) -> Optional[str]` for tool conditional guardrails.
 pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
-    Box::new(move |name: &str, args: &Json| {
+    Arc::new(move |name: &str, args: &Json| {
         Python::attach(|py| {
             let py_args = json_to_py(py, args).map_err(|e| {
                 FlowError::Internal(format!(
@@ -619,7 +619,7 @@ pub fn wrap_py_llm_sanitize_request_fn(
 
 /// Wrap a Python callable `(LlmRequest) -> Optional[str]` for LLM conditional guardrails.
 pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
-    Box::new(move |request: &LlmRequest| {
+    Arc::new(move |request: &LlmRequest| {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),

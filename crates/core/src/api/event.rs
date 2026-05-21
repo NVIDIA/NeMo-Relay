@@ -53,72 +53,118 @@ pub struct EventCategory(String);
 
 impl EventCategory {
     /// Top-level agent or workflow scope.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `agent`.
     pub fn agent() -> Self {
         Self("agent".into())
     }
 
     /// Generic function or application step.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `function`.
     pub fn function() -> Self {
         Self("function".into())
     }
 
     /// LLM call.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `llm`.
     pub fn llm() -> Self {
         Self("llm".into())
     }
 
     /// Tool invocation.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `tool`.
     pub fn tool() -> Self {
         Self("tool".into())
     }
 
     /// Retrieval step.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `retriever`.
     pub fn retriever() -> Self {
         Self("retriever".into())
     }
 
     /// Embedding-generation step.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `embedder`.
     pub fn embedder() -> Self {
         Self("embedder".into())
     }
 
     /// Result reranking step.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `reranker`.
     pub fn reranker() -> Self {
         Self("reranker".into())
     }
 
     /// Guardrail or validation step.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `guardrail`.
     pub fn guardrail() -> Self {
         Self("guardrail".into())
     }
 
     /// Evaluation or scoring step.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `evaluator`.
     pub fn evaluator() -> Self {
         Self("evaluator".into())
     }
 
     /// Vendor-defined custom category.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `custom`.
     pub fn custom() -> Self {
         Self("custom".into())
     }
 
     /// Unknown or unclassified work.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] with the wire value `unknown`.
     pub fn unknown() -> Self {
         Self("unknown".into())
     }
 
     /// Create a category from an arbitrary producer-provided string.
+    ///
+    /// # Parameters
+    /// - `value`: Wire category value to preserve.
+    ///
+    /// # Returns
+    /// An [`EventCategory`] containing `value`.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
     /// Return the string form serialized on the wire.
+    ///
+    /// # Returns
+    /// The category value as a string slice.
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
 
     /// Convert this category to the closest legacy scope type for internal
     /// adapters that still need span-kind classification.
+    ///
+    /// # Returns
+    /// The closest matching [`ScopeType`], or [`ScopeType::Unknown`] when the
+    /// category has no legacy equivalent.
     pub fn to_scope_type(&self) -> ScopeType {
         match self.as_str() {
             "agent" => ScopeType::Agent,
@@ -211,6 +257,9 @@ pub struct CategoryProfile {
 
 impl CategoryProfile {
     /// Return true when the profile has no wire-serialized fields.
+    ///
+    /// # Returns
+    /// `true` when no profile fields would be serialized on the wire.
     pub fn is_wire_empty(&self) -> bool {
         self.model_name.is_none()
             && self.tool_call_id.is_none()
@@ -271,6 +320,16 @@ pub struct ScopeEvent {
 
 impl ScopeEvent {
     /// Construct a scope event from a base envelope and ATOF-specific fields.
+    ///
+    /// # Parameters
+    /// - `base`: Shared ATOF event envelope.
+    /// - `scope_category`: Lifecycle phase for the scope event.
+    /// - `attributes`: Scope attributes to canonicalize and attach.
+    /// - `category`: Semantic event category.
+    /// - `category_profile`: Optional category-specific profile data.
+    ///
+    /// # Returns
+    /// A [`ScopeEvent`] containing the provided fields.
     pub fn new(
         base: BaseEvent,
         scope_category: ScopeCategory,
@@ -306,6 +365,14 @@ pub struct MarkEvent {
 
 impl MarkEvent {
     /// Construct a mark event from a base envelope and optional category data.
+    ///
+    /// # Parameters
+    /// - `base`: Shared ATOF event envelope.
+    /// - `category`: Optional semantic event category.
+    /// - `category_profile`: Optional category-specific profile data.
+    ///
+    /// # Returns
+    /// A [`MarkEvent`] containing the provided fields.
     pub fn new(
         base: BaseEvent,
         category: Option<EventCategory>,
@@ -331,6 +398,9 @@ pub enum Event {
 
 impl Event {
     /// Return the ATOF event kind.
+    ///
+    /// # Returns
+    /// `"scope"` for [`Event::Scope`] and `"mark"` for [`Event::Mark`].
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Scope(_) => "scope",
@@ -339,6 +409,9 @@ impl Event {
     }
 
     /// Return the lifecycle phase for scope events.
+    ///
+    /// # Returns
+    /// `Some` lifecycle phase for scope events, otherwise `None`.
     pub fn scope_category(&self) -> Option<ScopeCategory> {
         match self {
             Self::Scope(event) => Some(event.scope_category),
@@ -347,6 +420,10 @@ impl Event {
     }
 
     /// Return the semantic category if present.
+    ///
+    /// # Returns
+    /// `Some` category for scope events and categorized mark events, otherwise
+    /// `None`.
     pub fn category(&self) -> Option<&EventCategory> {
         match self {
             Self::Scope(event) => Some(&event.category),
@@ -355,6 +432,9 @@ impl Event {
     }
 
     /// Return the category-specific profile if present.
+    ///
+    /// # Returns
+    /// `Some` profile when category-specific fields are present.
     pub fn category_profile(&self) -> Option<&CategoryProfile> {
         match self {
             Self::Scope(event) => event.category_profile.as_ref(),
@@ -363,6 +443,9 @@ impl Event {
     }
 
     /// Return the mutable category-specific profile if present.
+    ///
+    /// # Returns
+    /// `Some` mutable profile when category-specific fields are present.
     pub fn category_profile_mut(&mut self) -> Option<&mut CategoryProfile> {
         match self {
             Self::Scope(event) => event.category_profile.as_mut(),
@@ -371,41 +454,65 @@ impl Event {
     }
 
     /// Return the parent scope UUID, if the event is nested under a scope.
+    ///
+    /// # Returns
+    /// `Some` parent UUID when the event has a parent scope, otherwise `None`.
     pub fn parent_uuid(&self) -> Option<Uuid> {
         self.base().parent_uuid
     }
 
     /// Return the unique event or span UUID.
+    ///
+    /// # Returns
+    /// The event UUID.
     pub fn uuid(&self) -> Uuid {
         self.base().uuid
     }
 
     /// Return the event timestamp.
+    ///
+    /// # Returns
+    /// The UTC event timestamp.
     pub fn timestamp(&self) -> &DateTime<Utc> {
         &self.base().timestamp
     }
 
     /// Return the human-readable event name.
+    ///
+    /// # Returns
+    /// The event name.
     pub fn name(&self) -> &str {
         self.base().name.as_str()
     }
 
     /// Return the optional application payload attached to the event.
+    ///
+    /// # Returns
+    /// `Some` payload when event data is present, otherwise `None`.
     pub fn data(&self) -> Option<&Json> {
         self.base().data.as_ref()
     }
 
     /// Return the optional data schema.
+    ///
+    /// # Returns
+    /// `Some` schema when the event payload declares one, otherwise `None`.
     pub fn data_schema(&self) -> Option<&DataSchema> {
         self.base().data_schema.as_ref()
     }
 
     /// Return the optional metadata attached to the event.
+    ///
+    /// # Returns
+    /// `Some` metadata when present, otherwise `None`.
     pub fn metadata(&self) -> Option<&Json> {
         self.base().metadata.as_ref()
     }
 
     /// Return attributes for scope events.
+    ///
+    /// # Returns
+    /// `Some` attributes for scope events, otherwise `None`.
     pub fn attributes(&self) -> Option<&[String]> {
         match self {
             Self::Scope(event) => Some(event.attributes.as_slice()),
@@ -414,11 +521,17 @@ impl Event {
     }
 
     /// Return the semantic scope category for scope events.
+    ///
+    /// # Returns
+    /// `Some` legacy [`ScopeType`] when the event has a category.
     pub fn scope_type(&self) -> Option<ScopeType> {
         self.category().map(EventCategory::to_scope_type)
     }
 
     /// Return the semantic input payload for start events.
+    ///
+    /// # Returns
+    /// `Some` payload for scope-start events with data, otherwise `None`.
     pub fn input(&self) -> Option<&Json> {
         match self {
             Self::Scope(event) if event.scope_category == ScopeCategory::Start => {
@@ -429,6 +542,9 @@ impl Event {
     }
 
     /// Return the semantic output payload for end events.
+    ///
+    /// # Returns
+    /// `Some` payload for scope-end events with data, otherwise `None`.
     pub fn output(&self) -> Option<&Json> {
         match self {
             Self::Scope(event) if event.scope_category == ScopeCategory::End => {
@@ -439,30 +555,45 @@ impl Event {
     }
 
     /// Return the normalized model name for LLM events.
+    ///
+    /// # Returns
+    /// `Some` model name when the event profile includes one.
     pub fn model_name(&self) -> Option<&str> {
         self.category_profile()
             .and_then(|profile| profile.model_name.as_deref())
     }
 
     /// Return the provider-specific tool-call correlation identifier.
+    ///
+    /// # Returns
+    /// `Some` tool call identifier when the event profile includes one.
     pub fn tool_call_id(&self) -> Option<&str> {
         self.category_profile()
             .and_then(|profile| profile.tool_call_id.as_deref())
     }
 
     /// Return the runtime-only annotated LLM request.
+    ///
+    /// # Returns
+    /// `Some` annotated request when the event profile includes one.
     pub fn annotated_request(&self) -> Option<&Arc<AnnotatedLlmRequest>> {
         self.category_profile()
             .and_then(|profile| profile.annotated_request.as_ref())
     }
 
     /// Return the runtime-only annotated LLM response.
+    ///
+    /// # Returns
+    /// `Some` annotated response when the event profile includes one.
     pub fn annotated_response(&self) -> Option<&Arc<AnnotatedLlmResponse>> {
         self.category_profile()
             .and_then(|profile| profile.annotated_response.as_ref())
     }
 
     /// Return true for scope-start events.
+    ///
+    /// # Returns
+    /// `true` when the event is a scope-start event.
     pub fn is_scope_start(&self) -> bool {
         matches!(
             self,
@@ -474,6 +605,9 @@ impl Event {
     }
 
     /// Return true for scope-end events.
+    ///
+    /// # Returns
+    /// `true` when the event is a scope-end event.
     pub fn is_scope_end(&self) -> bool {
         matches!(
             self,
@@ -493,6 +627,12 @@ impl Event {
 }
 
 /// Convert handle bitflags into ATOF attributes.
+///
+/// # Parameters
+/// - `attributes`: Handle-specific attribute bitflags.
+///
+/// # Returns
+/// Canonical lowercase ATOF attribute strings for the provided bitflags.
 pub fn attributes_from_handle(attributes: HandleAttributes) -> Vec<String> {
     match attributes {
         HandleAttributes::Scope(attributes) => scope_attributes_to_strings(attributes),
@@ -502,6 +642,12 @@ pub fn attributes_from_handle(attributes: HandleAttributes) -> Vec<String> {
 }
 
 /// Convert scope bitflags into ATOF attributes.
+///
+/// # Parameters
+/// - `attributes`: Scope attribute bitflags.
+///
+/// # Returns
+/// Canonical lowercase ATOF attribute strings for the provided bitflags.
 pub fn scope_attributes_to_strings(attributes: ScopeAttributes) -> Vec<String> {
     let mut values = Vec::new();
     if attributes.contains(ScopeAttributes::PARALLEL) {
@@ -514,6 +660,12 @@ pub fn scope_attributes_to_strings(attributes: ScopeAttributes) -> Vec<String> {
 }
 
 /// Convert tool bitflags into ATOF attributes.
+///
+/// # Parameters
+/// - `attributes`: Tool attribute bitflags.
+///
+/// # Returns
+/// Canonical lowercase ATOF attribute strings for the provided bitflags.
 pub fn tool_attributes_to_strings(attributes: ToolAttributes) -> Vec<String> {
     let mut values = Vec::new();
     if attributes.contains(ToolAttributes::REMOTE) {
@@ -523,6 +675,12 @@ pub fn tool_attributes_to_strings(attributes: ToolAttributes) -> Vec<String> {
 }
 
 /// Convert LLM bitflags into ATOF attributes.
+///
+/// # Parameters
+/// - `attributes`: LLM attribute bitflags.
+///
+/// # Returns
+/// Canonical lowercase ATOF attribute strings for the provided bitflags.
 pub fn llm_attributes_to_strings(attributes: LlmAttributes) -> Vec<String> {
     let mut values = Vec::new();
     if attributes.contains(LlmAttributes::STATEFUL) {
@@ -548,6 +706,17 @@ mod timestamp {
     };
     use std::fmt;
 
+    /// Serialize a UTC timestamp as RFC 3339.
+    ///
+    /// # Parameters
+    /// - `value`: Timestamp to serialize.
+    /// - `serializer`: Serde serializer receiving the string value.
+    ///
+    /// # Returns
+    /// The serializer's success value.
+    ///
+    /// # Errors
+    /// Returns any error produced by the serializer.
     pub fn serialize<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -555,6 +724,16 @@ mod timestamp {
         serializer.serialize_str(&value.to_rfc3339())
     }
 
+    /// Deserialize a UTC timestamp from an RFC 3339 string.
+    ///
+    /// # Parameters
+    /// - `deserializer`: Serde deserializer providing the timestamp value.
+    ///
+    /// # Returns
+    /// Parsed UTC timestamp.
+    ///
+    /// # Errors
+    /// Returns a serde error when the input is not a valid RFC 3339 timestamp.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Utc>, D::Error>
     where
         D: Deserializer<'de>,

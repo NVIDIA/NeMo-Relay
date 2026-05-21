@@ -10,12 +10,10 @@
 use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
-use crate::api::runtime::callbacks::{
-    LlmConditionalFn, LlmConditionalSharedFn, ToolConditionalFn, ToolConditionalSharedFn,
-};
 use crate::api::runtime::{
-    EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
 
@@ -32,9 +30,6 @@ pub struct ScopeLocalRegistries {
     pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
     /// Tool guardrails that can reject execution before the callback runs.
     pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
-    /// Cloneable tool guardrails used by lock-free event-emitting evaluation.
-    pub(crate) tool_conditional_execution_shared_guardrails:
-        SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>,
     /// Tool request intercepts that can rewrite arguments before execution.
     pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Tool execution intercepts that wrap or replace callback execution.
@@ -45,9 +40,6 @@ pub struct ScopeLocalRegistries {
     pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
     /// LLM guardrails that can reject execution before the provider callback runs.
     pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
-    /// Cloneable LLM guardrails used by lock-free event-emitting evaluation.
-    pub(crate) llm_conditional_execution_shared_guardrails:
-        SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>,
     /// LLM request intercepts that can rewrite or annotate requests.
     pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Non-streaming LLM execution intercepts that wrap callback execution.
@@ -69,17 +61,11 @@ impl ScopeLocalRegistries {
             tool_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_conditional_execution_shared_guardrails: SortedRegistry::new(|entry| {
-                entry.priority
-            }),
             tool_request_intercepts: SortedRegistry::new(|entry| entry.priority),
             tool_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
             llm_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
             llm_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
             llm_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_conditional_execution_shared_guardrails: SortedRegistry::new(|entry| {
-                entry.priority
-            }),
             llm_request_intercepts: SortedRegistry::new(|entry| entry.priority),
             llm_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
             llm_stream_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
@@ -120,6 +106,13 @@ pub fn merge_guardrail_entries<'a, F>(
 }
 
 /// Merge named global and scope-local guardrail entries in priority order.
+///
+/// # Parameters
+/// - `global`: Process-global guardrail registry.
+/// - `scope_locals`: Scope-local registries collected from active scopes.
+///
+/// # Returns
+/// A vector of `(name, guardrail entry)` pairs sorted by ascending priority.
 pub(crate) fn merge_named_guardrail_entries<'a, F>(
     global: &'a SortedRegistry<GuardrailEntry<F>>,
     scope_locals: &'a [&'a SortedRegistry<GuardrailEntry<F>>],

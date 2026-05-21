@@ -621,7 +621,7 @@ async fn test_conditional_guardrail_rejects() {
     register_tool_conditional_execution_guardrail(
         "rejector",
         1,
-        Box::new(|_name, _args| Ok(Some("not allowed".to_string()))),
+        Arc::new(|_name, _args| Ok(Some("not allowed".to_string()))),
     )
     .unwrap();
 
@@ -655,7 +655,7 @@ async fn test_conditional_guardrail_allows() {
     reset_global();
     setup_isolated_thread();
 
-    register_tool_conditional_execution_guardrail("allower", 1, Box::new(|_name, _args| Ok(None)))
+    register_tool_conditional_execution_guardrail("allower", 1, Arc::new(|_name, _args| Ok(None)))
         .unwrap();
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
@@ -694,14 +694,15 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
     )
     .unwrap();
 
-    register_tool_conditional_execution_guardrail("tool_scope_allow", 1, Box::new(|_, _| Ok(None)))
+    register_tool_conditional_execution_guardrail("tool_scope_allow", 1, Arc::new(|_, _| Ok(None)))
         .unwrap();
     register_tool_conditional_execution_guardrail(
         "tool_scope_reject",
         2,
-        Box::new(|_, _| Ok(Some("blocked by tool guardrail".to_string()))),
+        Arc::new(|_, _| Ok(Some("blocked by tool guardrail".to_string()))),
     )
     .unwrap();
+    assert!(global_context().read().unwrap().extensions.is_empty());
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let allowed = tool_call_execute(
@@ -775,13 +776,13 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     reset_global();
     setup_isolated_thread();
 
-    register_tool_conditional_execution_guardrail("allows", 1, Box::new(|_name, _args| Ok(None)))
+    register_tool_conditional_execution_guardrail("allows", 1, Arc::new(|_name, _args| Ok(None)))
         .unwrap();
 
     register_tool_conditional_execution_guardrail(
         "rejects",
         2,
-        Box::new(|_name, _args| Ok(Some("blocked by second".to_string()))),
+        Arc::new(|_name, _args| Ok(Some("blocked by second".to_string()))),
     )
     .unwrap();
 
@@ -819,7 +820,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     register_tool_conditional_execution_guardrail(
         "name_filter",
         1,
-        Box::new(|name, _args| {
+        Arc::new(|name, _args| {
             if name == "dangerous_tool" {
                 Ok(Some("dangerous_tool is forbidden".to_string()))
             } else {
@@ -1175,7 +1176,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     register_tool_conditional_execution_guardrail(
         "gate",
         1,
-        Box::new(|_name, _args| Ok(Some("blocked".to_string()))),
+        Arc::new(|_name, _args| Ok(Some("blocked".to_string()))),
     )
     .unwrap();
 
@@ -1226,7 +1227,7 @@ async fn test_conditional_rejection_prevents_execution() {
     register_tool_conditional_execution_guardrail(
         "gate2",
         1,
-        Box::new(|_name, _args| Ok(Some("no execution".to_string()))),
+        Arc::new(|_name, _args| Ok(Some("no execution".to_string()))),
     )
     .unwrap();
 
@@ -1614,7 +1615,7 @@ async fn test_full_pipeline_integration() {
     register_tool_conditional_execution_guardrail(
         "conditional",
         1,
-        Box::new(move |_name, _args| {
+        Arc::new(move |_name, _args| {
             o3.lock().unwrap().push("conditional".into());
             Ok(None) // Allow
         }),
@@ -1831,7 +1832,7 @@ async fn test_llm_conditional_guardrail_rejects() {
     register_llm_conditional_execution_guardrail(
         "llm_gate",
         1,
-        Box::new(|_req| Ok(Some("LLM call rejected".to_string()))),
+        Arc::new(|_req| Ok(Some("LLM call rejected".to_string()))),
     )
     .unwrap();
 
@@ -1882,12 +1883,12 @@ async fn test_llm_conditional_guardrail_emits_guardrail_scope() {
     )
     .unwrap();
 
-    register_llm_conditional_execution_guardrail("llm_scope_allow", 1, Box::new(|_| Ok(None)))
+    register_llm_conditional_execution_guardrail("llm_scope_allow", 1, Arc::new(|_| Ok(None)))
         .unwrap();
     register_llm_conditional_execution_guardrail(
         "llm_scope_reject",
         2,
-        Box::new(|_| Ok(Some("blocked by llm guardrail".to_string()))),
+        Arc::new(|_| Ok(Some("blocked by llm guardrail".to_string()))),
     )
     .unwrap();
 
@@ -2073,7 +2074,7 @@ fn test_standalone_conditional_execution_rejects() {
     register_tool_conditional_execution_guardrail(
         "standalone_gate",
         1,
-        Box::new(|_name, _args| Ok(Some("rejected by standalone".to_string()))),
+        Arc::new(|_name, _args| Ok(Some("rejected by standalone".to_string()))),
     )
     .unwrap();
 

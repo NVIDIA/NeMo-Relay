@@ -20,10 +20,9 @@ use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
 use crate::api::runtime::callbacks::{
-    EventSubscriberFn, LlmConditionalFn, LlmConditionalSharedFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs,
-    ToolConditionalFn, ToolConditionalSharedFn, ToolExecutionFn, ToolExecutionNextFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
+    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
@@ -40,11 +39,6 @@ use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
-
-pub(crate) const TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION: &str =
-    "__nemo_flow_tool_conditional_shared_guardrails";
-pub(crate) const LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION: &str =
-    "__nemo_flow_llm_conditional_shared_guardrails";
 
 pub(crate) struct ConditionalGuardrailSnapshot<F> {
     name: String,
@@ -92,7 +86,7 @@ impl NemoFlowContextState {
     /// A [`NemoFlowContextState`] with empty registries, no subscribers, and no
     /// extensions.
     pub fn new() -> Self {
-        let mut state = Self {
+        Self {
             tool_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
             tool_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
@@ -106,96 +100,7 @@ impl NemoFlowContextState {
             llm_stream_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
             event_subscribers: HashMap::new(),
             extensions: HashMap::new(),
-        };
-        state.install_conditional_shared_registries();
-        state
-    }
-
-    fn install_conditional_shared_registries(&mut self) {
-        self.extensions.insert(
-            TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
-            Box::new(
-                SortedRegistry::<GuardrailEntry<ToolConditionalSharedFn>>::new(|entry| {
-                    entry.priority
-                }),
-            ),
-        );
-        self.extensions.insert(
-            LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
-            Box::new(
-                SortedRegistry::<GuardrailEntry<LlmConditionalSharedFn>>::new(|entry| {
-                    entry.priority
-                }),
-            ),
-        );
-    }
-
-    pub(crate) fn tool_conditional_shared_guardrails(
-        &self,
-    ) -> Option<&SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>> {
-        self.extensions
-            .get(TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
-            .and_then(|value| {
-                value.downcast_ref::<SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>>()
-            })
-    }
-
-    pub(crate) fn tool_conditional_shared_guardrails_mut(
-        &mut self,
-    ) -> &mut SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>> {
-        if !self
-            .extensions
-            .contains_key(TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
-        {
-            self.extensions.insert(
-                TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
-                Box::new(
-                    SortedRegistry::<GuardrailEntry<ToolConditionalSharedFn>>::new(|entry| {
-                        entry.priority
-                    }),
-                ),
-            );
         }
-        self.extensions
-            .get_mut(TOOL_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
-            .and_then(|value| {
-                value.downcast_mut::<SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>>()
-            })
-            .expect("tool conditional shared guardrail registry has invalid type")
-    }
-
-    pub(crate) fn llm_conditional_shared_guardrails(
-        &self,
-    ) -> Option<&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>> {
-        self.extensions
-            .get(LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
-            .and_then(|value| {
-                value.downcast_ref::<SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>>()
-            })
-    }
-
-    pub(crate) fn llm_conditional_shared_guardrails_mut(
-        &mut self,
-    ) -> &mut SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>> {
-        if !self
-            .extensions
-            .contains_key(LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
-        {
-            self.extensions.insert(
-                LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION.to_string(),
-                Box::new(
-                    SortedRegistry::<GuardrailEntry<LlmConditionalSharedFn>>::new(|entry| {
-                        entry.priority
-                    }),
-                ),
-            );
-        }
-        self.extensions
-            .get_mut(LLM_CONDITIONAL_SHARED_GUARDRAILS_EXTENSION)
-            .and_then(|value| {
-                value.downcast_mut::<SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>>()
-            })
-            .expect("llm conditional shared guardrail registry has invalid type")
     }
 
     /// Store an arbitrary runtime extension under `key`.
@@ -743,14 +648,9 @@ impl NemoFlowContextState {
     /// are released.
     pub(crate) fn tool_conditional_execution_entries(
         &self,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalSharedFn>>],
-    ) -> Vec<ConditionalGuardrailSnapshot<ToolConditionalSharedFn>> {
-        let empty_global =
-            SortedRegistry::new(|entry: &GuardrailEntry<ToolConditionalSharedFn>| entry.priority);
-        let global = self
-            .tool_conditional_shared_guardrails()
-            .unwrap_or(&empty_global);
-        merge_named_guardrail_entries(global, scope_locals)
+        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
+    ) -> Vec<ConditionalGuardrailSnapshot<ToolConditionalFn>> {
+        merge_named_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
             .into_iter()
             .map(|(name, entry)| ConditionalGuardrailSnapshot {
                 name: name.to_string(),
@@ -794,11 +694,30 @@ impl NemoFlowContextState {
     /// This function emits guardrail scope start/end events while evaluating
     /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
-    /// registry locks held.
+    /// registry locks held. If `entries` is empty, no guardrail scopes are
+    /// emitted.
+    ///
+    /// # Parameters
+    /// - `name`: Tool name associated with the request.
+    /// - `args`: Tool arguments to validate.
+    /// - `entries`: Owned conditional guardrail snapshots to evaluate.
+    /// - `subscribers`: Event subscribers that should observe guardrail scope
+    ///   start/end events.
+    /// - `parent_uuid`: Optional parent scope UUID for emitted guardrail
+    ///   scopes.
+    /// - `metadata`: Optional metadata attached to emitted guardrail scopes.
+    ///
+    /// # Returns
+    /// A [`Result`](crate::error::Result) containing `Ok(None)` when execution
+    /// is allowed or `Ok(Some(reason))` when a guardrail rejects the call.
+    ///
+    /// # Errors
+    /// Propagates any error returned by a guardrail callback after emitting the
+    /// corresponding guardrail scope end event.
     pub(crate) fn tool_conditional_execution_snapshot_chain(
         name: &str,
         args: &Json,
-        entries: Vec<ConditionalGuardrailSnapshot<ToolConditionalSharedFn>>,
+        entries: Vec<ConditionalGuardrailSnapshot<ToolConditionalFn>>,
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
@@ -957,14 +876,9 @@ impl NemoFlowContextState {
     /// are released.
     pub(crate) fn llm_conditional_execution_entries(
         &self,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalSharedFn>>],
-    ) -> Vec<ConditionalGuardrailSnapshot<LlmConditionalSharedFn>> {
-        let empty_global =
-            SortedRegistry::new(|entry: &GuardrailEntry<LlmConditionalSharedFn>| entry.priority);
-        let global = self
-            .llm_conditional_shared_guardrails()
-            .unwrap_or(&empty_global);
-        merge_named_guardrail_entries(global, scope_locals)
+        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
+    ) -> Vec<ConditionalGuardrailSnapshot<LlmConditionalFn>> {
+        merge_named_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
             .into_iter()
             .map(|(name, entry)| ConditionalGuardrailSnapshot {
                 name: name.to_string(),
@@ -1006,10 +920,28 @@ impl NemoFlowContextState {
     /// This function emits guardrail scope start/end events while evaluating
     /// the provided entries. Callers should pass entries snapped from the
     /// global and scope-local registries so subscriber callbacks run without
-    /// registry locks held.
+    /// registry locks held. If `entries` is empty, no guardrail scopes are
+    /// emitted.
+    ///
+    /// # Parameters
+    /// - `request`: LLM request to validate.
+    /// - `entries`: Owned conditional guardrail snapshots to evaluate.
+    /// - `subscribers`: Event subscribers that should observe guardrail scope
+    ///   start/end events.
+    /// - `parent_uuid`: Optional parent scope UUID for emitted guardrail
+    ///   scopes.
+    /// - `metadata`: Optional metadata attached to emitted guardrail scopes.
+    ///
+    /// # Returns
+    /// A [`Result`](crate::error::Result) containing `Ok(None)` when execution
+    /// is allowed or `Ok(Some(reason))` when a guardrail rejects the call.
+    ///
+    /// # Errors
+    /// Propagates any error returned by a guardrail callback after emitting the
+    /// corresponding guardrail scope end event.
     pub(crate) fn llm_conditional_execution_snapshot_chain(
         request: &LlmRequest,
-        entries: Vec<ConditionalGuardrailSnapshot<LlmConditionalSharedFn>>,
+        entries: Vec<ConditionalGuardrailSnapshot<LlmConditionalFn>>,
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,

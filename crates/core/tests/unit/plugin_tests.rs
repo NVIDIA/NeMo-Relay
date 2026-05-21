@@ -896,7 +896,7 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     ctx.register_tool_conditional_execution_guardrail(
         "tool_conditional",
         1,
-        Box::new(|name, _args| Ok((name == "blocked-tool").then(|| "blocked tool".to_string()))),
+        Arc::new(|name, _args| Ok((name == "blocked-tool").then(|| "blocked tool".to_string()))),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
@@ -914,7 +914,7 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     ctx.register_llm_conditional_execution_guardrail(
         "llm_conditional",
         1,
-        Box::new(|request| {
+        Arc::new(|request| {
             Ok((request.headers.get("blocked") == Some(&json!(true)))
                 .then(|| "blocked llm".to_string()))
         }),
@@ -1005,14 +1005,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Box::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_conditional_execution_guardrail(
             "tool-conditional",
             1,
-            Box::new(|_, _| Ok(None)),
+            Arc::new(|_, _| Ok(None)),
         ),
         "tool conditional execution guardrail:",
     );
@@ -1047,13 +1047,13 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         "llm sanitize response guardrail:",
     );
 
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Box::new(|_| Ok(None)))
+    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
         .unwrap();
     expect_registration_failed(
         ctx.register_llm_conditional_execution_guardrail(
             "llm-conditional",
             1,
-            Box::new(|_| Ok(None)),
+            Arc::new(|_| Ok(None)),
         ),
         "llm conditional execution guardrail:",
     );
@@ -1164,7 +1164,7 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Box::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Ok(None)),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
@@ -1179,7 +1179,7 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         Box::new(|response| response),
     )
     .unwrap();
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Box::new(|_| Ok(None)))
+    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
         .unwrap();
     ctx.register_llm_execution_intercept(
         "llm-exec",
