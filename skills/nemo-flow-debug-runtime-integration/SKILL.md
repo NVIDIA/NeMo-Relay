@@ -78,3 +78,4 @@ working.
 - `nemo-flow-start`
 - `nemo-flow-use-context-isolation`
 - `nemo-flow-tune-adaptive-config`
+- `nemo-flow-build-plugin`

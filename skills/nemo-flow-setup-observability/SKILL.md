@@ -65,6 +65,8 @@ activity but has not yet decided which output they need.
 - You already know you need ATIF -> `nemo-flow-export-atif-trajectories`
 - You already know you need OTEL -> `nemo-flow-export-otel`
 - You already know you need OpenInference -> `nemo-flow-export-openinference`
+- You need to package subscriber-based export behavior as a reusable plugin ->
+  `nemo-flow-build-plugin`
 - You are debugging missing telemetry -> `nemo-flow-debug-runtime-integration`
 
 ## Related Skills
@@ -72,3 +74,4 @@ activity but has not yet decided which output they need.
 - `nemo-flow-export-atif-trajectories`
 - `nemo-flow-export-otel`
 - `nemo-flow-export-openinference`
+- `nemo-flow-build-plugin`

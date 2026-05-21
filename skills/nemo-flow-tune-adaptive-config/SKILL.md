@@ -85,3 +85,4 @@ request-specific middleware, or production trace debugging.
 - `nemo-flow-tune-performance`
 - `nemo-flow-tune-adaptive-hints`
 - `nemo-flow-debug-runtime-integration`
+- `nemo-flow-build-plugin`

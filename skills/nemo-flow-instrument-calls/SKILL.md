@@ -70,9 +70,12 @@ needs to run them through NeMo Flow correctly.
   `nemo-flow-debug-runtime-integration`
 - You need per-request isolation or worker-pool advice ->
   `nemo-flow-use-context-isolation`
+- You need reusable config-activated runtime behavior ->
+  `nemo-flow-build-plugin`
 
 ## Related Skills
 
 - `nemo-flow-start`
 - `nemo-flow-typed-wrappers-codecs`
 - `nemo-flow-setup-observability`
+- `nemo-flow-build-plugin`

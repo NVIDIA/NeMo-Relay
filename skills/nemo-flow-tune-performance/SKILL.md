@@ -23,8 +23,8 @@ Do not use this skill when the application is not instrumented yet. Start with
 
 - Observe first, compare against a baseline, then enable one behavior change at
   a time.
-- Use the adaptive plugin component rather than inventing a separate optimizer
-  object or hand-registering adaptive behavior at every call site.
+- Use the adaptive plugin component rather than inventing separate tuning logic
+  or hand-registering adaptive behavior at every call site.
 - Start with in-memory state and telemetry-only behavior for local development.
 - Move to persistent state only when learned signals must survive restarts or be
   shared across workers.
@@ -71,6 +71,8 @@ Do not use this skill when the application is not instrumented yet. Start with
 - You need the exact adaptive config shape -> `nemo-flow-tune-adaptive-config`
 - You need to consume adaptive hints or scheduling guidance in app logic ->
   `nemo-flow-tune-adaptive-hints`
+- You need to build reusable plugin behavior instead of configuring the built-in
+  adaptive component -> `nemo-flow-build-plugin`
 
 ## Related Skills
 
@@ -79,3 +81,4 @@ Do not use this skill when the application is not instrumented yet. Start with
 - `nemo-flow-setup-observability`
 - `nemo-flow-tune-adaptive-config`
 - `nemo-flow-tune-adaptive-hints`
+- `nemo-flow-build-plugin`
