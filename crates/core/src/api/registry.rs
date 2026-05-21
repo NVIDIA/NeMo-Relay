@@ -12,32 +12,73 @@ use crate::api::runtime::{
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
 use crate::error::{FlowError, Result};
+use crate::registry::RegistryEntry;
 
-/// A priority-ordered request intercept registration entry.
-pub struct Intercept<F> {
+/// A priority-ordered registration record.
+///
+/// Registry records carry the common entry metadata used by all middleware
+/// registries plus the caller-provided payload.
+#[derive(Clone)]
+pub(crate) struct RegistryRecord<T> {
+    /// Unique middleware name within its registry.
+    pub(crate) name: String,
     /// Lower values run earlier in the chain.
-    pub priority: i32,
+    pub(crate) priority: i32,
+    /// The caller-provided registry payload.
+    pub(crate) payload: T,
+}
+
+impl<T> RegistryRecord<T> {
+    /// Create a new priority-ordered registry record.
+    pub(crate) fn new(name: impl Into<String>, priority: i32, payload: T) -> Self {
+        Self {
+            name: name.into(),
+            priority,
+            payload,
+        }
+    }
+}
+
+impl<T> RegistryEntry for RegistryRecord<T> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn priority(&self) -> i32 {
+        self.priority
+    }
+}
+
+/// Request-intercept-specific registration payload.
+///
+/// Request intercepts carry one extra chain-control flag that does not apply
+/// to guardrails or execution intercepts.
+#[derive(Clone)]
+pub(crate) struct RequestIntercept<F> {
     /// Whether this intercept stops later request intercepts after it returns.
-    pub break_chain: bool,
-    /// The caller-provided intercept callback.
-    pub callable: F,
+    pub(crate) break_chain: bool,
+    /// The caller-provided request intercept callback.
+    pub(crate) callable: F,
 }
 
-/// A priority-ordered execution intercept registration entry.
-pub struct ExecutionIntercept<F> {
-    /// Lower values run earlier in the chain.
-    pub priority: i32,
-    /// The caller-provided execution intercept callback.
-    pub callable: F,
+impl<F> RequestIntercept<F> {
+    /// Create a new request intercept payload.
+    pub(crate) fn new(break_chain: bool, callable: F) -> Self {
+        Self {
+            break_chain,
+            callable,
+        }
+    }
 }
 
-/// A priority-ordered guardrail registration entry.
-pub struct GuardrailEntry<F> {
-    /// Lower values run earlier in the chain.
-    pub priority: i32,
-    /// The caller-provided guardrail callback.
-    pub guardrail: F,
-}
+/// A priority-ordered guardrail registration record.
+pub(crate) type Guardrail<F> = RegistryRecord<F>;
+
+/// A priority-ordered request intercept registration record.
+pub(crate) type Intercept<F> = RegistryRecord<RequestIntercept<F>>;
+
+/// A priority-ordered execution intercept registration record.
+pub(crate) type ExecutionIntercept<F> = RegistryRecord<F>;
 
 macro_rules! global_guardrail_registry_api {
     (
@@ -70,11 +111,7 @@ macro_rules! global_guardrail_registry_api {
             state
                 .$field
                 .register(
-                    name.to_string(),
-                    GuardrailEntry {
-                        priority,
-                        guardrail: guardrail.into(),
-                    },
+                    Guardrail::new(name, priority, guardrail),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -139,12 +176,7 @@ macro_rules! global_intercept_registry_api {
             state
                 .$field
                 .register(
-                    name.to_string(),
-                    Intercept {
-                        priority,
-                        break_chain,
-                        callable,
-                    },
+                    Intercept::new(name, priority, RequestIntercept::new(break_chain, callable)),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -201,7 +233,7 @@ macro_rules! global_execution_registry_api {
                 .map_err(|error| FlowError::Internal(error.to_string()))?;
             state
                 .$field
-                .register(name.to_string(), ExecutionIntercept { priority, callable })
+                .register(ExecutionIntercept::new(name, priority, callable))
                 .map_err(FlowError::AlreadyExists)
         }
 
@@ -266,11 +298,7 @@ macro_rules! scope_guardrail_registry_api {
             registries
                 .$field
                 .register(
-                    name.to_string(),
-                    GuardrailEntry {
-                        priority,
-                        guardrail: guardrail.into(),
-                    },
+                    Guardrail::new(name, priority, guardrail),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -342,12 +370,7 @@ macro_rules! scope_intercept_registry_api {
             registries
                 .$field
                 .register(
-                    name.to_string(),
-                    Intercept {
-                        priority,
-                        break_chain,
-                        callable,
-                    },
+                    Intercept::new(name, priority, RequestIntercept::new(break_chain, callable)),
                 )
                 .map_err(FlowError::AlreadyExists)
         }
@@ -415,7 +438,7 @@ macro_rules! scope_execution_registry_api {
                 .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
             registries
                 .$field
-                .register(name.to_string(), ExecutionIntercept { priority, callable })
+                .register(ExecutionIntercept::new(name, priority, callable))
                 .map_err(FlowError::AlreadyExists)
         }
 

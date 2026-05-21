@@ -21,6 +21,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+#[cfg(any(feature = "otel", feature = "openinference"))]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};

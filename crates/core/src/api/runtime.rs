@@ -11,8 +11,7 @@ pub mod state;
 pub use callbacks::{
     EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
     LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamExecutionRegistryRef, LlmStreamExecutionRegistryRefs, ToolConditionalFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 pub use global::global_context;

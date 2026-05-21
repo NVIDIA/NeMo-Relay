@@ -5,8 +5,8 @@
 //!
 //! The runtime tracks the current scope hierarchy through a shared
 //! [`ScopeStack`] stored in task-local or thread-local state. Advanced callers
-//! can use this module to inspect the active scope chain, attach scope-local
-//! middleware, or propagate scope context into worker threads.
+//! can use this module to inspect the active scope chain or propagate scope
+//! context into worker threads.
 
 use std::cell::RefCell;
 use std::sync::{Arc, RwLock};
@@ -17,7 +17,7 @@ use crate::api::runtime::callbacks::EventSubscriberFn;
 use crate::api::scope::{ScopeHandle, ScopeType};
 use crate::context::registries::ScopeLocalRegistries;
 use crate::error::{FlowError, Result};
-use crate::registry::SortedRegistry;
+use crate::registry::{RegistryEntry, SortedRegistry};
 
 /// Mutable stack of active scopes plus their scope-local registries.
 ///
@@ -161,7 +161,10 @@ impl ScopeStack {
     /// # Notes
     /// When the scope is active but has no registries yet, this function
     /// creates an empty scope-local registry set first.
-    pub fn local_registries_mut(&mut self, uuid: &Uuid) -> Option<&mut ScopeLocalRegistries> {
+    pub(crate) fn local_registries_mut(
+        &mut self,
+        uuid: &Uuid,
+    ) -> Option<&mut ScopeLocalRegistries> {
         if !self.stack.iter().any(|handle| handle.uuid == *uuid) {
             return None;
         }
@@ -177,7 +180,7 @@ impl ScopeStack {
     /// # Returns
     /// A vector of registry references ordered from root toward the current
     /// top-most scope.
-    pub fn collect_scope_local_registries<'a, T>(
+    pub(crate) fn collect_scope_local_registries<'a, T: RegistryEntry>(
         &'a self,
         field: impl Fn(&'a ScopeLocalRegistries) -> &'a SortedRegistry<T>,
     ) -> Vec<&'a SortedRegistry<T>> {
@@ -193,24 +196,12 @@ impl ScopeStack {
     /// # Returns
     /// A vector of subscribers collected from each active scope that owns
     /// scope-local registries.
-    pub fn collect_scope_local_subscribers(&self) -> Vec<EventSubscriberFn> {
+    pub(crate) fn collect_scope_local_subscribers(&self) -> Vec<EventSubscriberFn> {
         self.stack
             .iter()
             .filter_map(|handle| self.scope_registries.get(&handle.uuid))
             .flat_map(|registries| registries.event_subscribers.values().cloned())
             .collect()
-    }
-
-    /// Return the scope-local registries for `uuid` without creating them.
-    ///
-    /// # Parameters
-    /// - `uuid`: UUID of the scope whose registries should be borrowed.
-    ///
-    /// # Returns
-    /// `Some(&ScopeLocalRegistries)` when registries already exist for that
-    /// scope and `None` otherwise.
-    pub fn scope_registries_get(&self, uuid: &Uuid) -> Option<&ScopeLocalRegistries> {
-        self.scope_registries.get(uuid)
     }
 }
 

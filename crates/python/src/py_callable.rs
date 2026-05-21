@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use nemo_flow::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_flow::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
@@ -182,8 +183,8 @@ fn stream_from_async_iter(
 }
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
-pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
-    Box::new(move |name: &str, args: Json| {
+pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
+    Arc::new(move |name: &str, args: Json| {
         Python::attach(|py| {
             let py_args = match json_to_py(py, &args) {
                 Ok(v) => v,
@@ -237,7 +238,7 @@ pub fn wrap_py_tool_conditional_fn(py_fn: Py<PyAny>) -> ToolConditionalFn {
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool request intercepts.
 pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         Python::attach(|py| {
             let py_args = json_to_py(py, &args).map_err(|e| {
                 FlowError::Internal(format!("tool callback json_to_py failed for '{name}': {e}"))
@@ -587,10 +588,8 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
 }
 
 /// Wrap a Python callable `(LlmRequest) -> LlmRequest` for LLM sanitize request guardrails.
-pub fn wrap_py_llm_sanitize_request_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
-    Box::new(move |request: LlmRequest| {
+pub fn wrap_py_llm_sanitize_request_fn(py_fn: Py<PyAny>) -> LlmSanitizeRequestFn {
+    Arc::new(move |request: LlmRequest| {
         Python::attach(|py| {
             let py_req = PyLLMRequest {
                 inner: request.clone(),
@@ -646,7 +645,7 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
 /// The Python function receives ``(name: str, request: LlmRequest, annotated: AnnotatedLLMRequest | None)``
 /// and must return ``(LlmRequest, AnnotatedLLMRequest | None)``.
 pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
-    Box::new(
+    Arc::new(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLLMRequest>|
@@ -819,10 +818,8 @@ pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send
 }
 
 /// Wrap a Python callable `(dict) -> dict` for LLM sanitize response guardrails.
-pub fn wrap_py_llm_sanitize_response_fn(
-    py_fn: Py<PyAny>,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    Box::new(move |response: Json| {
+pub fn wrap_py_llm_sanitize_response_fn(py_fn: Py<PyAny>) -> LlmSanitizeResponseFn {
+    Arc::new(move |response: Json| {
         Python::attach(|py| {
             let py_resp = match json_to_py(py, &response) {
                 Ok(v) => v,

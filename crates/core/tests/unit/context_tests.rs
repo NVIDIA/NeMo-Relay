@@ -10,7 +10,7 @@ use uuid::{Uuid, Version};
 
 use crate::api::event::Event;
 use crate::api::llm::LlmRequest;
-use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
+use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept, RequestIntercept};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::NemoFlowContextState;
 use crate::api::runtime::ScopeStack;
@@ -41,14 +41,14 @@ fn scope_stack_tracks_scope_local_registries_and_subscribers() {
         .insert("sub".to_string(), subscriber.clone());
     registries
         .tool_request_intercepts
-        .register(
-            "tool".to_string(),
-            Intercept {
-                priority: 10,
+        .register(Intercept {
+            name: "tool".to_string(),
+            priority: 10,
+            payload: RequestIntercept {
                 break_chain: false,
-                callable: Box::new(|_, value| Ok(value)),
+                callable: Arc::new(|_, value| Ok(value)),
             },
-        )
+        })
         .unwrap();
 
     assert_eq!(stack.collect_scope_local_subscribers().len(), 1);
@@ -58,11 +58,8 @@ fn scope_stack_tracks_scope_local_registries_and_subscribers() {
             .len(),
         1
     );
-    assert!(stack.scope_registries_get(&child_uuid).is_some());
-
     let removed = stack.remove(&child_uuid).unwrap();
     assert_eq!(removed.uuid, child_uuid);
-    assert!(stack.scope_registries_get(&child_uuid).is_none());
 }
 
 #[test]
@@ -100,28 +97,22 @@ fn scope_stack_rejects_removing_non_top_or_root_scopes() {
 
 #[test]
 fn merge_helpers_preserve_global_and_scope_local_priority_order() {
-    let mut global_guardrails =
-        SortedRegistry::new(|entry: &GuardrailEntry<&'static str>| entry.priority);
+    let mut global_guardrails = SortedRegistry::new();
     global_guardrails
-        .register(
-            "global".to_string(),
-            GuardrailEntry {
-                priority: 20,
-                guardrail: "global",
-            },
-        )
+        .register(Guardrail {
+            name: "global".to_string(),
+            priority: 20,
+            payload: "global",
+        })
         .unwrap();
 
-    let mut local_guardrails =
-        SortedRegistry::new(|entry: &GuardrailEntry<&'static str>| entry.priority);
+    let mut local_guardrails = SortedRegistry::new();
     local_guardrails
-        .register(
-            "local".to_string(),
-            GuardrailEntry {
-                priority: 5,
-                guardrail: "local",
-            },
-        )
+        .register(Guardrail {
+            name: "local".to_string(),
+            priority: 5,
+            payload: "local",
+        })
         .unwrap();
 
     let local_guardrail_refs = [&local_guardrails];
@@ -129,35 +120,33 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
     assert_eq!(
         merged_guardrails
             .iter()
-            .map(|entry| entry.guardrail)
+            .map(|entry| entry.payload)
             .collect::<Vec<_>>(),
         vec!["local", "global"]
     );
 
-    let mut global_intercepts =
-        SortedRegistry::new(|entry: &Intercept<&'static str>| entry.priority);
+    let mut global_intercepts = SortedRegistry::new();
     global_intercepts
-        .register(
-            "global".to_string(),
-            Intercept {
-                priority: 40,
+        .register(Intercept {
+            name: "global".to_string(),
+            priority: 40,
+            payload: RequestIntercept {
                 break_chain: false,
                 callable: "global",
             },
-        )
+        })
         .unwrap();
 
-    let mut local_intercepts =
-        SortedRegistry::new(|entry: &Intercept<&'static str>| entry.priority);
+    let mut local_intercepts = SortedRegistry::new();
     local_intercepts
-        .register(
-            "local".to_string(),
-            Intercept {
-                priority: 10,
+        .register(Intercept {
+            name: "local".to_string(),
+            priority: 10,
+            payload: RequestIntercept {
                 break_chain: false,
                 callable: "local",
             },
-        )
+        })
         .unwrap();
 
     let local_intercept_refs = [&local_intercepts];
@@ -165,37 +154,77 @@ fn merge_helpers_preserve_global_and_scope_local_priority_order() {
     assert_eq!(
         merged_intercepts
             .iter()
-            .map(|entry| entry.callable)
+            .map(|entry| entry.payload.callable)
             .collect::<Vec<_>>(),
         vec!["local", "global"]
     );
 
-    let mut global_exec =
-        SortedRegistry::new(|entry: &ExecutionIntercept<&'static str>| entry.priority);
+    let mut global_exec = SortedRegistry::new();
     global_exec
-        .register(
-            "global".to_string(),
-            ExecutionIntercept {
-                priority: 15,
-                callable: "global",
-            },
-        )
+        .register(ExecutionIntercept {
+            name: "global".to_string(),
+            priority: 15,
+            payload: "global",
+        })
         .unwrap();
 
-    let mut local_exec =
-        SortedRegistry::new(|entry: &ExecutionIntercept<&'static str>| entry.priority);
+    let mut local_exec = SortedRegistry::new();
     local_exec
-        .register(
-            "local".to_string(),
-            ExecutionIntercept {
-                priority: 1,
-                callable: "local",
-            },
-        )
+        .register(ExecutionIntercept {
+            name: "local".to_string(),
+            priority: 1,
+            payload: "local",
+        })
         .unwrap();
 
     let merged_exec = merge_execution_intercept_callables(&global_exec, &[&local_exec]);
     assert_eq!(merged_exec, vec![("local", 1), ("global", 15)]);
+}
+
+#[test]
+fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
+    let mut state = NemoFlowContextState::new();
+    state
+        .tool_conditional_execution_guardrails
+        .register(Guardrail {
+            name: "snapshot_guardrail".to_string(),
+            priority: 1,
+            payload: Arc::new(|name, _args| Ok(Some(format!("{name} blocked")))),
+        })
+        .unwrap();
+
+    let entries = state.tool_conditional_execution_entries(&[]);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "snapshot_guardrail");
+    assert!(
+        state
+            .tool_conditional_execution_guardrails
+            .deregister("snapshot_guardrail")
+    );
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber: EventSubscriberFn = Arc::new(move |event| {
+        captured.lock().unwrap().push(event.clone());
+    });
+    let subscribers = [subscriber];
+
+    let rejection = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
+        "snapshot_target",
+        &json!({}),
+        &entries,
+        &subscribers,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(rejection.as_deref(), Some("snapshot_target blocked"));
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events.iter().map(Event::name).collect::<Vec<_>>(),
+        vec!["snapshot_guardrail", "snapshot_guardrail"]
+    );
 }
 
 #[test]

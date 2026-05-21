@@ -32,7 +32,7 @@ use crate::json::Json;
 ///
 /// # Returns
 /// Sanitized JSON payload for the emitted event.
-pub type ToolSanitizeFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
+pub type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 /// Decide whether a tool call is allowed to continue.
 ///
 /// The callback receives the tool name and the current argument payload. It can
@@ -70,7 +70,7 @@ pub type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> +
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
-pub type ToolInterceptFn = Box<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
+pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
 /// Continuation type invoked by tool execution intercepts.
 ///
 /// Execution intercepts receive this callable as their `next` continuation and
@@ -120,7 +120,7 @@ pub type ToolExecutionFn = Arc<
 ///
 /// # Returns
 /// Sanitized [`LlmRequest`] for the emitted event.
-pub type LlmSanitizeRequestFn = Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
+pub type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
 /// Sanitize an LLM response before the runtime records it.
 ///
 /// These callbacks rewrite the JSON response payload captured on LLM-end
@@ -131,7 +131,7 @@ pub type LlmSanitizeRequestFn = Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sy
 ///
 /// # Returns
 /// Sanitized JSON response payload for the emitted event.
-pub type LlmSanitizeResponseFn = Box<dyn Fn(Json) -> Json + Send + Sync>;
+pub type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
 /// Decide whether an LLM call is allowed to continue.
 ///
 /// The callback receives the current [`LlmRequest`] and can allow execution,
@@ -168,7 +168,7 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
-pub type LlmRequestInterceptFn = Box<
+pub type LlmRequestInterceptFn = Arc<
     dyn Fn(
             &str,
             LlmRequest,
@@ -243,14 +243,14 @@ pub type LlmFinalizerFn = Box<dyn FnOnce() -> Json + Send>;
 ///
 /// # Returns
 /// A shared reference to a scope-local streaming execution registry.
-pub type LlmStreamExecutionRegistryRef<'a> = &'a crate::registry::SortedRegistry<
+pub(crate) type LlmStreamExecutionRegistryRef<'a> = &'a crate::registry::SortedRegistry<
     crate::api::registry::ExecutionIntercept<LlmStreamExecutionFn>,
 >;
 /// Slice of scope-local streaming execution registries.
 ///
 /// # Returns
 /// A borrowed slice of scope-local streaming execution registry references.
-pub type LlmStreamExecutionRegistryRefs<'a> = &'a [LlmStreamExecutionRegistryRef<'a>];
+pub(crate) type LlmStreamExecutionRegistryRefs<'a> = &'a [LlmStreamExecutionRegistryRef<'a>];
 
 /// Continuation type invoked by streaming LLM execution intercepts.
 ///

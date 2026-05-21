@@ -122,7 +122,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         "shared-none",
         1,
         false,
-        Box::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, annotated| {
             assert!(annotated.is_none());
             request.headers.insert("x-no-codec".into(), json!(true));
             Ok((request, None))
@@ -150,7 +150,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         "shared-codec",
         1,
         false,
-        Box::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, annotated| {
             let mut annotated = annotated.expect("codec should provide annotated request");
             annotated.model = Some("intercepted-model".into());
             request.headers.insert("x-codec".into(), json!(true));

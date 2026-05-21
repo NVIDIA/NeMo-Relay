@@ -16,7 +16,8 @@ use std::sync::Arc;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use nemo_flow::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -97,9 +98,9 @@ fn recv_llm_request_result(
 /// Wrap a JS function `(name: string, args: object) => object` for tool sanitize/intercept.
 pub fn wrap_js_tool_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
+) -> ToolSanitizeFn {
     let func = Arc::new(func);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let func = func.clone();
         let name = name.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -155,7 +156,7 @@ pub fn wrap_js_tool_request_intercept_fn(
     func: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
 ) -> ToolInterceptFn {
     let func = Arc::new(func);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let func = func.clone();
         let name = name.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -212,7 +213,7 @@ pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> LlmRequestInterceptFn {
     let func = Arc::new(func);
-    Box::new(
+    Arc::new(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLlmRequest>|
@@ -278,9 +279,9 @@ pub fn wrap_js_llm_request_intercept_fn(
 /// Since ThreadsafeFunction requires serde-serializable args, we serialize the request as JSON.
 pub fn wrap_js_llm_sanitize_request_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
+) -> LlmSanitizeRequestFn {
     let func = Arc::new(func);
-    Box::new(move |request: LlmRequest| {
+    Arc::new(move |request: LlmRequest| {
         let func = func.clone();
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -311,9 +312,9 @@ pub fn wrap_js_llm_sanitize_request_fn(
 /// Wrap a JS function for LLM sanitize response: `(response: Json) => Json`.
 pub fn wrap_js_llm_response_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+) -> LlmSanitizeResponseFn {
     let func = Arc::new(func);
-    Box::new(move |response: Json| {
+    Arc::new(move |response: Json| {
         let func = func.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let status = func.call_with_return_value(

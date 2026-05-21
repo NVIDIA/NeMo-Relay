@@ -718,7 +718,7 @@ impl Plugin for HeaderPlugin {
                 "header_plugin",
                 priority,
                 false,
-                Box::new(|_name, mut request, annotated| {
+                Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!("set"));
                     Ok((request, annotated))
                 }),
@@ -727,7 +727,7 @@ impl Plugin for HeaderPlugin {
                 "tool_request_plugin",
                 priority,
                 false,
-                Box::new(|_name, mut args| {
+                Arc::new(|_name, mut args| {
                     if let Json::Object(ref mut map) = args {
                         map.insert("x-tool-plugin".into(), json!(true));
                     }

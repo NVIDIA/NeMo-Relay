@@ -10,10 +10,11 @@
 //! generated `nemo_flow.h` header.
 //!
 //! The `wrap_*` functions convert C callbacks (with opaque `user_data` pointers)
-//! into Rust closures (`Box<dyn Fn(...)>`) that the core runtime can invoke.
-//! Each wrapper captures the user data and its optional free function in an
-//! `Arc<UserData>` so the closure is `Send + Sync` and the free function is
-//! called exactly once when all references are dropped.
+//! into Rust closures that the core runtime can invoke. Registry-stored
+//! callbacks return `Arc`-backed closures, while one-shot or mutable callback
+//! shapes remain boxed. Each wrapper captures the user data and its optional
+//! free function in an `Arc<UserData>` so the closure is `Send + Sync` and the
+//! free function is called exactly once when all references are dropped.
 
 use std::ffi::{CStr, CString};
 use std::future::Future;
@@ -23,7 +24,8 @@ use std::sync::Arc;
 use libc::c_char;
 use nemo_flow::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
@@ -248,9 +250,9 @@ pub fn wrap_tool_sanitize_fn(
     cb: NemoFlowToolSanitizeCb,
     user_data: *mut libc::c_void,
     free_fn: NemoFlowFreeFn,
-) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
+) -> ToolSanitizeFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
         let result_ptr = unsafe { cb(ud.ptr, c_name.as_ptr(), c_args) };
@@ -294,7 +296,7 @@ pub fn wrap_tool_request_intercept_fn(
     free_fn: NemoFlowFreeFn,
 ) -> ToolInterceptFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         clear_last_error();
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
@@ -565,7 +567,7 @@ pub fn wrap_llm_request_intercept_fn(
     free_fn: NemoFlowFreeFn,
 ) -> LlmRequestInterceptFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(
+    Arc::new(
         move |name: &str, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
             clear_last_error();
             let c_name = CString::new(name).unwrap_or_default();
@@ -641,9 +643,9 @@ pub fn wrap_llm_response_fn(
     cb: NemoFlowJsonCb,
     user_data: *mut libc::c_void,
     free_fn: NemoFlowFreeFn,
-) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+) -> LlmSanitizeResponseFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |response: Json| {
+    Arc::new(move |response: Json| {
         let c_json = json_to_c_string(&response);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
         unsafe { nemo_flow_string_free_internal(c_json) };
@@ -658,9 +660,9 @@ pub fn wrap_llm_sanitize_request_fn(
     cb: NemoFlowLlmRequestCb,
     user_data: *mut libc::c_void,
     free_fn: NemoFlowFreeFn,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
+) -> LlmSanitizeRequestFn {
     let ud = make_user_data(user_data, free_fn);
-    Box::new(move |request: LlmRequest| {
+    Arc::new(move |request: LlmRequest| {
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
         let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
         // Free the input request

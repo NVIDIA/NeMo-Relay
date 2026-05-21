@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
+use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
@@ -23,31 +23,32 @@ use crate::registry::SortedRegistry;
 /// subscribers. These registrations are merged with the global runtime
 /// registries when the runtime resolves the effective middleware chain for a
 /// tool or LLM call executed inside that scope.
-pub struct ScopeLocalRegistries {
+pub(crate) struct ScopeLocalRegistries {
     /// Tool request sanitizers applied to emitted tool-start payloads.
-    pub tool_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
+    pub(crate) tool_sanitize_request_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Tool response sanitizers applied to emitted tool-end payloads.
-    pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
+    pub(crate) tool_sanitize_response_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Tool guardrails that can reject execution before the callback runs.
-    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
+    pub(crate) tool_conditional_execution_guardrails: SortedRegistry<Guardrail<ToolConditionalFn>>,
     /// Tool request intercepts that can rewrite arguments before execution.
-    pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
+    pub(crate) tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Tool execution intercepts that wrap or replace callback execution.
-    pub tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
+    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
     /// LLM request sanitizers applied to emitted LLM-start payloads.
-    pub llm_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeRequestFn>>,
+    pub(crate) llm_sanitize_request_guardrails: SortedRegistry<Guardrail<LlmSanitizeRequestFn>>,
     /// LLM response sanitizers applied to emitted LLM-end payloads.
-    pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
+    pub(crate) llm_sanitize_response_guardrails: SortedRegistry<Guardrail<LlmSanitizeResponseFn>>,
     /// LLM guardrails that can reject execution before the provider callback runs.
-    pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
+    pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// LLM request intercepts that can rewrite or annotate requests.
-    pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Non-streaming LLM execution intercepts that wrap callback execution.
-    pub llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
+    pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Streaming LLM execution intercepts that wrap stream-producing callbacks.
-    pub llm_stream_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
+    pub(crate) llm_stream_execution_intercepts:
+        SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Scope-local lifecycle subscribers visible while the owning scope is active.
-    pub event_subscribers: HashMap<String, EventSubscriberFn>,
+    pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
 }
 
 impl ScopeLocalRegistries {
@@ -56,19 +57,19 @@ impl ScopeLocalRegistries {
     /// # Returns
     /// A [`ScopeLocalRegistries`] value with no registered guardrails,
     /// intercepts, or subscribers.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            tool_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_request_intercepts: SortedRegistry::new(|entry| entry.priority),
-            tool_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
-            llm_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_request_intercepts: SortedRegistry::new(|entry| entry.priority),
-            llm_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
-            llm_stream_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
+            tool_sanitize_request_guardrails: SortedRegistry::new(),
+            tool_sanitize_response_guardrails: SortedRegistry::new(),
+            tool_conditional_execution_guardrails: SortedRegistry::new(),
+            tool_request_intercepts: SortedRegistry::new(),
+            tool_execution_intercepts: SortedRegistry::new(),
+            llm_sanitize_request_guardrails: SortedRegistry::new(),
+            llm_sanitize_response_guardrails: SortedRegistry::new(),
+            llm_conditional_execution_guardrails: SortedRegistry::new(),
+            llm_request_intercepts: SortedRegistry::new(),
+            llm_execution_intercepts: SortedRegistry::new(),
+            llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),
         }
     }
@@ -92,37 +93,16 @@ impl Default for ScopeLocalRegistries {
 ///
 /// # Returns
 /// A vector of guardrail entries sorted by ascending priority.
-pub fn merge_guardrail_entries<'a, F>(
-    global: &'a SortedRegistry<GuardrailEntry<F>>,
-    scope_locals: &'a [&'a SortedRegistry<GuardrailEntry<F>>],
-) -> Vec<&'a GuardrailEntry<F>> {
+pub(crate) fn merge_guardrail_entries<'a, F>(
+    global: &'a SortedRegistry<Guardrail<F>>,
+    scope_locals: &'a [&'a SortedRegistry<Guardrail<F>>],
+) -> Vec<&'a Guardrail<F>> {
     let mut all = Vec::new();
     all.extend(global.sorted_values());
     for registry in scope_locals {
         all.extend(registry.sorted_values());
     }
     all.sort_by_key(|entry| entry.priority);
-    all
-}
-
-/// Merge named global and scope-local guardrail entries in priority order.
-///
-/// # Parameters
-/// - `global`: Process-global guardrail registry.
-/// - `scope_locals`: Scope-local registries collected from active scopes.
-///
-/// # Returns
-/// A vector of `(name, guardrail entry)` pairs sorted by ascending priority.
-pub(crate) fn merge_named_guardrail_entries<'a, F>(
-    global: &'a SortedRegistry<GuardrailEntry<F>>,
-    scope_locals: &'a [&'a SortedRegistry<GuardrailEntry<F>>],
-) -> Vec<(&'a str, &'a GuardrailEntry<F>)> {
-    let mut all = Vec::new();
-    all.extend(global.sorted_entries());
-    for registry in scope_locals {
-        all.extend(registry.sorted_entries());
-    }
-    all.sort_by_key(|(_, entry)| entry.priority);
     all
 }
 
@@ -134,7 +114,7 @@ pub(crate) fn merge_named_guardrail_entries<'a, F>(
 ///
 /// # Returns
 /// A vector of intercept entries sorted by ascending priority.
-pub fn merge_intercept_entries<'a, F>(
+pub(crate) fn merge_intercept_entries<'a, F>(
     global: &'a SortedRegistry<Intercept<F>>,
     scope_locals: &'a [&'a SortedRegistry<Intercept<F>>],
 ) -> Vec<&'a Intercept<F>> {
@@ -158,17 +138,17 @@ pub fn merge_intercept_entries<'a, F>(
 ///
 /// # Returns
 /// A vector of `(callable, priority)` pairs sorted by ascending priority.
-pub fn merge_execution_intercept_callables<F: Clone>(
+pub(crate) fn merge_execution_intercept_callables<F: Clone>(
     global: &SortedRegistry<ExecutionIntercept<F>>,
     scope_locals: &[&SortedRegistry<ExecutionIntercept<F>>],
 ) -> Vec<(F, i32)> {
     let mut all = Vec::new();
     for entry in global.sorted_values() {
-        all.push((entry.callable.clone(), entry.priority));
+        all.push((entry.payload.clone(), entry.priority));
     }
     for registry in scope_locals {
         for entry in registry.sorted_values() {
-            all.push((entry.callable.clone(), entry.priority));
+            all.push((entry.payload.clone(), entry.priority));
         }
     }
     all.sort_by_key(|(_, priority)| *priority);

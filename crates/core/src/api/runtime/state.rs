@@ -18,7 +18,7 @@ use crate::api::event::{
 };
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
-use crate::api::registry::{ExecutionIntercept, GuardrailEntry, Intercept};
+use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::callbacks::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
@@ -32,18 +32,12 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
     merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
-    merge_named_guardrail_entries,
 };
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
-
-pub(crate) struct ConditionalGuardrailSnapshot<F> {
-    name: String,
-    guardrail: F,
-}
 
 /// Process-global runtime state backing middleware and event emission.
 ///
@@ -52,31 +46,32 @@ pub(crate) struct ConditionalGuardrailSnapshot<F> {
 /// and arbitrary extension slots used by bindings or integrations.
 pub struct NemoFlowContextState {
     /// Global tool request sanitizers applied to emitted tool-start payloads.
-    pub tool_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
+    pub(crate) tool_sanitize_request_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Global tool response sanitizers applied to emitted tool-end payloads.
-    pub tool_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<ToolSanitizeFn>>,
+    pub(crate) tool_sanitize_response_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Global tool guardrails that can reject execution before the callback runs.
-    pub tool_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<ToolConditionalFn>>,
+    pub(crate) tool_conditional_execution_guardrails: SortedRegistry<Guardrail<ToolConditionalFn>>,
     /// Global tool request intercepts that can rewrite arguments before execution.
-    pub tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
+    pub(crate) tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Global tool execution intercepts that wrap or replace callback execution.
-    pub tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
+    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
     /// Global LLM request sanitizers applied to emitted LLM-start payloads.
-    pub llm_sanitize_request_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeRequestFn>>,
+    pub(crate) llm_sanitize_request_guardrails: SortedRegistry<Guardrail<LlmSanitizeRequestFn>>,
     /// Global LLM response sanitizers applied to emitted LLM-end payloads.
-    pub llm_sanitize_response_guardrails: SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>,
+    pub(crate) llm_sanitize_response_guardrails: SortedRegistry<Guardrail<LlmSanitizeResponseFn>>,
     /// Global LLM guardrails that can reject execution before the provider callback runs.
-    pub llm_conditional_execution_guardrails: SortedRegistry<GuardrailEntry<LlmConditionalFn>>,
+    pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// Global LLM request intercepts that can rewrite or annotate requests.
-    pub llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
     /// Global non-streaming LLM execution intercepts that wrap callback execution.
-    pub llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
+    pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Global streaming LLM execution intercepts that wrap stream-producing callbacks.
-    pub llm_stream_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
+    pub(crate) llm_stream_execution_intercepts:
+        SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Global lifecycle subscribers notified after runtime events are emitted.
-    pub event_subscribers: HashMap<String, EventSubscriberFn>,
+    pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
     /// Arbitrary binding- or integration-specific runtime extensions.
-    pub extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
+    pub(crate) extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
 
 impl NemoFlowContextState {
@@ -87,17 +82,17 @@ impl NemoFlowContextState {
     /// extensions.
     pub fn new() -> Self {
         Self {
-            tool_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
-            tool_request_intercepts: SortedRegistry::new(|entry| entry.priority),
-            tool_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
-            llm_sanitize_request_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_sanitize_response_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_conditional_execution_guardrails: SortedRegistry::new(|entry| entry.priority),
-            llm_request_intercepts: SortedRegistry::new(|entry| entry.priority),
-            llm_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
-            llm_stream_execution_intercepts: SortedRegistry::new(|entry| entry.priority),
+            tool_sanitize_request_guardrails: SortedRegistry::new(),
+            tool_sanitize_response_guardrails: SortedRegistry::new(),
+            tool_conditional_execution_guardrails: SortedRegistry::new(),
+            tool_request_intercepts: SortedRegistry::new(),
+            tool_execution_intercepts: SortedRegistry::new(),
+            llm_sanitize_request_guardrails: SortedRegistry::new(),
+            llm_sanitize_response_guardrails: SortedRegistry::new(),
+            llm_conditional_execution_guardrails: SortedRegistry::new(),
+            llm_request_intercepts: SortedRegistry::new(),
+            llm_execution_intercepts: SortedRegistry::new(),
+            llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),
             extensions: HashMap::new(),
         }
@@ -164,7 +159,7 @@ impl NemoFlowContextState {
     /// # Returns
     /// A vector containing all global subscribers followed by the provided
     /// scope-local subscribers.
-    pub fn collect_event_subscribers(
+    pub(crate) fn collect_event_subscribers(
         &self,
         scope_local_subscribers: &[EventSubscriberFn],
     ) -> Vec<EventSubscriberFn> {
@@ -180,7 +175,7 @@ impl NemoFlowContextState {
     /// # Parameters
     /// - `event`: Fully constructed lifecycle event to deliver.
     /// - `subscribers`: Subscribers that should observe the event.
-    pub fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
+    pub(crate) fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
         for subscriber in subscribers {
             subscriber(event);
         }
@@ -598,16 +593,16 @@ impl NemoFlowContextState {
     ///
     /// # Returns
     /// The sanitized JSON payload after every matching guardrail has run.
-    pub fn tool_sanitize_request_chain(
+    pub(crate) fn tool_sanitize_request_chain(
         &self,
         name: &str,
         args: Json,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolSanitizeFn>>],
+        scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Json {
         let entries = merge_guardrail_entries(&self.tool_sanitize_request_guardrails, scope_locals);
         let mut value = args;
         for entry in entries {
-            value = (entry.guardrail)(name, value);
+            value = (entry.payload)(name, value);
         }
         value
     }
@@ -622,17 +617,17 @@ impl NemoFlowContextState {
     ///
     /// # Returns
     /// The sanitized JSON payload after every matching guardrail has run.
-    pub fn tool_sanitize_response_chain(
+    pub(crate) fn tool_sanitize_response_chain(
         &self,
         name: &str,
         result: Json,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolSanitizeFn>>],
+        scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Json {
         let entries =
             merge_guardrail_entries(&self.tool_sanitize_response_guardrails, scope_locals);
         let mut value = result;
         for entry in entries {
-            value = (entry.guardrail)(name, value);
+            value = (entry.payload)(name, value);
         }
         value
     }
@@ -644,49 +639,16 @@ impl NemoFlowContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// Owned guardrail snapshots that can be evaluated after registry locks
+    /// Named guardrail snapshots that can be evaluated after registry locks
     /// are released.
     pub(crate) fn tool_conditional_execution_entries(
         &self,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
-    ) -> Vec<ConditionalGuardrailSnapshot<ToolConditionalFn>> {
-        merge_named_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
+        scope_locals: &[&SortedRegistry<Guardrail<ToolConditionalFn>>],
+    ) -> Vec<Guardrail<ToolConditionalFn>> {
+        merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
             .into_iter()
-            .map(|(name, entry)| ConditionalGuardrailSnapshot {
-                name: name.to_string(),
-                guardrail: entry.guardrail.clone(),
-            })
+            .cloned()
             .collect()
-    }
-
-    /// Evaluate tool conditional-execution guardrails in priority order.
-    ///
-    /// # Parameters
-    /// - `name`: Tool name associated with the request.
-    /// - `args`: Tool arguments to validate.
-    /// - `scope_locals`: Scope-local conditional guardrail registries collected
-    ///   from the active scope stack.
-    ///
-    /// # Returns
-    /// A [`Result`] containing `Ok(None)` when execution is allowed or
-    /// `Ok(Some(reason))` when a guardrail rejects the call.
-    ///
-    /// # Errors
-    /// Propagates any error returned by a guardrail callback.
-    pub fn tool_conditional_execution_chain(
-        &self,
-        name: &str,
-        args: &Json,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<ToolConditionalFn>>],
-    ) -> crate::error::Result<Option<String>> {
-        let entries =
-            merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals);
-        for entry in entries {
-            if let Some(error) = (entry.guardrail)(name, args)? {
-                return Ok(Some(error));
-            }
-        }
-        Ok(None)
     }
 
     /// Evaluate a snapshot of tool conditional-execution guardrails in priority order.
@@ -701,7 +663,7 @@ impl NemoFlowContextState {
     /// # Parameters
     /// - `name`: Tool name associated with the request.
     /// - `args`: Tool arguments to validate.
-    /// - `entries`: Owned conditional guardrail snapshots to evaluate.
+    /// - `entries`: Borrowed conditional guardrail snapshots to evaluate.
     /// - `subscribers`: Event subscribers that should observe guardrail scope
     ///   start/end events.
     /// - `parent_uuid`: Optional parent scope UUID for emitted guardrail
@@ -718,7 +680,7 @@ impl NemoFlowContextState {
     pub(crate) fn tool_conditional_execution_snapshot_chain(
         name: &str,
         args: &Json,
-        entries: Vec<ConditionalGuardrailSnapshot<ToolConditionalFn>>,
+        entries: &[Guardrail<ToolConditionalFn>],
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
@@ -734,7 +696,7 @@ impl NemoFlowContextState {
                 }),
                 subscribers,
             );
-            let result = (entry.guardrail)(name, args);
+            let result = (entry.payload)(name, args);
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -775,7 +737,7 @@ impl NemoFlowContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub fn tool_request_intercepts_chain(
+    pub(crate) fn tool_request_intercepts_chain(
         &self,
         name: &str,
         args: Json,
@@ -784,8 +746,8 @@ impl NemoFlowContextState {
         let entries = merge_intercept_entries(&self.tool_request_intercepts, scope_locals);
         let mut value = args;
         for entry in entries {
-            value = (entry.callable)(name, value)?;
-            if entry.break_chain {
+            value = (entry.payload.callable)(name, value)?;
+            if entry.payload.break_chain {
                 break;
             }
         }
@@ -803,7 +765,7 @@ impl NemoFlowContextState {
     /// # Returns
     /// A composed [`ToolExecutionNextFn`] that wraps `default_fn` in every
     /// matching execution intercept.
-    pub fn tool_build_execution_chain(
+    pub(crate) fn tool_build_execution_chain(
         &self,
         name: &str,
         default_fn: ToolExecutionNextFn,
@@ -830,15 +792,15 @@ impl NemoFlowContextState {
     ///
     /// # Returns
     /// The sanitized [`LlmRequest`] after every matching guardrail has run.
-    pub fn llm_sanitize_request_chain(
+    pub(crate) fn llm_sanitize_request_chain(
         &self,
         request: LlmRequest,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmSanitizeRequestFn>>],
+        scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestFn>>],
     ) -> LlmRequest {
         let entries = merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals);
         let mut value = request;
         for entry in entries {
-            value = (entry.guardrail)(value);
+            value = (entry.payload)(value);
         }
         value
     }
@@ -852,15 +814,15 @@ impl NemoFlowContextState {
     ///
     /// # Returns
     /// The sanitized response payload after every matching guardrail has run.
-    pub fn llm_sanitize_response_chain(
+    pub(crate) fn llm_sanitize_response_chain(
         &self,
         response: Json,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmSanitizeResponseFn>>],
+        scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseFn>>],
     ) -> Json {
         let entries = merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals);
         let mut value = response;
         for entry in entries {
-            value = (entry.guardrail)(value);
+            value = (entry.payload)(value);
         }
         value
     }
@@ -872,47 +834,16 @@ impl NemoFlowContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// Owned guardrail snapshots that can be evaluated after registry locks
+    /// Named guardrail snapshots that can be evaluated after registry locks
     /// are released.
     pub(crate) fn llm_conditional_execution_entries(
         &self,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
-    ) -> Vec<ConditionalGuardrailSnapshot<LlmConditionalFn>> {
-        merge_named_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
+        scope_locals: &[&SortedRegistry<Guardrail<LlmConditionalFn>>],
+    ) -> Vec<Guardrail<LlmConditionalFn>> {
+        merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
             .into_iter()
-            .map(|(name, entry)| ConditionalGuardrailSnapshot {
-                name: name.to_string(),
-                guardrail: entry.guardrail.clone(),
-            })
+            .cloned()
             .collect()
-    }
-
-    /// Evaluate LLM conditional-execution guardrails in priority order.
-    ///
-    /// # Parameters
-    /// - `request`: LLM request to validate.
-    /// - `scope_locals`: Scope-local conditional guardrail registries collected
-    ///   from the active scope stack.
-    ///
-    /// # Returns
-    /// A [`Result`] containing `Ok(None)` when execution is allowed or
-    /// `Ok(Some(reason))` when a guardrail rejects the call.
-    ///
-    /// # Errors
-    /// Propagates any error returned by a guardrail callback.
-    pub fn llm_conditional_execution_chain(
-        &self,
-        request: &LlmRequest,
-        scope_locals: &[&SortedRegistry<GuardrailEntry<LlmConditionalFn>>],
-    ) -> crate::error::Result<Option<String>> {
-        let entries =
-            merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals);
-        for entry in entries {
-            if let Some(error) = (entry.guardrail)(request)? {
-                return Ok(Some(error));
-            }
-        }
-        Ok(None)
     }
 
     /// Evaluate a snapshot of LLM conditional-execution guardrails in priority order.
@@ -926,7 +857,7 @@ impl NemoFlowContextState {
     ///
     /// # Parameters
     /// - `request`: LLM request to validate.
-    /// - `entries`: Owned conditional guardrail snapshots to evaluate.
+    /// - `entries`: Borrowed conditional guardrail snapshots to evaluate.
     /// - `subscribers`: Event subscribers that should observe guardrail scope
     ///   start/end events.
     /// - `parent_uuid`: Optional parent scope UUID for emitted guardrail
@@ -942,7 +873,7 @@ impl NemoFlowContextState {
     /// corresponding guardrail scope end event.
     pub(crate) fn llm_conditional_execution_snapshot_chain(
         request: &LlmRequest,
-        entries: Vec<ConditionalGuardrailSnapshot<LlmConditionalFn>>,
+        entries: &[Guardrail<LlmConditionalFn>],
         subscribers: &[EventSubscriberFn],
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
@@ -957,7 +888,7 @@ impl NemoFlowContextState {
                 }),
                 subscribers,
             );
-            let result = (entry.guardrail)(request);
+            let result = (entry.payload)(request);
             let output = match &result {
                 Ok(Some(reason)) => json!({
                     "allowed": false,
@@ -1000,7 +931,7 @@ impl NemoFlowContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub fn llm_request_intercepts_chain(
+    pub(crate) fn llm_request_intercepts_chain(
         &self,
         name: &str,
         request: LlmRequest,
@@ -1012,10 +943,10 @@ impl NemoFlowContextState {
         let mut annotated_value = annotated;
         for entry in entries {
             let (new_request, new_annotated) =
-                (entry.callable)(name, request_value, annotated_value)?;
+                (entry.payload.callable)(name, request_value, annotated_value)?;
             request_value = new_request;
             annotated_value = new_annotated;
-            if entry.break_chain {
+            if entry.payload.break_chain {
                 break;
             }
         }
@@ -1035,7 +966,7 @@ impl NemoFlowContextState {
     /// # Returns
     /// A composed [`LlmExecutionNextFn`] that wraps `default_fn` in every
     /// matching execution intercept.
-    pub fn llm_build_execution_chain(
+    pub(crate) fn llm_build_execution_chain(
         &self,
         name: &str,
         default_fn: LlmExecutionNextFn,
@@ -1066,7 +997,7 @@ impl NemoFlowContextState {
     /// # Returns
     /// A composed [`LlmStreamExecutionNextFn`] that wraps `default_fn` in every
     /// matching execution intercept.
-    pub fn llm_stream_build_execution_chain(
+    pub(crate) fn llm_stream_build_execution_chain(
         &self,
         name: &str,
         default_fn: LlmStreamExecutionNextFn,

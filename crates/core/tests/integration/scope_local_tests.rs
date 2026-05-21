@@ -75,7 +75,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
         &handle.uuid,
         "local_sanitizer",
         10,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("scope_sanitized".into(), json!(true));
@@ -159,7 +159,7 @@ async fn test_auto_cleanup_on_scope_pop() {
         "ephemeral_intercept",
         1,
         false,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("ephemeral".into(), json!(true));
@@ -226,7 +226,7 @@ async fn test_priority_merge_global_and_scope_local() {
         "global_p10",
         10,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             o1.lock().unwrap().push(10);
             args.as_object_mut()
                 .unwrap()
@@ -242,7 +242,7 @@ async fn test_priority_merge_global_and_scope_local() {
         "global_p30",
         30,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             o3.lock().unwrap().push(30);
             args.as_object_mut()
                 .unwrap()
@@ -259,7 +259,7 @@ async fn test_priority_merge_global_and_scope_local() {
         "local_p20",
         20,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             o2.lock().unwrap().push(20);
             args.as_object_mut()
                 .unwrap()
@@ -321,7 +321,7 @@ fn test_name_coexistence_global_and_scope_local() {
     register_tool_sanitize_request_guardrail(
         "shared_name",
         1,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             c1.fetch_add(1, Ordering::SeqCst);
             args
         }),
@@ -334,7 +334,7 @@ fn test_name_coexistence_global_and_scope_local() {
         &handle.uuid,
         "shared_name",
         2,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             c2.fetch_add(1, Ordering::SeqCst);
             args
         }),
@@ -393,7 +393,7 @@ async fn test_scope_isolation_between_stacks() {
             "a_intercept",
             1,
             false,
-            Box::new(|_name, mut args| {
+            Arc::new(|_name, mut args| {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("a"));
@@ -419,7 +419,7 @@ async fn test_scope_isolation_between_stacks() {
             "b_intercept",
             1,
             false,
-            Box::new(|_name, mut args| {
+            Arc::new(|_name, mut args| {
                 args.as_object_mut()
                     .unwrap()
                     .insert("agent".into(), json!("b"));
@@ -498,7 +498,7 @@ async fn test_nested_scope_inheritance() {
         "global_intercept",
         1,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             og.lock().unwrap().push("global".into());
             args.as_object_mut()
                 .unwrap()
@@ -522,7 +522,7 @@ async fn test_nested_scope_inheritance() {
         "a_intercept",
         5,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             oa.lock().unwrap().push("scope_a".into());
             args.as_object_mut()
                 .unwrap()
@@ -547,7 +547,7 @@ async fn test_nested_scope_inheritance() {
         "b_intercept",
         10,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             ob.lock().unwrap().push("scope_b".into());
             args.as_object_mut()
                 .unwrap()

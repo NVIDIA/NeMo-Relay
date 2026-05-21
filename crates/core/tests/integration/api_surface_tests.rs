@@ -345,14 +345,14 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     expect_already_exists(
         register_tool_sanitize_request_guardrail(
             "tool-sanitize-request",
             1,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap_err(),
         "tool-sanitize-request",
@@ -363,7 +363,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     assert!(deregister_tool_sanitize_response_guardrail("tool-sanitize-response").unwrap());
@@ -376,7 +376,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     .unwrap();
     assert!(deregister_tool_conditional_execution_guardrail("tool-conditional").unwrap());
 
-    register_tool_request_intercept("tool-request", 1, false, Box::new(|_name, args| Ok(args)))
+    register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
         .unwrap();
     assert!(deregister_tool_request_intercept("tool-request").unwrap());
 
@@ -388,14 +388,14 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
 
-    register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, Box::new(|request| request))
+    register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, Arc::new(|request| request))
         .unwrap();
     assert!(deregister_llm_sanitize_request_guardrail("llm-sanitize-request").unwrap());
 
     register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Box::new(|response| response),
+        Arc::new(|response| response),
     )
     .unwrap();
     assert!(deregister_llm_sanitize_response_guardrail("llm-sanitize-response").unwrap());
@@ -412,7 +412,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
         "llm-request",
         1,
         false,
-        Box::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| Ok((request, annotated))),
     )
     .unwrap();
     assert!(deregister_llm_request_intercept("llm-request").unwrap());
@@ -465,7 +465,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-sanitize-request",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     expect_already_exists(
@@ -473,7 +473,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             &scope.uuid,
             "tool-sanitize-request",
             1,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap_err(),
         "tool-sanitize-request",
@@ -487,7 +487,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-sanitize-response",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     assert!(
@@ -512,7 +512,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "tool-request",
         1,
         false,
-        Box::new(|_name, args| Ok(args)),
+        Arc::new(|_name, args| Ok(args)),
     )
     .unwrap();
     assert!(scope_deregister_tool_request_intercept(&scope.uuid, "tool-request").unwrap());
@@ -530,7 +530,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-sanitize-request",
         1,
-        Box::new(|request| request),
+        Arc::new(|request| request),
     )
     .unwrap();
     assert!(
@@ -542,7 +542,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-sanitize-response",
         1,
-        Box::new(|response| response),
+        Arc::new(|response| response),
     )
     .unwrap();
     assert!(
@@ -567,7 +567,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "llm-request",
         1,
         false,
-        Box::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| Ok((request, annotated))),
     )
     .unwrap();
     assert!(scope_deregister_llm_request_intercept(&scope.uuid, "llm-request").unwrap());
@@ -616,7 +616,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             &scope.uuid,
             "missing-tool-sanitize",
             1,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap_err(),
         "scope",
@@ -627,7 +627,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             "missing-tool-request",
             1,
             false,
-            Box::new(|_name, args| Ok(args)),
+            Arc::new(|_name, args| Ok(args)),
         )
         .unwrap_err(),
         "scope",
@@ -660,7 +660,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("sanitized_request".into(), json!(true));
@@ -671,7 +671,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Box::new(|_name, mut result| {
+        Arc::new(|_name, mut result| {
             result
                 .as_object_mut()
                 .unwrap()
@@ -728,7 +728,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         "tool-request",
         1,
         false,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("intercepted".into(), json!(true));
@@ -824,7 +824,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Box::new(|mut request| {
+        Arc::new(|mut request| {
             request.headers.insert("x-sanitized".into(), json!(true));
             request
         }),
@@ -833,7 +833,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Box::new(|mut response| {
+        Arc::new(|mut response| {
             response
                 .as_object_mut()
                 .unwrap()
@@ -891,7 +891,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         "llm-request",
         1,
         false,
-        Box::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, annotated| {
             request.headers.insert("x-intercepted".into(), json!(true));
             Ok((request, annotated))
         }),

@@ -594,7 +594,7 @@ pub(crate) fn create_acg_llm_request_intercept(
     provider: String,
     plugin: Arc<dyn ProviderPlugin>,
 ) -> LlmRequestInterceptFn {
-    Box::new(move |_name: &str, request: LlmRequest, annotated| {
+    Arc::new(move |_name: &str, request: LlmRequest, annotated| {
         let translated =
             translate_request(&request, &agent_id, &provider, plugin.as_ref(), &hot_cache)
                 .unwrap_or(request);

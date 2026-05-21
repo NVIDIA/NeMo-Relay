@@ -386,7 +386,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         if let Some(error) = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
             &name,
             &args,
-            entries,
+            &entries,
             &subscribers,
             parent_uuid,
             guardrail_metadata,
@@ -533,7 +533,7 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     if let Some(error) = NemoFlowContextState::tool_conditional_execution_snapshot_chain(
         name,
         args,
-        entries,
+        &entries,
         &subscribers,
         parent_uuid,
         None,

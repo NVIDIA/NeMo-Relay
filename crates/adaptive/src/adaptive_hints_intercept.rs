@@ -171,7 +171,7 @@ impl AdaptiveHintsIntercept {
     /// transformed request.
     pub fn into_request_fn(self) -> LlmRequestInterceptFn {
         let this = Arc::new(self);
-        Box::new(
+        Arc::new(
             move |_name: &str, mut request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
                 let scope_path = extract_scope_path();
                 let manual_ls = read_manual_latency_sensitivity();

@@ -312,11 +312,6 @@ fn test_scope_stack_helpers_cover_lookup_mutation_and_remove_paths() {
     stack.top_mut().name = "root-renamed".into();
     assert_eq!(stack.top().name, "root-renamed");
 
-    assert!(stack.local_registries_mut(&Uuid::now_v7()).is_none());
-    assert!(stack.scope_registries_get(&root_uuid).is_none());
-    assert!(stack.local_registries_mut(&root_uuid).is_some());
-    assert!(stack.scope_registries_get(&root_uuid).is_some());
-
     let child = ScopeHandle::builder()
         .name("child")
         .scope_type(ScopeType::Function)
@@ -337,7 +332,6 @@ fn test_scope_stack_helpers_cover_lookup_mutation_and_remove_paths() {
     let removed = stack.remove(&child_uuid).unwrap();
     assert_eq!(removed.name, "child");
     assert!(stack.find(&child_uuid).is_none());
-    assert!(stack.scope_registries_get(&child_uuid).is_none());
 
     match stack.remove(&root_uuid) {
         Err(FlowError::InvalidArgument(message)) => {

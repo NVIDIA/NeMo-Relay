@@ -532,7 +532,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         };
         if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
             &request,
-            entries,
+            &entries,
             &subscribers,
             parent_uuid,
             guardrail_metadata,
@@ -680,7 +680,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         };
         if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
             &request,
-            entries,
+            &entries,
             &subscribers,
             parent_uuid,
             guardrail_metadata,
@@ -822,7 +822,7 @@ pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
     };
     if let Some(error) = NemoFlowContextState::llm_conditional_execution_snapshot_chain(
         request,
-        entries,
+        &entries,
         &subscribers,
         parent_uuid,
         None,

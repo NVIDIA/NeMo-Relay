@@ -5,9 +5,9 @@
 //! Wrappers that adapt JavaScript callback functions into Rust closures.
 //!
 //! Each wrapper takes a `js_sys::Function`, wraps it with `SendWrapper` (since
-//! JS functions are not `Send`), and returns a boxed closure matching the
-//! signature expected by the core runtime for guardrails, intercepts,
-//! execution functions, and event subscribers.
+//! JS functions are not `Send`), and returns the closure shape expected by the
+//! core runtime. Registry-stored callbacks return `Arc`-backed closures, while
+//! one-shot or mutable callback shapes remain boxed.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -32,7 +32,8 @@ use nemo_flow::api::event::Event;
 use nemo_flow::api::llm::LlmRequest;
 use nemo_flow::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_flow::codec::request::AnnotatedLlmRequest;
 #[cfg(target_arch = "wasm32")]
@@ -153,14 +154,14 @@ fn wasm_only_error() -> FlowError {
 
 /// Wrap a JS function `(name, args) => result` for tool sanitize/intercept.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_tool_fn(_func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
-    Box::new(move |_name: &str, _args: Json| Json::Null)
+pub fn wrap_js_tool_fn(_func: Function) -> ToolSanitizeFn {
+    Arc::new(move |_name: &str, _args: Json| Json::Null)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
+pub fn wrap_js_tool_fn(func: Function) -> ToolSanitizeFn {
     let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(&args);
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
@@ -206,13 +207,13 @@ pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
 /// Wrap a JS function `(name, args) => result` for fallible tool request intercepts.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_tool_request_intercept_fn(_func: Function) -> ToolInterceptFn {
-    Box::new(move |_name: &str, args: Json| Ok(args))
+    Arc::new(move |_name: &str, args: Json| Ok(args))
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
     let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(&args);
         let result = func
@@ -263,7 +264,7 @@ pub fn wrap_js_tool_exec_fn(
 /// `({ name, request, annotated }) => { request, annotated }`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptFn {
-    Box::new(
+    Arc::new(
         move |_name: &str, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
             Ok((request, annotated))
         },
@@ -273,7 +274,7 @@ pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptF
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn {
     let func = SendWrapper::new(func);
-    Box::new(
+    Arc::new(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLlmRequest>|
@@ -346,18 +347,14 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
 
 /// Wrap a JS function for LLM sanitize request: `(request) => request`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_llm_sanitize_request_fn(
-    _func: Function,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
-    Box::new(move |request: LlmRequest| request)
+pub fn wrap_js_llm_sanitize_request_fn(_func: Function) -> LlmSanitizeRequestFn {
+    Arc::new(move |request: LlmRequest| request)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_llm_sanitize_request_fn(
-    func: Function,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
+pub fn wrap_js_llm_sanitize_request_fn(func: Function) -> LlmSanitizeRequestFn {
     let func = SendWrapper::new(func);
-    Box::new(move |request: LlmRequest| {
+    Arc::new(move |request: LlmRequest| {
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         // TODO: This closure returns LlmRequest (not Result), so we cannot propagate
@@ -894,15 +891,15 @@ pub fn wrap_js_response_codec(decode_response_fn: Function) -> Arc<dyn LlmRespon
 ///
 /// Takes a `Json` value, passes it to JS, and deserializes the result back.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+pub fn wrap_js_llm_response_fn(func: Function) -> LlmSanitizeResponseFn {
     let _ = func;
-    Box::new(move |response: Json| response)
+    Arc::new(move |response: Json| response)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+pub fn wrap_js_llm_response_fn(func: Function) -> LlmSanitizeResponseFn {
     let func = SendWrapper::new(func);
-    Box::new(move |response: Json| {
+    Arc::new(move |response: Json| {
         let js_resp = json_to_js(&response);
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log errors and fall back to original response.

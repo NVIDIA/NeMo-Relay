@@ -38,8 +38,6 @@
 //!   [`atif::AtifExporter`](observability::atif::AtifExporter),
 //!   [`otel::OpenTelemetrySubscriber`](observability::otel::OpenTelemetrySubscriber),
 //!   and [`openinference::OpenInferenceSubscriber`](observability::openinference::OpenInferenceSubscriber).
-//! - [`registry`] — [`SortedRegistry`](registry::SortedRegistry) — a priority-sorted, named collection used for
-//!   all guardrail and intercept registries.
 //! - [`stream`] — [`stream::LlmStreamWrapper`] — a stream adapter that applies per-chunk
 //!   intercepts and aggregates streaming LLM responses.
 //!
@@ -64,7 +62,7 @@ pub mod json;
 pub mod observability;
 pub mod plugin;
 pub mod plugins;
-pub mod registry;
+mod registry;
 #[doc(hidden)]
 pub mod shared_runtime;
 pub mod stream;

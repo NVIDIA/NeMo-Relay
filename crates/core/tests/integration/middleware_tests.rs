@@ -99,7 +99,7 @@ fn test_sanitize_guardrail_priority_ordering() {
     register_tool_sanitize_request_guardrail(
         "g_p1",
         1,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o1.lock().unwrap().push(1);
             args
         }),
@@ -111,7 +111,7 @@ fn test_sanitize_guardrail_priority_ordering() {
     register_tool_sanitize_request_guardrail(
         "g_p3",
         3,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o3.lock().unwrap().push(3);
             args
         }),
@@ -123,7 +123,7 @@ fn test_sanitize_guardrail_priority_ordering() {
     register_tool_sanitize_request_guardrail(
         "g_p2",
         2,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o2.lock().unwrap().push(2);
             args
         }),
@@ -167,7 +167,7 @@ fn test_request_intercept_priority_ordering() {
         "i_p1",
         1,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o1.lock().unwrap().push(1);
             Ok(args)
         }),
@@ -179,7 +179,7 @@ fn test_request_intercept_priority_ordering() {
         "i_p3",
         3,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o3.lock().unwrap().push(3);
             Ok(args)
         }),
@@ -191,7 +191,7 @@ fn test_request_intercept_priority_ordering() {
         "i_p2",
         2,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o2.lock().unwrap().push(2);
             Ok(args)
         }),
@@ -228,7 +228,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         "intercept_a",
         10,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o_a.lock().unwrap().push("a_p10".into());
             Ok(args)
         }),
@@ -240,7 +240,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         "intercept_b",
         20,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o_b.lock().unwrap().push("b_p20".into());
             Ok(args)
         }),
@@ -261,7 +261,7 @@ fn test_re_registration_at_different_priority_re_sorts() {
         "intercept_a",
         30,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o_a2.lock().unwrap().push("a_p30".into());
             Ok(args)
         }),
@@ -303,7 +303,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
         "breaker",
         1,
         true, // break_chain = true
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("breaker_ran".into(), json!(true));
@@ -317,7 +317,7 @@ fn test_break_chain_stops_subsequent_intercepts() {
         "after_breaker",
         2,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             sc.store(true, Ordering::SeqCst);
             args.as_object_mut()
                 .unwrap()
@@ -360,7 +360,7 @@ fn test_no_break_chain_runs_all_intercepts() {
         "first",
         1,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             c1.fetch_add(1, Ordering::SeqCst);
             Ok(args)
         }),
@@ -372,7 +372,7 @@ fn test_no_break_chain_runs_all_intercepts() {
         "second",
         2,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             c2.fetch_add(1, Ordering::SeqCst);
             Ok(args)
         }),
@@ -709,7 +709,6 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
         Arc::new(|_, _| Ok(Some("blocked by tool guardrail".to_string()))),
     )
     .unwrap();
-    assert!(global_context().read().unwrap().extensions.is_empty());
 
     let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let allowed = tool_call_execute(
@@ -889,7 +888,7 @@ fn test_scope_local_guardrail_lifecycle() {
         &handle.uuid,
         "scoped_guardrail",
         1,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             cc.fetch_add(1, Ordering::SeqCst);
             args
         }),
@@ -1013,7 +1012,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     register_tool_sanitize_request_guardrail(
         "global_g",
         5,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             og.lock().unwrap().push("global".into());
             args.as_object_mut()
                 .unwrap()
@@ -1029,7 +1028,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
         &handle.uuid,
         "local_g",
         3,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             ol.lock().unwrap().push("local".into());
             args.as_object_mut()
                 .unwrap()
@@ -1197,7 +1196,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
         "should_not_run",
         1,
         false,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             ic.store(true, Ordering::SeqCst);
             Ok(args)
         }),
@@ -1299,7 +1298,7 @@ fn test_sanitize_guardrails_pipe_data() {
     register_tool_sanitize_request_guardrail(
         "add_a",
         1,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("field_a".into(), json!(true));
@@ -1312,7 +1311,7 @@ fn test_sanitize_guardrails_pipe_data() {
     register_tool_sanitize_request_guardrail(
         "add_b",
         2,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             // Verify field_a was added by the previous guardrail
             let has_a = args.get("field_a").is_some();
             args.as_object_mut()
@@ -1370,7 +1369,7 @@ fn test_response_sanitize_guardrails_pipe() {
     register_tool_sanitize_response_guardrail(
         "resp_g1",
         1,
-        Box::new(|_name, mut result| {
+        Arc::new(|_name, mut result| {
             result
                 .as_object_mut()
                 .unwrap()
@@ -1445,7 +1444,7 @@ fn test_concurrent_register_deregister() {
                 let res = register_tool_sanitize_request_guardrail(
                     &name,
                     i,
-                    Box::new(|_name, args| args),
+                    Arc::new(|_name, args| args),
                 );
                 assert!(res.is_ok(), "Registration should succeed for {name}");
 
@@ -1463,16 +1462,13 @@ fn test_concurrent_register_deregister() {
         h.join().expect("Thread should not panic");
     }
 
-    // Verify the context is still in a consistent state
-    let ctx = global_context();
-    let state = ctx.read().unwrap();
-    assert!(
-        state
-            .tool_sanitize_request_guardrails
-            .sorted_values()
-            .is_empty(),
-        "All guardrails should be deregistered"
-    );
+    for i in 0..10i32 {
+        let name = format!("concurrent_guardrail_{i}");
+        assert!(
+            !deregister_tool_sanitize_request_guardrail(&name).unwrap(),
+            "{name} should already be deregistered"
+        );
+    }
 }
 
 /// Concurrent register/deregister of intercepts across multiple threads.
@@ -1494,7 +1490,7 @@ fn test_concurrent_intercept_mutations() {
                     &name,
                     i,
                     false,
-                    Box::new(|_name, args| Ok(args)),
+                    Arc::new(|_name, args| Ok(args)),
                 );
                 assert!(res.is_ok());
 
@@ -1510,12 +1506,13 @@ fn test_concurrent_intercept_mutations() {
         h.join().expect("Thread should not panic");
     }
 
-    let ctx = global_context();
-    let state = ctx.read().unwrap();
-    assert!(
-        state.tool_request_intercepts.sorted_values().is_empty(),
-        "All intercepts should be deregistered"
-    );
+    for i in 0..10i32 {
+        let name = format!("concurrent_intercept_{i}");
+        assert!(
+            !deregister_tool_request_intercept(&name).unwrap(),
+            "{name} should already be deregistered"
+        );
+    }
 }
 
 /// Interleaved register and tool call execution from multiple threads.
@@ -1529,7 +1526,7 @@ fn test_concurrent_register_and_read() {
         register_tool_sanitize_request_guardrail(
             &format!("stable_{i}"),
             i,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap();
     }
@@ -1548,7 +1545,7 @@ fn test_concurrent_register_and_read() {
                     let _ = register_tool_sanitize_request_guardrail(
                         &name,
                         100 + i,
-                        Box::new(|_name, args| args),
+                        Arc::new(|_name, args| args),
                     );
                     std::thread::yield_now();
                     let _ = deregister_tool_sanitize_request_guardrail(&name);
@@ -1599,7 +1596,7 @@ async fn test_full_pipeline_integration() {
         "req_intercept",
         1,
         false,
-        Box::new(move |_name, mut args| {
+        Arc::new(move |_name, mut args| {
             o1.lock().unwrap().push("request_intercept".into());
             args.as_object_mut()
                 .unwrap()
@@ -1614,7 +1611,7 @@ async fn test_full_pipeline_integration() {
     register_tool_sanitize_request_guardrail(
         "sanitize_req",
         1,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             o2.lock().unwrap().push("sanitize_request".into());
             args
         }),
@@ -1653,7 +1650,7 @@ async fn test_full_pipeline_integration() {
     register_tool_sanitize_response_guardrail(
         "sanitize_resp",
         1,
-        Box::new(move |_name, result| {
+        Arc::new(move |_name, result| {
             o5.lock().unwrap().push("sanitize_response".into());
             result
         }),
@@ -1718,10 +1715,10 @@ fn test_duplicate_guardrail_registration_returns_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    register_tool_sanitize_request_guardrail("duplicate", 1, Box::new(|_name, args| args)).unwrap();
+    register_tool_sanitize_request_guardrail("duplicate", 1, Arc::new(|_name, args| args)).unwrap();
 
     let err =
-        register_tool_sanitize_request_guardrail("duplicate", 2, Box::new(|_name, args| args));
+        register_tool_sanitize_request_guardrail("duplicate", 2, Arc::new(|_name, args| args));
 
     assert!(err.is_err());
     match err.unwrap_err() {
@@ -1741,14 +1738,14 @@ fn test_duplicate_intercept_registration_returns_error() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    register_tool_request_intercept("dup_intercept", 1, false, Box::new(|_name, args| Ok(args)))
+    register_tool_request_intercept("dup_intercept", 1, false, Arc::new(|_name, args| Ok(args)))
         .unwrap();
 
     let err = register_tool_request_intercept(
         "dup_intercept",
         2,
         false,
-        Box::new(|_name, args| Ok(args)),
+        Arc::new(|_name, args| Ok(args)),
     );
 
     assert!(err.is_err());
@@ -1793,7 +1790,7 @@ fn test_deregister_removes_from_chain() {
     register_tool_sanitize_request_guardrail(
         "removable",
         1,
-        Box::new(move |_name, args| {
+        Arc::new(move |_name, args| {
             cc.fetch_add(1, Ordering::SeqCst);
             args
         }),
@@ -1988,7 +1985,7 @@ async fn test_llm_request_intercept_transforms() {
         "llm_req_i",
         1,
         false,
-        Box::new(|_name: &str, mut req: LlmRequest, annotated| {
+        Arc::new(|_name: &str, mut req: LlmRequest, annotated| {
             req.headers.insert("x-intercepted".into(), json!(true));
             Ok((req, annotated))
         }),
@@ -2086,7 +2083,7 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
         "llm_short_circuit_request",
         1,
         false,
-        Box::new(|_name, mut req, annotated| {
+        Arc::new(|_name, mut req, annotated| {
             req.content
                 .as_object_mut()
                 .unwrap()
@@ -2192,7 +2189,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
         "llm_stream_short_circuit_request",
         1,
         false,
-        Box::new(|_name, mut req, annotated| {
+        Arc::new(|_name, mut req, annotated| {
             req.content
                 .as_object_mut()
                 .unwrap()
