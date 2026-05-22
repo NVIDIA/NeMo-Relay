@@ -2174,5 +2174,5 @@ fn default_timeout_millis() -> u64 {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/plugins/nemo_guardrails/plugin_component_tests.rs"]
+#[path = "../../../tests/unit/plugins/nemo_guardrails/component_tests.rs"]
 mod tests;
