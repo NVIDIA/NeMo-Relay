@@ -36,11 +36,6 @@ use super::{NeMoGuardrailsConfig, RemoteBackendConfig, RequestDefaultsConfig};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 #[derive(Clone)]
-// PR 2 intentionally implements the first honest remote slice:
-// OpenAI chat requests, non-streaming + streaming execution, managed tool
-// input/output checks, broad request-defaults pass-through, and response
-// passthrough from the Guardrails server. The local backend remains out of
-// scope.
 struct RemoteBackendRuntime {
     endpoint: String,
     client: reqwest::Client,
