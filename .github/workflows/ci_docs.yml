@@ -72,4 +72,5 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
           NEMO_RELAY_DOCS_DEPS_READY: "1"
+          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
         run: just docs

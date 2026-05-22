@@ -10,7 +10,7 @@
     "integrations/openclaw"
   ],
   "devDependencies": {
-    "fern-api": "^5.27.5",
+    "fern-api": "^5.37.0",
     "typescript": "^5.9.3"
   }
 }
