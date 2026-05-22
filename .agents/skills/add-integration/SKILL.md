@@ -1,6 +1,6 @@
 ---
 name: add-integration
-description: Add a new third-party framework integration maintained as a NeMo Flow patch set
+description: Add a new third-party framework integration maintained as a NeMo Relay patch set
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-NeMo Flow integrations with upstream projects are maintained as manifest-pinned
+NeMo Relay integrations with upstream projects are maintained as manifest-pinned
 local upstream checkouts under `third_party/`, bootstrapped from
 `third_party/sources.lock`, with corresponding patch files in `patches/`.
 
@@ -24,9 +24,9 @@ exists and you are refreshing an existing patch set, use
 
 ## Required Patterns
 
-- `nemo_flow` stays an optional dependency
-- Framework behavior must fall back cleanly when NeMo Flow is unavailable
-- Tool calls and LLM calls should use NeMo Flow managed execution where possible
+- `nemo_relay` stays an optional dependency
+- Framework behavior must fall back cleanly when NeMo Relay is unavailable
+- Tool calls and LLM calls should use NeMo Relay managed execution where possible
 - Scope creation should mirror the framework's natural agent, graph, or function
   boundaries
 - Scope stack propagation must be explicit across worker threads or async
@@ -68,16 +68,16 @@ This root command is the stable public wrapper. The implementation lives under
 
 ```
 third_party/<name>/     # local upstream checkout pinned by third_party/sources.lock
-patches/<name>/         # tracked NeMo Flow integration patch set
-  0001-add-nemo-flow-integration.patch
+patches/<name>/         # tracked NeMo Relay integration patch set
+  0001-add-nemo-relay-integration.patch
 ```
 
 ## Checklist
 
 - [ ] Upstream checkout exists under `third_party/`
 - [ ] Optional import / activation guard is in place
-- [ ] Tool calls are wrapped through NeMo Flow where appropriate
-- [ ] LLM calls are wrapped through NeMo Flow where appropriate
+- [ ] Tool calls are wrapped through NeMo Relay where appropriate
+- [ ] LLM calls are wrapped through NeMo Relay where appropriate
 - [ ] Scope boundaries match the framework's execution model
 - [ ] Context propagation is correct across async or thread boundaries
 - [ ] Integration patch regenerates cleanly into `patches/<name>/`

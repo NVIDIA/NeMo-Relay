@@ -5,10 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # Consumer Skills
 
-This directory contains consumer-facing NeMo Flow skills for application
+This directory contains consumer-facing NeMo Relay skills for application
 developers, integrators, and end users.
 
-Public skill directories use a `nemo-flow-` prefix so they remain recognizable
+Public skill directories use a `nemo-relay-` prefix so they remain recognizable
 and collision-resistant when exported outside this repository.
 
 Skills in this directory are self-contained. A skill can point to another skill
@@ -19,14 +19,16 @@ documentation, embed those details directly in the skill.
 Use these skills for tasks such as:
 
 - Getting started with a binding
+- Migrating NeMo Flow codebases to NeMo Relay
 - Instrumenting tool and LLM calls
 - Choosing the current primary documentation track: Rust, Python, or Node.js
-- Configuring adaptive features
+- Tuning performance with adaptive features
+- Building reusable plugin behavior
 - Setting up observability and trace export
-- Debugging application-side NeMo Flow integrations
+- Debugging application-side NeMo Relay integrations
 
 When a skill mentions Go, WebAssembly, or raw FFI, treat those as source-first
-advanced surfaces. Their APIs are tracked in `go/nemo_flow`, `crates/wasm`, and
+advanced surfaces. Their APIs are tracked in `go/nemo_relay`, `crates/wasm`, and
 `crates/ffi`, but the primary end-user docs and quick starts focus on Rust,
 Python, and Node.js.
 

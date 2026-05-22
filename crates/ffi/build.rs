@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Build script that regenerates the committed `nemo_flow.h` header.
+//! Build script that regenerates the committed `nemo_relay.h` header.
 
 fn main() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -13,6 +13,6 @@ fn main() {
         .with_config(config)
         .generate()
     {
-        bindings.write_to_file(format!("{crate_dir}/nemo_flow.h"));
+        bindings.write_to_file(format!("{crate_dir}/nemo_relay.h"));
     }
 }

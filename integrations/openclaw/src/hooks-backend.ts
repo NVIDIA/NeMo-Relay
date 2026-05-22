@@ -8,9 +8,9 @@
  * subagent events. This class routes each event to focused replay modules and
  * owns fail-open behavior so observability never breaks the agent runtime.
  */
-import type { NemoFlowHookBackendConfig } from "./config.js";
-import { emitMark, toJsonRecord } from "./hook-replay/marks.js";
-import { llmKey } from "./hook-replay/correlation.js";
+import type { NemoRelayHookBackendConfig } from './config.js';
+import { emitMark, toJsonRecord } from './hook-replay/marks.js';
+import { llmKey } from './hook-replay/correlation.js';
 import {
   emitUnpairedModelCallTimingMarks,
   recordBeforeMessageWrite,
@@ -20,8 +20,8 @@ import {
   recordModelCallStarted,
   replayAgentEndMessages,
   replayPendingLlmOutputsForSession,
-} from "./hook-replay/llm.js";
-import { replayAfterToolCall } from "./hook-replay/tool.js";
+} from './hook-replay/llm.js';
+import { guardBeforeToolCall, replayAfterToolCall } from './hook-replay/tool.js';
 import {
   createHookReplayState,
   drainSession,
@@ -32,8 +32,8 @@ import {
   type HookReplayBackendState,
   type SessionLookupInput,
   type SessionState,
-} from "./hook-replay/session.js";
-import type { NemoFlowRuntimeModule } from "./modules.js";
+} from './hook-replay/session.js';
+import type { NemoRelayRuntimeModule } from './modules.js';
 import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
@@ -41,6 +41,7 @@ import type {
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeMessageWriteContext,
   PluginHookBeforeMessageWriteEvent,
+  PluginHookBeforeToolCallEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookLlmInputEvent,
@@ -54,21 +55,21 @@ import type {
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
   PluginHookToolContext,
-} from "./openclaw-hook-types.js";
-import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import type { JsonObject as JsonRecord } from "nemo-flow-node/typed";
+} from './openclaw-hook-types.js';
+import type { PluginLogger } from 'openclaw/plugin-sdk/plugin-entry';
+import type { JsonObject as JsonRecord } from 'nemo-relay-node/typed';
 
 export type HookReplayBackendOptions = {
-  nf: NemoFlowRuntimeModule;
-  config: NemoFlowHookBackendConfig;
+  nf: NemoRelayRuntimeModule;
+  config: NemoRelayHookBackendConfig;
   logger: PluginLogger;
   agentVersion: string;
 };
 
-/** Replays OpenClaw public hook events into NeMo Flow scopes, spans, and marks. */
+/** Replays OpenClaw public hook events into NeMo Relay scopes, spans, and marks. */
 export class HookReplayBackend {
-  private readonly nf: NemoFlowRuntimeModule;
-  private readonly config: NemoFlowHookBackendConfig;
+  private readonly nf: NemoRelayRuntimeModule;
+  private readonly config: NemoRelayHookBackendConfig;
   private readonly logger: PluginLogger;
   private readonly agentVersion: string;
   private readonly stateValue = createHookReplayState();
@@ -98,7 +99,7 @@ export class HookReplayBackend {
       sessionId: event.sessionId,
       sessionKey: event.sessionKey ?? ctx.sessionKey,
       agentId: ctx.agentId,
-      source: "session_start",
+      source: 'session_start',
       resumedFrom: event.resumedFrom,
     });
 
@@ -111,7 +112,7 @@ export class HookReplayBackend {
       sessionId: event.sessionId,
       sessionKey: event.sessionKey ?? ctx.sessionKey,
       agentId: ctx.agentId,
-      source: "lazy_session",
+      source: 'lazy_session',
     });
 
     if (!session) {
@@ -141,9 +142,14 @@ export class HookReplayBackend {
     recordModelCallEnded(this.sessionManager(), event, ctx);
   }
 
-  /** Replay a finished OpenClaw tool call as a NeMo Flow tool span or blocked mark. */
+  /** Replay a finished OpenClaw tool call as a NeMo Relay tool span or blocked mark. */
   onAfterToolCall(event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext): void {
     replayAfterToolCall(this.sessionManager(), event, ctx);
+  }
+
+  /** Run conditional-execution guardrails before OpenClaw invokes a tool. */
+  async onBeforeToolCall(event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext): Promise<void> {
+    await guardBeforeToolCall(this.sessionManager(), event, ctx);
   }
 
   /** Capture assistant message writes that may contain the clearest provider output. */
@@ -158,7 +164,7 @@ export class HookReplayBackend {
       sessionKey: ctx.sessionKey,
       runId: event.runId ?? ctx.runId,
       agentId: ctx.agentId,
-      source: "lazy_session",
+      source: 'lazy_session',
     });
 
     if (!session) {
@@ -166,12 +172,12 @@ export class HookReplayBackend {
     }
 
     const finalOutput = replayAgentEndMessages(this.sessionManager(), event, ctx, session);
-    if (finalOutput && (!session.finalOutput || "content" in finalOutput)) {
+    if (finalOutput && (!session.finalOutput || 'content' in finalOutput)) {
       session.finalOutput = finalOutput;
     }
 
     this.emitSessionMark(
-      "openclaw.agent_end",
+      'openclaw.agent_end',
       session,
       toJsonRecord({
         runId: event.runId ?? ctx.runId,
@@ -190,23 +196,23 @@ export class HookReplayBackend {
       sessionKey: event.sessionKey ?? ctx.sessionKey,
       runId: event.runId ?? ctx.runId,
       agentId: ctx.agentId,
-      source: "lazy_session",
+      source: 'lazy_session',
     });
 
     if (!session) {
       return;
     }
 
-    if (typeof event.lastAssistantMessage === "string" && event.lastAssistantMessage.length > 0) {
+    if (typeof event.lastAssistantMessage === 'string' && event.lastAssistantMessage.length > 0) {
       session.finalOutput = toJsonRecord({
         content: event.lastAssistantMessage,
-        source: "openclaw.before_agent_finalize",
+        source: 'openclaw.before_agent_finalize',
         runId: event.runId ?? ctx.runId,
       });
     }
 
     this.emitSessionMark(
-      "openclaw.before_agent_finalize",
+      'openclaw.before_agent_finalize',
       session,
       toJsonRecord({
         runId: event.runId ?? ctx.runId,
@@ -226,13 +232,13 @@ export class HookReplayBackend {
     const session =
       this.ensureSession({
         requesterSessionKey: ctx.requesterSessionKey,
-        source: "lazy_session",
+        source: 'lazy_session',
       }) ??
       this.ensureSession({
         childSessionKey: ctx.childSessionKey ?? event.childSessionKey,
         runId: ctx.runId ?? event.runId,
         agentId: event.agentId,
-        source: "lazy_session",
+        source: 'lazy_session',
       });
 
     if (!session) {
@@ -240,7 +246,7 @@ export class HookReplayBackend {
     }
 
     this.emitSessionMark(
-      "openclaw.subagent_spawned",
+      'openclaw.subagent_spawned',
       session,
       toJsonRecord({
         runId: event.runId,
@@ -258,12 +264,12 @@ export class HookReplayBackend {
     const session =
       this.ensureSession({
         requesterSessionKey: ctx.requesterSessionKey,
-        source: "lazy_session",
+        source: 'lazy_session',
       }) ??
       this.ensureSession({
         childSessionKey: ctx.childSessionKey ?? event.targetSessionKey,
         runId: ctx.runId ?? event.runId,
-        source: "lazy_session",
+        source: 'lazy_session',
       });
 
     if (!session) {
@@ -271,7 +277,7 @@ export class HookReplayBackend {
     }
 
     this.emitSessionMark(
-      "openclaw.subagent_ended",
+      'openclaw.subagent_ended',
       session,
       toJsonRecord({
         runId: event.runId ?? ctx.runId,
@@ -289,7 +295,7 @@ export class HookReplayBackend {
 
   /** Drain all active sessions when the OpenClaw gateway is stopping. */
   async drainForGatewayStop(reason?: string): Promise<void> {
-    await this.closeAllSessions({ reason: reason ?? "gateway_stop" });
+    await this.closeAllSessions({ reason: reason ?? 'gateway_stop' });
   }
 
   /** Close one session selected by a runtime lifecycle cleanup hook. */
@@ -320,24 +326,20 @@ export class HookReplayBackend {
       this.stateValue.counters.replayErrors += 1;
       this.logBoundedWarn(
         `safe-replay:${label}`,
-        `nemo-flow replay failed: label=${label} session=${session?.sessionId ?? "unknown"} error=${toMessage(error)}`,
+        `nemo-relay replay failed: label=${label} session=${session?.sessionId ?? 'unknown'} error=${toMessage(error)}`,
       );
     }
   }
 
   /** Async variant of safeReplay for hooks that need export or cleanup awaits. */
-  async safeReplayAsync(
-    label: string,
-    session: SessionState | undefined,
-    emit: () => Promise<void>,
-  ): Promise<void> {
+  async safeReplayAsync(label: string, session: SessionState | undefined, emit: () => Promise<void>): Promise<void> {
     try {
       await emit();
     } catch (error) {
       this.stateValue.counters.replayErrors += 1;
       this.logBoundedWarn(
         `safe-replay:${label}`,
-        `nemo-flow async replay failed: label=${label} session=${session?.sessionId ?? "unknown"} error=${toMessage(error)}`,
+        `nemo-relay async replay failed: label=${label} session=${session?.sessionId ?? 'unknown'} error=${toMessage(error)}`,
       );
     }
   }

@@ -425,7 +425,7 @@ fn overlay_generation_params(
 /// non-streaming request (`{id, object, created, model, choices: [{message, finish_reason}],
 /// usage}`). Once finalized, the assembled JSON can be fed back through
 /// [`OpenAIChatCodec::decode_response`] to produce the canonical
-/// [`AnnotatedLlmResponse`](crate::codec::response::AnnotatedLlmResponse).
+/// [`AnnotatedLlmResponse`].
 ///
 /// # Strategy
 ///

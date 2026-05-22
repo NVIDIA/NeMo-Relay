@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for py plugin coverage in the NeMo Flow Python crate.
+//! Coverage tests for py plugin coverage in the NeMo Relay Python crate.
 
 use super::*;
 
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
-use nemo_flow::plugin::rollback_registrations;
+use nemo_relay::plugin::rollback_registrations;
 use pyo3::types::PyModule;
 use serde_json::json;
 
@@ -695,19 +695,19 @@ async def tool_execution_intercept(name, value, next):
         let mut registrations = context.drain_registrations().unwrap();
         assert_eq!(registrations.len(), 12);
 
-        let previous_owner = std::env::var("NEMO_FLOW_RUNTIME_OWNER").ok();
+        let previous_owner = std::env::var("NEMO_RELAY_RUNTIME_OWNER").ok();
         let conflicting_owner = format!(
             "pid={};binding=node;version={}",
             std::process::id(),
             env!("CARGO_PKG_VERSION").split('.').next().unwrap()
         );
         unsafe {
-            std::env::set_var("NEMO_FLOW_RUNTIME_OWNER", &conflicting_owner);
+            std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", &conflicting_owner);
         }
         rollback_registrations(&mut registrations);
         match previous_owner {
-            Some(value) => unsafe { std::env::set_var("NEMO_FLOW_RUNTIME_OWNER", value) },
-            None => unsafe { std::env::remove_var("NEMO_FLOW_RUNTIME_OWNER") },
+            Some(value) => unsafe { std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", value) },
+            None => unsafe { std::env::remove_var("NEMO_RELAY_RUNTIME_OWNER") },
         }
     });
 }

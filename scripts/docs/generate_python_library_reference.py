@@ -177,7 +177,7 @@ def _assignment_names(node: ast.Assign | ast.AnnAssign) -> list[str]:
 def _reexport_names(node: ast.ImportFrom) -> list[str]:
     if node.module == "__future__":
         return []
-    if node.level == 0 and not (node.module or "").startswith("nemo_flow"):
+    if node.level == 0 and not (node.module or "").startswith("nemo_relay"):
         return []
     names: list[str] = []
     for alias in node.names:
@@ -323,8 +323,8 @@ def _sibling_positions(modules: list[ModuleDoc]) -> dict[str, int]:
 
 def _write_index(output_dir: Path, modules: list[ModuleDoc]) -> None:
     lines = [
-        frontmatter("Python Library Reference", "Generated Python API reference for the nemo_flow package.", 1),
-        "Generated from the local `python/nemo_flow` package source.\n\n",
+        frontmatter("Python Library Reference", "Generated Python API reference for the nemo_relay package.", 1),
+        "Generated from the local `python/nemo_relay` package source.\n\n",
         "## Modules\n\n",
     ]
 
@@ -408,7 +408,7 @@ def generate(package_root: Path, output_dir: Path) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package-root", type=Path, default=Path("python/nemo_flow"))
+    parser.add_argument("--package-root", type=Path, default=Path("python/nemo_relay"))
     parser.add_argument(
         "--output-dir",
         type=Path,

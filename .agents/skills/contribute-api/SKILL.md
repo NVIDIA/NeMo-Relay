@@ -1,6 +1,6 @@
 ---
 name: contribute-api
-description: Contribute a new NeMo Flow public API surface safely, with binding parity and docs in mind
+description: Contribute a new NeMo Relay public API surface safely, with binding parity and docs in mind
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---

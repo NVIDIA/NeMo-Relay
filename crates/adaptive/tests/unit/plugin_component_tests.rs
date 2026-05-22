@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for plugin component in the NeMo Flow adaptive crate.
+//! Unit tests for plugin component in the NeMo Relay adaptive crate.
 
 use super::*;
 
 use std::sync::{Mutex, OnceLock};
 
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::llm_request_intercepts;
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::plugin::{DiagnosticLevel, UnsupportedBehavior, clear_plugin_configuration};
-use nemo_flow::plugin::{Plugin, PluginRegistrationContext, rollback_registrations};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::llm_request_intercepts;
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::plugin::{DiagnosticLevel, UnsupportedBehavior, clear_plugin_configuration};
+use nemo_relay::plugin::{Plugin, PluginRegistrationContext, rollback_registrations};
 use serde_json::json;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -28,7 +28,7 @@ fn reset_global() {
     let _ = deregister_adaptive_component();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 #[test]
@@ -259,32 +259,32 @@ fn validate_backend_config_fields_only_flags_known_backend_extras() {
 fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::InvalidConfig("bad".into())),
-        nemo_flow::plugin::PluginError::InvalidConfig(message) if message == "bad"
+        nemo_relay::plugin::PluginError::InvalidConfig(message) if message == "bad"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::NotFound("missing".into())),
-        nemo_flow::plugin::PluginError::NotFound(message) if message == "missing"
+        nemo_relay::plugin::PluginError::NotFound(message) if message == "missing"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Storage("store".into())),
-        nemo_flow::plugin::PluginError::Internal(message) if message == "store"
+        nemo_relay::plugin::PluginError::Internal(message) if message == "store"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Internal("internal".into())),
-        nemo_flow::plugin::PluginError::Internal(message) if message == "internal"
+        nemo_relay::plugin::PluginError::Internal(message) if message == "internal"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::RegistrationFailed("register".into())),
-        nemo_flow::plugin::PluginError::RegistrationFailed(message) if message == "register"
+        nemo_relay::plugin::PluginError::RegistrationFailed(message) if message == "register"
     ));
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::ChannelClosed("closed".into())),
-        nemo_flow::plugin::PluginError::Internal(message) if message == "closed"
+        nemo_relay::plugin::PluginError::Internal(message) if message == "closed"
     ));
     let serde_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Serialization(serde_error)),
-        nemo_flow::plugin::PluginError::Serialization(_)
+        nemo_relay::plugin::PluginError::Serialization(_)
     ));
 }
 
@@ -294,7 +294,7 @@ fn adaptive_to_plugin_error_maps_redis_variant() {
     let redis_error = redis::Client::open("redis://bad host").unwrap_err();
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Redis(redis_error)),
-        nemo_flow::plugin::PluginError::Internal(message) if message.contains("Redis URL")
+        nemo_relay::plugin::PluginError::Internal(message) if message.contains("Redis URL")
     ));
 }
 

@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::ToolExecutionNextFn;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -57,7 +57,7 @@ pub struct ToolHandle {
     pub tool_call_id: Option<String>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::create_tool_handle`].
+/// Builder parameters for [`NemoRelayContextState::create_tool_handle`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateToolHandleParams<'a> {
@@ -84,7 +84,7 @@ pub struct CreateToolHandleParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::build_tool_end_event`].
+/// Builder parameters for [`NemoRelayContextState::build_tool_end_event`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct EndToolHandleParams<'a> {
@@ -239,7 +239,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
         (handle, event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
@@ -301,7 +301,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         );
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -319,7 +319,7 @@ fn emit_tool_end_without_output(handle: &ToolHandle, metadata: Option<Json>) -> 
         let event = state.end_tool_handle(handle, handle.data.clone(), metadata);
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -363,18 +363,34 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
     } = params;
     ensure_runtime_owner()?;
     {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_conditional_execution_guardrails
-        });
-        let context = global_context();
-        let state = context
-            .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        if let Some(error) = state.tool_conditional_execution_chain(&name, &args, &scope_locals)? {
-            drop(state);
-            drop(scope_guard);
+        let (entries, subscribers, parent_uuid, guardrail_metadata) = {
+            let scope_stack = current_scope_stack();
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+                &registries.tool_conditional_execution_guardrails
+            });
+            let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+            let context = global_context();
+            let state = context
+                .read()
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            let entries = state.tool_conditional_execution_entries(&scope_locals);
+            let subscribers = state.collect_event_subscribers(&scope_subscribers);
+            (
+                entries,
+                subscribers,
+                resolve_parent_uuid(parent.as_ref()),
+                metadata.clone(),
+            )
+        };
+        if let Some(error) = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
+            &name,
+            &args,
+            &entries,
+            &subscribers,
+            parent_uuid,
+            guardrail_metadata,
+        )? {
             let mut rejection_data = json!({});
             if let Some(object) = rejection_data.as_object_mut() {
                 object.insert("rejected".into(), json!(true));
@@ -479,7 +495,8 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 /// Run only the tool conditional-execution guardrail chain.
 ///
 /// This evaluates whether a tool call should be allowed to proceed without
-/// emitting lifecycle events or invoking request intercepts or execution.
+/// invoking request intercepts or execution. Each evaluated guardrail emits an
+/// automatic guardrail scope start/end pair for observability.
 ///
 /// # Parameters
 /// - `name`: Tool name used when resolving the guardrail chain.
@@ -494,19 +511,33 @@ pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
 ///
 /// # Notes
 /// This helper is useful for preflight checks when the caller needs the
-/// rejection result without starting a tool span.
+/// rejection result without starting a tool span. Guardrail scopes are still
+/// emitted for the conditional checks themselves.
 pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-    let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-        &registries.tool_conditional_execution_guardrails
-    });
-    let context = global_context();
-    let state = context
-        .read()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    if let Some(error) = state.tool_conditional_execution_chain(name, args, &scope_locals)? {
+    let (entries, subscribers, parent_uuid) = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+            &registries.tool_conditional_execution_guardrails
+        });
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        let entries = state.tool_conditional_execution_entries(&scope_locals);
+        let subscribers = state.collect_event_subscribers(&scope_subscribers);
+        (entries, subscribers, resolve_parent_uuid(None))
+    };
+    if let Some(error) = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
+        name,
+        args,
+        &entries,
+        &subscribers,
+        parent_uuid,
+        None,
+    )? {
         return Err(FlowError::GuardrailRejected(error));
     }
     Ok(())

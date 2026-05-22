@@ -1,16 +1,16 @@
 {
-  "name": "nemo-flow-claude-code-observability",
+  "name": "nemo-relay-claude-code-observability",
   "version": "0.1.0",
-  "description": "Claude Code hooks that forward canonical lifecycle payloads to nemo-flow-sidecar.",
+  "description": "Claude Code hooks that forward canonical lifecycle payloads to nemo-relay-sidecar.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",
-    "url": "https://github.com/NVIDIA/NeMo-Flow"
+    "url": "https://github.com/NVIDIA/NeMo-Relay"
   },
-  "homepage": "https://github.com/NVIDIA/NeMo-Flow",
-  "repository": "https://github.com/NVIDIA/NeMo-Flow",
+  "homepage": "https://github.com/NVIDIA/NeMo-Relay",
+  "repository": "https://github.com/NVIDIA/NeMo-Relay",
   "license": "Apache-2.0",
   "keywords": [
-    "nemo-flow",
+    "nemo-relay",
     "claude-code",
     "hooks",
     "observability"

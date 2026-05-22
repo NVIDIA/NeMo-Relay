@@ -18,19 +18,19 @@ fn zsh_uses_zdotdir_when_set() {
         Some(OsString::from("/home/u/dot")),
     )
     .unwrap();
-    assert_eq!(path, PathBuf::from("/home/u/dot/.zfunc/_nemo-flow"));
+    assert_eq!(path, PathBuf::from("/home/u/dot/.zfunc/_nemo-relay"));
 }
 
 #[test]
 fn zsh_falls_back_to_home_without_zdotdir() {
     let path = completion_path(Shell::Zsh, Some(OsString::from("/home/u")), None).unwrap();
-    assert_eq!(path, PathBuf::from("/home/u/.zfunc/_nemo-flow"));
+    assert_eq!(path, PathBuf::from("/home/u/.zfunc/_nemo-relay"));
 }
 
 #[test]
 fn bash_uses_home_dot_bash_completion_d() {
     let path = completion_path(Shell::Bash, Some(OsString::from("/home/u")), None).unwrap();
-    assert_eq!(path, PathBuf::from("/home/u/.bash_completion.d/nemo-flow"));
+    assert_eq!(path, PathBuf::from("/home/u/.bash_completion.d/nemo-relay"));
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn fish_uses_xdg_config_fish_completions() {
     let path = completion_path(Shell::Fish, Some(OsString::from("/home/u")), None).unwrap();
     assert_eq!(
         path,
-        PathBuf::from("/home/u/.config/fish/completions/nemo-flow.fish")
+        PathBuf::from("/home/u/.config/fish/completions/nemo-relay.fish")
     );
 }
 
@@ -83,12 +83,12 @@ fn detect_shell_rejects_missing_shell_env() {
 #[test]
 fn write_atomic_creates_target_and_removes_temp_file() {
     let temp = tempfile::tempdir().unwrap();
-    let target = temp.path().join("nemo-flow");
+    let target = temp.path().join("nemo-relay");
 
-    write_atomic(&target, b"complete -c nemo-flow").unwrap();
+    write_atomic(&target, b"complete -c nemo-relay").unwrap();
 
-    assert_eq!(std::fs::read(&target).unwrap(), b"complete -c nemo-flow");
-    assert!(!target.with_file_name(".nemo-flow.tmp").exists());
+    assert_eq!(std::fs::read(&target).unwrap(), b"complete -c nemo-relay");
+    assert!(!target.with_file_name(".nemo-relay.tmp").exists());
 }
 
 #[test]
@@ -111,9 +111,9 @@ fn install_writes_detected_shell_completion() {
     restore_env("ZDOTDIR", old_zdotdir);
     restore_env("SHELL", old_shell);
 
-    assert_eq!(path, temp.path().join(".zfunc/_nemo-flow"));
+    assert_eq!(path, temp.path().join(".zfunc/_nemo-relay"));
     let script = std::fs::read_to_string(path).unwrap();
-    assert!(script.contains("nemo-flow"));
+    assert!(script.contains("nemo-relay"));
 }
 
 fn restore_env(key: &str, value: Option<OsString>) {

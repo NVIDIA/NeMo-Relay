@@ -5,9 +5,9 @@
 //! Wrappers that adapt JavaScript callback functions into Rust closures.
 //!
 //! Each wrapper takes a `js_sys::Function`, wraps it with `SendWrapper` (since
-//! JS functions are not `Send`), and returns a boxed closure matching the
-//! signature expected by the core runtime for guardrails, intercepts,
-//! execution functions, and event subscribers.
+//! JS functions are not `Send`), and returns the closure shape expected by the
+//! core runtime. Registry-stored callbacks return `Arc`-backed closures, while
+//! one-shot or mutable callback shapes remain boxed.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -28,17 +28,18 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::runtime::{
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
-use nemo_flow::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
 #[cfg(target_arch = "wasm32")]
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::{FlowError, Result};
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result};
 
 #[cfg(target_arch = "wasm32")]
 use crate::convert::record_callback_error;
@@ -56,13 +57,13 @@ fn js_error_message(e: &JsValue) -> String {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn flow_error_from_js(e: &JsValue) -> FlowError {
+fn relay_error_from_js(e: &JsValue) -> FlowError {
     FlowError::Internal(js_error_message(e))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn flow_json_from_js(val: &JsValue) -> Result<Json> {
-    js_callback_to_json(val).map_err(|e| flow_error_from_js(&e))
+fn relay_json_from_js(val: &JsValue) -> Result<Json> {
+    js_callback_to_json(val).map_err(|e| relay_error_from_js(&e))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -123,13 +124,13 @@ async fn resolve_js_value(result: std::result::Result<JsValue, JsValue>) -> Resu
             if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                 let resolved = JsFuture::from(promise.clone())
                     .await
-                    .map_err(|e| flow_error_from_js(&e))?;
-                flow_json_from_js(&resolved)
+                    .map_err(|e| relay_error_from_js(&e))?;
+                relay_json_from_js(&resolved)
             } else {
-                flow_json_from_js(&val)
+                relay_json_from_js(&val)
             }
         }
-        Err(e) => Err(flow_error_from_js(&e)),
+        Err(e) => Err(relay_error_from_js(&e)),
     }
 }
 
@@ -153,22 +154,22 @@ fn wasm_only_error() -> FlowError {
 
 /// Wrap a JS function `(name, args) => result` for tool sanitize/intercept.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_tool_fn(_func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
-    Box::new(move |_name: &str, _args: Json| Json::Null)
+pub fn wrap_js_tool_fn(_func: Function) -> ToolSanitizeFn {
+    Arc::new(move |_name: &str, _args: Json| Json::Null)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send + Sync> {
+pub fn wrap_js_tool_fn(func: Function) -> ToolSanitizeFn {
     let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(&args);
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log errors so failures are not silent.
         callback_json_or_fallback(
             func.call2(&JsValue::NULL, &js_name, &js_args),
-            "nemo_flow: JS tool callback result conversion failed",
-            "nemo_flow: JS tool callback threw",
+            "nemo_relay: JS tool callback result conversion failed",
+            "nemo_relay: JS tool callback threw",
             Json::Null,
         )
     })
@@ -177,13 +178,13 @@ pub fn wrap_js_tool_fn(func: Function) -> Box<dyn Fn(&str, Json) -> Json + Send 
 /// Wrap a JS function `(name, args) => string | null` for tool conditional guardrails.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_tool_conditional_fn(_func: Function) -> ToolConditionalFn {
-    Box::new(move |_name: &str, _args: &Json| Ok(None))
+    Arc::new(move |_name: &str, _args: &Json| Ok(None))
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
     let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: &Json| {
+    Arc::new(move |name: &str, args: &Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(args);
         let result = func
@@ -206,19 +207,19 @@ pub fn wrap_js_tool_conditional_fn(func: Function) -> ToolConditionalFn {
 /// Wrap a JS function `(name, args) => result` for fallible tool request intercepts.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_tool_request_intercept_fn(_func: Function) -> ToolInterceptFn {
-    Box::new(move |_name: &str, args: Json| Ok(args))
+    Arc::new(move |_name: &str, args: Json| Ok(args))
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_tool_request_intercept_fn(func: Function) -> ToolInterceptFn {
     let func = SendWrapper::new(func);
-    Box::new(move |name: &str, args: Json| {
+    Arc::new(move |name: &str, args: Json| {
         let js_name = JsValue::from_str(name);
         let js_args = json_to_js(&args);
         let result = func
             .call2(&JsValue::NULL, &js_name, &js_args)
-            .map_err(|e| flow_error_from_js(&e))?;
-        flow_json_from_js(&result)
+            .map_err(|e| relay_error_from_js(&e))?;
+        relay_json_from_js(&result)
     })
 }
 
@@ -244,14 +245,14 @@ pub fn wrap_js_tool_exec_fn(
                     // Check if it's a Promise
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => flow_json_from_js(&resolved),
-                            Err(e) => Err(flow_error_from_js(&e)),
+                            Ok(resolved) => relay_json_from_js(&resolved),
+                            Err(e) => Err(relay_error_from_js(&e)),
                         }
                     } else {
-                        flow_json_from_js(&val)
+                        relay_json_from_js(&val)
                     }
                 }
-                Err(e) => Err(flow_error_from_js(&e)),
+                Err(e) => Err(relay_error_from_js(&e)),
             }
         }))
     })
@@ -263,7 +264,7 @@ pub fn wrap_js_tool_exec_fn(
 /// `({ name, request, annotated }) => { request, annotated }`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptFn {
-    Box::new(
+    Arc::new(
         move |_name: &str, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
             Ok((request, annotated))
         },
@@ -273,7 +274,7 @@ pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptF
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn {
     let func = SendWrapper::new(func);
-    Box::new(
+    Arc::new(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLlmRequest>|
@@ -312,7 +313,7 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
                     ))
                 })?;
             let new_req_json =
-                js_callback_to_json(&js_new_req).map_err(|e| flow_error_from_js(&e))?;
+                js_callback_to_json(&js_new_req).map_err(|e| relay_error_from_js(&e))?;
             let new_request: LlmRequest = serde_json::from_value(new_req_json).map_err(|e| {
                 FlowError::Internal(format!("failed to deserialize LlmRequest: {e}"))
             })?;
@@ -346,26 +347,22 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
 
 /// Wrap a JS function for LLM sanitize request: `(request) => request`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_llm_sanitize_request_fn(
-    _func: Function,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
-    Box::new(move |request: LlmRequest| request)
+pub fn wrap_js_llm_sanitize_request_fn(_func: Function) -> LlmSanitizeRequestFn {
+    Arc::new(move |request: LlmRequest| request)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_llm_sanitize_request_fn(
-    func: Function,
-) -> Box<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync> {
+pub fn wrap_js_llm_sanitize_request_fn(func: Function) -> LlmSanitizeRequestFn {
     let func = SendWrapper::new(func);
-    Box::new(move |request: LlmRequest| {
+    Arc::new(move |request: LlmRequest| {
         let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         // TODO: This closure returns LlmRequest (not Result), so we cannot propagate
         // errors through the type system. Log errors so failures are not silent.
         let result_json = callback_json_or_fallback(
             func.call1(&JsValue::NULL, &js_req),
-            "nemo_flow: JS LLM sanitize request result conversion failed",
-            "nemo_flow: JS LLM sanitize request callback threw",
+            "nemo_relay: JS LLM sanitize request result conversion failed",
+            "nemo_relay: JS LLM sanitize request callback threw",
             Json::Null,
         );
         serde_json::from_value(result_json).unwrap_or(request)
@@ -375,18 +372,18 @@ pub fn wrap_js_llm_sanitize_request_fn(
 /// Wrap a JS function for LLM conditional guardrails: `(request) => string | null`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_llm_conditional_fn(_func: Function) -> LlmConditionalFn {
-    Box::new(move |_request: &LlmRequest| Ok(None))
+    Arc::new(move |_request: &LlmRequest| Ok(None))
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn wrap_js_llm_conditional_fn(func: Function) -> LlmConditionalFn {
     let func = SendWrapper::new(func);
-    Box::new(move |request: &LlmRequest| {
+    Arc::new(move |request: &LlmRequest| {
         let req_json = serde_json::to_value(request).unwrap_or(Json::Null);
         let js_req = json_to_js(&req_json);
         let result = func
             .call1(&JsValue::NULL, &js_req)
-            .map_err(|e| flow_error_from_js(&e))?;
+            .map_err(|e| relay_error_from_js(&e))?;
 
         if result.is_null() || result.is_undefined() {
             Ok(None)
@@ -425,14 +422,14 @@ pub fn wrap_js_llm_exec_fn(
                 Ok(val) => {
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => flow_json_from_js(&resolved),
-                            Err(e) => Err(flow_error_from_js(&e)),
+                            Ok(resolved) => relay_json_from_js(&resolved),
+                            Err(e) => Err(relay_error_from_js(&e)),
                         }
                     } else {
-                        flow_json_from_js(&val)
+                        relay_json_from_js(&val)
                     }
                 }
-                Err(e) => Err(flow_error_from_js(&e)),
+                Err(e) => Err(relay_error_from_js(&e)),
             }
         }))
     })
@@ -460,7 +457,7 @@ pub fn wrap_js_collector_fn(func: Function) -> Box<dyn FnMut(Json) -> Result<()>
                 let msg = e
                     .as_string()
                     .unwrap_or_else(|| "JS collector threw an exception".to_string());
-                record_callback_error(format!("nemo_flow: {msg}"));
+                record_callback_error(format!("nemo_relay: {msg}"));
                 Err(FlowError::Internal(msg))
             }
         }
@@ -485,8 +482,8 @@ pub fn wrap_js_finalizer_fn(func: Function) -> Box<dyn FnOnce() -> Json + Send> 
         // errors through the type system. Log errors so failures are not silent.
         callback_json_or_fallback(
             func.call0(&JsValue::NULL),
-            "nemo_flow: JS finalizer result conversion failed",
-            "nemo_flow: JS finalizer callback threw",
+            "nemo_relay: JS finalizer result conversion failed",
+            "nemo_relay: JS finalizer callback threw",
             Json::Null,
         )
     })
@@ -502,17 +499,25 @@ pub fn wrap_js_event_subscriber(_func: Function) -> EventSubscriberFn {
 pub fn wrap_js_event_subscriber(func: Function) -> EventSubscriberFn {
     let func = SendWrapper::new(func);
     std::sync::Arc::new(move |event: &Event| {
-        let wasm_event = WasmEvent::from(event);
+        let wasm_event = match WasmEvent::try_from_event(event) {
+            Ok(event) => event,
+            Err(error) => {
+                record_callback_error(format!(
+                    "nemo_relay: failed to serialize JS event subscriber payload: {error}"
+                ));
+                return;
+            }
+        };
         let js_event = wasm_event
             .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
             .unwrap_or(JsValue::NULL);
         if let Err(e) = func.call1(&JsValue::NULL, &js_event) {
             record_callback_error(format!(
-                "nemo_flow: JS event subscriber callback threw: {}",
+                "nemo_relay: JS event subscriber callback threw: {}",
                 js_error_message(&e)
             ));
             eprintln!(
-                "nemo_flow: JS event subscriber callback threw: {}",
+                "nemo_relay: JS event subscriber callback threw: {}",
                 js_error_message(&e)
             );
         }
@@ -569,14 +574,14 @@ pub fn wrap_js_tool_exec_intercept_fn(
                 Ok(val) => {
                     if let Some(promise) = val.dyn_ref::<js_sys::Promise>() {
                         match JsFuture::from(promise.clone()).await {
-                            Ok(resolved) => flow_json_from_js(&resolved),
-                            Err(e) => Err(flow_error_from_js(&e)),
+                            Ok(resolved) => relay_json_from_js(&resolved),
+                            Err(e) => Err(relay_error_from_js(&e)),
                         }
                     } else {
-                        flow_json_from_js(&val)
+                        relay_json_from_js(&val)
                     }
                 }
-                Err(e) => Err(flow_error_from_js(&e)),
+                Err(e) => Err(relay_error_from_js(&e)),
             }
         }))
     })
@@ -886,22 +891,22 @@ pub fn wrap_js_response_codec(decode_response_fn: Function) -> Arc<dyn LlmRespon
 ///
 /// Takes a `Json` value, passes it to JS, and deserializes the result back.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+pub fn wrap_js_llm_response_fn(func: Function) -> LlmSanitizeResponseFn {
     let _ = func;
-    Box::new(move |response: Json| response)
+    Arc::new(move |response: Json| response)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wrap_js_llm_response_fn(func: Function) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
+pub fn wrap_js_llm_response_fn(func: Function) -> LlmSanitizeResponseFn {
     let func = SendWrapper::new(func);
-    Box::new(move |response: Json| {
+    Arc::new(move |response: Json| {
         let js_resp = json_to_js(&response);
         // TODO: This closure returns Json (not Result<Json>), so we cannot propagate
         // errors through the type system. Log errors and fall back to original response.
         callback_json_or_fallback(
             func.call1(&JsValue::NULL, &js_resp),
-            "nemo_flow: JS LLM response callback result conversion failed",
-            "nemo_flow: JS LLM response callback threw",
+            "nemo_relay: JS LLM response callback result conversion failed",
+            "nemo_relay: JS LLM response callback threw",
             response,
         )
     })

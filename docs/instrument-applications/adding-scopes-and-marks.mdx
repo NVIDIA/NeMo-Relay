@@ -6,7 +6,8 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this guide when you want NeMo Flow to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
+
+Use this guide when you want NeMo Relay to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
 
 ## What You Build
 
@@ -18,9 +19,9 @@ Scopes give emitted work ownership. Marks record point-in-time checkpoints insid
 
 Complete one binding Quick Start guide first:
 
-- [Python Quick Start](/getting-started/quick-start/python)
-- [Node.js Quick Start](/getting-started/quick-start/nodejs)
-- [Rust Quick Start](/getting-started/quick-start/rust)
+- [Python Quick Start](/getting-started/python)
+- [Node.js Quick Start](/getting-started/nodejs)
+- [Rust Quick Start](/getting-started/rust)
 
 You should know which application boundary should own the trace. Common scope boundaries include:
 
@@ -45,36 +46,44 @@ Follow this sequence to keep framework work attached to the expected runtime con
 
 The examples below create one `agent-run` scope and emit two marks.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-import nemo_flow
+<Tab title="Python">
+:sync: python
+
+```python
+import nemo_relay
 
 def log_event(event) -> None:
     print(f"{event.kind} {event.name}")
 
-nemo_flow.subscribers.register("scope-check", log_event)
+nemo_relay.subscribers.register("scope-check", log_event)
 
 try:
-    with nemo_flow.scope.scope(
+    with nemo_relay.scope.scope(
         "agent-run",
-        nemo_flow.ScopeType.Agent,
+        nemo_relay.ScopeType.Agent,
         input={"request_id": "req-123"},
     ) as handle:
-        nemo_flow.scope.event("planning-started", handle=handle, data={"step": 1})
-        nemo_flow.scope.event("planning-finished", handle=handle, data={"step": 2})
+        nemo_relay.scope.event("planning-started", handle=handle, data={"step": 1})
+        nemo_relay.scope.event("planning-finished", handle=handle, data={"step": 2})
 finally:
-    nemo_flow.subscribers.deregister("scope-check")
+    nemo_relay.subscribers.deregister("scope-check")
 ```
+</Tab>
 
-```js title="Node.js" for="node"
+<Tab title="Node.js">
+:sync: node
+
+```js
 const {
   ScopeType,
   deregisterSubscriber,
   event,
   registerSubscriber,
   withScope,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("scope-check", (runtimeEvent) => {
@@ -105,12 +114,16 @@ main().catch((error) => {
   process.exitCode = 1;
 });
 ```
+</Tab>
 
-```rust title="Rust" for="rust"
-use nemo_flow::api::scope::{
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -151,8 +164,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+</Tab>
 
-</CodeGroup>
+</Tabs>
 
 ## When to Add Marks
 

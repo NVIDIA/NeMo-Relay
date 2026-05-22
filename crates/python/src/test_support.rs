@@ -6,8 +6,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use pyo3::Python;
 
-const BINDING_KIND_ENV: &str = "NEMO_FLOW_BINDING_KIND";
-const RUNTIME_OWNER_ENV: &str = "NEMO_FLOW_RUNTIME_OWNER";
+const BINDING_KIND_ENV: &str = "NEMO_RELAY_BINDING_KIND";
+const RUNTIME_OWNER_ENV: &str = "NEMO_RELAY_RUNTIME_OWNER";
 
 fn python_test_lock() -> &'static Mutex<()> {
     static PYTHON_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

@@ -4,7 +4,7 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 export REPO_ROOT := justfile_directory()
-export NEMO_FLOW_REPO_ROOT := REPO_ROOT
+export NEMO_RELAY_REPO_ROOT := REPO_ROOT
 
 # Shared knobs used by the CI-oriented build, test, and package targets below.
 ci := "false"
@@ -22,7 +22,7 @@ export_uv_python_runtime() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
     python_runtime_exports="$(
-        cd "$NEMO_FLOW_REPO_ROOT"
+        cd "$NEMO_RELAY_REPO_ROOT"
         "$python_executable" - <<'PY'
 import shlex
 from pathlib import Path
@@ -56,7 +56,7 @@ PY
 
 uv_python_executable() {
     (
-        cd "$NEMO_FLOW_REPO_ROOT"
+        cd "$NEMO_RELAY_REPO_ROOT"
         uv python find
     )
 }
@@ -64,12 +64,12 @@ uv_python_executable() {
 activate_project_venv() {
     # Ensure PATH-based tool lookups (for example, `zig`) resolve from the
     # synced project environment without asking uv to resync the project.
-    if [[ -f "$NEMO_FLOW_REPO_ROOT/.venv/bin/activate" ]]; then
+    if [[ -f "$NEMO_RELAY_REPO_ROOT/.venv/bin/activate" ]]; then
         # shellcheck disable=SC1091
-        source "$NEMO_FLOW_REPO_ROOT/.venv/bin/activate"
-    elif [[ -f "$NEMO_FLOW_REPO_ROOT/.venv/Scripts/activate" ]]; then
+        source "$NEMO_RELAY_REPO_ROOT/.venv/bin/activate"
+    elif [[ -f "$NEMO_RELAY_REPO_ROOT/.venv/Scripts/activate" ]]; then
         # shellcheck disable=SC1091
-        source "$NEMO_FLOW_REPO_ROOT/.venv/Scripts/activate"
+        source "$NEMO_RELAY_REPO_ROOT/.venv/Scripts/activate"
     else
         echo "ERROR: expected project virtualenv activation script under .venv" >&2
         exit 1
@@ -78,10 +78,10 @@ activate_project_venv() {
 
 project_python_executable() {
     local python_executable=""
-    if [[ -x "$NEMO_FLOW_REPO_ROOT/.venv/bin/python" ]]; then
-        python_executable="$NEMO_FLOW_REPO_ROOT/.venv/bin/python"
-    elif [[ -x "$NEMO_FLOW_REPO_ROOT/.venv/Scripts/python.exe" ]]; then
-        python_executable="$NEMO_FLOW_REPO_ROOT/.venv/Scripts/python.exe"
+    if [[ -x "$NEMO_RELAY_REPO_ROOT/.venv/bin/python" ]]; then
+        python_executable="$NEMO_RELAY_REPO_ROOT/.venv/bin/python"
+    elif [[ -x "$NEMO_RELAY_REPO_ROOT/.venv/Scripts/python.exe" ]]; then
+        python_executable="$NEMO_RELAY_REPO_ROOT/.venv/Scripts/python.exe"
     else
         echo "ERROR: expected project virtualenv Python executable under .venv" >&2
         exit 1
@@ -121,7 +121,7 @@ PY
 use_project_python_source() {
     local python_executable="$1"
     local python_pathsep=""
-    local python_source_path="$NEMO_FLOW_REPO_ROOT/python"
+    local python_source_path="$NEMO_RELAY_REPO_ROOT/python"
 
     python_pathsep="$("$python_executable" - <<'PY'
 import os
@@ -135,7 +135,7 @@ PY
 }
 
 docs_dependencies_ready() {
-    case "${NEMO_FLOW_DOCS_DEPS_READY:-}" in
+    case "${NEMO_RELAY_DOCS_DEPS_READY:-}" in
         1|true|TRUE|True|yes|YES|Yes|on|ON|On)
             return 0
             ;;
@@ -150,13 +150,13 @@ ensure_docs_dependencies() {
         return 0
     fi
 
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     uv sync --inexact --no-default-groups --group dev --no-install-project
     npm install --ignore-scripts
 }
 
 ensure_node_docs_declarations() {
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     local types_file="crates/node/index.d.ts"
     local newest_source=""
 
@@ -168,12 +168,12 @@ ensure_node_docs_declarations() {
     fi
 
     if [[ ! -f "$types_file" || -n "$newest_source" ]]; then
-        npm run build-debug --workspace=nemo-flow-node
+        npm run build-debug --workspace=nemo-relay-node
     fi
 }
 
 generate_docs_api_references() {
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     uv run --no-sync python scripts/docs/generate_python_library_reference.py
     ensure_node_docs_declarations
     uv run --no-sync python scripts/docs/generate_node_library_reference.py
@@ -186,7 +186,7 @@ prepare_parent_dir() {
 
 artifact_path() {
     local filename="$1"
-    local base_dir="${output_dir:-$NEMO_FLOW_REPO_ROOT/target/coverage}"
+    local base_dir="${output_dir:-$NEMO_RELAY_REPO_ROOT/target/coverage}"
     printf '%s/%s\n' "$base_dir" "$filename"
 }
 
@@ -200,7 +200,7 @@ prepare_artifact() {
 # Package artifacts are grouped by ecosystem so local runs mirror CI layout.
 package_output_dir() {
     local channel="$1"
-    local base_dir="${output_dir:-$NEMO_FLOW_REPO_ROOT/target/packages}"
+    local base_dir="${output_dir:-$NEMO_RELAY_REPO_ROOT/target/packages}"
     printf '%s/%s\n' "$base_dir" "$channel"
 }
 
@@ -212,7 +212,7 @@ prepare_package_dir() {
 }
 
 head_git_sha() {
-    git -C "$NEMO_FLOW_REPO_ROOT" rev-parse --short=8 HEAD
+    git -C "$NEMO_RELAY_REPO_ROOT" rev-parse --short=8 HEAD
 }
 
 # Version helpers intentionally mutate package metadata in-place to match how CI
@@ -425,7 +425,7 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-flow", "nemo-flow-adaptive", "nemo-flow-ffi", "nemo-flow-cli")
+local_dependencies = ("nemo-relay", "nemo-relay-adaptive", "nemo-relay-ffi", "nemo-relay-cli")
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):
@@ -493,17 +493,17 @@ mismatched = []
 checked = 0
 
 for package in metadata["packages"]:
-    if package["id"] not in workspace_members or not package["name"].startswith("nemo-flow"):
+    if package["id"] not in workspace_members or not package["name"].startswith("nemo-relay"):
         continue
     checked += 1
     if package["version"] != version:
         mismatched.append(f"{package['name']}={package['version']}")
 
 if checked == 0:
-    raise SystemExit("Cargo metadata did not include any nemo-flow workspace packages")
+    raise SystemExit("Cargo metadata did not include any nemo-relay workspace packages")
 if mismatched:
     raise SystemExit(f"Cargo workspace packages do not all resolve to {version}: {', '.join(mismatched)}")
-print(f"Cargo metadata resolves {checked} nemo-flow workspace packages to {version}")
+print(f"Cargo metadata resolves {checked} nemo-relay workspace packages to {version}")
 PY
     then
         rm -f "$metadata_file"
@@ -516,7 +516,7 @@ set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
-    set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$version"
+    set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
 }
 
 set_node_package_version() {
@@ -691,7 +691,7 @@ docs:
     {{ bash_helpers }}
     ensure_docs_dependencies
     generate_docs_api_references
-    cd "$NEMO_FLOW_REPO_ROOT/fern"
+    cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings
 
 # regenerate the ignored Fern API reference pages
@@ -706,7 +706,7 @@ build-rust:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     export_uv_python_runtime
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
         cargo test --workspace --no-run
@@ -718,8 +718,8 @@ build-rust:
 build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    cd "$NEMO_FLOW_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
     activate_project_venv
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
@@ -732,11 +732,11 @@ build-python:
 build-go:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
-        cargo build -p nemo-flow-ffi
+        cargo build -p nemo-relay-ffi
     else
-        cargo build --release -p nemo-flow-ffi
+        cargo build --release -p nemo-relay-ffi
     fi
 
 
@@ -747,23 +747,23 @@ build-node:
     if is_true "{{ ci }}"; then
         prepare_llvm_cov_workspace
     fi
-    cd "$NEMO_FLOW_REPO_ROOT"
-    npm install --workspace=nemo-flow-node --ignore-scripts
+    cd "$NEMO_RELAY_REPO_ROOT"
+    npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
-        npm run build-debug --workspace=nemo-flow-node
+        npm run build-debug --workspace=nemo-relay-node
     else
-        npm run build --workspace=nemo-flow-node
+        npm run build --workspace=nemo-relay-node
     fi
 
 # --set [ci=true|false]
 build-wasm:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
-        npm run build:pkg --workspace=nemo-flow-wasm
+        npm run build:pkg --workspace=nemo-relay-wasm
     else
-        NEMO_FLOW_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-flow-wasm
+        NEMO_RELAY_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-relay-wasm
     fi
 
 build-all: build-rust build-python build-go build-node build-wasm
@@ -776,6 +776,7 @@ clean:
     rm -rf \
         .coverage \
         .pytest_cache \
+        *.profraw \
         crates/**/*.profraw \
         crates/node/*.node \
         crates/node/coverage \
@@ -786,14 +787,18 @@ clean:
         crates/wasm/node_modules \
         crates/wasm/pkg-test/ \
         crates/wasm/pkg/ \
+        integrations/openclaw/*.profraw \
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
         integrations/openclaw/node_modules \
         node_modules \
-        go/nemo_flow/coverage.out \
-        python/nemo_flow/*.so \
-        python/nemo_flow/__pycache__ \
-        python/nemo_flow/_native*.pyd \
+        docs/_build/ \
+        docs/reference/api/**/_generated/ \
+        docs/reference/api/**/_source/ \
+        go/nemo_relay/coverage.out \
+        python/nemo_relay/*.so \
+        python/nemo_relay/__pycache__ \
+        python/nemo_relay/_native*.pyd \
         python/tests/__pycache__ \
         target
 
@@ -804,7 +809,7 @@ test-rust:
     output_dir="{{ output_dir }}"
     junit_out=""
     export_uv_python_runtime
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact rust-workspace.xml)"
         junit_out="$(prepare_artifact rust_junit_report.xml)"
@@ -812,7 +817,7 @@ test-rust:
             prepare_llvm_cov_workspace
         fi
         cargo nextest run --workspace --profile ci
-        cp "$NEMO_FLOW_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
+        cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \
                 --ignore-filename-regex '.*/tests/.*\.rs$' \
@@ -832,32 +837,47 @@ test-python:
     coverage_out=""
     junit_out=""
     rust_coverage_out=""
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact python-coverage.xml)"
         junit_out="$(prepare_artifact python-junit.xml)"
-        pytest_cmd+=(--cov=nemo_flow --cov-report term-missing --cov-report "xml:$coverage_out")
+        pytest_cmd+=(--cov=nemo_relay --cov-report term-missing --cov-report "xml:$coverage_out")
         pytest_cmd+=(--junit-xml "$junit_out")
         export_uv_python_runtime
         if rust_source_coverage_supported; then
             rust_coverage_out="$(prepare_artifact python-rust.xml)"
             prepare_llvm_cov_workspace
         fi
-        cargo test -p nemo-flow-python --lib
+        cargo test -p nemo-relay-python --lib
     fi
-    uv sync --inexact --no-install-project --no-install-package nemo-flow --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay
     activate_project_venv
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
     "$python_executable" -m maturin develop --skip-install
-    "$python_executable" -m "${pytest_cmd[@]}"
+    "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
-            -p nemo-flow-python \
+            -p nemo-relay-python \
             --ignore-filename-regex '.*/tests/.*\.rs$' \
             --cobertura \
             --output-path "$rust_coverage_out"
     fi
+
+test-python-langchain:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    pytest_cmd=(pytest)
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --skip-install
+    "$python_executable" -m "${pytest_cmd[@]}" \
+        python/tests/integrations/deepagents_tests \
+        python/tests/integrations/langchain_tests \
+        python/tests/integrations/langgraph_tests
 
 # --set [output_dir=<path>] [ci=true|false]
 test-go:
@@ -875,7 +895,7 @@ test-go:
     fi
     coverage_out=""
     junit_out=""
-    lib_dir="$NEMO_FLOW_REPO_ROOT/target/$target"
+    lib_dir="$NEMO_RELAY_REPO_ROOT/target/$target"
     host_os="$(uname -s 2>/dev/null || true)"
     is_windows=false
     case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
@@ -883,8 +903,8 @@ test-go:
             is_windows=true
             ;;
     esac
-    cd "$NEMO_FLOW_REPO_ROOT"
-    cargo build $flag -p nemo-flow-ffi
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo build $flag -p nemo-relay-ffi
 
     if [[ "$is_windows" == true ]]; then
         export CC=clang
@@ -922,7 +942,7 @@ test-go:
         go_test_cmd+=("-ldflags=${go_ldflags[*]}")
     fi
     go_test_cmd+=(./...)
-    cd "$NEMO_FLOW_REPO_ROOT/go/nemo_flow"
+    cd "$NEMO_RELAY_REPO_ROOT/go/nemo_relay"
     if is_true "{{ ci }}"; then
         # Work-around /dev/stderr not being available on Windows
         "${go_test_cmd[@]}" 2>&1 | tee >(cat >&2) | go-junit-report -set-exit-code > "$junit_out"
@@ -939,7 +959,7 @@ test-node:
     coverage_out=""
     junit_out=""
     rust_coverage_out=""
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"
@@ -947,40 +967,40 @@ test-node:
             rust_coverage_out="$(prepare_artifact node-rust.xml)"
             prepare_llvm_cov_workspace
         fi
-        cargo test -p nemo-flow-node --lib
+        cargo test -p nemo-relay-node --lib
     fi
-    npm install --workspace=nemo-flow-node --ignore-scripts
+    npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
-        npm run coverage --workspace=nemo-flow-node
+        npm run coverage --workspace=nemo-relay-node
         cp crates/node/coverage/cobertura-coverage.xml "$coverage_out"
         cp crates/node/junit.xml "$junit_out"
-        cd "$NEMO_FLOW_REPO_ROOT"
+        cd "$NEMO_RELAY_REPO_ROOT"
         if [[ -n "$rust_coverage_out" ]]; then
             cargo llvm-cov report \
-                -p nemo-flow-node \
+                -p nemo-relay-node \
                 --ignore-filename-regex '.*/tests/.*\.rs$' \
                 --cobertura \
                 --output-path "$rust_coverage_out"
         fi
     else
-        npm test --workspace=nemo-flow-node
+        npm test --workspace=nemo-relay-node
     fi
 
 # --set [ci=true|false]
 test-openclaw:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
         npm ci --ignore-scripts
-        npm run build-debug --workspace=nemo-flow-node
+        npm run build-debug --workspace=nemo-relay-node
     else
         npm install --ignore-scripts
     fi
-    npm run typecheck --workspace=nemo-flow-openclaw
-    npm test --workspace=nemo-flow-openclaw
-    npm run test:live --workspace=nemo-flow-openclaw
-    npm run pack:check --workspace=nemo-flow-openclaw
+    npm run typecheck --workspace=nemo-relay-openclaw
+    npm test --workspace=nemo-relay-openclaw
+    npm run test:live --workspace=nemo-relay-openclaw
+    npm run pack:check --workspace=nemo-relay-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
 test-wasm:
@@ -989,21 +1009,21 @@ test-wasm:
     output_dir="{{ output_dir }}"
     coverage_out=""
     junit_out=""
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     wasm-pack test --node crates/wasm
-    npm install --workspace=nemo-flow-wasm --ignore-scripts
+    npm install --workspace=nemo-relay-wasm --ignore-scripts
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact wasm-js.xml)"
         junit_out="$(prepare_artifact wasm-junit.xml)"
-        npm run coverage:pkg --workspace=nemo-flow-wasm
+        npm run coverage:pkg --workspace=nemo-relay-wasm
         cp crates/wasm/coverage/cobertura-coverage.xml "$coverage_out"
         cp crates/wasm/junit.xml "$junit_out"
     else
-        npm run test:pkg --workspace=nemo-flow-wasm
+        npm run test:pkg --workspace=nemo-relay-wasm
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-go test-node test-openclaw test-wasm
+test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-wasm
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -1017,7 +1037,7 @@ set-version version="":
         echo "Error: version is required for set-version" >&2
         exit 1
     fi
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     set_project_version "$version"
 
 # --set [output_dir=<path>] [ref_name=<name>]
@@ -1028,7 +1048,7 @@ package-node:
     # If `ref_name` is set, write it as the exact package version before packing.
     linux_glibc_version="{{ linux_glibc_version }}"
     output_dir="{{ output_dir }}"
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir npm)"
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
@@ -1036,25 +1056,25 @@ package-node:
         package_version="${version}+${sha}"
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
-        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
-        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     fi
     build_args=(build)
     if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
         # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
         # Zig version pin aligned with that lockfile version.
-        uv sync --inexact --no-install-project --no-install-package nemo-flow --no-default-groups --group dev
+        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
         activate_project_venv
         prepend_ziglang_to_path "$(project_python_executable)"
         build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
     fi
-    npm install --workspace=nemo-flow-node --ignore-scripts
-    npm run --workspace=nemo-flow-node "${build_args[@]}"
-    npm pack --workspace=nemo-flow-node --pack-destination "$package_dir"
+    npm install --workspace=nemo-relay-node --ignore-scripts
+    npm run --workspace=nemo-relay-node "${build_args[@]}"
+    npm pack --workspace=nemo-relay-node --pack-destination "$package_dir"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
@@ -1069,7 +1089,7 @@ package-openclaw:
     # If `ref_name` is empty, append the current short HEAD SHA to the version.
     # If `ref_name` is set, write it as the exact package version before packing.
     output_dir="{{ output_dir }}"
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir openclaw)"
     if [[ -z "{{ ref_name }}" ]]; then
         sha="$(head_git_sha)"
@@ -1078,21 +1098,21 @@ package-openclaw:
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
-        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
-        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-flow-node "$package_version"
+        set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     fi
-    npm install --workspace=nemo-flow-node --workspace=nemo-flow-openclaw --ignore-scripts
+    npm install --workspace=nemo-relay-node --workspace=nemo-relay-openclaw --ignore-scripts
     if is_true "{{ ci }}"; then
-        npm run build-debug --workspace=nemo-flow-node
+        npm run build-debug --workspace=nemo-relay-node
     else
-        npm run build --workspace=nemo-flow-node
+        npm run build --workspace=nemo-relay-node
     fi
-    npm pack --workspace=nemo-flow-openclaw --pack-destination "$package_dir"
+    npm pack --workspace=nemo-relay-openclaw --pack-destination "$package_dir"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
@@ -1109,9 +1129,9 @@ package-python:
     output_dir="{{ output_dir }}"
     linux_glibc_version="{{ linux_glibc_version }}"
     export_uv_python_runtime
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir wheels)"
-    sync_args=(--no-install-project --no-install-package nemo-flow)
+    sync_args=(--no-install-project --no-install-package nemo-relay)
     uv sync --inexact "${sync_args[@]}"
     activate_project_venv
     if [[ -z "{{ ref_name }}" ]]; then
@@ -1142,7 +1162,7 @@ package-wasm:
     # `prepare_pkg.mjs` rewrites the wasm-pack output into the publishable npm
     # layout before this target sets the package version and packs the tarball.
     output_dir="{{ output_dir }}"
-    cd "$NEMO_FLOW_REPO_ROOT"
+    cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir wasm)"
     wasm-pack build --release crates/wasm
     node crates/wasm/scripts/prepare_pkg.mjs

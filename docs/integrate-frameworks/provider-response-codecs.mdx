@@ -6,11 +6,12 @@ position: 8
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+
 Use this guide when subscribers, exporters, or diagnostics need a provider-neutral view of raw LLM responses.
 
 ## What You Build
 
-You will attach a response codec to a managed LLM wrapper so NeMo Flow can decode provider responses into `AnnotatedLLMResponse` data for LLM end events.
+You will attach a response codec to a managed LLM wrapper so NeMo Relay can decode provider responses into `AnnotatedLLMResponse` data for LLM end events.
 
 Response codecs are observability-only:
 
@@ -60,12 +61,16 @@ Choose the codec that matches the actual provider response shape. For example, d
 The examples below attach built-in response codecs for supported provider response
 shapes.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-import nemo_flow
-from nemo_flow import LLMRequest
-from nemo_flow.codecs import OpenAIChatCodec
+<Tab title="Python">
+:sync: python
+
+```python
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay.codecs import OpenAIChatCodec
 
 async def invoke_provider(request: LLMRequest):
     return {
@@ -81,7 +86,7 @@ async def invoke_provider(request: LLMRequest):
     }
 
 codec = OpenAIChatCodec()
-response = await nemo_flow.llm.execute(
+response = await nemo_relay.llm.execute(
     "openai-chat",
     LLMRequest({}, {"model": "gpt-4o-mini", "messages": []}),
     invoke_provider,
@@ -89,10 +94,14 @@ response = await nemo_flow.llm.execute(
     response_codec=codec,
 )
 ```
+</Tab>
 
-```ts title="Node.js" for="node"
-import { OpenAIChatCodec } from 'nemo-flow-node';
-import { JsonPassthrough, typedLlmExecute } from 'nemo-flow-node/typed';
+<Tab title="Node.js">
+:sync: node
+
+```ts
+import { OpenAIChatCodec } from 'nemo-relay-node';
+import { JsonPassthrough, typedLlmExecute } from 'nemo-relay-node/typed';
 
 const codec = new OpenAIChatCodec();
 
@@ -117,11 +126,15 @@ const response = await typedLlmExecute(
   },
 );
 ```
+</Tab>
 
-```rust title="Rust" for="rust"
-use nemo_flow::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
-use nemo_flow::codec::openai_chat::OpenAIChatCodec;
-use nemo_flow::codec::traits::LlmResponseCodec;
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::traits::LlmResponseCodec;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -159,17 +172,22 @@ let response = llm_call_execute(
 )
 .await?;
 ```
+</Tab>
 
-</CodeGroup>
+</Tabs>
 
 ## Read Annotated Responses
 
 Subscribers can inspect `annotated_response` on LLM end events. The exact event category fields are binding-provided, so defensive checks should confirm the annotation exists before reading it.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-import nemo_flow
+<Tab title="Python">
+:sync: python
+
+```python
+import nemo_relay
 
 def on_event(event):
     annotated = getattr(event, "annotated_response", None)
@@ -180,14 +198,18 @@ def on_event(event):
     print("text", annotated.response_text())
     print("usage", annotated.usage)
 
-nemo_flow.subscribers.register("response-debugger", on_event)
+nemo_relay.subscribers.register("response-debugger", on_event)
 ```
+</Tab>
 
-```ts title="Node.js" for="node"
-import { registerSubscriber } from 'nemo-flow-node';
+<Tab title="Node.js">
+:sync: node
+
+```ts
+import { registerSubscriber } from 'nemo-relay-node';
 
 registerSubscriber('response-debugger', (event) => {
-  const annotated = event.annotated_response;
+  const annotated = event.category_profile?.annotated_response;
   if (!annotated) {
     return;
   }
@@ -197,8 +219,9 @@ registerSubscriber('response-debugger', (event) => {
   console.log('usage', annotated.usage);
 });
 ```
+</Tab>
 
-</CodeGroup>
+</Tabs>
 
 ## Custom Response Codecs
 
@@ -207,7 +230,7 @@ Use a custom response codec when the provider or framework response does not mat
 In Python, a custom response codec can route to built-in codecs and return their native `AnnotatedLLMResponse` values:
 
 ```python
-from nemo_flow.codecs import OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_relay.codecs import OpenAIChatCodec, OpenAIResponsesCodec
 
 class OpenAIRoutingResponseCodec:
     def __init__(self):
@@ -223,7 +246,7 @@ class OpenAIRoutingResponseCodec:
 In Node.js, implement `decodeResponse` and return the normalized response JSON shape:
 
 ```ts
-import type { JsonValue, LlmResponseCodec } from 'nemo-flow-node/typed';
+import type { JsonValue, LlmResponseCodec } from 'nemo-relay-node/typed';
 
 const frameworkResponseCodec: LlmResponseCodec = {
   decodeResponse(response: JsonValue): JsonValue {
@@ -260,10 +283,10 @@ const frameworkResponseCodec: LlmResponseCodec = {
 In Rust, implement `LlmResponseCodec` directly:
 
 ```rust
-use nemo_flow::codec::request::MessageContent;
-use nemo_flow::codec::response::{AnnotatedLlmResponse, FinishReason, Usage};
-use nemo_flow::codec::traits::LlmResponseCodec;
-use nemo_flow::error::{FlowError, Result};
+use nemo_relay::codec::request::MessageContent;
+use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, Usage};
+use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::error::{FlowError, Result};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 

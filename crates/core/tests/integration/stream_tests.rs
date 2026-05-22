@@ -1,23 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for stream in the NeMo Flow core crate.
+//! Integration tests for stream in the NeMo Relay core crate.
 
 #![allow(clippy::await_holding_lock)]
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use nemo_flow::api::llm::{LlmCallParams, llm_call};
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::error::FlowError;
-use nemo_flow::error::Result;
-use nemo_flow::json::Json;
-use nemo_flow::stream::LlmStreamWrapper;
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
+use nemo_relay::api::llm::{LlmCallParams, llm_call};
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::error::FlowError;
+use nemo_relay::error::Result;
+use nemo_relay::json::Json;
+use nemo_relay::stream::LlmStreamWrapper;
 use serde_json::json;
 use tokio_stream::{Stream, StreamExt};
 
@@ -25,14 +25,14 @@ use tokio_stream::{Stream, StreamExt};
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn is_llm_end(event: &Event) -> bool {
-    event.scope_type() == Some(nemo_flow::api::scope::ScopeType::Llm)
+    event.scope_type() == Some(nemo_relay::api::scope::ScopeType::Llm)
         && event.scope_category() == Some(ScopeCategory::End)
 }
 
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 fn make_llm_handle(name: &str) -> LlmHandle {

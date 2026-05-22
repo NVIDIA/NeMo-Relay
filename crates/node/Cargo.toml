@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-node"
+name = "nemo-relay-node"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Node.js native bindings for NeMo Flow built with napi-rs."
+description = "Node.js native bindings for NeMo Relay built with napi-rs."
 readme = "README.md"
 
 [lints]
@@ -18,8 +18,8 @@ crate-type = ["cdylib"]
 test = false
 
 [dependencies]
-nemo-flow = { workspace = true, features = ["otel", "openinference"] }
-nemo-flow-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay = { workspace = true, features = ["otel", "openinference"] }
+nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 chrono = "0.4"
 napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }
 napi-derive = "2"

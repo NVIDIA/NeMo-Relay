@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for redis in the NeMo Flow adaptive crate.
+//! Unit tests for redis in the NeMo Relay adaptive crate.
 
 use super::*;
 
@@ -16,7 +16,7 @@ use crate::types::metadata::MetadataEnvelope;
 use crate::types::plan::ExecutionPlan;
 use crate::types::records::RunRecord;
 
-const REDIS_TEST_ENV: &str = "NEMO_FLOW_RUN_REDIS_TESTS";
+const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
 
 async fn get_test_redis() -> Option<RedisBackend> {
     if std::env::var_os(REDIS_TEST_ENV).is_none() {

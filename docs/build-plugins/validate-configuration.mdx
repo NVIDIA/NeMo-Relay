@@ -6,6 +6,7 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+
 Use this guide when you have a plugin kind and need predictable diagnostics before the plugin installs runtime behavior.
 
 ## What You Build
@@ -24,10 +25,14 @@ Each component has:
 
 Disabled components are still validated. This lets operators detect config problems before enabling a component in a later rollout.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-from nemo_flow.plugin import ComponentSpec, ConfigPolicy, PluginConfig
+<Tab title="Python">
+:sync: python
+
+```python
+from nemo_relay.plugin import ComponentSpec, ConfigPolicy, PluginConfig
 
 config = PluginConfig(
     version=1,
@@ -45,9 +50,13 @@ config = PluginConfig(
     ),
 )
 ```
+</Tab>
 
-```ts title="Node.js" for="node"
-import type { PluginConfig } from 'nemo-flow-node/plugin';
+<Tab title="Node.js">
+:sync: node
+
+```ts
+import type { PluginConfig } from 'nemo-relay-node/plugin';
 
 const config: PluginConfig = {
   version: 1,
@@ -65,9 +74,13 @@ const config: PluginConfig = {
   },
 };
 ```
+</Tab>
 
-```rust title="Rust" for="rust"
-use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 
 let mut component = PluginComponentSpec::new("header-plugin");
 component.enabled = true;
@@ -80,8 +93,9 @@ let config = PluginConfig {
     policy: ConfigPolicy::default(),
 };
 ```
+</Tab>
 
-</CodeGroup>
+</Tabs>
 
 ## Validation Rules
 
@@ -120,19 +134,27 @@ Prefer stable diagnostic codes over prose-only messages. The message can improve
 
 Use the validation API before initialization and fail deployment if the report contains errors.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-import nemo_flow
+<Tab title="Python">
+:sync: python
 
-report = nemo_flow.plugin.validate(config)
+```python
+import nemo_relay
+
+report = nemo_relay.plugin.validate(config)
 has_errors = any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"])
 if has_errors:
     raise RuntimeError(report["diagnostics"])
 ```
+</Tab>
 
-```ts title="Node.js" for="node"
-import * as plugin from 'nemo-flow-node/plugin';
+<Tab title="Node.js">
+:sync: node
+
+```ts
+import * as plugin from 'nemo-relay-node/plugin';
 
 const report = plugin.validate(config);
 const hasErrors = report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
@@ -140,17 +162,22 @@ if (hasErrors) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 ```
+</Tab>
 
-```rust title="Rust" for="rust"
-use nemo_flow::plugin::validate_plugin_config;
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::plugin::validate_plugin_config;
 
 let report = validate_plugin_config(&config);
 if report.has_errors() {
     anyhow::bail!("{:?}", report.diagnostics);
 }
 ```
+</Tab>
 
-</CodeGroup>
+</Tabs>
 
 ## Validation Checklist
 

@@ -18,9 +18,9 @@ from urllib.request import Request, urlopen
 
 import plugin as nemoguardrails_plugin
 
-from nemo_flow import Json, JsonObject, LLMRequest, ScopeType, llm, scope, tools
-from nemo_flow import plugin as flow_plugin
-from nemo_flow.codecs import OpenAIChatCodec
+from nemo_relay import Json, JsonObject, LLMRequest, ScopeType, llm, scope, tools
+from nemo_relay import plugin as relay_plugin
+from nemo_relay.codecs import OpenAIChatCodec
 
 EXAMPLE_ROOT = Path(__file__).resolve().parent
 
@@ -106,10 +106,10 @@ def _guardrails_component_config(args: argparse.Namespace) -> JsonObject:
     return cast(JsonObject, config)
 
 
-def _plugin_config(args: argparse.Namespace) -> flow_plugin.PluginConfig:
-    return flow_plugin.PluginConfig(
+def _plugin_config(args: argparse.Namespace) -> relay_plugin.PluginConfig:
+    return relay_plugin.PluginConfig(
         components=[
-            flow_plugin.ComponentSpec(
+            relay_plugin.ComponentSpec(
                 kind=nemoguardrails_plugin.DEFAULT_KIND,
                 config=_guardrails_component_config(args),
             )
@@ -203,7 +203,7 @@ async def run_agent() -> None:
     try:
         nemoguardrails_plugin.register()
         registered = True
-        await flow_plugin.initialize(_plugin_config(args))
+        await relay_plugin.initialize(_plugin_config(args))
 
         with scope.scope("nemoguardrails-example-agent", ScopeType.Agent):
             tool_result = await _execute_example_tool(args.tool)
@@ -239,7 +239,7 @@ async def run_agent() -> None:
         print("\nAssistant:")
         print(_assistant_text(response))
     finally:
-        flow_plugin.clear()
+        relay_plugin.clear()
         if registered:
             nemoguardrails_plugin.deregister()
 

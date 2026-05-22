@@ -6,19 +6,19 @@
 /**
  * Test helper for querying the OpenClaw gateway status endpoint in live smoke runs.
  */
-import assert from "node:assert/strict";
+import assert from 'node:assert/strict';
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from 'openclaw/plugin-sdk/plugin-entry';
 
-import type { NemoFlowHealthSnapshot } from "../src/health.js";
+import type { NemoRelayHealthSnapshot } from '../src/health.js';
 
-export type TestGatewayMethodHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+export type TestGatewayMethodHandler = Parameters<OpenClawPluginApi['registerGatewayMethod']>[1];
 
 export async function callGatewayStatus(
   handler: TestGatewayMethodHandler | undefined,
-): Promise<NemoFlowHealthSnapshot> {
+): Promise<NemoRelayHealthSnapshot> {
   assert.ok(handler);
-  let status: NemoFlowHealthSnapshot | undefined;
+  let status: NemoRelayHealthSnapshot | undefined;
 
   await handler({
     req: {} as never,
@@ -28,7 +28,7 @@ export async function callGatewayStatus(
     respond: (ok, payload, error) => {
       assert.equal(ok, true);
       assert.equal(error, undefined);
-      status = payload as NemoFlowHealthSnapshot;
+      status = payload as NemoRelayHealthSnapshot;
     },
     context: {} as never,
   });

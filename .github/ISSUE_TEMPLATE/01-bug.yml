@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: Bug
-description: Report a reproducible defect in NeMo Flow.
+description: Report a reproducible defect in NeMo Relay.
 title: "[Bug]: "
 type: Bug
 body:
@@ -33,14 +33,14 @@ body:
     attributes:
       label: Current behavior
       description: Describe what happened, including any error messages, traces, or incorrect output.
-      placeholder: NeMo Flow currently...
+      placeholder: NeMo Relay currently...
     validations: {required: true}
   - type: textarea
     id: expected_behavior
     attributes:
       label: Expected behavior
       description: Describe what you expected to happen.
-      placeholder: I expected NeMo Flow to...
+      placeholder: I expected NeMo Relay to...
     validations: {required: true}
   - type: textarea
     id: steps_to_reproduce
@@ -58,7 +58,7 @@ body:
       label: Environment
       description: Include versions, platform, installation source, and relevant toolchain details.
       placeholder: |
-        - NeMo Flow version or commit:
+        - NeMo Relay version or commit:
         - OS and architecture:
         - Rust version:
         - Python version:

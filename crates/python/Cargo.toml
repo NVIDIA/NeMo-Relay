@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-python"
+name = "nemo-relay-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Python native extension bindings for NeMo Flow built with PyO3."
+description = "Python native extension bindings for NeMo Relay built with PyO3."
 readme = "README.md"
 
 [lints]
@@ -18,8 +18,8 @@ name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-nemo-flow = { workspace = true, features = ["otel", "openinference"] }
-nemo-flow-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay = { workspace = true, features = ["otel", "openinference"] }
+nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 pyo3 = { version = "0.28.2", features = ["abi3", "abi3-py311", "experimental-inspect", "macros"] }
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 pythonize = "0.28.0"

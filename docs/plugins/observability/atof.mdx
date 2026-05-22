@@ -6,6 +6,7 @@ position: 4
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+
 Use the `atof` section when you want the raw Agent Trajectory Observability
 Format (ATOF) `0.1` event stream written as JSONL.
 
@@ -41,28 +42,32 @@ JSON object per lifecycle event to `logs/events.jsonl`.
 |---|---|---|
 | `enabled` | `false` | Must be `true` to write events. |
 | `output_directory` | Current working directory | Directory containing the JSONL file. |
-| `filename` | Timestamped `nemo-flow-events-*.jsonl` | Explicit output filename. |
+| `filename` | Timestamped `nemo-relay-events-*.jsonl` | Explicit output filename. |
 | `mode` | `append` | `append` or `overwrite`. |
 
 ## Expected Output
 
 Each emitted scope, tool, LLM, middleware, or mark event is written as one ATOF
 JSON object per line. For event field semantics, see
-[Events](/about-nemo-flow/concepts/events).
+[Events](/about-nemo-relay/concepts/events).
 
 Register the plugin before instrumented work starts and clear it during
 shutdown so file handles flush.
 
 ## Plugin Configuration
 
-Use plugin configuration when the application should let NeMo Flow own the ATOF
+Use plugin configuration when the application should let NeMo Relay own the ATOF
 exporter lifecycle.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-from nemo_flow import plugin
-from nemo_flow.observability import AtofConfig, ComponentSpec, ObservabilityConfig
+<Tab title="Python">
+:sync: python
+
+```python
+from nemo_relay import plugin
+from nemo_relay.observability import AtofConfig, ComponentSpec, ObservabilityConfig
 
 config = plugin.PluginConfig(
     components=[
@@ -91,9 +96,15 @@ finally:
     plugin.clear()
 ```
 
-```js title="Node.js" for="node"
-const plugin = require("nemo-flow-node/plugin");
-const observability = require("nemo-flow-node/observability");
+</Tab>
+</Tabs>
+
+<Tab title="Node.js">
+:sync: node
+
+```js
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
 
 await plugin.initialize({
   version: 1,
@@ -117,11 +128,16 @@ try {
 }
 ```
 
-```rust title="Rust" for="rust"
-use nemo_flow::observability::plugin_component::{
+</Tab>
+
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::observability::plugin_component::{
     AtofSectionConfig, ComponentSpec, ObservabilityConfig,
 };
-use nemo_flow::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atof: Some(AtofSectionConfig {
@@ -145,17 +161,21 @@ assert!(!report.has_errors());
 let active = initialize_plugins(config).await?;
 ```
 
-</CodeGroup>
+</Tab>
 
 ## Manual API
 
 Use the manual `AtofExporter` API when a test or script needs a custom
 subscriber name or explicit registration window.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
-from nemo_flow import AtofExporter, AtofExporterConfig, AtofExporterMode
+<Tab title="Python">
+:sync: python
+
+```python
+from nemo_relay import AtofExporter, AtofExporterConfig, AtofExporterMode
 
 config = AtofExporterConfig()
 config.output_directory = "logs"
@@ -172,8 +192,14 @@ exporter.deregister("atof-exporter")
 exporter.shutdown()
 ```
 
-```js title="Node.js" for="node"
-const { AtofExporter } = require("nemo-flow-node");
+</Tab>
+</Tabs>
+
+<Tab title="Node.js">
+:sync: node
+
+```js
+const { AtofExporter } = require("nemo-relay-node");
 
 const exporter = new AtofExporter({
   outputDirectory: "logs",
@@ -192,8 +218,13 @@ try {
 }
 ```
 
-```rust title="Rust" for="rust"
-use nemo_flow::observability::atof::{
+</Tab>
+
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::observability::atof::{
     AtofExporter, AtofExporterConfig, AtofExporterMode,
 };
 
@@ -211,7 +242,7 @@ let _ = exporter.deregister("atof-exporter")?;
 exporter.shutdown()?;
 ```
 
-</CodeGroup>
+</Tab>
 
 ## Common Validation Failures
 

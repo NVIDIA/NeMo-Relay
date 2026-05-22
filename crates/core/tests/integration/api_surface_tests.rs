@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for api surface in the NeMo Flow core crate.
+//! Integration tests for api surface in the NeMo Relay core crate.
 
 #![allow(clippy::await_holding_lock)]
 
@@ -10,13 +10,13 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::StreamExt;
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::llm::{LlmAttributes, LlmRequest};
-use nemo_flow::api::llm::{
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_call_end,
     llm_call_execute, llm_conditional_execution, llm_request_intercepts, llm_stream_call_execute,
 };
-use nemo_flow::api::registry::{
+use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
@@ -43,23 +43,23 @@ use nemo_flow::api::registry::{
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
 };
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_flow::api::scope::ScopeType;
-use nemo_flow::api::scope::{event, pop_scope, push_scope};
-use nemo_flow::api::subscriber::{
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::ScopeType;
+use nemo_relay::api::scope::{event, pop_scope, push_scope};
+use nemo_relay::api::subscriber::{
     deregister_subscriber, register_subscriber, scope_deregister_subscriber,
     scope_register_subscriber,
 };
-use nemo_flow::api::tool::ToolAttributes;
-use nemo_flow::api::tool::{
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,
 };
-use nemo_flow::error::{FlowError, Result};
-use nemo_flow::json::Json;
+use nemo_relay::error::{FlowError, Result};
+use nemo_relay::json::Json;
 use serde_json::{Map, json};
 use tokio_stream::Stream;
 
@@ -68,7 +68,7 @@ static TEST_MUTEX: Mutex<()> = Mutex::new(());
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 fn setup_isolated_thread() {
@@ -130,7 +130,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     let scope_end = utc_timestamp("2026-01-01T00:00:06.723456Z");
 
     let scope_handle = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("timestamp-scope")
             .scope_type(ScopeType::Agent)
             .timestamp(scope_start)
@@ -138,7 +138,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     event(
-        nemo_flow::api::scope::EmitMarkEventParams::builder()
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
             .name("timestamp-mark")
             .parent(&scope_handle)
             .timestamp(mark_timestamp)
@@ -146,7 +146,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     let tool_handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("timestamp-tool")
             .args(json!({"x": 1}))
             .timestamp(tool_start)
@@ -154,7 +154,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     tool_call_end(
-        nemo_flow::api::tool::ToolCallEndParams::builder()
+        nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .result(json!({"ok": true}))
             .timestamp(tool_end)
@@ -172,7 +172,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     llm_call_end(
-        nemo_flow::api::llm::LlmCallEndParams::builder()
+        nemo_relay::api::llm::LlmCallEndParams::builder()
             .handle(&llm_handle)
             .response(json!({"ok": true}))
             .timestamp(llm_end)
@@ -180,7 +180,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_handle.uuid)
             .timestamp(scope_end)
             .build(),
@@ -221,7 +221,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     let llm_start = utc_timestamp("2099-02-01T00:00:02.333333Z");
 
     let scope_handle = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("default_ts_scope")
             .scope_type(ScopeType::Agent)
             .timestamp(scope_start)
@@ -229,7 +229,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
     let tool_handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("default_ts_tool")
             .args(json!({"x": 1}))
             .timestamp(tool_start)
@@ -237,7 +237,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
     tool_call_end(
-        nemo_flow::api::tool::ToolCallEndParams::builder()
+        nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
             .result(json!({"ok": true}))
             .build(),
@@ -254,14 +254,14 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
     llm_call_end(
-        nemo_flow::api::llm::LlmCallEndParams::builder()
+        nemo_relay::api::llm::LlmCallEndParams::builder()
             .handle(&llm_handle)
             .response(json!({"ok": true}))
             .build(),
     )
     .unwrap();
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope_handle.uuid)
             .build(),
     )
@@ -318,6 +318,18 @@ fn noop_llm_stream_exec() -> LlmStreamExecutionNextFn {
     })
 }
 
+fn fixed_llm_stream_exec(chunks: Vec<Json>) -> LlmStreamExecutionNextFn {
+    let chunks = Arc::new(chunks);
+    Arc::new(move |_request| {
+        let chunks = chunks.clone();
+        Box::pin(async move {
+            let items = chunks.iter().cloned().map(Ok).collect::<Vec<_>>();
+            Ok(Box::pin(tokio_stream::iter(items))
+                as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+        })
+    })
+}
+
 fn failing_llm_stream_exec() -> LlmStreamExecutionNextFn {
     Arc::new(|_request| {
         Box::pin(async { Err(FlowError::Internal("llm stream execution failed".into())) })
@@ -333,14 +345,14 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     expect_already_exists(
         register_tool_sanitize_request_guardrail(
             "tool-sanitize-request",
             1,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap_err(),
         "tool-sanitize-request",
@@ -351,7 +363,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     assert!(deregister_tool_sanitize_response_guardrail("tool-sanitize-response").unwrap());
@@ -359,12 +371,12 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Box::new(|_name, _args| Ok(None)),
+        Arc::new(|_name, _args| Ok(None)),
     )
     .unwrap();
     assert!(deregister_tool_conditional_execution_guardrail("tool-conditional").unwrap());
 
-    register_tool_request_intercept("tool-request", 1, false, Box::new(|_name, args| Ok(args)))
+    register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
         .unwrap();
     assert!(deregister_tool_request_intercept("tool-request").unwrap());
 
@@ -376,14 +388,14 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
 
-    register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, Box::new(|request| request))
+    register_llm_sanitize_request_guardrail("llm-sanitize-request", 1, Arc::new(|request| request))
         .unwrap();
     assert!(deregister_llm_sanitize_request_guardrail("llm-sanitize-request").unwrap());
 
     register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Box::new(|response| response),
+        Arc::new(|response| response),
     )
     .unwrap();
     assert!(deregister_llm_sanitize_response_guardrail("llm-sanitize-response").unwrap());
@@ -391,7 +403,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_llm_conditional_execution_guardrail(
         "llm-conditional",
         1,
-        Box::new(|_request| Ok(None)),
+        Arc::new(|_request| Ok(None)),
     )
     .unwrap();
     assert!(deregister_llm_conditional_execution_guardrail("llm-conditional").unwrap());
@@ -400,7 +412,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
         "llm-request",
         1,
         false,
-        Box::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| Ok((request, annotated))),
     )
     .unwrap();
     assert!(deregister_llm_request_intercept("llm-request").unwrap());
@@ -442,7 +454,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     setup_isolated_thread();
 
     let scope = push_scope(
-        nemo_flow::api::scope::PushScopeParams::builder()
+        nemo_relay::api::scope::PushScopeParams::builder()
             .name("scope-registry")
             .scope_type(ScopeType::Function)
             .build(),
@@ -453,7 +465,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-sanitize-request",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     expect_already_exists(
@@ -461,7 +473,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             &scope.uuid,
             "tool-sanitize-request",
             1,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap_err(),
         "tool-sanitize-request",
@@ -475,7 +487,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-sanitize-response",
         1,
-        Box::new(|_name, args| args),
+        Arc::new(|_name, args| args),
     )
     .unwrap();
     assert!(
@@ -487,7 +499,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-conditional",
         1,
-        Box::new(|_name, _args| Ok(None)),
+        Arc::new(|_name, _args| Ok(None)),
     )
     .unwrap();
     assert!(
@@ -500,7 +512,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "tool-request",
         1,
         false,
-        Box::new(|_name, args| Ok(args)),
+        Arc::new(|_name, args| Ok(args)),
     )
     .unwrap();
     assert!(scope_deregister_tool_request_intercept(&scope.uuid, "tool-request").unwrap());
@@ -518,7 +530,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-sanitize-request",
         1,
-        Box::new(|request| request),
+        Arc::new(|request| request),
     )
     .unwrap();
     assert!(
@@ -530,7 +542,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-sanitize-response",
         1,
-        Box::new(|response| response),
+        Arc::new(|response| response),
     )
     .unwrap();
     assert!(
@@ -542,7 +554,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "llm-conditional",
         1,
-        Box::new(|_request| Ok(None)),
+        Arc::new(|_request| Ok(None)),
     )
     .unwrap();
     assert!(
@@ -555,7 +567,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "llm-request",
         1,
         false,
-        Box::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| Ok((request, annotated))),
     )
     .unwrap();
     assert!(scope_deregister_llm_request_intercept(&scope.uuid, "llm-request").unwrap());
@@ -593,7 +605,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     assert!(!scope_deregister_subscriber(&scope.uuid, "scope-subscriber").unwrap());
 
     pop_scope(
-        nemo_flow::api::scope::PopScopeParams::builder()
+        nemo_relay::api::scope::PopScopeParams::builder()
             .handle_uuid(&scope.uuid)
             .build(),
     )
@@ -604,7 +616,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             &scope.uuid,
             "missing-tool-sanitize",
             1,
-            Box::new(|_name, args| args),
+            Arc::new(|_name, args| args),
         )
         .unwrap_err(),
         "scope",
@@ -615,7 +627,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             "missing-tool-request",
             1,
             false,
-            Box::new(|_name, args| Ok(args)),
+            Arc::new(|_name, args| Ok(args)),
         )
         .unwrap_err(),
         "scope",
@@ -648,7 +660,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("sanitized_request".into(), json!(true));
@@ -659,7 +671,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Box::new(|_name, mut result| {
+        Arc::new(|_name, mut result| {
             result
                 .as_object_mut()
                 .unwrap()
@@ -670,7 +682,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     .unwrap();
 
     let handle = tool_call(
-        nemo_flow::api::tool::ToolCallParams::builder()
+        nemo_relay::api::tool::ToolCallParams::builder()
             .name("tool-api")
             .args(json!({"value": 1}))
             .attributes(ToolAttributes::REMOTE)
@@ -681,7 +693,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     )
     .unwrap();
     tool_call_end(
-        nemo_flow::api::tool::ToolCallEndParams::builder()
+        nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&handle)
             .result(json!({"ok": true}))
             .data(json!({"phase": "end"}))
@@ -716,7 +728,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         "tool-request",
         1,
         false,
-        Box::new(|_name, mut args| {
+        Arc::new(|_name, mut args| {
             args.as_object_mut()
                 .unwrap()
                 .insert("intercepted".into(), json!(true));
@@ -733,7 +745,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     register_tool_conditional_execution_guardrail(
         "tool-reject",
         1,
-        Box::new(|_name, _args| Ok(Some("tool denied".into()))),
+        Arc::new(|_name, _args| Ok(Some("tool denied".into()))),
     )
     .unwrap();
     assert!(matches!(
@@ -742,7 +754,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     ));
     assert!(matches!(
         tool_call_execute(
-            nemo_flow::api::tool::ToolCallExecuteParams::builder()
+            nemo_relay::api::tool::ToolCallExecuteParams::builder()
                 .name("tool-api")
                 .args(json!({"value": 3}))
                 .func(noop_tool_exec())
@@ -766,7 +778,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     let baseline = events.lock().unwrap().len();
     assert!(matches!(
         tool_call_execute(
-            nemo_flow::api::tool::ToolCallExecuteParams::builder()
+            nemo_relay::api::tool::ToolCallExecuteParams::builder()
                 .name("tool-api")
                 .args(json!({"value": 4}))
                 .func(failing_tool_exec())
@@ -812,7 +824,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Box::new(|mut request| {
+        Arc::new(|mut request| {
             request.headers.insert("x-sanitized".into(), json!(true));
             request
         }),
@@ -821,7 +833,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Box::new(|mut response| {
+        Arc::new(|mut response| {
             response
                 .as_object_mut()
                 .unwrap()
@@ -844,7 +856,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     )
     .unwrap();
     llm_call_end(
-        nemo_flow::api::llm::LlmCallEndParams::builder()
+        nemo_relay::api::llm::LlmCallEndParams::builder()
             .handle(&handle)
             .response(json!({"response": "ok"}))
             .data(json!({"phase": "end"}))
@@ -879,7 +891,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         "llm-request",
         1,
         false,
-        Box::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, annotated| {
             request.headers.insert("x-intercepted".into(), json!(true));
             Ok((request, annotated))
         }),
@@ -896,7 +908,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     register_llm_conditional_execution_guardrail(
         "llm-reject",
         1,
-        Box::new(|_request| Ok(Some("llm denied".into()))),
+        Arc::new(|_request| Ok(Some("llm denied".into()))),
     )
     .unwrap();
     assert!(matches!(
@@ -971,6 +983,144 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
 }
 
 #[tokio::test]
+async fn test_llm_stream_chunk_marks_track_successful_chunks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("llm-stream-chunk-mark-events");
+    let raw_chunks = vec![
+        json!({
+            "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": "hello"}, "finish_reason": null}]
+        }),
+        json!({"unexpected": true}),
+    ];
+    let collected = Arc::new(Mutex::new(Vec::<Json>::new()));
+
+    let collector_state = collected.clone();
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(move |chunk| {
+        collector_state.lock().unwrap().push(chunk);
+        Ok(())
+    });
+    let finalizer_state = collected.clone();
+    let finalizer: Box<dyn FnOnce() -> Json + Send> =
+        Box::new(move || Json::Array(finalizer_state.lock().unwrap().clone()));
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("llm-stream")
+            .request(make_llm_request(json!({"messages": []})))
+            .func(fixed_llm_stream_exec(raw_chunks.clone()))
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .data(json!({"request": "stream"}))
+            .model_name("stream-model")
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let mut yielded = Vec::new();
+    while let Some(item) = stream.next().await {
+        yielded.push(item.unwrap());
+    }
+    assert_eq!(yielded, raw_chunks);
+
+    let captured = events.lock().unwrap().clone();
+    assert_eq!(captured.len(), 4);
+    assert_eq!(captured[0].kind(), "scope");
+    assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(captured[0].category().unwrap().as_str(), "llm");
+    assert_eq!(captured[1].kind(), "mark");
+    assert_eq!(captured[1].name(), "llm.chunk");
+    assert_eq!(captured[2].kind(), "mark");
+    assert_eq!(captured[2].name(), "llm.chunk");
+    assert_eq!(captured[3].kind(), "scope");
+    assert_eq!(captured[3].scope_category(), Some(ScopeCategory::End));
+    assert_eq!(captured[3].output().unwrap(), &Json::Array(raw_chunks));
+
+    let llm_uuid = captured[0].uuid();
+    for mark in [&captured[1], &captured[2]] {
+        assert_eq!(mark.parent_uuid(), Some(llm_uuid));
+        assert_eq!(mark.category(), None);
+        assert_eq!(mark.scope_type(), None);
+    }
+    assert_eq!(
+        captured[1].data().unwrap(),
+        &json!({
+            "chunk_index": 0,
+            "provider": "openai_chat_completions",
+            "event_type": "chat.completion.chunk",
+            "choice_indices": [0]
+        })
+    );
+    assert_eq!(
+        captured[2].data().unwrap(),
+        &json!({"chunk_index": 1, "provider": "unknown"})
+    );
+
+    deregister_subscriber("llm-stream-chunk-mark-events").unwrap();
+}
+
+#[tokio::test]
+async fn test_llm_stream_chunk_mark_survives_collector_failure() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("llm-stream-collector-failure-events");
+    let raw_chunk = json!({"object": "chat.completion.chunk", "choices": []});
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> =
+        Box::new(|_chunk| Err(FlowError::Internal("collector failed".into())));
+    let finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!({"finalized": true}));
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("llm-stream")
+            .request(make_llm_request(json!({"messages": []})))
+            .func(fixed_llm_stream_exec(vec![raw_chunk]))
+            .collector(collector)
+            .finalizer(finalizer)
+            .attributes(LlmAttributes::STREAMING)
+            .data(json!({"request": "stream"}))
+            .model_name("stream-model")
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let item = stream.next().await.unwrap();
+    assert!(matches!(
+        item,
+        Err(FlowError::Internal(message)) if message == "collector failed"
+    ));
+    assert!(stream.next().await.is_none());
+
+    let captured = events.lock().unwrap().clone();
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[0].kind(), "scope");
+    assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(captured[1].kind(), "mark");
+    assert_eq!(captured[1].name(), "llm.chunk");
+    assert_eq!(captured[1].parent_uuid(), Some(captured[0].uuid()));
+    assert_eq!(
+        captured[1].data().unwrap(),
+        &json!({
+            "chunk_index": 0,
+            "provider": "openai_chat_completions",
+            "event_type": "chat.completion.chunk"
+        })
+    );
+    assert_eq!(captured[2].kind(), "scope");
+    assert_eq!(captured[2].scope_category(), Some(ScopeCategory::End));
+    assert_eq!(captured[2].output().unwrap(), &json!({"finalized": true}));
+
+    deregister_subscriber("llm-stream-collector-failure-events").unwrap();
+}
+
+#[tokio::test]
 async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -1039,7 +1189,7 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
     register_llm_conditional_execution_guardrail(
         "llm-stream-reject",
         1,
-        Box::new(|_request| Ok(Some("stream denied".into()))),
+        Arc::new(|_request| Ok(Some("stream denied".into()))),
     )
     .unwrap();
     let reject_collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_chunk| Ok(()));
@@ -1110,7 +1260,7 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
     drop(failed_events);
 
     event(
-        nemo_flow::api::scope::EmitMarkEventParams::builder()
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
             .name("standalone-mark")
             .data(json!({"seen": true}))
             .build(),

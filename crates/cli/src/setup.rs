@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! First-run setup for `nemo-flow` configuration.
+//! First-run setup for `nemo-relay` configuration.
 //!
 //! Drives the required scope and agent prompts, then writes a `config.toml` to the chosen scope. Pure
 //! helpers (`detect_installed_agents`, `build_config`, `save_config`) are split out from the
@@ -38,8 +38,8 @@ use self::model::detect_installed_agents_in;
 
 ///
 /// When `agent_hint` is `Some`, the agent multi-select is skipped — the user already declared
-/// intent by typing `nemo-flow claude` (or another agent name), so respect that and only ask
-/// scope and agents. To set up multiple agents, the user re-runs `nemo-flow config` later.
+/// intent by typing `nemo-relay claude` (or another agent name), so respect that and only ask
+/// scope and agents. To set up multiple agents, the user re-runs `nemo-relay config` later.
 pub(crate) fn prompt_user(
     detected_agents: &[CodingAgent],
     agent_hint: Option<CodingAgent>,
@@ -51,16 +51,16 @@ pub(crate) fn prompt_user(
         Some(agent) => {
             let (name, _) = agent_key_and_command(agent);
             println!("  Setting up {name}.");
-            println!("  Re-run `nemo-flow config` later to configure additional agents.");
+            println!("  Re-run `nemo-relay config` later to configure additional agents.");
         }
         None => {
             println!("  Let's set up your coding agent.");
-            println!("  This runs once. Re-run later with `nemo-flow config`.");
+            println!("  This runs once. Re-run later with `nemo-relay config`.");
         }
     }
-    // Only print the detected-agents listing for the unscoped wizard (`nemo-flow config`),
+    // Only print the detected-agents listing for the unscoped wizard (`nemo-relay config`),
     // where the user is about to pick from the multi-select. When the agent was already chosen
-    // via the easy-path shortcut (`nemo-flow codex`), listing the other three agents is noise.
+    // via the easy-path shortcut (`nemo-relay codex`), listing the other three agents is noise.
     if agent_hint.is_none() {
         println!();
         print_detected_agents(detected_agents);
@@ -95,12 +95,12 @@ pub(crate) fn prompt_user(
     })
 }
 
-/// Top-level setup entry point used by `nemo-flow config` and the easy-path fallback.
+/// Top-level setup entry point used by `nemo-relay config` and the easy-path fallback.
 /// Detects agents, prompts the user, writes the config, prints a final summary.
 ///
-/// `agent_hint` carries the agent the user typed on the easy path (`nemo-flow claude`); when
+/// `agent_hint` carries the agent the user typed on the easy path (`nemo-relay claude`); when
 /// `Some`, the agent multi-select is skipped because intent is already declared. `None` from
-/// `nemo-flow config` asks the full set so users can configure multiple agents at once.
+/// `nemo-relay config` asks the full set so users can configure multiple agents at once.
 pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
     let detected = detect_installed_agents();
     let mut answers = prompt_user(&detected, agent_hint)?;
@@ -133,7 +133,7 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
     for path in &written {
         println!("    {}", path.display());
     }
-    println!("  Configure observability with `nemo-flow plugins edit`.");
+    println!("  Configure plugins with `nemo-relay plugins edit`.");
     println!();
     Ok(())
 }
@@ -158,7 +158,7 @@ fn ensure_tty() -> Result<(), CliError> {
     if !std::io::stdin().is_terminal() {
         return Err(CliError::Config(
             "interactive setup requires a TTY; pass `--config <path>` or set up \
-             `.nemo-flow/config.toml` manually"
+             `.nemo-relay/config.toml` manually"
                 .into(),
         ));
     }

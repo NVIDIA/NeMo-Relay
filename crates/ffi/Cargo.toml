@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-ffi"
+name = "nemo-relay-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "C-compatible FFI bindings for integrating NeMo Flow into native applications."
+description = "C-compatible FFI bindings for integrating NeMo Relay into native applications."
 readme = "README.md"
 
 [lints]
@@ -17,8 +17,8 @@ workspace = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-nemo-flow = { workspace = true, features = ["otel", "openinference"] }
-nemo-flow-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay = { workspace = true, features = ["otel", "openinference"] }
+nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 chrono = "0.4"
 libc = "0.2"
 serde_json = "1"

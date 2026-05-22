@@ -1,6 +1,6 @@
 ---
 name: test-node-binding
-description: Build and test the NeMo Flow Node.js binding; use this for crates/node changes or Node-facing integration checks
+description: Build and test the NeMo Relay Node.js binding; use this for crates/node changes or Node-facing integration checks
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -19,7 +19,7 @@ Node surface, or Node-facing examples/docs.
 
 ## Default Path
 
-1. Format changed Node files with `npm run format --workspace=nemo-flow-node`.
+1. Format changed Node files with `npm run format --workspace=nemo-relay-node`.
 2. Install dependencies and build with `just build-node` when you need
    to validate packaging/build output.
 3. Run `just test-node` for the normal dev/test loop.
@@ -36,7 +36,7 @@ Node surface, or Node-facing examples/docs.
 just build-node
 
 # Format Node files
-npm run format --workspace=nemo-flow-node
+npm run format --workspace=nemo-relay-node
 
 # Standard test loop
 just test-node
@@ -54,7 +54,7 @@ just ci=true test-node
 
 ```bash
 # Public API docstring checks when surface docs changed
-npm run check:docstrings --workspace=nemo-flow-node
+npm run check:docstrings --workspace=nemo-relay-node
 ```
 
 ## When To Escalate

@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow"
+name = "nemo-relay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core Rust SDK for NeMo Flow observability, scope management, and runtime instrumentation."
+description = "Core Rust SDK for NeMo Relay observability, scope management, and runtime instrumentation."
 readme = "README.md"
 
 [lints]

@@ -131,7 +131,7 @@ fn hermes_api_call_id(payload: &Value, session_id: &str) -> String {
 
 fn hermes_llm_request(payload: &Value) -> Value {
     // Prefer first-party sanitized request bodies from newer Hermes telemetry hooks. This is still
-    // observer-only data: NeMo Flow is not intercepting or rewriting Hermes execution here. When the
+    // observer-only data: NeMo Relay is not intercepting or rewriting Hermes execution here. When the
     // exact payload is absent or was truncated by Hermes, fall back to the legacy summary shape.
     if let Some(request) = hermes_exact_request(payload) {
         return request;

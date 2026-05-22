@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for anthropic messages surface in the NeMo Flow adaptive crate.
+//! Unit tests for anthropic messages surface in the NeMo Relay adaptive crate.
 
 use serde_json::json;
 
 use super::*;
 use chrono::Utc;
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 use uuid::Uuid;
 
 use crate::acg::prompt_ir::{

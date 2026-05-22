@@ -10,7 +10,7 @@ repos:
         entry: python3 scripts/lint/check_copyright.py
         language: system
         files: '\.(rs|go|py|pyi|toml|yaml|yml|md|mjs|js|ts|h|sh)$|\.gitignore$'
-        exclude: '(/SKILL\.md|index\.js|index\.d\.ts|nemo_flow\.h|node_modules/|target/|\.venv/|pkg/|^\.github/pull_request_template\.md)$'
+        exclude: '(/SKILL\.md|index\.js|index\.d\.ts|nemo_relay\.h|node_modules/|target/|\.venv/|pkg/|^\.github/pull_request_template\.md)$'
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -75,9 +75,11 @@ repos:
           - --accept
           - '200..=299,403,429'
           - --exclude
-          - '^https://www\.npmjs\.com/package/nemo-flow-(node|wasm)$'
+          - '^https://www\.npmjs\.com/package/nemo-relay-(node|wasm)$'
           - --exclude
-          - '^https://nemo-flow\.docs\.buildwithfern\.com/dev/?$'
+          - '^https://github\.com/NVIDIA/NeMo-Relay(?:/.*)?$'
+          - --exclude
+          - '^https://nvidia-nemo-relay\.docs\.buildwithfern\.com/nemo-relay(?:/.*)?$'
           - README.md
           - CONTRIBUTING.md
           - docs/**/*.mdx
@@ -113,9 +115,9 @@ repos:
     hooks:
       - id: ffi-header-sync
         name: ffi header sync
-        entry: cargo check -p nemo-flow-ffi
+        entry: cargo check -p nemo-relay-ffi
         language: system
-        files: '^crates/ffi/(Cargo\.toml|cbindgen\.toml|nemo_flow\.h|src/.*\.rs)$'
+        files: '^crates/ffi/(Cargo\.toml|cbindgen\.toml|nemo_relay\.h|src/.*\.rs)$'
         pass_filenames: false
 
       - id: cargo-fmt
@@ -178,7 +180,7 @@ repos:
 
       - id: go-vet
         name: go vet
-        entry: bash -c 'cd go/nemo_flow && go vet ./...'
+        entry: bash -c 'cd go/nemo_relay && go vet ./...'
         language: system
         types: [go]
         pass_filenames: false

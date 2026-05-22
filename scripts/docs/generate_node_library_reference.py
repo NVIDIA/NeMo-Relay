@@ -40,18 +40,18 @@ KIND_LABELS = {
     "const": "constant",
 }
 MODULE_TITLES = {
-    "nemo-flow-node": "Runtime",
-    "nemo-flow-node/typed": "Typed Helpers",
-    "nemo-flow-node/plugin": "Plugin Helpers",
-    "nemo-flow-node/adaptive": "Adaptive Helpers",
-    "nemo-flow-node/observability": "Observability Helpers",
+    "nemo-relay-node": "Runtime",
+    "nemo-relay-node/typed": "Typed Helpers",
+    "nemo-relay-node/plugin": "Plugin Helpers",
+    "nemo-relay-node/adaptive": "Adaptive Helpers",
+    "nemo-relay-node/observability": "Observability Helpers",
 }
 MODULE_DESCRIPTIONS = {
-    "nemo-flow-node": "Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.",
-    "nemo-flow-node/typed": "Typed wrappers and codec-aware execution helpers.",
-    "nemo-flow-node/plugin": "Plugin configuration, validation, activation, and registration helpers.",
-    "nemo-flow-node/adaptive": "Adaptive plugin configuration helpers.",
-    "nemo-flow-node/observability": "Observability plugin configuration helpers.",
+    "nemo-relay-node": "Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.",
+    "nemo-relay-node/typed": "Typed wrappers and codec-aware execution helpers.",
+    "nemo-relay-node/plugin": "Plugin configuration, validation, activation, and registration helpers.",
+    "nemo-relay-node/adaptive": "Adaptive plugin configuration helpers.",
+    "nemo-relay-node/observability": "Observability plugin configuration helpers.",
 }
 BASE_URL = "/reference/api/nodejs-library-reference"
 
@@ -356,7 +356,7 @@ def _write_index(output_dir: Path, modules: list[ModuleDoc]) -> None:
     lines = [
         frontmatter(
             "Node.js Library Reference",
-            "Generated Node.js API reference for the nemo-flow-node package.",
+            "Generated Node.js API reference for the nemo-relay-node package.",
             2,
         ),
         "Generated from the local `crates/node` package exports and TypeScript declaration files.\n\n",

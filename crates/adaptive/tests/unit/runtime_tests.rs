@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for runtime in the NeMo Flow adaptive crate.
+//! Unit tests for runtime in the NeMo Relay adaptive crate.
 
-use nemo_flow::api::llm::{LlmRequest, llm_request_intercepts};
-use nemo_flow::api::runtime::{
-    NemoFlowContextState, create_scope_stack, global_context, set_thread_scope_stack,
+use nemo_relay::api::llm::{LlmRequest, llm_request_intercepts};
+use nemo_relay::api::runtime::{
+    NemoRelayContextState, create_scope_stack, global_context, set_thread_scope_stack,
 };
-use nemo_flow::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use serde_json::{Map, Value as Json};
 
 use crate::config::{
@@ -18,16 +18,16 @@ use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
-use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_flow::plugin::{ConfigPolicy, UnsupportedBehavior};
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
 
 #[cfg(feature = "redis-backend")]
-const REDIS_TEST_ENV: &str = "NEMO_FLOW_RUN_REDIS_TESTS";
+const REDIS_TEST_ENV: &str = "NEMO_RELAY_RUN_REDIS_TESTS";
 
 fn reset_runtime_context() {
     let context = global_context();
     let mut state = context.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
     set_thread_scope_stack(create_scope_stack());
 }
 
@@ -286,7 +286,7 @@ fn validate_config_reports_unknown_backend_and_acg_provider_per_policy() {
             .diagnostics
             .iter()
             .any(|diag| diag.code == "adaptive.unknown_backend"
-                && diag.level == nemo_flow::plugin::DiagnosticLevel::Warning)
+                && diag.level == nemo_relay::plugin::DiagnosticLevel::Warning)
     );
     assert!(
         warn_report
@@ -378,7 +378,7 @@ fn adaptive_owned_runtime_sources_use_canonical_acg_module_paths() {
 
     for (path, source, canonical_patterns) in owned_sources {
         assert!(
-            !source.contains("nemo_flow_acg::"),
+            !source.contains("nemo_relay_acg::"),
             "{path} should not fall back to the compatibility shim",
         );
         for canonical_pattern in canonical_patterns {

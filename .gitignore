@@ -11,14 +11,14 @@ __pycache__/
 *.pyo
 *.egg-info/
 *.so
-python/nemo_flow/_native*.so
+python/nemo_relay/_native*.so
 
 # Python (Windows)
-python/nemo_flow/_native*.pyd
+python/nemo_relay/_native*.pyd
 
 # Go
-go/nemo_flow/nemo_flow_test
-go/nemo_flow/nemo_flow_test.exe
+go/nemo_relay/nemo_relay_test
+go/nemo_relay/nemo_relay_test.exe
 
 # Node.js (NAPI-RS)
 node_modules/
@@ -47,7 +47,7 @@ crates/wasm/junit.xml
 .coverage
 *.profraw
 *.profdata
-go/nemo_flow/coverage.out
+go/nemo_relay/coverage.out
 go_junit_report.xml
 *.dSYM/
 
@@ -85,9 +85,12 @@ third_party/openclaw/
 third_party/opencode/
 
 # Documentation
+docs/_build/
 docs/reference/api/nodejs-library-reference/
 docs/reference/api/python-library-reference/
 docs/reference/api/rust-library-reference/
+docs/reference/api/**/_generated/
+docs/reference/api/**/_source/
 **/release-notes.md
 CHANGELOG.md
 

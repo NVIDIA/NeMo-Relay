@@ -1,33 +1,33 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python-facing API functions for the NeMo Flow runtime.
+//! Python-facing API functions for the NeMo Relay runtime.
 //!
 //! Each `#[pyfunction]` here is registered into the `_native` module and
-//! delegates to the corresponding function in [`nemo_flow::api`].
-//! The Python wrapper modules (`nemo_flow.scope`, `nemo_flow.tools`, etc.)
+//! delegates to the corresponding function in [`nemo_relay::api`].
+//! The Python wrapper modules (`nemo_relay.scope`, `nemo_relay.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
 use std::sync::Arc;
 
-use nemo_flow::api::llm as core_llm_api;
-use nemo_flow::api::llm::LlmAttributes;
-use nemo_flow::api::registry as core_registry_api;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::runtime::{
+use nemo_relay::api::llm as core_llm_api;
+use nemo_relay::api::llm::LlmAttributes;
+use nemo_relay::api::registry as core_registry_api;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
     set_thread_scope_stack as bind_thread_scope_stack,
     sync_thread_scope_stack as sync_bound_thread_scope_stack, task_scope_top,
 };
-use nemo_flow::api::scope as core_scope_api;
-use nemo_flow::api::scope::ScopeAttributes;
-use nemo_flow::api::subscriber as core_subscriber_api;
-use nemo_flow::api::tool as core_tool_api;
-use nemo_flow::api::tool::ToolAttributes;
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::{FlowError, Result as FlowResult};
+use nemo_relay::api::scope as core_scope_api;
+use nemo_relay::api::scope::ScopeAttributes;
+use nemo_relay::api::subscriber as core_subscriber_api;
+use nemo_relay::api::tool as core_tool_api;
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
@@ -123,7 +123,7 @@ pub fn create_scope_stack() -> PyScopeStack {
 
 /// Bind a ``ScopeStack`` to the current thread's thread-local storage.
 ///
-/// This ensures that subsequent NeMo Flow API calls on this thread use the given
+/// This ensures that subsequent NeMo Relay API calls on this thread use the given
 /// scope stack rather than a default one. Primarily useful when propagating
 /// scope context into worker threads (e.g. ``ThreadPoolExecutor``).
 ///
@@ -137,7 +137,7 @@ pub fn set_thread_scope_stack(stack: &PyScopeStack) {
 /// Sync a ``ScopeStack`` to the current thread's Rust thread-local storage
 /// **without** marking it as explicitly set.
 ///
-/// This is used internally by ``nemo_flow.get_scope_stack()`` to keep the Rust
+/// This is used internally by ``nemo_relay.get_scope_stack()`` to keep the Rust
 /// thread-local in sync with the Python ``contextvars.ContextVar`` without
 /// affecting ``scope_stack_active()``.
 #[pyfunction]
@@ -154,7 +154,7 @@ pub fn sync_thread_scope_stack(stack: &PyScopeStack) {
 /// present.
 ///
 /// .. note::
-///     The Python-level ``nemo_flow.scope_stack_active()`` wrapper also
+///     The Python-level ``nemo_relay.scope_stack_active()`` wrapper also
 ///     checks the ``contextvars.ContextVar`` and should be preferred in
 ///     Python code. This native function is useful for non-async contexts
 ///     where ``contextvars`` are not involved.

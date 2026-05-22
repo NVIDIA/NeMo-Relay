@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Flow typed wrappers with explicit Codec protocol."""
+"""Tests for NeMo Relay typed wrappers with explicit Codec protocol."""
 
 import dataclasses
 from typing import cast
 
 import pytest
 
-from nemo_flow import JsonObject, LLMRequest, intercepts, typed
-from nemo_flow.typed import BestEffortAnyCodec, Codec, DataclassCodec, JsonPassthrough
+from nemo_relay import JsonObject, LLMRequest, intercepts, typed
+from nemo_relay.typed import BestEffortAnyCodec, Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
 # Test models

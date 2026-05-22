@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Flow LLM Codec system.
+"""Tests for NeMo Relay LLM Codec system.
 
 Covers:
 - AnnotatedLLMRequest construction, field access, setters, helpers
@@ -12,14 +12,14 @@ Covers:
 
 from typing import cast
 
-from nemo_flow import (
+from nemo_relay import (
     AnnotatedLLMRequest,
     JsonObject,
     LLMRequest,
     intercepts,
     llm,
 )
-from nemo_flow.codecs import (
+from nemo_relay.codecs import (
     LlmCodec,
 )
 
@@ -347,15 +347,15 @@ class TestCodecPipeline:
 class TestCodecsModuleImport:
     def test_codecs_module_import(self):
         """Verify module import structure works correctly."""
-        from nemo_flow import codecs as codecs_mod
+        from nemo_relay import codecs as codecs_mod
 
         # LlmCodec is accessible from the module
         assert hasattr(codecs_mod, "LlmCodec")
         assert codecs_mod.LlmCodec is LlmCodec
 
         # AnnotatedLLMRequest at top level matches _native
-        from nemo_flow import AnnotatedLLMRequest as top_level_alr
-        from nemo_flow._native import AnnotatedLLMRequest as native_alr
+        from nemo_relay import AnnotatedLLMRequest as top_level_alr
+        from nemo_relay._native import AnnotatedLLMRequest as native_alr
 
         assert top_level_alr is native_alr
 

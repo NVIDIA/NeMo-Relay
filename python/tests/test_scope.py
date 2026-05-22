@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Flow scope operations."""
+"""Tests for NeMo Relay scope operations."""
 
 import pytest
 
-from nemo_flow import (
+from nemo_relay import (
     ScopeAttributes,
     ScopeHandle,
     ScopeType,
@@ -73,12 +73,12 @@ class TestScope:
     def test_get_handle_preserves_explicit_worker_thread_scope_stack(self):
         import threading
 
-        import nemo_flow
+        import nemo_relay
 
         result = {}
 
         def worker():
-            nemo_flow.set_thread_scope_stack(nemo_flow.create_scope_stack())
+            nemo_relay.set_thread_scope_stack(nemo_relay.create_scope_stack())
             result["name"] = scope.get_handle().name
 
         t = threading.Thread(target=worker)

@@ -1,27 +1,27 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for py storage coverage in the NeMo Flow Python crate.
+//! Coverage tests for py storage coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
 
 use chrono::Utc;
-use nemo_flow_adaptive::acg::profile::{BlockStabilityScore, StabilityClass};
-use nemo_flow_adaptive::acg::prompt_ir::{
+use nemo_relay_adaptive::acg::profile::{BlockStabilityScore, StabilityClass};
+use nemo_relay_adaptive::acg::prompt_ir::{
     BlockContentType, PromptBlock, PromptIR, PromptRole, ProvenanceLabel, SensitivityLabel, SpanId,
 };
-use nemo_flow_adaptive::acg::stability::StabilityAnalysisResult;
+use nemo_relay_adaptive::acg::stability::StabilityAnalysisResult;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use serde_json::json;
 use uuid::Uuid;
 
-use nemo_flow_adaptive::storage::traits::StorageBackendDyn;
-use nemo_flow_adaptive::trie::accumulator::{AccumulatorState, NodeAccumulators, RunningStats};
-use nemo_flow_adaptive::trie::data_models::PredictionTrieNode;
-use nemo_flow_adaptive::types::metadata::{MetadataEnvelope, ParallelHint};
-use nemo_flow_adaptive::types::plan::{ExecutionPlan, ParallelGroup};
-use nemo_flow_adaptive::types::records::{CallKind, CallRecord, RunRecord};
+use nemo_relay_adaptive::storage::traits::StorageBackendDyn;
+use nemo_relay_adaptive::trie::accumulator::{AccumulatorState, NodeAccumulators, RunningStats};
+use nemo_relay_adaptive::trie::data_models::PredictionTrieNode;
+use nemo_relay_adaptive::types::metadata::{MetadataEnvelope, ParallelHint};
+use nemo_relay_adaptive::types::plan::{ExecutionPlan, ParallelGroup};
+use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
 
 use super::*;
 
@@ -384,8 +384,8 @@ fn py_storage_uses_canonical_adaptive_acg_imports() {
         std::fs::read_to_string(format!("{}/src/py_storage.rs", env!("CARGO_MANIFEST_DIR")))
             .unwrap();
 
-    assert!(source.contains("nemo_flow_adaptive::acg"));
-    assert!(!source.contains("nemo_flow_acg::"));
+    assert!(source.contains("nemo_relay_adaptive::acg"));
+    assert!(!source.contains("nemo_relay_acg::"));
 }
 
 #[test]

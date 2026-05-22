@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! # NeMo Flow Adaptive
+//! # NeMo Relay Adaptive
 //!
-//! Adaptive config helpers and core-plugin integration for NeMo Flow.
+//! Adaptive config helpers and core-plugin integration for NeMo Relay.
 //! Adaptive behavior is enabled through the generic core plugin system.
 //!
 //! This crate provides the adaptive runtime, persistence abstractions, learner
 //! implementations, and Adaptive Cache Governor (ACG) analysis types used to
-//! derive and apply runtime hints from observed NeMo Flow executions.
+//! derive and apply runtime hints from observed NeMo Relay executions.
 pub mod acg;
 pub mod acg_component;
 pub mod acg_learner;

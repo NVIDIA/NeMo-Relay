@@ -12,7 +12,7 @@ use std::{collections::HashSet, sync::LazyLock};
 use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
 
-use nemo_flow::api::registry::{
+use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
@@ -25,8 +25,8 @@ use nemo_flow::api::registry::{
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::plugin::{
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
     initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,

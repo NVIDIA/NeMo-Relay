@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for coverage in the NeMo Flow Python crate.
+//! Coverage tests for coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
 use std::pin::Pin;
@@ -22,9 +22,9 @@ use crate::py_callable::{
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn, wrap_py_tool_exec_fn,
     wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
-use nemo_flow::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -98,18 +98,18 @@ fn test_native_pymodule_entrypoint_registers_bindings() {
 fn test_python_test_guard_restores_existing_runtime_env() {
     let lock = crate::test_support::lock_python_test();
     unsafe {
-        std::env::set_var("NEMO_FLOW_BINDING_KIND", "python");
-        std::env::set_var("NEMO_FLOW_RUNTIME_OWNER", "owner");
+        std::env::set_var("NEMO_RELAY_BINDING_KIND", "python");
+        std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", "owner");
     }
     {
         let _guard = crate::test_support::init_python_test_locked(lock);
-        assert!(std::env::var_os("NEMO_FLOW_BINDING_KIND").is_none());
-        assert!(std::env::var_os("NEMO_FLOW_RUNTIME_OWNER").is_none());
+        assert!(std::env::var_os("NEMO_RELAY_BINDING_KIND").is_none());
+        assert!(std::env::var_os("NEMO_RELAY_RUNTIME_OWNER").is_none());
     }
     let _lock = crate::test_support::lock_python_test();
     unsafe {
-        std::env::remove_var("NEMO_FLOW_BINDING_KIND");
-        std::env::remove_var("NEMO_FLOW_RUNTIME_OWNER");
+        std::env::remove_var("NEMO_RELAY_BINDING_KIND");
+        std::env::remove_var("NEMO_RELAY_RUNTIME_OWNER");
     }
 }
 
@@ -117,31 +117,31 @@ fn test_python_test_guard_restores_existing_runtime_env() {
 fn test_python_test_guard_keeps_absent_runtime_env_absent() {
     let lock = crate::test_support::lock_python_test();
     unsafe {
-        std::env::remove_var("NEMO_FLOW_BINDING_KIND");
-        std::env::remove_var("NEMO_FLOW_RUNTIME_OWNER");
+        std::env::remove_var("NEMO_RELAY_BINDING_KIND");
+        std::env::remove_var("NEMO_RELAY_RUNTIME_OWNER");
     }
     {
         let _guard = crate::test_support::init_python_test_locked(lock);
         unsafe {
-            std::env::set_var("NEMO_FLOW_BINDING_KIND", "mutated-binding");
-            std::env::set_var("NEMO_FLOW_RUNTIME_OWNER", "mutated-owner");
+            std::env::set_var("NEMO_RELAY_BINDING_KIND", "mutated-binding");
+            std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", "mutated-owner");
         }
         assert_eq!(
-            std::env::var_os("NEMO_FLOW_BINDING_KIND"),
+            std::env::var_os("NEMO_RELAY_BINDING_KIND"),
             Some("mutated-binding".into())
         );
         assert_eq!(
-            std::env::var_os("NEMO_FLOW_RUNTIME_OWNER"),
+            std::env::var_os("NEMO_RELAY_RUNTIME_OWNER"),
             Some("mutated-owner".into())
         );
     }
     let _lock = crate::test_support::lock_python_test();
     unsafe {
-        std::env::remove_var("NEMO_FLOW_BINDING_KIND");
-        std::env::remove_var("NEMO_FLOW_RUNTIME_OWNER");
+        std::env::remove_var("NEMO_RELAY_BINDING_KIND");
+        std::env::remove_var("NEMO_RELAY_RUNTIME_OWNER");
     }
-    assert!(std::env::var_os("NEMO_FLOW_BINDING_KIND").is_none());
-    assert!(std::env::var_os("NEMO_FLOW_RUNTIME_OWNER").is_none());
+    assert!(std::env::var_os("NEMO_RELAY_BINDING_KIND").is_none());
+    assert!(std::env::var_os("NEMO_RELAY_RUNTIME_OWNER").is_none());
 }
 
 #[test]
@@ -322,7 +322,7 @@ fn test_plugin_bindings_validate_configure_and_clear() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = crate::py_plugin::lock_plugin_test_state_for_tests();
     Python::attach(|py| {
-        nemo_flow_adaptive::plugin_component::register_adaptive_component().unwrap();
+        nemo_relay_adaptive::plugin_component::register_adaptive_component().unwrap();
 
         let plugin_module = PyModule::new(py, "_plugin_test").unwrap();
         crate::py_plugin::register(&plugin_module).unwrap();
@@ -801,7 +801,7 @@ async def llm_stream_intercept(request, next):
                         let chunks = vec![Ok(json!({"chunk": "a"})), Ok(json!({"chunk": "b"}))];
                         Ok(Box::pin(tokio_stream::iter(chunks))
                             as Pin<
-                                Box<dyn Stream<Item = nemo_flow::error::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_relay::error::Result<Json>> + Send>,
                             >)
                     })
                 });
@@ -941,7 +941,7 @@ async def llm_stream_intercept_fail(request, next):
                         let chunks = vec![Ok(json!({"chunk": "downstream"}))];
                         Ok(Box::pin(tokio_stream::iter(chunks))
                             as Pin<
-                                Box<dyn Stream<Item = nemo_flow::error::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_relay::error::Result<Json>> + Send>,
                             >)
                     })
                 });
@@ -960,7 +960,7 @@ async def llm_stream_intercept_fail(request, next):
                     Box::pin(async move {
                         Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]))
                             as Pin<
-                                Box<dyn Stream<Item = nemo_flow::error::Result<Json>> + Send>,
+                                Box<dyn Stream<Item = nemo_relay::error::Result<Json>> + Send>,
                             >)
                     })
                 });

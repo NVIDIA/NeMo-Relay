@@ -70,22 +70,22 @@ reviews:
         Treat binding changes as public API changes. Check for parity with the other language bindings, FFI ownership/lifetime safety,
         callback error propagation, stable type conversion, and consistent async/stream semantics.
         Flag changes that update one binding without corresponding tests or documentation for the same surface elsewhere.
-    - path: "python/nemo_flow/**/*"
+    - path: "python/nemo_relay/**/*"
       instructions: |
         Review Python wrapper changes for typed API consistency, contextvars-based scope isolation, async behavior, and parity with the native extension.
         Stubs and runtime implementations should stay aligned.
-    - path: "go/nemo_flow/**/*"
+    - path: "go/nemo_relay/**/*"
       instructions: |
         Review Go binding changes for cgo memory ownership, race safety, callback cleanup, idiomatic exported APIs, and parity with Rust/FFI behavior.
         Any API change should include focused Go tests and consider race-test behavior.
-    - path: "{crates/**/tests/**,python/tests/**,go/nemo_flow/**/*_test.go}"
+    - path: "{crates/**/tests/**,python/tests/**,go/nemo_relay/**/*_test.go}"
       instructions: |
         Tests should cover the behavior promised by the changed API surface, including error paths and cross-request isolation where relevant.
         Prefer assertions on lifecycle events, scope stacks, middleware ordering, and binding parity over shallow smoke tests.
     - path: "patches/**/*.patch"
       instructions: |
         Patch changes should remain reviewable as regenerated diffs against the matching third_party submodule.
-        Check that integration behavior, package metadata, and tests remain consistent with the main NeMo Flow API.
+        Check that integration behavior, package metadata, and tests remain consistent with the main NeMo Relay API.
     - path: "{docs/**,README.md,CONTRIBUTING.md,RELEASING.md,SECURITY.md}"
       instructions: |
         Review documentation for technical accuracy against the current API, command correctness, and consistency across language bindings.

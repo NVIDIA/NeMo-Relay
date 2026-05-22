@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for telemetry in the NeMo Flow adaptive crate.
+//! Unit tests for telemetry in the NeMo Relay adaptive crate.
 
 use super::*;
 use chrono::{TimeZone, Utc};
-use nemo_flow::codec::response::Usage;
+use nemo_relay::codec::response::Usage;
 use uuid::Uuid;
 
 fn assert_send_sync<T: Send + Sync>() {}

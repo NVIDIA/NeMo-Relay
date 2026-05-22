@@ -3,16 +3,16 @@
 
 navigation:
   - folder: ./about
-    title: "About NeMo Flow"
-    slug: about-nemo-flow
+    title: "About NeMo Relay"
+    slug: about-nemo-relay
     title-source: frontmatter
   - folder: ./getting-started
     title: "Getting Started"
     slug: getting-started
     title-source: frontmatter
-  - folder: ./nemo-flow-cli
-    title: "NeMo Flow CLI"
-    slug: nemo-flow-cli
+  - folder: ./nemo-relay-cli
+    title: "NeMo Relay CLI"
+    slug: nemo-relay-cli
     title-source: frontmatter
   - folder: ./integrations
     title: "Supported Integrations"

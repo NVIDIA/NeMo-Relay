@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # NVIDIA Style Guidance for Agents
 
-Use this file as the first-pass reference for NeMo Flow documentation reviews.
+Use this file as the first-pass reference for NeMo Relay documentation reviews.
 It condenses NVIDIA writing guidance into review actions and points to focused
 support documents for deeper checks.
 
-This guide is not a substitute for verifying repository facts. For NeMo Flow
+This guide is not a substitute for verifying repository facts. For NeMo Relay
 docs, factual accuracy and current API behavior are more important than copy
 polish.
 
@@ -85,7 +85,7 @@ available. Keep the finding body focused on the reader impact and the fix.
 ## Common Agent Pitfalls
 
 - Do not enforce marketing or social-media rules on technical documentation.
-- Do not add trademark symbols to NeMo Flow learning docs by default.
+- Do not add trademark symbols to NeMo Relay learning docs by default.
 - Do not replace precise technical terms with simpler words when precision would be lost.
 - Do not flag passive voice when the actor is unknown or the action is the important part.
 - Do not rewrite API names, package names, command flags, or code literals for style.

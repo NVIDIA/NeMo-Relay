@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# refactor: rename to NeMo Relay (#141)
+8f096e7f7aac9a7bcad069bae310c37a7499a802

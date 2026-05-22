@@ -3,16 +3,16 @@
 
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
 
-//! # NeMo Flow Core
+//! # NeMo Relay Core
 //!
-//! The core runtime library for the NeMo Flow multi-language agent framework. This crate
+//! The core runtime library for the NeMo Relay multi-language agent framework. This crate
 //! provides execution scope management, lifecycle event tracking, and middleware pipelines
 //! (guardrails and intercepts) for tool and LLM calls.
 //!
 //! ## Architecture
 //!
 //! The runtime is organized around a **global context**
-//! ([`api::runtime::NemoFlowContextState`]) that holds all registered middleware
+//! ([`api::runtime::NemoRelayContextState`]) that holds all registered middleware
 //! (guardrails, intercepts, subscribers) and a **scope stack**
 //! ([`api::runtime::ScopeStack`]) that tracks the hierarchical execution context
 //! via task-local or thread-local storage.
@@ -38,8 +38,6 @@
 //!   [`atif::AtifExporter`](observability::atif::AtifExporter),
 //!   [`otel::OpenTelemetrySubscriber`](observability::otel::OpenTelemetrySubscriber),
 //!   and [`openinference::OpenInferenceSubscriber`](observability::openinference::OpenInferenceSubscriber).
-//! - [`registry`] — [`SortedRegistry`](registry::SortedRegistry) — a priority-sorted, named collection used for
-//!   all guardrail and intercept registries.
 //! - [`stream`] — [`stream::LlmStreamWrapper`] — a stream adapter that applies per-chunk
 //!   intercepts and aggregates streaming LLM responses.
 //!
@@ -63,7 +61,8 @@ pub mod error;
 pub mod json;
 pub mod observability;
 pub mod plugin;
-pub mod registry;
+pub mod plugins;
+mod registry;
 #[doc(hidden)]
 pub mod shared_runtime;
 pub mod stream;

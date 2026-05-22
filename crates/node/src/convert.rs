@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Conversion utilities for bridging between NeMo Flow core types and NAPI types.
+//! Conversion utilities for bridging between NeMo Relay core types and NAPI types.
 //!
 //! Provides helpers to convert errors and optional JSON values between the core
 //! runtime representation and the NAPI binding layer.
@@ -11,7 +11,7 @@ use std::sync::{LazyLock, Mutex};
 use chrono::{DateTime, Utc};
 use serde_json::Value as Json;
 
-use nemo_flow::error::FlowError;
+use nemo_relay::error::FlowError;
 
 static LAST_CALLBACK_ERROR: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 

@@ -1,6 +1,6 @@
 ---
 name: contribute-docs
-description: Contribute documentation or example changes that stay aligned with NeMo Flow public behavior
+description: Contribute documentation or example changes that stay aligned with NeMo Relay public behavior
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---

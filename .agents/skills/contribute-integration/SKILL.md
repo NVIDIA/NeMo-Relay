@@ -1,6 +1,6 @@
 ---
 name: contribute-integration
-description: Contribute a new or updated third-party framework integration for NeMo Flow
+description: Contribute a new or updated third-party framework integration for NeMo Relay
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -19,8 +19,8 @@ as LangChain, LangGraph, or another patched third-party project.
 
 ## Default Guidance
 
-- Keep NeMo Flow optional
-- Preserve the framework's original behavior when NeMo Flow is absent
+- Keep NeMo Relay optional
+- Preserve the framework's original behavior when NeMo Relay is absent
 - Wrap tool and LLM paths at the correct framework boundary
 - Keep the tracked patch artifact minimal and reproducible
 

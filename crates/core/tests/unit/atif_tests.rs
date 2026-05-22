@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for atif in the NeMo Flow core crate.
+//! Unit tests for atif in the NeMo Relay core crate.
 
 use super::*;
 use crate::api::event::{
@@ -1296,7 +1296,7 @@ fn test_step_extra_invocation_timestamps() {
     // end must be >= start
     assert!(inv.end_timestamp.unwrap() >= inv.start_timestamp.unwrap());
     assert_eq!(inv.invocation_id, Some(llm_uuid.to_string()));
-    assert_eq!(inv.framework, Some("nemo_flow".to_string()));
+    assert_eq!(inv.framework, Some("nemo_relay".to_string()));
 }
 
 #[test]

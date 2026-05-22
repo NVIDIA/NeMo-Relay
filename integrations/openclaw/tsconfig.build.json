@@ -7,10 +7,5 @@
     "sourceMap": false,
     "outDir": "dist"
   },
-  "exclude": [
-    "test/**",
-    "src/**/*.test.ts",
-    ".test-dist/**",
-    "dist/**"
-  ]
+  "exclude": ["test/**", "src/**/*.test.ts", ".test-dist/**", "dist/**"]
 }

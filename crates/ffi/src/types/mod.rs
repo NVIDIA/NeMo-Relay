@@ -7,27 +7,28 @@
 //! and free functions for all types that cross the C FFI boundary. Each opaque
 //! struct wraps a corresponding core type and is heap-allocated; the C consumer
 //! sees only an opaque pointer. All returned C strings must be freed with
-//! [`crate::convert::nemo_flow_string_free`], and all handles must be freed
-//! with their corresponding `nemo_flow_*_free` function.
+//! [`crate::convert::nemo_relay_string_free`], and all handles must be freed
+//! with their corresponding `nemo_relay_*_free` function.
 
 use libc::c_char;
-use nemo_flow::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
-use nemo_flow::plugin::PluginRegistrationContext;
+use nemo_relay::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
+use nemo_relay::plugin::PluginRegistrationContext;
 use serde_json::Value as Json;
 
-use nemo_flow::api::event::Event;
+use nemo_relay::api::event::Event;
 #[cfg(test)]
-use nemo_flow::api::llm::LlmAttributes;
-use nemo_flow::api::llm::{LlmHandle, LlmRequest};
+use nemo_relay::api::llm::LlmAttributes;
+use nemo_relay::api::llm::{LlmHandle, LlmRequest};
 #[cfg(test)]
-use nemo_flow::api::scope::ScopeAttributes;
-use nemo_flow::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::api::scope::ScopeAttributes;
+use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 #[cfg(test)]
-use nemo_flow::api::tool::ToolAttributes;
-use nemo_flow::api::tool::ToolHandle;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::api::tool::ToolHandle;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_c_string, str_to_c_string};
+use crate::error::set_last_error;
 #[cfg(test)]
 use crate::{api, convert};
 
@@ -51,31 +52,31 @@ pub struct FfiScopeStack(pub ScopeStackHandle);
 /// Opaque handle to a captured thread-local scope stack binding.
 pub struct FfiThreadScopeStackBinding(pub ThreadScopeStackBinding);
 /// Opaque ATIF exporter handle.
-pub struct FfiAtifExporter(pub nemo_flow::observability::atif::AtifExporter);
+pub struct FfiAtifExporter(pub nemo_relay::observability::atif::AtifExporter);
 /// Opaque ATOF JSONL exporter handle.
-pub struct FfiAtofExporter(pub nemo_flow::observability::atof::AtofExporter);
+pub struct FfiAtofExporter(pub nemo_relay::observability::atof::AtofExporter);
 /// Opaque OpenTelemetry subscriber handle.
-pub struct FfiOpenTelemetrySubscriber(pub nemo_flow::observability::otel::OpenTelemetrySubscriber);
+pub struct FfiOpenTelemetrySubscriber(pub nemo_relay::observability::otel::OpenTelemetrySubscriber);
 /// Opaque OpenInference subscriber handle.
 pub struct FfiOpenInferenceSubscriber(
-    pub nemo_flow::observability::openinference::OpenInferenceSubscriber,
+    pub nemo_relay::observability::openinference::OpenInferenceSubscriber,
 );
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
-/// `nemo_flow::plugin::PluginRegistrationContext`, not an owned heap allocation.
+/// `nemo_relay::plugin::PluginRegistrationContext`, not an owned heap allocation.
 /// It is only valid for the duration of the plugin registration callback that receives
 /// it. C callers must not store the pointer, use it after the callback returns, or attempt to
 /// free or drop it.
 ///
-/// There is intentionally no `nemo_flow_plugin_context_free` function because this FFI
+/// There is intentionally no `nemo_relay_plugin_context_free` function because this FFI
 /// wrapper does not own the underlying registration context.
 pub struct FfiPluginContext(pub *mut PluginRegistrationContext);
 
 /// Opaque handle carrying both request and response codec trait objects.
 ///
-/// Created by `nemo_flow_openai_chat_codec_new` (and similar constructors).
-/// Freed by `nemo_flow_codec_free`. The handle carries two `Arc`s pointing
+/// Created by `nemo_relay_openai_chat_codec_new` (and similar constructors).
+/// Freed by `nemo_relay_codec_free`. The handle carries two `Arc`s pointing
 /// to the same underlying codec instance: one for the `LlmCodec` trait and
 /// one for the `LlmResponseCodec` trait.
 pub struct FfiCodecHandle {
@@ -91,7 +92,7 @@ pub struct FfiCodecHandle {
 /// The type of scope in the agent execution hierarchy.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
-pub enum NemoFlowScopeType {
+pub enum NemoRelayScopeType {
     /// Top-level agent scope.
     Agent = 0,
     /// Generic function scope.
@@ -116,38 +117,38 @@ pub enum NemoFlowScopeType {
     Unknown = 10,
 }
 
-impl From<NemoFlowScopeType> for ScopeType {
-    fn from(v: NemoFlowScopeType) -> Self {
+impl From<NemoRelayScopeType> for ScopeType {
+    fn from(v: NemoRelayScopeType) -> Self {
         match v {
-            NemoFlowScopeType::Agent => ScopeType::Agent,
-            NemoFlowScopeType::Function => ScopeType::Function,
-            NemoFlowScopeType::Tool => ScopeType::Tool,
-            NemoFlowScopeType::Llm => ScopeType::Llm,
-            NemoFlowScopeType::Retriever => ScopeType::Retriever,
-            NemoFlowScopeType::Embedder => ScopeType::Embedder,
-            NemoFlowScopeType::Reranker => ScopeType::Reranker,
-            NemoFlowScopeType::Guardrail => ScopeType::Guardrail,
-            NemoFlowScopeType::Evaluator => ScopeType::Evaluator,
-            NemoFlowScopeType::Custom => ScopeType::Custom,
-            NemoFlowScopeType::Unknown => ScopeType::Unknown,
+            NemoRelayScopeType::Agent => ScopeType::Agent,
+            NemoRelayScopeType::Function => ScopeType::Function,
+            NemoRelayScopeType::Tool => ScopeType::Tool,
+            NemoRelayScopeType::Llm => ScopeType::Llm,
+            NemoRelayScopeType::Retriever => ScopeType::Retriever,
+            NemoRelayScopeType::Embedder => ScopeType::Embedder,
+            NemoRelayScopeType::Reranker => ScopeType::Reranker,
+            NemoRelayScopeType::Guardrail => ScopeType::Guardrail,
+            NemoRelayScopeType::Evaluator => ScopeType::Evaluator,
+            NemoRelayScopeType::Custom => ScopeType::Custom,
+            NemoRelayScopeType::Unknown => ScopeType::Unknown,
         }
     }
 }
 
-impl From<ScopeType> for NemoFlowScopeType {
+impl From<ScopeType> for NemoRelayScopeType {
     fn from(v: ScopeType) -> Self {
         match v {
-            ScopeType::Agent => NemoFlowScopeType::Agent,
-            ScopeType::Function => NemoFlowScopeType::Function,
-            ScopeType::Tool => NemoFlowScopeType::Tool,
-            ScopeType::Llm => NemoFlowScopeType::Llm,
-            ScopeType::Retriever => NemoFlowScopeType::Retriever,
-            ScopeType::Embedder => NemoFlowScopeType::Embedder,
-            ScopeType::Reranker => NemoFlowScopeType::Reranker,
-            ScopeType::Guardrail => NemoFlowScopeType::Guardrail,
-            ScopeType::Evaluator => NemoFlowScopeType::Evaluator,
-            ScopeType::Custom => NemoFlowScopeType::Custom,
-            ScopeType::Unknown => NemoFlowScopeType::Unknown,
+            ScopeType::Agent => NemoRelayScopeType::Agent,
+            ScopeType::Function => NemoRelayScopeType::Function,
+            ScopeType::Tool => NemoRelayScopeType::Tool,
+            ScopeType::Llm => NemoRelayScopeType::Llm,
+            ScopeType::Retriever => NemoRelayScopeType::Retriever,
+            ScopeType::Embedder => NemoRelayScopeType::Embedder,
+            ScopeType::Reranker => NemoRelayScopeType::Reranker,
+            ScopeType::Guardrail => NemoRelayScopeType::Guardrail,
+            ScopeType::Evaluator => NemoRelayScopeType::Evaluator,
+            ScopeType::Custom => NemoRelayScopeType::Custom,
+            ScopeType::Unknown => NemoRelayScopeType::Unknown,
         }
     }
 }
@@ -159,9 +160,9 @@ impl From<ScopeType> for NemoFlowScopeType {
 /// Free a scope handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_free(ptr: *mut FfiScopeHandle) {
+pub unsafe extern "C" fn nemo_relay_scope_handle_free(ptr: *mut FfiScopeHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -170,9 +171,9 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_free(ptr: *mut FfiScopeHandle) {
 /// Free a tool handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_handle_free(ptr: *mut FfiToolHandle) {
+pub unsafe extern "C" fn nemo_relay_tool_handle_free(ptr: *mut FfiToolHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -181,9 +182,9 @@ pub unsafe extern "C" fn nemo_flow_tool_handle_free(ptr: *mut FfiToolHandle) {
 /// Free an LLM handle previously returned by the runtime.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_handle_free(ptr: *mut FfiLLMHandle) {
+pub unsafe extern "C" fn nemo_relay_llm_handle_free(ptr: *mut FfiLLMHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -192,9 +193,9 @@ pub unsafe extern "C" fn nemo_flow_llm_handle_free(ptr: *mut FfiLLMHandle) {
 /// Free an LLM request object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_request_free(ptr: *mut FfiLLMRequest) {
+pub unsafe extern "C" fn nemo_relay_llm_request_free(ptr: *mut FfiLLMRequest) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
@@ -203,67 +204,67 @@ pub unsafe extern "C" fn nemo_flow_llm_request_free(ptr: *mut FfiLLMRequest) {
 /// Free an event object.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by an `nemo_flow_*` function, or null.
+/// `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_free(ptr: *mut FfiEvent) {
+pub unsafe extern "C" fn nemo_relay_event_free(ptr: *mut FfiEvent) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free a scope stack handle previously returned by `nemo_flow_scope_stack_create`.
+/// Free a scope stack handle previously returned by `nemo_relay_scope_stack_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_flow_scope_stack_create`, or null.
+/// `ptr` must be a valid pointer returned by `nemo_relay_scope_stack_create`, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_stack_free(ptr: *mut FfiScopeStack) {
+pub unsafe extern "C" fn nemo_relay_scope_stack_free(ptr: *mut FfiScopeStack) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free an ATIF exporter handle previously returned by `nemo_flow_atif_exporter_create`.
+/// Free an ATIF exporter handle previously returned by `nemo_relay_atif_exporter_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_flow_atif_exporter_create`, or null.
+/// `ptr` must be a valid pointer returned by `nemo_relay_atif_exporter_create`, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atif_exporter_free(ptr: *mut FfiAtifExporter) {
+pub unsafe extern "C" fn nemo_relay_atif_exporter_free(ptr: *mut FfiAtifExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
-/// Free an ATOF JSONL exporter handle previously returned by `nemo_flow_atof_exporter_create`.
+/// Free an ATOF JSONL exporter handle previously returned by `nemo_relay_atof_exporter_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_flow_atof_exporter_create`, or null.
+/// `ptr` must be a valid pointer returned by `nemo_relay_atof_exporter_create`, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_free(ptr: *mut FfiAtofExporter) {
+pub unsafe extern "C" fn nemo_relay_atof_exporter_free(ptr: *mut FfiAtofExporter) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
 /// Free an OpenTelemetry subscriber handle previously returned by
-/// `nemo_flow_otel_subscriber_create`.
+/// `nemo_relay_otel_subscriber_create`.
 ///
 /// # Safety
-/// `ptr` must be a valid pointer returned by `nemo_flow_otel_subscriber_create`, or null.
+/// `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTelemetrySubscriber) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }
 }
 
 /// Free an OpenInference subscriber handle previously returned by
-/// `nemo_flow_openinference_subscriber_create`.
+/// `nemo_relay_openinference_subscriber_create`.
 ///
 /// # Safety
 /// `ptr` must be a valid pointer returned by
-/// `nemo_flow_openinference_subscriber_create`, or null.
+/// `nemo_relay_openinference_subscriber_create`, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_openinference_subscriber_free(
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_free(
     ptr: *mut FfiOpenInferenceSubscriber,
 ) {
     if !ptr.is_null() {
@@ -272,13 +273,13 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_free(
 }
 
 /// Free a codec handle previously returned by one of the codec constructor
-/// functions (`nemo_flow_openai_chat_codec_new`, etc.).
+/// functions (`nemo_relay_openai_chat_codec_new`, etc.).
 ///
 /// # Safety
 /// `handle` must be a valid pointer returned by one of the codec constructor
 /// functions, or null. Double-free is undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_codec_free(handle: *mut FfiCodecHandle) {
+pub unsafe extern "C" fn nemo_relay_codec_free(handle: *mut FfiCodecHandle) {
     if !handle.is_null() {
         drop(unsafe { Box::from_raw(handle) });
     }
@@ -289,12 +290,12 @@ pub unsafe extern "C" fn nemo_flow_codec_free(handle: *mut FfiCodecHandle) {
 // ---------------------------------------------------------------------------
 
 /// Return the UUID of a scope handle as a C string. Caller must free the result
-/// with `nemo_flow_string_free`. Returns null if `ptr` is null.
+/// with `nemo_relay_string_free`. Returns null if `ptr` is null.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_uuid(ptr: *const FfiScopeHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_scope_handle_uuid(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -307,7 +308,7 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_uuid(ptr: *const FfiScopeHandle)
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_name(ptr: *const FfiScopeHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_scope_handle_name(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -319,11 +320,11 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_name(ptr: *const FfiScopeHandle)
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_scope_type(
+pub unsafe extern "C" fn nemo_relay_scope_handle_scope_type(
     ptr: *const FfiScopeHandle,
-) -> NemoFlowScopeType {
+) -> NemoRelayScopeType {
     if ptr.is_null() {
-        return NemoFlowScopeType::Unknown;
+        return NemoRelayScopeType::Unknown;
     }
     unsafe { &*ptr }.0.scope_type.into()
 }
@@ -333,7 +334,7 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_scope_type(
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_attributes(ptr: *const FfiScopeHandle) -> u32 {
+pub unsafe extern "C" fn nemo_relay_scope_handle_attributes(ptr: *const FfiScopeHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -341,12 +342,12 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_attributes(ptr: *const FfiScopeH
 }
 
 /// Return the parent scope UUID as a C string, or null if there is no parent.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_parent_uuid(
+pub unsafe extern "C" fn nemo_relay_scope_handle_parent_uuid(
     ptr: *const FfiScopeHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -359,12 +360,12 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_parent_uuid(
 }
 
 /// Return the scope data as a JSON C string, or null if no data is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_data(ptr: *const FfiScopeHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_scope_handle_data(ptr: *const FfiScopeHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -375,12 +376,12 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_data(ptr: *const FfiScopeHandle)
 }
 
 /// Return the scope metadata as a JSON C string, or null if no metadata is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiScopeHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_scope_handle_metadata(
+pub unsafe extern "C" fn nemo_relay_scope_handle_metadata(
     ptr: *const FfiScopeHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -401,7 +402,7 @@ pub unsafe extern "C" fn nemo_flow_scope_handle_metadata(
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_handle_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_tool_handle_uuid(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -413,7 +414,7 @@ pub unsafe extern "C" fn nemo_flow_tool_handle_uuid(ptr: *const FfiToolHandle) -
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_handle_name(ptr: *const FfiToolHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_tool_handle_name(ptr: *const FfiToolHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -425,7 +426,7 @@ pub unsafe extern "C" fn nemo_flow_tool_handle_name(ptr: *const FfiToolHandle) -
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_handle_attributes(ptr: *const FfiToolHandle) -> u32 {
+pub unsafe extern "C" fn nemo_relay_tool_handle_attributes(ptr: *const FfiToolHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -433,12 +434,12 @@ pub unsafe extern "C" fn nemo_flow_tool_handle_attributes(ptr: *const FfiToolHan
 }
 
 /// Return the parent scope UUID of a tool handle, or null if none.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiToolHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_tool_handle_parent_uuid(
+pub unsafe extern "C" fn nemo_relay_tool_handle_parent_uuid(
     ptr: *const FfiToolHandle,
 ) -> *mut c_char {
     if ptr.is_null() {
@@ -459,7 +460,7 @@ pub unsafe extern "C" fn nemo_flow_tool_handle_parent_uuid(
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_handle_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_llm_handle_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -471,7 +472,7 @@ pub unsafe extern "C" fn nemo_flow_llm_handle_uuid(ptr: *const FfiLLMHandle) -> 
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_handle_name(ptr: *const FfiLLMHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_llm_handle_name(ptr: *const FfiLLMHandle) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -483,7 +484,7 @@ pub unsafe extern "C" fn nemo_flow_llm_handle_name(ptr: *const FfiLLMHandle) -> 
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_handle_attributes(ptr: *const FfiLLMHandle) -> u32 {
+pub unsafe extern "C" fn nemo_relay_llm_handle_attributes(ptr: *const FfiLLMHandle) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -491,12 +492,14 @@ pub unsafe extern "C" fn nemo_flow_llm_handle_attributes(ptr: *const FfiLLMHandl
 }
 
 /// Return the parent scope UUID of an LLM handle, or null if none.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiLLMHandle` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_handle_parent_uuid(ptr: *const FfiLLMHandle) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_llm_handle_parent_uuid(
+    ptr: *const FfiLLMHandle,
+) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -511,7 +514,7 @@ pub unsafe extern "C" fn nemo_flow_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 // ---------------------------------------------------------------------------
 
 /// Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest`
-/// that must be freed with `nemo_flow_llm_request_free`. Returns null on
+/// that must be freed with `nemo_relay_llm_request_free`. Returns null on
 /// invalid input.
 ///
 /// # Parameters
@@ -521,7 +524,7 @@ pub unsafe extern "C" fn nemo_flow_llm_handle_parent_uuid(ptr: *const FfiLLMHand
 /// # Safety
 /// All string arguments must be valid null-terminated C strings or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_request_new(
+pub unsafe extern "C" fn nemo_relay_llm_request_new(
     headers_json: *const c_char,
     content_json: *const c_char,
 ) -> *mut FfiLLMRequest {
@@ -539,7 +542,7 @@ pub unsafe extern "C" fn nemo_flow_llm_request_new(
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_request_headers(ptr: *const FfiLLMRequest) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_llm_request_headers(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -551,7 +554,7 @@ pub unsafe extern "C" fn nemo_flow_llm_request_headers(ptr: *const FfiLLMRequest
 /// # Safety
 /// `ptr` must be a valid `FfiLLMRequest` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_llm_request_content(ptr: *const FfiLLMRequest) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -567,7 +570,7 @@ pub unsafe extern "C" fn nemo_flow_llm_request_content(ptr: *const FfiLLMRequest
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_uuid(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -575,12 +578,12 @@ pub unsafe extern "C" fn nemo_flow_event_uuid(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the name of an event as a C string, or null if unnamed.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_name(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_name(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -588,16 +591,35 @@ pub unsafe extern "C" fn nemo_flow_event_name(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the event discriminator as a C string.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_kind(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_kind(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
     str_to_c_string(unsafe { &*ptr }.0.kind())
+}
+
+/// Return the canonical subscriber event JSON as a C string.
+/// Caller must free the result with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid `FfiEvent` pointer or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_event_json(ptr: *const FfiEvent) -> *mut c_char {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    match unsafe { &*ptr }.0.try_to_json_value() {
+        Ok(value) => json_to_c_string(&value),
+        Err(error) => {
+            set_last_error(&error.to_string());
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Return the ATOF version as a C string.
@@ -605,7 +627,7 @@ pub unsafe extern "C" fn nemo_flow_event_kind(ptr: *const FfiEvent) -> *mut c_ch
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_atof_version(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_atof_version(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -620,13 +642,13 @@ pub unsafe extern "C" fn nemo_flow_event_atof_version(ptr: *const FfiEvent) -> *
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_scope_category(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_scope_category(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
     match unsafe { &*ptr }.0.scope_category() {
-        Some(nemo_flow::api::event::ScopeCategory::Start) => str_to_c_string("start"),
-        Some(nemo_flow::api::event::ScopeCategory::End) => str_to_c_string("end"),
+        Some(nemo_relay::api::event::ScopeCategory::Start) => str_to_c_string("start"),
+        Some(nemo_relay::api::event::ScopeCategory::End) => str_to_c_string("end"),
         None => std::ptr::null_mut(),
     }
 }
@@ -636,7 +658,7 @@ pub unsafe extern "C" fn nemo_flow_event_scope_category(ptr: *const FfiEvent) ->
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_category(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_category(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -651,7 +673,7 @@ pub unsafe extern "C" fn nemo_flow_event_category(ptr: *const FfiEvent) -> *mut 
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_attributes_json(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_attributes_json(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -666,7 +688,7 @@ pub unsafe extern "C" fn nemo_flow_event_attributes_json(ptr: *const FfiEvent) -
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_category_profile(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_category_profile(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -685,7 +707,7 @@ pub unsafe extern "C" fn nemo_flow_event_category_profile(ptr: *const FfiEvent) 
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_data_schema(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_data_schema(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -703,7 +725,7 @@ pub unsafe extern "C" fn nemo_flow_event_data_schema(ptr: *const FfiEvent) -> *m
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_attributes(ptr: *const FfiEvent) -> u32 {
+pub unsafe extern "C" fn nemo_relay_event_attributes(ptr: *const FfiEvent) -> u32 {
     if ptr.is_null() {
         return 0;
     }
@@ -711,12 +733,12 @@ pub unsafe extern "C" fn nemo_flow_event_attributes(ptr: *const FfiEvent) -> u32
 }
 
 /// Return the event data as a JSON C string, or null if no data is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_data(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_data(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -727,12 +749,12 @@ pub unsafe extern "C" fn nemo_flow_event_data(ptr: *const FfiEvent) -> *mut c_ch
 }
 
 /// Return the event metadata as a JSON C string, or null if no metadata is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_metadata(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_metadata(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -747,7 +769,7 @@ pub unsafe extern "C" fn nemo_flow_event_metadata(ptr: *const FfiEvent) -> *mut 
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_timestamp(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_timestamp(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -755,12 +777,12 @@ pub unsafe extern "C" fn nemo_flow_event_timestamp(ptr: *const FfiEvent) -> *mut
 }
 
 /// Return the event input as a JSON C string, or null if no input is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_input(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_input(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -771,12 +793,12 @@ pub unsafe extern "C" fn nemo_flow_event_input(ptr: *const FfiEvent) -> *mut c_c
 }
 
 /// Return the event output as a JSON C string, or null if no output is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_output(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_output(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -787,12 +809,12 @@ pub unsafe extern "C" fn nemo_flow_event_output(ptr: *const FfiEvent) -> *mut c_
 }
 
 /// Return the event model name as a C string, or null if no model name is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_model_name(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -803,12 +825,12 @@ pub unsafe extern "C" fn nemo_flow_event_model_name(ptr: *const FfiEvent) -> *mu
 }
 
 /// Return the event tool call ID as a C string, or null if no tool call ID is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_tool_call_id(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -819,12 +841,12 @@ pub unsafe extern "C" fn nemo_flow_event_tool_call_id(ptr: *const FfiEvent) -> *
 }
 
 /// Return the event parent UUID as a C string, or null if no parent UUID is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_parent_uuid(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -835,12 +857,12 @@ pub unsafe extern "C" fn nemo_flow_event_parent_uuid(ptr: *const FfiEvent) -> *m
 }
 
 /// Return the event scope type as a C string, or null if no scope type is set.
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_scope_type(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -852,12 +874,12 @@ pub unsafe extern "C" fn nemo_flow_event_scope_type(ptr: *const FfiEvent) -> *mu
 
 /// Return the annotated request from an LLM start event as a JSON C string,
 /// or null if not available (non-LLM events, or no codec was active).
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_annotated_request(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_annotated_request(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -872,12 +894,12 @@ pub unsafe extern "C" fn nemo_flow_event_annotated_request(ptr: *const FfiEvent)
 
 /// Return the annotated response from an LLM end event as a JSON C string,
 /// or null if not available (non-LLM events, or no response codec was active).
-/// Caller must free the result with `nemo_flow_string_free`.
+/// Caller must free the result with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `ptr` must be a valid `FfiEvent` pointer or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_event_annotated_response(ptr: *const FfiEvent) -> *mut c_char {
+pub unsafe extern "C" fn nemo_relay_event_annotated_response(ptr: *const FfiEvent) -> *mut c_char {
     if ptr.is_null() {
         return std::ptr::null_mut();
     }

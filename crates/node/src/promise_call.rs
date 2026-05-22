@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Promise-aware JS function calling for NeMo Flow NAPI bindings.
+//! Promise-aware JS function calling for NeMo Relay NAPI bindings.
 //!
 //! This module wraps JS middleware callbacks so Rust can call them from any thread
 //! and await either synchronous return values or Promise-returning callbacks.
@@ -20,7 +20,7 @@ use napi::threadsafe_function::{ThreadSafeCallContext, ThreadsafeFunction};
 use napi::{Env, JsFunction, JsUnknown, NapiRaw, NapiValue};
 use serde_json::Value as Json;
 
-use nemo_flow::error::{FlowError, Result as FlowResult};
+use nemo_relay::error::{FlowError, Result as FlowResult};
 
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
@@ -101,20 +101,22 @@ fn undefined_to_unknown(env: &Env) -> napi::Result<JsUnknown> {
 
 fn build_next_unknown(env: &Env, next: NextFn) -> napi::Result<JsUnknown> {
     let next_fn = match next {
-        NextFn::Json(next) => env.create_function_from_closure("__nemo_flow_next", move |ctx| {
-            let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
-            let next = next.clone();
-            ctx.env.execute_tokio_future(
-                async move {
-                    next(arg)
-                        .await
-                        .map_err(|e| napi::Error::from_reason(e.to_string()))
-                },
-                |_env, value| Ok(value),
-            )
-        })?,
+        NextFn::Json(next) => {
+            env.create_function_from_closure("__nemo_relay_next", move |ctx| {
+                let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
+                let next = next.clone();
+                ctx.env.execute_tokio_future(
+                    async move {
+                        next(arg)
+                            .await
+                            .map_err(|e| napi::Error::from_reason(e.to_string()))
+                    },
+                    |_env, value| Ok(value),
+                )
+            })?
+        }
         NextFn::Stream(next) => {
-            env.create_function_from_closure("__nemo_flow_next", move |ctx| {
+            env.create_function_from_closure("__nemo_relay_next", move |ctx| {
                 let arg = ctx.get::<Json>(0).unwrap_or(Json::Null);
                 let next = next.clone();
                 ctx.env.execute_tokio_future(
@@ -137,13 +139,13 @@ fn build_completion_unknowns(
     completion: CallCompletion,
 ) -> napi::Result<(JsUnknown, JsUnknown)> {
     let resolve_completion = completion.clone();
-    let resolve = env.create_function_from_closure("__nemo_flow_resolve", move |ctx| {
+    let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
         let value = ctx.get::<Json>(0).unwrap_or(Json::Null);
         resolve_completion.send(Ok(value));
         ctx.env.get_undefined()
     })?;
 
-    let reject = env.create_function_from_closure("__nemo_flow_reject", move |ctx| {
+    let reject = env.create_function_from_closure("__nemo_relay_reject", move |ctx| {
         let message = rejection_message(
             ctx.get::<String>(0),
             ctx.get::<napi::JsObject>(0)
@@ -162,7 +164,7 @@ fn build_completion_unknowns(
 
 fn create_promise_wrapper(env: &Env, callable: &JsFunction) -> napi::Result<JsFunction> {
     let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nemo_flow_promise_wrapper(error, arg0, next, resolve, reject) {
+        r#"((fn) => function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
   if (error != null) {
     reject(error);
     return;

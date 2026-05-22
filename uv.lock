@@ -1314,7 +1314,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nemo-flow"
+name = "nemo-relay"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1368,9 +1368,9 @@ requires-dist = [
     { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'", specifier = "~=1.0" },
     { name = "langgraph", marker = "extra == 'langchain'" },
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.2.0,<2.0.0" },
-    { name = "nemo-flow", extras = ["langchain"], marker = "extra == 'langchain-nvidia'" },
-    { name = "nemo-flow", extras = ["langchain"], marker = "extra == 'langgraph'" },
-    { name = "nemo-flow", extras = ["langgraph"], marker = "extra == 'deepagents'" },
+    { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langchain-nvidia'" },
+    { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langgraph'" },
+    { name = "nemo-relay", extras = ["langgraph"], marker = "extra == 'deepagents'" },
 ]
 provides-extras = ["deepagents", "langchain", "langchain-nvidia", "langgraph"]
 

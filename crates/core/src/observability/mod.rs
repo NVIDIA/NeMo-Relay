@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Optional observability integrations for NeMo Flow Core.
+//! Optional observability integrations for NeMo Relay Core.
 
 #[cfg(test)]
 use std::sync::Mutex;

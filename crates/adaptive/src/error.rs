@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Error types for the nemo-flow-adaptive crate.
+//! Error types for the nemo-relay-adaptive crate.
 
-use nemo_flow::plugin::PluginError;
+use nemo_relay::plugin::PluginError;
 use thiserror::Error;
 
-/// The error type for all nemo-flow-adaptive operations.
+/// The error type for all nemo-relay-adaptive operations.
 #[derive(Debug, Error)]
 pub enum AdaptiveError {
     /// Configuration validation failed.
@@ -29,7 +29,7 @@ pub enum AdaptiveError {
     #[error("internal error: {0}")]
     Internal(String),
 
-    /// A registration with the NeMo Flow runtime failed.
+    /// A registration with the NeMo Relay runtime failed.
     #[error("registration failed: {0}")]
     RegistrationFailed(String),
 
@@ -61,7 +61,7 @@ impl From<PluginError> for AdaptiveError {
     }
 }
 
-/// A specialized [`Result`](std::result::Result) type for nemo-flow-adaptive operations.
+/// A specialized [`Result`](std::result::Result) type for nemo-relay-adaptive operations.
 pub type Result<T> = std::result::Result<T, AdaptiveError>;
 
 #[cfg(test)]

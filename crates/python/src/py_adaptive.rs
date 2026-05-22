@@ -7,13 +7,13 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use nemo_flow::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_flow::codec::response::Usage;
-use nemo_flow_adaptive::acg::{
+use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
+use nemo_relay::codec::response::Usage;
+use nemo_relay_adaptive::acg::{
     AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
 };
-use nemo_flow_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
-use nemo_flow_adaptive::{AdaptiveConfig, AdaptiveRuntime};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime};
 use pyo3::prelude::*;
 use uuid::Uuid;
 
@@ -28,7 +28,7 @@ pub struct PyAdaptiveRuntime {
 enum PyAdaptiveRuntimeState {
     Pending {
         config: AdaptiveConfig,
-        report: nemo_flow::plugin::ConfigReport,
+        report: nemo_relay::plugin::ConfigReport,
     },
     Ready(AdaptiveRuntime),
 }
@@ -236,13 +236,13 @@ impl PyAdaptiveRuntime {
 
 fn validate_adaptive_config_or_err(
     config: &AdaptiveConfig,
-) -> PyResult<nemo_flow::plugin::ConfigReport> {
+) -> PyResult<nemo_relay::plugin::ConfigReport> {
     let report = AdaptiveRuntime::validate_config(config);
     if report.has_errors() {
         let joined = report
             .diagnostics
             .iter()
-            .filter(|diag| diag.level == nemo_flow::plugin::DiagnosticLevel::Error)
+            .filter(|diag| diag.level == nemo_relay::plugin::DiagnosticLevel::Error)
             .map(|diag| diag.message.as_str())
             .collect::<Vec<_>>()
             .join("; ");

@@ -27,7 +27,7 @@ rust_package:
   - 'crates/ffi/Cargo.toml'
   - 'crates/ffi/build.rs'
   - 'crates/ffi/cbindgen.toml'
-  - 'crates/ffi/nemo_flow.h'
+  - 'crates/ffi/nemo_relay.h'
   - 'crates/ffi/src/**'
   - 'justfile'
   - 'rust-toolchain.toml'
@@ -63,7 +63,21 @@ python_package:
   - 'crates/python/src/**'
   - 'justfile'
   - 'pyproject.toml'
-  - 'python/nemo_flow/**'
+  - 'python/nemo_relay/**'
+  - 'rust-toolchain.toml'
+  - 'uv.lock'
+
+python_integration_langchain:
+  # Includes LangGraph and DeepAgents integrations as well
+  - 'justfile'
+  - 'pyproject.toml'
+  - 'python/nemo_relay/integrations/deepagents/**'
+  - 'python/nemo_relay/integrations/langchain/**'
+  - 'python/nemo_relay/integrations/langgraph/**'
+  - 'python/tests/integrations/conftest.py'
+  - 'python/tests/integrations/deepagents_tests/**'
+  - 'python/tests/integrations/langchain_tests/**'
+  - 'python/tests/integrations/langgraph_tests/**'
   - 'rust-toolchain.toml'
   - 'uv.lock'
 
@@ -109,7 +123,7 @@ docs:
   - 'crates/**/*.md'
   - 'fern/**'
   - 'integrations/coding-agents/**'
-  - 'python/nemo_flow/**'
+  - 'python/nemo_relay/**'
   - 'scripts/build-docs.sh'
   - 'scripts/docs/**'
 
@@ -125,7 +139,7 @@ go:
   - 'crates/ffi/Cargo.toml'
   - 'crates/ffi/build.rs'
   - 'crates/ffi/cbindgen.toml'
-  - 'crates/ffi/nemo_flow.h'
+  - 'crates/ffi/nemo_relay.h'
   - 'crates/ffi/src/**'
   - 'go/**/!(*.md)'
 

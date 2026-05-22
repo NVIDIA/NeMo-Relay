@@ -11,9 +11,9 @@ import { pkgDir, testsJsDir, wasm } from './test_support.mjs';
 
 test('WebAssembly generated package exposes the expected package metadata', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-  assert.equal(packageJson.name, 'nemo-flow-wasm');
-  assert.equal(packageJson.types, 'nemo_flow_wasm.d.ts');
-  assert.equal(packageJson.exports['.'].types, './nemo_flow_wasm.d.ts');
+  assert.equal(packageJson.name, 'nemo-relay-wasm');
+  assert.equal(packageJson.types, 'nemo_relay_wasm.d.ts');
+  assert.equal(packageJson.exports['.'].types, './nemo_relay_wasm.d.ts');
   assert.equal(packageJson.exports['./typed'].default, './typed.js');
   assert.equal(packageJson.exports['./plugin'].default, './plugin.js');
   assert.equal(packageJson.exports['./adaptive'].default, './adaptive.js');
@@ -25,7 +25,7 @@ test('WebAssembly generated package exposes the expected package metadata', () =
 test('WebAssembly generated package includes the expected wrapper files', () => {
   const expectedFiles = [
     'index.js',
-    'nemo_flow_wasm.d.ts',
+    'nemo_relay_wasm.d.ts',
     'typed.js',
     'typed.d.ts',
     'plugin.js',
@@ -41,21 +41,21 @@ test('WebAssembly generated package includes the expected wrapper files', () => 
 
 test('WebAssembly package keeps the generated root declaration as the source of truth for exports metadata', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-  assert.equal(packageJson.types, 'nemo_flow_wasm.d.ts');
-  assert.equal(packageJson.exports['.'].types, './nemo_flow_wasm.d.ts');
+  assert.equal(packageJson.types, 'nemo_relay_wasm.d.ts');
+  assert.equal(packageJson.exports['.'].types, './nemo_relay_wasm.d.ts');
 });
 
 test('WebAssembly package root declaration contains the documented public types and exports', () => {
   const indexJs = fs.readFileSync(path.join(pkgDir, 'index.js'), 'utf8');
-  const wasmDts = fs.readFileSync(path.join(pkgDir, 'nemo_flow_wasm.d.ts'), 'utf8');
+  const wasmDts = fs.readFileSync(path.join(pkgDir, 'nemo_relay_wasm.d.ts'), 'utf8');
 
   for (const typeName of ['Json', 'JsonObject', 'OpenTelemetryConfig', 'OpenInferenceConfig']) {
     assert.match(wasmDts, new RegExp(String.raw`export (type|interface) ${typeName}\b`));
   }
 
-  assert.match(indexJs, /nemo_flow_wasm\.js/);
+  assert.match(indexJs, /nemo_relay_wasm\.js/);
   for (const name of Object.keys(wasm)) {
-    assert.match(wasmDts, new RegExp(String.raw`\b${name}\b`), `expected ${name} in nemo_flow_wasm.d.ts`);
+    assert.match(wasmDts, new RegExp(String.raw`\b${name}\b`), `expected ${name} in nemo_relay_wasm.d.ts`);
   }
 });
 

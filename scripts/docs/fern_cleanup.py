@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""NeMo Flow-specific cleanup for generated Fern documentation."""
+"""NeMo Relay-specific cleanup for generated Fern documentation."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 from reference_common import quote_yaml_string
 
 UNSUPPORTED_OPTION_LINE = re.compile(r"^:(?:gutter|sync-group|sync|selected):(?:\s+.*)?$")
-GITHUB_BLOB_BASE = "https://github.com/NVIDIA/NeMo-Flow/blob/main"
+GITHUB_BLOB_BASE = "https://github.com/NVIDIA/NeMo-Relay/blob/main"
 
 # The Fern migration runs over pages that may have been produced from several
 # intermediate Sphinx layouts. Keep the old variants here so the cleanup remains
@@ -29,15 +29,15 @@ SUPPORT_API_REFERENCE_TEXT = (
     "Use the [Python Library Reference](/reference/api/python-library-reference),\n"
     "[Node.js Library Reference](/reference/api/nodejs-library-reference), and\n"
     "[Rust Library Reference](/reference/api/rust-library-reference) for generated\n"
-    "symbol-level documentation. The Rust reference includes `nemo-flow`,\n"
-    "`nemo-flow-adaptive`, and `nemo-flow-ffi`. For Go and WebAssembly surfaces, use\n"
+    "symbol-level documentation. The Rust reference includes `nemo-relay`,\n"
+    "`nemo-relay-adaptive`, and `nemo-relay-ffi`. For Go and WebAssembly surfaces, use\n"
     "the source directories, tests, and task-focused guides when you need exact\n"
     "behavior."
 )
 ASSISTANT_SYMBOL_REFERENCE_TEXT = (
     "For symbol-level work, assistants should use the source directories, tests, and\n"
     "the generated Python, Node.js, and Rust library references. For\n"
-    "repository-specific automation, use the NeMo Flow agent skills under `skills/`\n"
+    "repository-specific automation, use the NeMo Relay agent skills under `skills/`\n"
     "and keep examples aligned with the public docs."
 )
 REPO_FILE_LINK_REPLACEMENTS = {
@@ -191,19 +191,19 @@ def _rewrite_omitted_api_mentions(pages_dir: Path) -> int:
             ): SUPPORT_API_REFERENCE_TEXT,
             (
                 "For symbol-level work, assistants should use the generated Rust, Python, and\n"
-                "Node.js API references. For repository-specific automation, use the NeMo Flow\n"
+                "Node.js API references. For repository-specific automation, use the NeMo Relay\n"
                 "agent skills under `skills/` and keep examples aligned with the public docs."
             ): ASSISTANT_SYMBOL_REFERENCE_TEXT,
             (
                 "For symbol-level work, assistants should use the source directories, tests, and\n"
                 "the generated Python Library Reference. For repository-specific automation, use\n"
-                "the NeMo Flow agent skills under `skills/` and keep examples aligned with the\n"
+                "the NeMo Relay agent skills under `skills/` and keep examples aligned with the\n"
                 "public docs."
             ): ASSISTANT_SYMBOL_REFERENCE_TEXT,
             (
                 "For symbol-level work, assistants should use the source directories, tests, and\n"
                 "the generated Python and Node.js library references. For repository-specific\n"
-                "automation, use the NeMo Flow agent skills under `skills/` and keep examples\n"
+                "automation, use the NeMo Relay agent skills under `skills/` and keep examples\n"
                 "aligned with the public docs."
             ): ASSISTANT_SYMBOL_REFERENCE_TEXT,
         },
@@ -405,7 +405,7 @@ def main() -> None:
     tab_groups_changed = _repair_premature_tab_group_closes(pages_dir)
     changed = _remove_unsupported_directive_options(pages_dir)
     print(
-        f"NeMo Flow Fern cleanup updated {changed} page(s), "
+        f"NeMo Relay Fern cleanup updated {changed} page(s), "
         f"rewrote links in {links_changed} page(s), "
         f"added language tab metadata in {language_tabs_changed} page(s), "
         f"removed duplicate page headings in {headings_changed} page(s), "

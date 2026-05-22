@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::api::event::{BaseEvent, MarkEvent};
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
     current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
@@ -145,7 +145,7 @@ pub struct PushScopeParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::create_scope_handle`].
+/// Builder parameters for [`NemoRelayContextState::create_scope_handle`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateScopeHandleParams<'a> {
@@ -171,7 +171,7 @@ pub struct CreateScopeHandleParams<'a> {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
-/// Builder parameters for [`NemoFlowContextState::build_scope_end_event`].
+/// Builder parameters for [`NemoRelayContextState::build_scope_end_event`].
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct EndScopeHandleParams<'a> {
@@ -295,7 +295,7 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
         (handle, event, subscribers)
     };
     task_scope_push(handle.clone());
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(handle)
 }
 
@@ -353,7 +353,7 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     };
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }
 
@@ -406,6 +406,6 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
         ));
         (event, subscribers)
     };
-    NemoFlowContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }

@@ -14172,7 +14172,7 @@ MIT License
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE```
 
-## @types/node - 20.19.40
+## @types/node - 24.12.4
 **Repository URL**: https://github.com/DefinitelyTyped/DefinitelyTyped
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -26709,7 +26709,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## undici-types - 6.21.0
+## undici-types - 7.16.0
 **Repository URL**: https://github.com/nodejs/undici
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html

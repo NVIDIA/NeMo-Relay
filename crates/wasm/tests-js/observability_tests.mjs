@@ -17,16 +17,16 @@ test('WebAssembly observability wrappers expose helper defaults', () => {
   });
   assert.deepEqual(observability.atifConfig(), {
     enabled: false,
-    agent_name: 'NeMo Flow',
+    agent_name: 'NeMo Relay',
     model_name: 'unknown',
-    filename_template: 'nemo-flow-atif-{session_id}.json',
+    filename_template: 'nemo-relay-atif-{session_id}.json',
   });
   assert.deepEqual(observability.otlpConfig(), {
     enabled: false,
     transport: 'http_binary',
     headers: {},
     resource_attributes: {},
-    service_name: 'nemo-flow',
+    service_name: 'nemo-relay',
     timeout_millis: 3000,
   });
 });
@@ -51,9 +51,9 @@ test('WebAssembly observability wrappers build component specs and validate file
       },
       atif: {
         enabled: true,
-        agent_name: 'NeMo Flow',
+        agent_name: 'NeMo Relay',
         model_name: 'unknown',
-        filename_template: 'nemo-flow-atif-{session_id}.json',
+        filename_template: 'nemo-relay-atif-{session_id}.json',
       },
     },
   });
@@ -62,11 +62,8 @@ test('WebAssembly observability wrappers build component specs and validate file
     version: 1,
     components: [component],
   });
-  assert.deepEqual(
-    report.diagnostics.map((diagnostic) => [diagnostic.component, diagnostic.field]).sort(),
-    [
-      ['atif', 'enabled'],
-      ['atof', 'enabled'],
-    ],
-  );
+  assert.deepEqual(report.diagnostics.map((diagnostic) => [diagnostic.component, diagnostic.field]).sort(), [
+    ['atif', 'enabled'],
+    ['atof', 'enabled'],
+  ]);
 });

@@ -6,12 +6,12 @@
  *
  * OpenClaw currently exposes public hooks for request snapshots, assistant
  * outputs, message writes, and model-call timing as separate event streams. This
- * module correlates those signals into NeMo Flow LLM spans while staying on the
+ * module correlates those signals into NeMo Relay LLM spans while staying on the
  * public plugin API. The reconstruction is intentionally best-effort until
  * OpenClaw exposes a first-class provider-call lifecycle hook with a stable
  * call id, request, response, usage, and timing in one contract.
  */
-import type { NemoFlowHookBackendConfig } from "../config.js";
+import type { NemoRelayHookBackendConfig } from '../config.js';
 import type {
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
@@ -21,9 +21,9 @@ import type {
   PluginHookLlmOutputEvent,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
-} from "../openclaw-hook-types.js";
-import type { JsonObject as JsonRecord, JsonValue } from "nemo-flow-node/typed";
-import { emitMark, toJsonRecord, toJsonValue } from "./marks.js";
+} from '../openclaw-hook-types.js';
+import type { JsonObject as JsonRecord, JsonValue } from 'nemo-relay-node/typed';
+import { emitMark, toJsonRecord, toJsonValue } from './marks.js';
 import {
   evictExpiredCorrelationRecords,
   ensureSession,
@@ -34,14 +34,8 @@ import {
   type PendingLlmOutputRecord,
   type SessionManager,
   type SessionState,
-} from "./session.js";
-import {
-  llmKey,
-  modelTimingKey,
-  modelTimingLlmKey,
-  nowMicros,
-  startMicrosFromDuration,
-} from "./correlation.js";
+} from './session.js';
+import { llmKey, modelTimingKey, modelTimingLlmKey, nowMicros, startMicrosFromDuration } from './correlation.js';
 
 /**
  * Store one OpenClaw llm_input snapshot and replay it immediately if the matching
@@ -58,7 +52,7 @@ export function recordLlmInput(
     sessionKey: ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
-    source: "lazy_session",
+    source: 'lazy_session',
   });
   if (!session) {
     return;
@@ -79,7 +73,11 @@ export function recordLlmInput(
   const input = createInputRecord(session, event);
   insertBoundedRecord(manager.state.llmInputs, key, input, manager.config.correlation.maxRecordsPerKey);
 
-  const pending = shiftOldest(manager.state.llmOutputsPendingInput, key, (record) => record.sessionKey === session.sessionId);
+  const pending = shiftOldest(
+    manager.state.llmOutputsPendingInput,
+    key,
+    (record) => record.sessionKey === session.sessionId,
+  );
   if (!pending) {
     return;
   }
@@ -112,7 +110,7 @@ export function recordLlmOutput(
     sessionKey: ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
-    source: "lazy_session",
+    source: 'lazy_session',
   });
   if (!session) {
     return;
@@ -172,7 +170,7 @@ export function recordBeforeMessageWrite(
   }
 
   const message = isRecord(event.message) ? event.message : undefined;
-  if (!message || typeof message.role !== "string") {
+  if (!message || typeof message.role !== 'string') {
     return;
   }
   const recordedMessage = toJsonValue(message);
@@ -184,12 +182,12 @@ export function recordBeforeMessageWrite(
     session.messageWrites = [...historyMessages];
   }
 
-  if (message.role === "assistant") {
-    const provider = stringField(message, "provider");
-    const model = stringField(message, "model");
+  if (message.role === 'assistant') {
+    const provider = stringField(message, 'provider');
+    const model = stringField(message, 'model');
     const assistantTexts = extractTextBlocks(message);
     const assistantToolCalls = snapshotMessages(extractToolCalls(message));
-    const usage = "usage" in message ? toJsonValue(message.usage) : undefined;
+    const usage = 'usage' in message ? toJsonValue(message.usage) : undefined;
     if (provider && model && (assistantTexts.length > 0 || assistantToolCalls.length > 0 || usage !== undefined)) {
       session.assistantMessageWrites ??= [];
       session.assistantMessageWrites.push({
@@ -199,7 +197,7 @@ export function recordBeforeMessageWrite(
         assistantTexts,
         assistantToolCalls,
         historyMessages,
-        prompt: "",
+        prompt: '',
         observedAtMs: Date.now(),
         replayed: false,
         ...(usage === undefined ? {} : { usage }),
@@ -230,7 +228,7 @@ export function recordModelCallStarted(
     sessionKey: event.sessionKey ?? ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
-    source: "lazy_session",
+    source: 'lazy_session',
     timestamp: nowMs * 1000,
   });
   if (!session) {
@@ -271,7 +269,7 @@ export function recordModelCallEnded(
     sessionKey: event.sessionKey ?? ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
-    source: "lazy_session",
+    source: 'lazy_session',
     timestamp: startMicros,
   });
   if (!session) {
@@ -304,7 +302,12 @@ export function recordModelCallEnded(
   }
   insertBoundedRecord(
     manager.state.modelTimingsByLlmKey,
-    modelTimingLlmKey({ sessionId: session.sessionId, runId: event.runId, provider: event.provider, model: event.model }),
+    modelTimingLlmKey({
+      sessionId: session.sessionId,
+      runId: event.runId,
+      provider: event.provider,
+      model: event.model,
+    }),
     record,
     manager.config.correlation.maxRecordsPerKey,
   );
@@ -389,7 +392,7 @@ export function emitUnpairedModelCallTimingMarks(manager: SessionManager, sessio
       if (record.sessionKey !== session.sessionId || record.consumed || record.endedAtMs !== undefined) {
         continue;
       }
-      emitModelTimingMark(manager, session, "openclaw.model_call_timing_unpaired", record);
+      emitModelTimingMark(manager, session, 'openclaw.model_call_timing_unpaired', record);
       record.consumed = true;
     }
   }
@@ -407,19 +410,19 @@ export function emitUnpairedModelCallTimingMarks(manager: SessionManager, sessio
   if (unpairedEnded.length === 1) {
     const [record] = unpairedEnded;
     if (record) {
-      emitModelTimingMark(manager, session, "openclaw.model_call_timing_unpaired", record);
+      emitModelTimingMark(manager, session, 'openclaw.model_call_timing_unpaired', record);
     }
   } else if (unpairedEnded.length > 1) {
     emitModelTimingSummaryMark(manager, session, unpairedEnded);
   }
 }
 
-/** Build the request payload passed to NeMo Flow for a replayed LLM span. */
+/** Build the request payload passed to NeMo Relay for a replayed LLM span. */
 export function buildReplayLlmRequest(
   input: LlmInputRecord,
   output: PluginHookLlmOutputEvent,
-  config: NemoFlowHookBackendConfig,
-  source = "openclaw.hooks",
+  config: NemoRelayHookBackendConfig,
+  source = 'openclaw.hooks',
 ): JsonValue {
   const messages =
     config.capture.includePrompts && Array.isArray(input.historyMessages)
@@ -441,16 +444,16 @@ export function buildReplayLlmRequest(
   });
 }
 
-/** Build the response payload passed to NeMo Flow for a replayed LLM span. */
+/** Build the response payload passed to NeMo Relay for a replayed LLM span. */
 export function buildReplayLlmResponse(
   event: PluginHookLlmOutputEvent,
   timing: ModelCallRecord | undefined,
-  config: NemoFlowHookBackendConfig,
+  config: NemoRelayHookBackendConfig,
 ): JsonValue {
   const usage = mapUsage(event.usage);
   const assistantToolCallNames = toolCallNames(event.assistantToolCalls);
   return toJsonValue({
-    role: "assistant",
+    role: 'assistant',
     content: config.capture.includeResponses
       ? responseContent(event.assistantTexts, assistantToolCallNames)
       : undefined,
@@ -473,11 +476,7 @@ export function buildReplayLlmResponse(
 }
 
 /** Replay an output whose matching input never arrived before the grace timeout. */
-function replayExpiredPendingOutput(
-  manager: SessionManager,
-  key: string,
-  record: PendingLlmOutputRecord,
-): void {
+function replayExpiredPendingOutput(manager: SessionManager, key: string, record: PendingLlmOutputRecord): void {
   try {
     if (!removeRecord(manager.state.llmOutputsPendingInput, key, record)) {
       return;
@@ -501,21 +500,21 @@ function replayExpiredPendingOutput(
     manager.state.counters.replayErrors += 1;
     manager.logBoundedWarn(
       `llm_grace_timer_failed:${key}`,
-      `nemo-flow failed to replay pending llm_output after grace timer: ${error instanceof Error ? error.message : String(error)}`,
+      `nemo-relay failed to replay pending llm_output after grace timer: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
 
-/** Emit the actual NeMo Flow LLM span from correlated request, output, and timing data. */
+/** Emit the actual NeMo Relay LLM span from correlated request, output, and timing data. */
 function replayLlmOutput(params: {
   manager: SessionManager;
   event: PluginHookLlmOutputEvent;
   ctx: PluginHookAgentContext;
   input: LlmInputRecord;
   timing?: ModelCallRecord | undefined;
-  source?: "openclaw.llm_output" | "openclaw.before_message_write" | undefined;
+  source?: 'openclaw.llm_output' | 'openclaw.before_message_write' | undefined;
 }): void {
-  const { manager, event, ctx, input, timing, source = "openclaw.llm_output" } = params;
+  const { manager, event, ctx, input, timing, source = 'openclaw.llm_output' } = params;
   const observedEndMicros = nowMicros();
   const endMicros = timing?.endedAtMs === undefined ? observedEndMicros : timing.endedAtMs * 1000;
   const observedStartMicros = Math.min(input.observedAtMs * 1000, endMicros);
@@ -528,7 +527,7 @@ function replayLlmOutput(params: {
     sessionKey: ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
-    source: "lazy_session",
+    source: 'lazy_session',
     timestamp: startMicros,
   });
   if (!session) {
@@ -544,10 +543,10 @@ function replayLlmOutput(params: {
     provider: event.provider,
     model: event.model,
     callId: timing?.callId,
-    correlation: source === "openclaw.before_message_write" ? "fifo_model_call_timing" : undefined,
+    correlation: source === 'openclaw.before_message_write' ? 'fifo_model_call_timing' : undefined,
   });
 
-  manager.emitCapturedUnderSession("llm_output", session, () => {
+  manager.emitCapturedUnderSession('llm_output', session, () => {
     const handle = manager.nf.llmCall(
       event.provider,
       request,
@@ -561,7 +560,7 @@ function replayLlmOutput(params: {
     manager.nf.llmCallEnd(handle, response, null, metadata, endMicros);
     manager.state.counters.llmSpansReplayed += 1;
   });
-  if (source === "openclaw.llm_output") {
+  if (source === 'openclaw.llm_output') {
     incrementHookLlmOutputReplayCount(session, event.runId, manager.config.correlation.maxRecordsPerKey);
   }
 }
@@ -614,7 +613,7 @@ function replayAssistantMessageWrites(
         placeholderRequest: true,
       },
       timing,
-      source: "openclaw.before_message_write",
+      source: 'openclaw.before_message_write',
     });
     record.replayed = true;
     replayed += 1;
@@ -687,12 +686,12 @@ function emitModelTimingAmbiguousMark(
   event: PluginHookLlmOutputEvent,
   candidateCount: number,
 ): void {
-  manager.emitCapturedUnderSession("model_call_timing_ambiguous", session, () => {
+  manager.emitCapturedUnderSession('model_call_timing_ambiguous', session, () => {
     emitMark({
       nf: manager.nf,
       state: manager.state,
       session,
-      name: "openclaw.model_call_timing_ambiguous",
+      name: 'openclaw.model_call_timing_ambiguous',
       data: toJsonRecord({
         runId: event.runId,
         sessionId: event.sessionId,
@@ -739,17 +738,13 @@ function emitModelTimingMark(
 }
 
 /** Emit a compact summary when multiple timing records cannot be paired safely. */
-function emitModelTimingSummaryMark(
-  manager: SessionManager,
-  session: SessionState,
-  records: ModelCallRecord[],
-): void {
-  manager.emitCapturedUnderSession("model_call_timing_unmatched", session, () => {
+function emitModelTimingSummaryMark(manager: SessionManager, session: SessionState, records: ModelCallRecord[]): void {
+  manager.emitCapturedUnderSession('model_call_timing_unmatched', session, () => {
     emitMark({
       nf: manager.nf,
       state: manager.state,
       session,
-      name: "openclaw.model_call_timing_unmatched",
+      name: 'openclaw.model_call_timing_unmatched',
       data: toJsonRecord({
         count: records.length,
         sampleCallIds: records.slice(0, 5).map((record) => record.callId),
@@ -794,7 +789,7 @@ function placeholderInputRecord(record: PendingLlmOutputRecord): LlmInputRecord 
     runId: record.runId,
     provider: record.provider,
     model: record.model,
-    prompt: "",
+    prompt: '',
     historyMessages: [],
     imagesCount: 0,
     observedAtMs: Date.now(),
@@ -808,23 +803,23 @@ function appendPromptIfMissing(historyMessages: unknown[], prompt: string): unkn
     return historyMessages;
   }
   const last = historyMessages.at(-1);
-  if (isRecord(last) && last.role === "user" && extractTextBlocks(last).join("\n") === prompt) {
+  if (isRecord(last) && last.role === 'user' && extractTextBlocks(last).join('\n') === prompt) {
     return historyMessages;
   }
-  return [...historyMessages, { role: "user", content: prompt }];
+  return [...historyMessages, { role: 'user', content: prompt }];
 }
 
 /** Apply prompt-capture privacy settings to one historical message. */
-function sanitizePromptMessage(message: unknown, config: NemoFlowHookBackendConfig): unknown {
+function sanitizePromptMessage(message: unknown, config: NemoRelayHookBackendConfig): unknown {
   if (!isRecord(message)) {
     return message;
   }
 
   let sanitized: Record<string, unknown> = { ...message };
-  if ((sanitized.role === "tool" || sanitized.role === "toolResult") && config.capture.stripToolResults) {
+  if ((sanitized.role === 'tool' || sanitized.role === 'toolResult') && config.capture.stripToolResults) {
     sanitized = { ...sanitized, content: { stripped: true } };
   }
-  if (sanitized.role === "assistant" && config.capture.stripToolArgs) {
+  if (sanitized.role === 'assistant' && config.capture.stripToolArgs) {
     sanitized = stripAssistantToolArgs(sanitized);
   } else if (Array.isArray(sanitized.content)) {
     sanitized = { ...sanitized, content: sanitized.content.map(stripLargeAssistantContentFields) };
@@ -855,7 +850,7 @@ function stripToolCallArgs(value: unknown): unknown {
     return value;
   }
   const stripped: Record<string, unknown> = { ...value };
-  for (const key of ["args", "arguments", "input", "params"]) {
+  for (const key of ['args', 'arguments', 'input', 'params']) {
     if (stripped[key] !== undefined) {
       stripped[key] = { stripped: true };
     }
@@ -868,8 +863,8 @@ function stripLargeAssistantContentFields(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }
-  if (value.type === "thinking") {
-    return { type: "thinking", stripped: true };
+  if (value.type === 'thinking') {
+    return { type: 'thinking', stripped: true };
   }
   const stripped: Record<string, unknown> = { ...value };
   if (stripped.thinking !== undefined) {
@@ -883,12 +878,12 @@ function stripLargeAssistantContentFields(value: unknown): unknown {
 
 /** Choose the user-visible LLM output text, falling back to tool-call names. */
 function responseContent(assistantTexts: string[], assistantToolCallNames: string[]): string | undefined {
-  const text = assistantTexts.join("\n").trim();
+  const text = assistantTexts.join('\n').trim();
   if (text.length > 0) {
     return text;
   }
   if (assistantToolCallNames.length > 0) {
-    return `tool calls: ${assistantToolCallNames.join(", ")}`;
+    return `tool calls: ${assistantToolCallNames.join(', ')}`;
   }
   return undefined;
 }
@@ -897,10 +892,10 @@ function responseContent(assistantTexts: string[], assistantToolCallNames: strin
 function lastAssistantText(messages: unknown[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!isRecord(message) || message.role !== "assistant") {
+    if (!isRecord(message) || message.role !== 'assistant') {
       continue;
     }
-    const text = extractTextBlocks(message).join("\n").trim();
+    const text = extractTextBlocks(message).join('\n').trim();
     if (text.length > 0) {
       return text;
     }
@@ -918,14 +913,14 @@ function finalOutputFromAgentEnd(
   if (lastText) {
     return toJsonRecord({
       content: lastText,
-      source: "openclaw.agent_end",
+      source: 'openclaw.agent_end',
       runId,
       success: event.success,
     });
   }
   if (event.error) {
     return toJsonRecord({
-      source: "openclaw.agent_end",
+      source: 'openclaw.agent_end',
       runId,
       success: event.success,
       error: event.error,
@@ -937,7 +932,7 @@ function finalOutputFromAgentEnd(
 /** Extract textual content blocks from OpenClaw/OpenAI/Anthropic-like messages. */
 function extractTextBlocks(message: Record<string, unknown>): string[] {
   const content = message.content;
-  if (typeof content === "string" && content.length > 0) {
+  if (typeof content === 'string' && content.length > 0) {
     return [content];
   }
   if (!Array.isArray(content)) {
@@ -945,9 +940,9 @@ function extractTextBlocks(message: Record<string, unknown>): string[] {
   }
   const texts: string[] = [];
   for (const item of content) {
-    if (typeof item === "string") {
+    if (typeof item === 'string') {
       texts.push(item);
-    } else if (isRecord(item) && typeof item.text === "string") {
+    } else if (isRecord(item) && typeof item.text === 'string') {
       texts.push(item.text);
     }
   }
@@ -966,18 +961,16 @@ function extractToolCalls(message: Record<string, unknown>): unknown[] {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (item) => isToolCallLike(item),
-  );
+  return content.filter((item) => isToolCallLike(item));
 }
 
 /** Identify likely tool-call content blocks across provider-specific shapes. */
 function isToolCallLike(value: unknown): boolean {
   return (
     isRecord(value) &&
-    (value.type === "toolCall" ||
-      value.type === "tool_use" ||
-      value.type === "tool-call" ||
+    (value.type === 'toolCall' ||
+      value.type === 'tool_use' ||
+      value.type === 'tool-call' ||
       value.toolName !== undefined ||
       value.name !== undefined)
   );
@@ -994,9 +987,7 @@ function toolCallNames(toolCalls: unknown[] | undefined): string[] {
       continue;
     }
     const name =
-      stringField(toolCall, "name") ??
-      stringField(toolCall, "toolName") ??
-      stringField(toolCall, "functionName");
+      stringField(toolCall, 'name') ?? stringField(toolCall, 'toolName') ?? stringField(toolCall, 'functionName');
     if (name) {
       names.push(name);
     }
@@ -1005,12 +996,12 @@ function toolCallNames(toolCalls: unknown[] | undefined): string[] {
 }
 
 /** Convert stored message-write usage back into the llm_output usage contract. */
-function mapHookUsage(usage: unknown): PluginHookLlmOutputEvent["usage"] | undefined {
+function mapHookUsage(usage: unknown): PluginHookLlmOutputEvent['usage'] | undefined {
   const mapped = mapUsage(usage);
   if (!mapped) {
     return undefined;
   }
-  const hookUsage: NonNullable<PluginHookLlmOutputEvent["usage"]> = {};
+  const hookUsage: NonNullable<PluginHookLlmOutputEvent['usage']> = {};
   if (mapped.prompt_tokens !== undefined) {
     hookUsage.input = mapped.prompt_tokens;
   }
@@ -1104,10 +1095,10 @@ function findCurrentPromptIndex(messages: unknown[], prompt: string): number | u
   }
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!isRecord(message) || message.role !== "user") {
+    if (!isRecord(message) || message.role !== 'user') {
       continue;
     }
-    if (extractTextBlocks(message).join("\n") === prompt) {
+    if (extractTextBlocks(message).join('\n') === prompt) {
       return index;
     }
   }
@@ -1166,16 +1157,16 @@ function mapUsage(usage: unknown): Record<string, number> | undefined {
     return undefined;
   }
   const mapped: Record<string, number> = {};
-  const input = numberField(usage, "input") ?? numberField(usage, "prompt_tokens");
-  const output = numberField(usage, "output") ?? numberField(usage, "completion_tokens");
-  const cacheRead = numberField(usage, "cacheRead") ?? numberField(usage, "cache_read_tokens");
-  const cacheWrite = numberField(usage, "cacheWrite") ?? numberField(usage, "cache_write_tokens");
-  const total = numberField(usage, "total") ?? numberField(usage, "totalTokens") ?? numberField(usage, "total_tokens");
+  const input = numberField(usage, 'input') ?? numberField(usage, 'prompt_tokens');
+  const output = numberField(usage, 'output') ?? numberField(usage, 'completion_tokens');
+  const cacheRead = numberField(usage, 'cacheRead') ?? numberField(usage, 'cache_read_tokens');
+  const cacheWrite = numberField(usage, 'cacheWrite') ?? numberField(usage, 'cache_write_tokens');
+  const total = numberField(usage, 'total') ?? numberField(usage, 'totalTokens') ?? numberField(usage, 'total_tokens');
   const totalCanIncludeCompletion = total === undefined || output === undefined || total >= output;
   const prompt = total !== undefined && output !== undefined && totalCanIncludeCompletion ? total - output : input;
   const totalCanIncludePrompt = total === undefined || prompt === undefined || total >= prompt;
   const normalizedTotal = totalCanIncludeCompletion && totalCanIncludePrompt ? total : undefined;
-  const costTotal = isRecord(usage.cost) ? numberField(usage.cost, "total") : numberField(usage, "cost_usd");
+  const costTotal = isRecord(usage.cost) ? numberField(usage.cost, 'total') : numberField(usage, 'cost_usd');
   if (prompt !== undefined) {
     mapped.prompt_tokens = prompt;
   }
@@ -1203,13 +1194,13 @@ function mapUsage(usage: unknown): Record<string, number> | undefined {
 /** Read a non-empty string field from a generic hook record. */
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /** Read a finite numeric field from a generic hook record. */
 function numberField(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /** Copy model_call_ended details into a retained timing record. */
@@ -1229,7 +1220,10 @@ function applyModelCallEnd(record: ModelCallRecord, event: PluginHookModelCallEn
 }
 
 /** Find the newest started-but-not-ended timing record for a session. */
-function latestUnendedRecord(records: ModelCallRecord[] | undefined, session: SessionState): ModelCallRecord | undefined {
+function latestUnendedRecord(
+  records: ModelCallRecord[] | undefined,
+  session: SessionState,
+): ModelCallRecord | undefined {
   if (!records) {
     return undefined;
   }
@@ -1304,5 +1298,5 @@ function evictExpiredReplayRecords(manager: SessionManager): void {
 
 /** Narrow unknown values to plain records for payload traversal. */
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -7,11 +7,11 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use the Adaptive plugin when you want NeMo Flow to collect runtime signals and
+Use the Adaptive plugin when you want NeMo Relay to collect runtime signals and
 activate measured adaptive behavior through the shared plugin system.
 
 Adaptive is a first-party plugin component with kind `adaptive`. It uses the
-same runtime model as the rest of NeMo Flow: scopes and managed calls emit
+same runtime model as the rest of NeMo Relay: scopes and managed calls emit
 lifecycle events, subscribers and learners observe those events, intercepts can
 add guidance, and plugin configuration controls what is active.
 
@@ -27,7 +27,7 @@ The plugin can coordinate:
 ## Use Adaptive When
 
 Adaptive is useful when an agent workflow repeats similar work and you want to
-observe or tune behavior without hard-coding optimization logic into every
+observe or tune behavior without hard-coding tuning logic into every
 application.
 
 Start here when you need to:
@@ -37,7 +37,7 @@ Start here when you need to:
 - Plan prompt-cache breakpoints for supported providers.
 - Evaluate tool parallelism opportunities.
 - Share adaptive state across workers when needed.
-- Roll out optimization as a configuration change.
+- Roll out measured tuning as a configuration change.
 
 If instrumentation is not in place yet, start with
 [Instrument Applications](/instrument-applications/about) or

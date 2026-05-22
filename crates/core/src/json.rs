@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! JSON utilities for the NeMo Flow runtime.
+//! JSON utilities for the NeMo Relay runtime.
 //!
 //! This module provides a [`Json`] type alias for [`serde_json::Value`] used
 //! throughout the crate, and a [`merge_json`] helper for shallow-merging
 //! optional JSON values.
 
 /// Type alias for [`serde_json::Value`], used as the universal JSON
-/// representation throughout the NeMo Flow runtime.
+/// representation throughout the NeMo Relay runtime.
 pub type Json = serde_json::Value;
 
 /// Shallow-merge two optional JSON values.

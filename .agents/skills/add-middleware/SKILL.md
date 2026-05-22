@@ -1,6 +1,6 @@
 ---
 name: add-middleware
-description: Add a new guardrail or intercept type to the NeMo Flow middleware pipeline
+description: Add a new guardrail or intercept type to the NeMo Relay middleware pipeline
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-NeMo Flow supports guardrails (validate/gate) and intercepts (transform) at various
+NeMo Relay supports guardrails (validate/gate) and intercepts (transform) at various
 pipeline stages. Adding a new middleware type requires changes across all layers.
 
 Use this skill when introducing a new middleware registration surface or adding
@@ -54,7 +54,7 @@ See `docs/about/concepts/middleware.md` for the full diagrams.
 pub type MyNewFn = Box<dyn Fn(&str, Json) -> Json + Send + Sync>;
 ```
 
-2. Add the registry field to `NemoFlowContextState` in
+2. Add the registry field to `NemoRelayContextState` in
    `crates/core/src/api/runtime/state.rs`.
 
 Add a `SortedRegistry<GuardrailEntry<MyNewFn>>` or `SortedRegistry<Intercept<MyNewFn>>`
@@ -66,7 +66,7 @@ Use the existing `global_*_registry_api!` and `scope_*_registry_api!` macro
 patterns in `crates/core/src/api/registry.rs`. Both global and scope-local
 variants are needed unless the design explicitly rules one out.
 
-4. Add chain execution helpers to `NemoFlowContextState` in
+4. Add chain execution helpers to `NemoRelayContextState` in
    `crates/core/src/api/runtime/state.rs`.
 
 Follow the pattern of `tool_sanitize_request_chain` or `tool_request_intercepts_chain`.

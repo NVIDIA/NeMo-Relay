@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for NeMo Flow subscriber and event handling."""
+"""Tests for NeMo Relay subscriber and event handling."""
 
 from datetime import datetime, timezone
 from typing import Any, cast
 
 import pytest
 
-from nemo_flow import (
+from nemo_relay import (
     LLMRequest,
     MarkEvent,
     ScopeEvent,

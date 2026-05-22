@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for py adaptive coverage in the NeMo Flow Python crate.
+//! Coverage tests for py adaptive coverage in the NeMo Relay Python crate.
 
 use super::*;
 
 use std::fs;
 
-use nemo_flow::api::scope::{ScopeHandle, ScopeType as CoreScopeType};
+use nemo_relay::api::scope::{ScopeHandle, ScopeType as CoreScopeType};
 use pyo3::types::{PyDict, PyModule};
 use serde_json::json;
 
@@ -68,8 +68,8 @@ fn py_adaptive_uses_canonical_adaptive_acg_imports() {
     let source =
         fs::read_to_string(format!("{}/src/py_adaptive.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
 
-    assert!(source.contains("nemo_flow_adaptive::acg"));
-    assert!(!source.contains("nemo_flow_acg::"));
+    assert!(source.contains("nemo_relay_adaptive::acg"));
+    assert!(!source.contains("nemo_relay_acg::"));
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn python_crate_manifest_drops_direct_acg_dependency() {
     let manifest =
         fs::read_to_string(format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR"))).unwrap();
 
-    assert!(!manifest.contains("nemo-flow-acg ="));
+    assert!(!manifest.contains("nemo-relay-acg ="));
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn adaptive_runtime_locking_and_helper_errors_are_covered() {
 
         let guard = locked_runtime.inner.try_lock().unwrap();
         let _llm_request = crate::py_types::PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({
                     "messages": [{"role": "user", "content": "hello"}],

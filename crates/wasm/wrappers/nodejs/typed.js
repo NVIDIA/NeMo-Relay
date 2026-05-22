@@ -3,7 +3,7 @@
 
 'use strict';
 
-const { toolCallExecute, llmCallExecute, llmStreamCallExecute } = require('./nemo_flow_wasm.js');
+const { toolCallExecute, llmCallExecute, llmStreamCallExecute } = require('./nemo_relay_wasm.js');
 
 /**
  * A passthrough codec that performs no conversion.

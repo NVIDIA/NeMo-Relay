@@ -8,9 +8,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::runtime::EventSubscriberFn;
-use nemo_flow::api::scope::ScopeType;
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::runtime::EventSubscriberFn;
+use nemo_relay::api::scope::ScopeType;
 
 use crate::types::records::{CallKind, CallRecord};
 

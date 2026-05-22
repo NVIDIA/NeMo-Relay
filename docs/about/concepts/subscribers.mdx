@@ -11,7 +11,7 @@ execution.
 
 ## What Subscribers Are
 
-Subscribers are consumers of the NeMo Flow event stream. They receive emitted
+Subscribers are consumers of the NeMo Relay event stream. They receive emitted
 lifecycle events and use them for observation, forwarding, export, or analysis.
 
 ## How Subscribers Relate to Events
@@ -61,6 +61,52 @@ exporter handoff.
 
 Some subscribers stay inside the process and power custom logging, analytics, or
 debugging logic.
+
+#### Host Integration Event JSON
+
+For host integrations that need a serialized event payload, use the event
+object's canonical JSON helpers instead of reconstructing payloads from native
+attributes. Python subscribers can call `event.to_dict()` or `event.to_json()`
+from the callback while still using the normal subscriber registration API.
+
+This pattern is useful when an agent runtime, framework adapter, or plugin host
+already has its own lifecycle hooks but wants NeMo Relay to be the shared
+telemetry representation. The host integration maps those hooks into NeMo Relay
+scopes, LLM calls, tool calls, or marks. NeMo Relay emits the canonical ATOF event
+stream, and each subscriber chooses whether to consume the native event object,
+the canonical JSON helper, or an exporter-specific translation.
+
+```{mermaid}
+flowchart
+    Host[Host Integration]
+
+    subgraph NeMoFlow[NeMo Relay]
+        direction TB
+        Binding[Binding API]
+        Core[Rust Core Runtime]
+        Events[Canonical ATOF Event Stream]
+        Observer[In-Process Subscriber]
+        Json[Canonical Event JSON]
+        Exporters[Exporter Subscribers]
+        Backends[JSONL / ATIF / OTLP]
+
+        Binding -->|emits scopes, tools, LLMs, marks| Core
+        Core --> Events
+        Events --> Observer
+        Observer -->|to_dict / to_json / JSON| Json
+        Events --> Exporters
+        Exporters --> Backends
+    end
+
+    Host -->|maps lifecycle hooks| Binding
+    Json -. host consumes canonical telemetry .-> Host
+```
+
+The important boundary is that subscribers do not define the event schema. They
+receive the runtime event and may serialize it through the binding helper when
+they need a stable JSON payload. Exporter subscribers, such as the ATOF JSONL
+exporter, consume the same event stream and serialize the same canonical event
+shape for their target backend.
 
 ### Forwarding and Export
 
@@ -116,6 +162,8 @@ plugin component.
 Use these practices when applying the concept in application or integration code.
 
 - Use a plain subscriber when you want in-process custom behavior.
+- Use `event.to_dict()` or `event.to_json()` when a host runtime or exporter
+  needs the canonical event JSON shape in-process.
 - Use a scope-local subscriber when the observation should disappear with the
   owning scope.
 - Use a plugin-installed subscriber when the behavior should be reusable and

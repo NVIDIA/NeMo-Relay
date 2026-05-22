@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 
 fn gateway_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_nemo-flow")
+    env!("CARGO_BIN_EXE_nemo-relay")
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn cli_version_exits_successfully() {
         .unwrap();
 
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("nemo-flow "));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("nemo-relay "));
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn cli_completions_prints_script_for_requested_shell() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("#compdef nemo-flow") || stdout.contains("_nemo-flow"));
+    assert!(stdout.contains("#compdef nemo-relay") || stdout.contains("_nemo-relay"));
 }
 
 #[test]
@@ -173,8 +173,8 @@ fn cli_bare_invocation_runs_doctor_when_config_exists() {
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
-    std::fs::write(cwd.join(".nemo-flow/config.toml"), "[upstream]\n").unwrap();
+    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
+    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream]\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -200,9 +200,9 @@ fn cli_bare_invocation_reports_invalid_config_resolution() {
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(cwd.join(".nemo-flow")).unwrap();
-    std::fs::write(cwd.join(".nemo-flow/config.toml"), "[upstream]\n").unwrap();
-    std::fs::write(cwd.join(".nemo-flow/plugins.toml"), "components = [\n").unwrap();
+    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
+    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream]\n").unwrap();
+    std::fs::write(cwd.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -262,12 +262,12 @@ fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let nested = project.join("nested");
-    let xdg = temp.path().join("xdg/nemo-flow");
-    std::fs::create_dir_all(project.join(".nemo-flow")).unwrap();
+    let xdg = temp.path().join("xdg/nemo-relay");
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::write(
-        project.join(".nemo-flow/config.toml"),
+        project.join(".nemo-relay/config.toml"),
         r#"
 [upstream]
 openai_base_url = "http://project-openai"
@@ -289,9 +289,9 @@ command = "codex --full-auto"
     let output = Command::new(gateway_bin())
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
-        .env("NEMO_FLOW_GATEWAY_BIND", "127.0.0.1:0")
-        .env("NEMO_FLOW_OPENAI_BASE_URL", "http://env-openai")
-        .env("NEMO_FLOW_ANTHROPIC_BASE_URL", "http://env-anthropic")
+        .env("NEMO_RELAY_GATEWAY_BIND", "127.0.0.1:0")
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -308,7 +308,7 @@ command = "codex --full-auto"
 #[test]
 fn cli_hook_forward_fails_open_without_gateway_url() {
     let mut child = Command::new(gateway_bin())
-        .env_remove("NEMO_FLOW_GATEWAY_URL")
+        .env_remove("NEMO_RELAY_GATEWAY_URL")
         .args(["hook-forward", "codex"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -325,7 +325,7 @@ fn cli_hook_forward_fails_open_without_gateway_url() {
 #[test]
 fn cli_hook_forward_fails_closed_without_gateway_url() {
     let mut child = Command::new(gateway_bin())
-        .env_remove("NEMO_FLOW_GATEWAY_URL")
+        .env_remove("NEMO_RELAY_GATEWAY_URL")
         .args(["hook-forward", "codex", "--fail-closed"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -378,8 +378,8 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
         r#"{"continue":true}"#
     );
     assert!(request.contains("POST /hooks/codex HTTP/1.1"));
-    assert!(request.contains("x-nemo-flow-config-profile: coverage"));
-    assert!(request.contains("x-nemo-flow-gateway-mode: passthrough"));
+    assert!(request.contains("x-nemo-relay-config-profile: coverage"));
+    assert!(request.contains("x-nemo-relay-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));
 }
 
@@ -406,6 +406,28 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     assert!(!output.status.success());
     assert!(request.contains("POST /hooks/cursor HTTP/1.1"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP 503"));
+}
+
+#[test]
+fn cli_hook_forward_exits_two_for_guardrail_rejection() {
+    let (server_url, received) = spawn_single_request_server(
+        403,
+        r#"{"error":{"message":"guardrail rejected: blocked by policy","type":"nemo_relay_guardrail_rejected","reason":"blocked by policy"}}"#,
+    );
+    let mut child = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--gateway-url", &server_url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"{}").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let request = received.recv().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(request.contains("POST /hooks/codex HTTP/1.1"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("blocked by policy"));
 }
 
 #[test]

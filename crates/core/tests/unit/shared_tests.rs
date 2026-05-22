@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for shared in the NeMo Flow core crate.
+//! Unit tests for shared in the NeMo Relay core crate.
 
 use super::*;
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use serde_json::{Map, json};
 
 use crate::api::llm::LlmRequest;
 use crate::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use crate::api::scope::ScopeType;
@@ -75,7 +75,7 @@ fn reset_global() {
     {
         let ctx = global_context();
         let mut state = ctx.write().unwrap();
-        *state = NemoFlowContextState::new();
+        *state = NemoRelayContextState::new();
     }
     set_thread_scope_stack(create_scope_stack());
     let _ = deregister_llm_request_intercept("shared-none");
@@ -122,7 +122,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         "shared-none",
         1,
         false,
-        Box::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, annotated| {
             assert!(annotated.is_none());
             request.headers.insert("x-no-codec".into(), json!(true));
             Ok((request, None))
@@ -150,7 +150,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         "shared-codec",
         1,
         false,
-        Box::new(|_name, mut request, annotated| {
+        Arc::new(|_name, mut request, annotated| {
             let mut annotated = annotated.expect("codec should provide annotated request");
             annotated.model = Some("intercepted-model".into());
             request.headers.insert("x-codec".into(), json!(true));

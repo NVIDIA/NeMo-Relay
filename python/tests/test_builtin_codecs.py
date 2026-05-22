@@ -14,8 +14,8 @@ from typing import cast
 
 import pytest
 
-import nemo_flow
-from nemo_flow import (
+import nemo_relay
+from nemo_relay import (
     AnnotatedLLMRequest,
     AnnotatedLLMResponse,
     JsonObject,
@@ -24,7 +24,7 @@ from nemo_flow import (
     llm,
     subscribers,
 )
-from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # ---------------------------------------------------------------------------
 # 1. Built-in codec construction
@@ -169,13 +169,13 @@ class TestBuiltinCodecDecodeResponse:
 class TestLlmResponseCodecProtocol:
     def test_protocol_importable(self):
         """LlmResponseCodec protocol is importable from codecs module."""
-        from nemo_flow.codecs import LlmResponseCodec
+        from nemo_relay.codecs import LlmResponseCodec
 
         assert LlmResponseCodec.__name__ == "LlmResponseCodec"
 
     def test_builtin_codecs_satisfy_protocol(self):
         """Built-in codecs satisfy LlmResponseCodec protocol."""
-        from nemo_flow.codecs import LlmResponseCodec
+        from nemo_relay.codecs import LlmResponseCodec
 
         assert isinstance(OpenAIChatCodec(), LlmResponseCodec)
         assert isinstance(OpenAIResponsesCodec(), LlmResponseCodec)
@@ -433,7 +433,7 @@ class TestResponseCodecObjectParam:
 class TestBuiltinCodecsTupleRemoved:
     def test_no_builtin_codecs_tuple(self):
         """BUILTIN_CODECS tuple is no longer in codecs module."""
-        from nemo_flow import codecs as codecs_mod
+        from nemo_relay import codecs as codecs_mod
 
         assert not hasattr(codecs_mod, "BUILTIN_CODECS")
 
@@ -445,15 +445,15 @@ class TestBuiltinCodecsTupleRemoved:
 
 class TestBuiltinCodecImports:
     def test_importable_from_codecs_module(self):
-        """Built-in codecs are importable from nemo_flow.codecs."""
-        from nemo_flow.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+        """Built-in codecs are importable from nemo_relay.codecs."""
+        from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
         assert OpenAIChatCodec is not None
         assert OpenAIResponsesCodec is not None
         assert AnthropicMessagesCodec is not None
 
     def test_not_reexported_from_top_level(self):
-        """Built-in codecs are not re-exported from nemo_flow."""
-        assert not hasattr(nemo_flow, "OpenAIChatCodec")
-        assert not hasattr(nemo_flow, "OpenAIResponsesCodec")
-        assert not hasattr(nemo_flow, "AnthropicMessagesCodec")
+        """Built-in codecs are not re-exported from nemo_relay."""
+        assert not hasattr(nemo_relay, "OpenAIChatCodec")
+        assert not hasattr(nemo_relay, "OpenAIResponsesCodec")
+        assert not hasattr(nemo_relay, "AnthropicMessagesCodec")

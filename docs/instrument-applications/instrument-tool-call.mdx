@@ -6,7 +6,8 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this guide when you have an application tool callback and want NeMo Flow to emit lifecycle events, apply middleware, and preserve the active agent scope around the call.
+
+Use this guide when you have an application tool callback and want NeMo Relay to emit lifecycle events, apply middleware, and preserve the active agent scope around the call.
 
 ## What You Build
 
@@ -22,9 +23,9 @@ You will wrap one existing tool callback with the managed tool execution API. Th
 
 Complete one binding Quick Start guide first:
 
-- [Python Quick Start](/getting-started/quick-start/python)
-- [Node.js Quick Start](/getting-started/quick-start/nodejs)
-- [Rust Quick Start](/getting-started/quick-start/rust)
+- [Python Quick Start](/getting-started/python)
+- [Node.js Quick Start](/getting-started/nodejs)
+- [Rust Quick Start](/getting-started/rust)
 
 Create a scope for the active request or agent run before adding tool instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
 
@@ -45,12 +46,16 @@ Follow this sequence to keep framework work attached to the expected runtime con
 
 The examples below wrap a `search` callback and print emitted events.
 
-<CodeGroup>
+<Tabs>
+:sync-group: language
 
-```python title="Python" for="python"
+<Tab title="Python">
+:sync: python
+
+```python
 import asyncio
 
-import nemo_flow
+import nemo_relay
 
 def log_event(event) -> None:
     print(f"{event.kind} {event.name}")
@@ -58,15 +63,15 @@ def log_event(event) -> None:
 async def search(args):
     return {
         "query": args["query"],
-        "hits": [{"title": "NeMo Flow"}],
+        "hits": [{"title": "NeMo Relay"}],
     }
 
 async def main() -> None:
-    nemo_flow.subscribers.register("instrumentation-check", log_event)
+    nemo_relay.subscribers.register("instrumentation-check", log_event)
 
     try:
-        with nemo_flow.scope.scope("agent-run", nemo_flow.ScopeType.Agent) as handle:
-            result = await nemo_flow.tools.execute(
+        with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
+            result = await nemo_relay.tools.execute(
                 "search",
                 {"query": "runtime instrumentation"},
                 search,
@@ -74,19 +79,23 @@ async def main() -> None:
             )
             print(result)
     finally:
-        nemo_flow.subscribers.deregister("instrumentation-check")
+        nemo_relay.subscribers.deregister("instrumentation-check")
 
 asyncio.run(main())
 ```
+</Tab>
 
-```js title="Node.js" for="node"
+<Tab title="Node.js">
+:sync: node
+
+```js
 const {
   ScopeType,
   deregisterSubscriber,
   registerSubscriber,
   toolCallExecute,
   withScope,
-} = require("nemo-flow-node");
+} = require("nemo-relay-node");
 
 async function main() {
   registerSubscriber("instrumentation-check", (event) => {
@@ -100,7 +109,7 @@ async function main() {
         { query: "runtime instrumentation" },
         async (args) => ({
           query: args.query,
-          hits: [{ title: "NeMo Flow" }],
+          hits: [{ title: "NeMo Relay" }],
         }),
         handle,
         null,
@@ -120,13 +129,17 @@ main().catch((error) => {
   process.exitCode = 1;
 });
 ```
+</Tab>
 
-```rust title="Rust" for="rust"
-use nemo_flow::api::scope::{
+<Tab title="Rust">
+:sync: rust
+
+```rust
+use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::api::tool::{tool_call_execute, ToolCallExecuteParams};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -156,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Box::pin(async move {
                     Ok(json!({
                         "query": args["query"],
-                        "hits": [{"title": "NeMo Flow"}]
+                        "hits": [{"title": "NeMo Relay"}]
                     }))
                 })
             }))
@@ -172,8 +185,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+</Tab>
 
-</CodeGroup>
+</Tabs>
 
 ## Validate the Integration
 
@@ -182,7 +196,8 @@ Check both behavior and instrumentation:
 - The tool result matches what the application returned before the wrapper was added.
 - The subscriber prints an agent or request scope event.
 - The subscriber prints tool start and tool end events for `search`.
-- Tool start input contains the request arguments after request intercepts.
+- Tool start input contains the request arguments after request intercepts and
+  sanitize-request guardrails.
 - Tool end output contains the tool result after response guardrails.
 
 If only the business result appears, the callback ran but instrumentation did not run. Confirm that the call goes through `tools.execute`, `toolCallExecute`, or `tool_call_execute`.
@@ -193,7 +208,7 @@ Use this checklist before running the pattern in production traffic.
 
 - Keep tool names stable. Subscribers and downstream exporters use names for filtering and dashboards.
 - Keep tool arguments and results JSON-compatible.
-- Register temporary debugging subscribers only in dev or test environments.
+- Register temporary debugging subscribers only in development or test environments.
 - Pass the parent scope handle when the tool is part of a larger agent, request, or workflow.
 - Use middleware names that describe ownership, such as `search.redact_args` or `retrieval.timeout`.
 

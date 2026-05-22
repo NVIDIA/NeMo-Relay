@@ -14,25 +14,25 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio_stream::Stream;
 
-use nemo_flow::api::event::{Event, ScopeCategory};
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::{
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
-use nemo_flow::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_flow::api::scope::ScopeType;
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::codec::request::AnnotatedLlmRequest;
-use nemo_flow::codec::request::MessageContent;
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::response::FinishReason;
-use nemo_flow::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_flow::error::{FlowError, Result};
-use nemo_flow::json::Json;
+use nemo_relay::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::ScopeType;
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::request::MessageContent;
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::response::FinishReason;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::error::{FlowError, Result};
+use nemo_relay::json::Json;
 
 // ---------------------------------------------------------------------------
 // Test isolation
@@ -47,7 +47,7 @@ fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCat
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 fn setup_isolated_thread() {
@@ -225,7 +225,7 @@ async fn test_decode_runs_before_intercepts() {
         "ann_i",
         1,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             *cap.lock().unwrap() = Some(annotated.clone());
             Ok((req, annotated))
         }),
@@ -276,7 +276,7 @@ async fn test_encode_runs_after_intercepts() {
         "modify_model",
         1,
         false,
-        Box::new(|_name, req, annotated| {
+        Arc::new(|_name, req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("modified".into());
             Ok((req, Some(ann)))
@@ -339,7 +339,7 @@ async fn test_annotated_intercept_receives_both() {
         "capture_both",
         1,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             *cp.lock().unwrap() = Some((req.clone(), annotated.clone()));
             Ok((req, annotated))
         }),
@@ -394,7 +394,7 @@ async fn test_legacy_intercept_backward_compat() {
         "legacy_1",
         1,
         false,
-        Box::new(move |_name, mut req, annotated| {
+        Arc::new(move |_name, mut req, annotated| {
             *lc1.lock().unwrap() = true;
             req.headers.insert("x-legacy".into(), json!("was-here"));
             Ok((req, annotated))
@@ -438,7 +438,7 @@ async fn test_legacy_intercept_backward_compat() {
         "legacy_2",
         1,
         false,
-        Box::new(move |_name, mut req, annotated| {
+        Arc::new(move |_name, mut req, annotated| {
             *lc2.lock().unwrap() = true;
             req.headers.insert("x-legacy-2".into(), json!("also-here"));
             Ok((req, annotated))
@@ -495,7 +495,7 @@ async fn test_stream_path_also_decodes() {
         "stream_ann",
         1,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
             Ok((req, annotated))
         }),
@@ -559,7 +559,7 @@ async fn test_shared_helper_both_paths() {
         "shared_ann",
         1,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             *acc.lock().unwrap() += 1;
             Ok((req, annotated))
         }),
@@ -634,7 +634,7 @@ async fn test_explicit_codec_param_overrides() {
         "check_model",
         1,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             if let Some(ref ann) = annotated {
                 *cm.lock().unwrap() = ann.model.clone();
             }
@@ -682,7 +682,7 @@ async fn test_encode_merge_not_replace() {
         "merge_mod",
         1,
         false,
-        Box::new(|_name, req, annotated| {
+        Arc::new(|_name, req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("new_model".into());
             Ok((req, Some(ann)))
@@ -751,7 +751,7 @@ async fn test_unified_chain_priority_order() {
         "legacy_p10",
         10,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             cl1.lock().unwrap().push("legacy_p10".into());
             Ok((req, annotated))
         }),
@@ -764,7 +764,7 @@ async fn test_unified_chain_priority_order() {
         "annotated_p5",
         5,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             cl2.lock().unwrap().push("annotated_p5".into());
             Ok((req, annotated))
         }),
@@ -812,7 +812,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
         "no_codec_ann",
         1,
         false,
-        Box::new(move |_name, req, annotated| {
+        Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
             Ok((req, annotated))
         }),

@@ -3,21 +3,21 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Flow)](https://github.com/NVIDIA/NeMo-Flow/blob/main/LICENSE)
-[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Flow/)
-[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Flow?color=green)](https://github.com/NVIDIA/NeMo-Flow/releases)
-[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Flow/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Flow)
-[![PyPI](https://img.shields.io/pypi/v/nemo-flow?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-flow/)
-[![npm node](https://img.shields.io/npm/v/nemo-flow-node?label=nemo-flow-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-flow-wasm?label=nemo-flow-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-flow-wasm)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow?label=nemo-flow&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-adaptive?label=nemo-flow-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-adaptive)
-[![Crates.io](https://img.shields.io/crates/v/nemo-flow-cli?label=nemo-flow-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-flow-cli)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Flow)
+[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
+[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Relay?color=green)](https://github.com/NVIDIA/NeMo-Relay/releases)
+[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
+[![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
+[![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
+[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
 
-# NeMo Flow
+# NeMo Relay
 
-`nemo-flow-ffi` provides the C-compatible ABI for NeMo Flow. Use it when a
+`nemo-relay-ffi` provides the C-compatible ABI for NeMo Relay. Use it when a
 native integration or downstream language binding needs direct access to the
 shared Rust runtime contract.
 
@@ -26,21 +26,21 @@ binding consumes it through CGo.
 
 ## Why Use It?
 
-- 🔌 **Expose NeMo Flow to native consumers**: Call the shared Rust runtime from
+- 🔌 **Expose NeMo Relay to native consumers**: Call the shared Rust runtime from
   C-compatible hosts and downstream language bindings.
 - 🧱 **Build on one ABI**: Keep native integrations aligned with the same scope,
   middleware, lifecycle event, and observability contract.
-- 📦 **Consume a generated C header**: Use the committed `nemo_flow.h` surface
+- 📦 **Consume a generated C header**: Use the committed `nemo_relay.h` surface
   produced by the crate build.
 - 🚧 **Work source-first**: Use this experimental surface when Rust, Python, and
   Node.js packages are not the right integration layer.
 
 ## What You Get
 
-- ✅ **Exported `nemo_flow_*` symbols**: APIs for scopes, tool calls, LLM calls,
+- ✅ **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, observability exporters, and scope stack
   isolation.
-- ✅ **Generated header**: A committed `nemo_flow.h` file for C-compatible
+- ✅ **Generated header**: A committed `nemo_relay.h` file for C-compatible
   consumers.
 - ✅ **Native library outputs**: Shared and static libraries for platform
   linking.
@@ -54,13 +54,13 @@ binding consumes it through CGo.
 Build the FFI library from a repository checkout:
 
 ```bash
-cargo build --release -p nemo-flow-ffi
+cargo build --release -p nemo-relay-ffi
 ```
 
 The generated header is available at:
 
 ```text
-crates/ffi/nemo_flow.h
+crates/ffi/nemo_relay.h
 ```
 
 Cargo writes the shared and static libraries under `target/release/`.
@@ -71,7 +71,7 @@ Include the generated header and link against the release library for your
 platform:
 
 ```c
-#include "nemo_flow.h"
+#include "nemo_relay.h"
 ```
 
 Use the FFI surface only when you need a native ABI. Rust, Python, and Node.js
@@ -79,4 +79,4 @@ applications should prefer the supported packages for those languages.
 
 ## Documentation
 
-NeMo Flow Documentation: https://nvidia.github.io/NeMo-Flow
+NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay

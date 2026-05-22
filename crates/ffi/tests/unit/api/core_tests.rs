@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for core in the NeMo Flow FFI crate.
+//! Unit tests for core in the NeMo Relay FFI crate.
 
 use super::*;
 
@@ -9,7 +9,7 @@ use super::*;
 fn test_ffi_plugin_config_validate_initialize_and_clear() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_flow_clear_plugin_configuration();
+    let _ = nemo_relay_clear_plugin_configuration();
 
     let config = cstring(
         &json!({
@@ -40,16 +40,16 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 
     let mut report_json = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_flow_validate_plugin_config(config.as_ptr(), &mut report_json) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json) },
+        NemoRelayStatus::Ok
     );
     let report = unsafe { returned_json(report_json) };
     assert_eq!(report["diagnostics"], json!([]));
 
     let mut kinds_json = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_flow_list_plugin_kinds_json(&mut kinds_json) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_list_plugin_kinds_json(&mut kinds_json) },
+        NemoRelayStatus::Ok
     );
     let kinds = unsafe { returned_json(kinds_json) };
     assert!(
@@ -65,26 +65,26 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 
     let mut configured_json = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_flow_initialize_plugins(config.as_ptr(), &mut configured_json) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_initialize_plugins(config.as_ptr(), &mut configured_json) },
+        NemoRelayStatus::Ok
     );
     let configured_report = unsafe { returned_json(configured_json) };
     assert_eq!(configured_report["diagnostics"], json!([]));
 
     let mut active_json = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_flow_active_plugin_report_json(&mut active_json) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_active_plugin_report_json(&mut active_json) },
+        NemoRelayStatus::Ok
     );
     let active_report = unsafe { returned_json(active_json) };
     assert_eq!(active_report["diagnostics"], json!([]));
 
-    assert_eq!(nemo_flow_clear_plugin_configuration(), NemoFlowStatus::Ok);
+    assert_eq!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
 
     let mut cleared_json = ptr::null_mut();
     assert_eq!(
-        unsafe { nemo_flow_active_plugin_report_json(&mut cleared_json) },
-        NemoFlowStatus::Ok
+        unsafe { nemo_relay_active_plugin_report_json(&mut cleared_json) },
+        NemoRelayStatus::Ok
     );
     assert_eq!(unsafe { returned_json(cleared_json) }, Json::Null);
 }
@@ -93,7 +93,7 @@ fn test_ffi_plugin_config_validate_initialize_and_clear() {
 fn test_ffi_observability_plugin_file_sinks() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_flow_clear_plugin_configuration();
+    let _ = nemo_relay_clear_plugin_configuration();
     let dir = std::env::temp_dir().join(unique_name("ffi_observability_plugin"));
     std::fs::create_dir_all(&dir).unwrap();
     let dir_text = dir.to_string_lossy().into_owned();
@@ -132,19 +132,19 @@ fn test_ffi_observability_plugin_file_sinks() {
 
     unsafe {
         assert_eq!(
-            take_string(nemo_flow_observability_plugin_kind()).unwrap(),
+            take_string(nemo_relay_observability_plugin_kind()).unwrap(),
             "observability"
         );
         let mut default_config_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_observability_default_config_json(&mut default_config_json),
-            NemoFlowStatus::Ok
+            nemo_relay_observability_default_config_json(&mut default_config_json),
+            NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(default_config_json)["version"], json!(1));
         let mut component_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_observability_component_spec_json(ptr::null(), true, &mut component_json),
-            NemoFlowStatus::Ok
+            nemo_relay_observability_component_spec_json(ptr::null(), true, &mut component_json),
+            NemoRelayStatus::Ok
         );
         let component = returned_json(component_json);
         assert_eq!(component["kind"], "observability");
@@ -152,15 +152,15 @@ fn test_ffi_observability_plugin_file_sinks() {
 
         let mut report_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_validate_plugin_config(config.as_ptr(), &mut report_json),
-            NemoFlowStatus::Ok
+            nemo_relay_validate_plugin_config(config.as_ptr(), &mut report_json),
+            NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(report_json)["diagnostics"], json!([]));
 
         let mut initialized_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_initialize_plugins(config.as_ptr(), &mut initialized_json),
-            NemoFlowStatus::Ok
+            nemo_relay_initialize_plugins(config.as_ptr(), &mut initialized_json),
+            NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(initialized_json)["diagnostics"], json!([]));
 
@@ -169,9 +169,9 @@ fn test_ffi_observability_plugin_file_sinks() {
         let input = cstring(r#"{"agent":true}"#);
         let mut scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -179,20 +179,23 @@ fn test_ffi_observability_plugin_file_sinks() {
                 input.as_ptr(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let scope_uuid = take_string(nemo_flow_scope_handle_uuid(scope)).unwrap();
+        let scope_uuid = take_string(nemo_relay_scope_handle_uuid(scope)).unwrap();
 
         let mark_name = cstring("ffi-observability-mark");
         let mark_data = cstring(r#"{"step":1}"#);
         assert_eq!(
-            nemo_flow_event(mark_name.as_ptr(), scope, mark_data.as_ptr(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_event(mark_name.as_ptr(), scope, mark_data.as_ptr(), ptr::null()),
+            NemoRelayStatus::Ok
         );
-        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
-        assert_eq!(nemo_flow_clear_plugin_configuration(), NemoFlowStatus::Ok);
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+        assert_eq!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
 
         let jsonl = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
         assert_eq!(jsonl.trim().lines().count(), 3);
@@ -215,7 +218,7 @@ fn test_ffi_observability_plugin_file_sinks() {
 fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
-    let _ = nemo_flow_clear_plugin_configuration();
+    let _ = nemo_relay_clear_plugin_configuration();
     let dir = std::env::temp_dir().join(unique_name("ffi_observability_plugin_multi_agent"));
     std::fs::create_dir_all(&dir).unwrap();
     let dir_text = dir.to_string_lossy().into_owned();
@@ -244,8 +247,8 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
     unsafe {
         let mut initialized_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_initialize_plugins(config.as_ptr(), &mut initialized_json),
-            NemoFlowStatus::Ok
+            nemo_relay_initialize_plugins(config.as_ptr(), &mut initialized_json),
+            NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(initialized_json)["diagnostics"], json!([]));
 
@@ -255,9 +258,9 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
         let first_input = cstring(r#"{"agent":"first"}"#);
         let mut first = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 first_name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -265,29 +268,29 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                 first_input.as_ptr(),
                 &mut first,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let first_uuid = take_string(nemo_flow_scope_handle_uuid(first)).unwrap();
+        let first_uuid = take_string(nemo_relay_scope_handle_uuid(first)).unwrap();
 
         let first_mark = cstring("ffi-first-mark");
         let first_mark_data = cstring(r#"{"agent":"first"}"#);
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 first_mark.as_ptr(),
                 first,
                 first_mark_data.as_ptr(),
                 ptr::null()
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let nested_name = cstring("ffi-nested-agent");
         let nested_input = cstring(r#"{"agent":"nested"}"#);
         let mut nested = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 nested_name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -295,31 +298,37 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                 nested_input.as_ptr(),
                 &mut nested,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let nested_mark = cstring("ffi-nested-mark");
         let nested_mark_data = cstring(r#"{"agent":"nested"}"#);
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 nested_mark.as_ptr(),
                 nested,
                 nested_mark_data.as_ptr(),
                 ptr::null()
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_eq!(nemo_flow_pop_scope(nested, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(nested);
-        assert_eq!(nemo_flow_pop_scope(first, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(first);
+        assert_eq!(
+            nemo_relay_pop_scope(nested, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(nested);
+        assert_eq!(
+            nemo_relay_pop_scope(first, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(first);
 
         let second_name = cstring("ffi-second-agent");
         let second_input = cstring(r#"{"agent":"second"}"#);
         let mut second = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 second_name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -327,24 +336,27 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                 second_input.as_ptr(),
                 &mut second,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        let second_uuid = take_string(nemo_flow_scope_handle_uuid(second)).unwrap();
+        let second_uuid = take_string(nemo_relay_scope_handle_uuid(second)).unwrap();
         let second_mark = cstring("ffi-second-mark");
         let second_mark_data = cstring(r#"{"agent":"second"}"#);
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 second_mark.as_ptr(),
                 second,
                 second_mark_data.as_ptr(),
                 ptr::null()
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert_eq!(nemo_flow_pop_scope(second, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(second);
-        nemo_flow_scope_stack_free(stack);
-        assert_eq!(nemo_flow_clear_plugin_configuration(), NemoFlowStatus::Ok);
+        assert_eq!(
+            nemo_relay_pop_scope(second, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(second);
+        nemo_relay_scope_stack_free(stack);
+        assert_eq!(nemo_relay_clear_plugin_configuration(), NemoRelayStatus::Ok);
 
         let files = std::fs::read_dir(&dir)
             .unwrap()
@@ -375,7 +387,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
 fn test_ffi_plugin_top_level_null_and_invalid_paths() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
-    let _ = nemo_flow_clear_plugin_configuration();
+    let _ = nemo_relay_clear_plugin_configuration();
 
     let valid_config = cstring(
         &json!({
@@ -389,8 +401,8 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
 
     unsafe {
         assert_eq!(
-            nemo_flow_validate_plugin_config(valid_config.as_ptr(), ptr::null_mut()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_validate_plugin_config(valid_config.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
         );
         assert!(
             read_last_error()
@@ -400,12 +412,12 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
 
         let mut out_json = ptr::null_mut();
         assert_eq!(
-            nemo_flow_validate_plugin_config(invalid_json.as_ptr(), &mut out_json),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_validate_plugin_config(invalid_json.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_validate_plugin_config(invalid_shape.as_ptr(), &mut out_json),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_validate_plugin_config(invalid_shape.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -414,39 +426,39 @@ fn test_ffi_plugin_top_level_null_and_invalid_paths() {
         );
 
         assert_eq!(
-            nemo_flow_initialize_plugins(valid_config.as_ptr(), ptr::null_mut()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_initialize_plugins(valid_config.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_initialize_plugins(invalid_json.as_ptr(), &mut out_json),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_initialize_plugins(invalid_json.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_initialize_plugins(invalid_shape.as_ptr(), &mut out_json),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_initialize_plugins(invalid_shape.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
         );
 
         assert_eq!(
-            nemo_flow_active_plugin_report_json(ptr::null_mut()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_active_plugin_report_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_list_plugin_kinds_json(ptr::null_mut()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_list_plugin_kinds_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_register_plugin(
+            nemo_relay_register_plugin(
                 ptr::null(),
                 None,
                 plugin_register_fail,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_deregister_plugin(ptr::null()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_deregister_plugin(ptr::null()),
+            NemoRelayStatus::NullPointer
         );
     }
 }
@@ -458,8 +470,8 @@ fn test_ffi_error_paths_and_scope_stack() {
 
     unsafe {
         assert_eq!(
-            nemo_flow_get_handle(ptr::null_mut()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_get_handle(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
         );
         assert!(read_last_error().unwrap().contains("out pointer is null"));
 
@@ -467,9 +479,9 @@ fn test_ffi_error_paths_and_scope_stack() {
         let invalid_json = cstring("{");
         let mut handle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 invalid_json.as_ptr(),
@@ -477,31 +489,31 @@ fn test_ffi_error_paths_and_scope_stack() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
         let stack = fresh_scope_stack();
-        assert!(nemo_flow_scope_stack_active());
+        assert!(nemo_relay_scope_stack_active());
 
         let mut root = ptr::null_mut();
-        assert_eq!(nemo_flow_get_handle(&mut root), NemoFlowStatus::Ok);
-        let root_uuid = take_string(nemo_flow_scope_handle_uuid(root)).unwrap();
+        assert_eq!(nemo_relay_get_handle(&mut root), NemoRelayStatus::Ok);
+        let root_uuid = take_string(nemo_relay_scope_handle_uuid(root)).unwrap();
         assert!(!root_uuid.is_empty());
         assert_eq!(
-            nemo_flow_scope_handle_scope_type(root) as i32,
-            NemoFlowScopeType::Agent as i32
+            nemo_relay_scope_handle_scope_type(root) as i32,
+            NemoRelayScopeType::Agent as i32
         );
-        assert_eq!(nemo_flow_scope_handle_attributes(root), 0);
-        nemo_flow_scope_handle_free(root);
+        assert_eq!(nemo_relay_scope_handle_attributes(root), 0);
+        nemo_relay_scope_handle_free(root);
 
         let scope_name = cstring("ffi_scope");
         let scope_data = cstring(r#"{"scope":true}"#);
         let scope_metadata = cstring(r#"{"meta":"ok"}"#);
         let mut scope = ptr::null_mut();
         assert_eq!(
-            nemo_flow_push_scope(
+            nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Function,
+                NemoRelayScopeType::Function,
                 ptr::null(),
                 1,
                 scope_data.as_ptr(),
@@ -509,34 +521,46 @@ fn test_ffi_error_paths_and_scope_stack() {
                 ptr::null(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            take_string(nemo_flow_scope_handle_name(scope)).unwrap(),
+            take_string(nemo_relay_scope_handle_name(scope)).unwrap(),
             "ffi_scope"
         );
         assert_eq!(
-            nemo_flow_scope_handle_scope_type(scope) as i32,
-            NemoFlowScopeType::Function as i32
+            nemo_relay_scope_handle_scope_type(scope) as i32,
+            NemoRelayScopeType::Function as i32
         );
-        assert_eq!(nemo_flow_scope_handle_attributes(scope), 1);
-        assert!(take_string(nemo_flow_scope_handle_parent_uuid(scope)).is_some());
+        assert_eq!(nemo_relay_scope_handle_attributes(scope), 1);
+        assert!(take_string(nemo_relay_scope_handle_parent_uuid(scope)).is_some());
         assert_eq!(
-            serde_json::from_str::<Json>(&take_string(nemo_flow_scope_handle_data(scope)).unwrap())
-                .unwrap(),
+            serde_json::from_str::<Json>(
+                &take_string(nemo_relay_scope_handle_data(scope)).unwrap()
+            )
+            .unwrap(),
             json!({"scope": true})
         );
         assert_eq!(
             serde_json::from_str::<Json>(
-                &take_string(nemo_flow_scope_handle_metadata(scope)).unwrap()
+                &take_string(nemo_relay_scope_handle_metadata(scope)).unwrap()
             )
             .unwrap(),
             json!({"meta": "ok"})
         );
-        assert_eq!(nemo_flow_pop_scope(scope, ptr::null()), NemoFlowStatus::Ok);
-        nemo_flow_scope_handle_free(scope);
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
 
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_event_json_null_pointer_returns_null() {
+    unsafe {
+        assert!(types::nemo_relay_event_json(ptr::null::<FfiEvent>()).is_null());
     }
 }
 
@@ -550,19 +574,19 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
         let subscriber_name = unique_name("ffi_subscriber");
         let subscriber_name_c = cstring(&subscriber_name);
         assert_eq!(
-            nemo_flow_register_subscriber(
+            nemo_relay_register_subscriber(
                 subscriber_name_c.as_ptr(),
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let intercept_name = unique_name("ffi_tool_intercept");
         let intercept_name_c = cstring(&intercept_name);
         assert_eq!(
-            nemo_flow_register_tool_request_intercept(
+            nemo_relay_register_tool_request_intercept(
                 intercept_name_c.as_ptr(),
                 1,
                 false,
@@ -570,46 +594,46 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let conditional_name = unique_name("ffi_tool_conditional");
         let conditional_name_c = cstring(&conditional_name);
         assert_eq!(
-            nemo_flow_register_tool_conditional_execution_guardrail(
+            nemo_relay_register_tool_conditional_execution_guardrail(
                 conditional_name_c.as_ptr(),
                 1,
                 tool_allow_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let tool_name = cstring("ffi_tool");
         let args = cstring(r#"{"value": 1}"#);
         let mut intercepted_out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_request_intercepts(
+            nemo_relay_tool_request_intercepts(
                 tool_name.as_ptr(),
                 args.as_ptr(),
                 &mut intercepted_out
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let intercepted_json = returned_json(intercepted_out);
         assert_eq!(intercepted_json["intercepted"], json!(true));
 
         assert_eq!(
-            nemo_flow_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_tool_conditional_execution(tool_name.as_ptr(), args.as_ptr()),
+            NemoRelayStatus::Ok
         );
 
         let tool_call_id = cstring("call_ffi_123");
         let metadata = cstring(r#"{"source":"ffi-test"}"#);
         let mut handle: *mut FfiToolHandle = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 args.as_ptr(),
                 ptr::null(),
@@ -619,26 +643,26 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
                 tool_call_id.as_ptr(),
                 &mut handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
-        assert!(take_string(nemo_flow_tool_handle_uuid(handle)).is_some());
+        assert!(take_string(nemo_relay_tool_handle_uuid(handle)).is_some());
         assert_eq!(
-            take_string(nemo_flow_tool_handle_name(handle)).unwrap(),
+            take_string(nemo_relay_tool_handle_name(handle)).unwrap(),
             "ffi_tool"
         );
-        assert_eq!(nemo_flow_tool_handle_attributes(handle), 1);
-        assert!(take_string(nemo_flow_tool_handle_parent_uuid(handle)).is_some());
+        assert_eq!(nemo_relay_tool_handle_attributes(handle), 1);
+        assert!(take_string(nemo_relay_tool_handle_parent_uuid(handle)).is_some());
 
         let result = cstring(r#"{"ok": true}"#);
         assert_eq!(
-            nemo_flow_tool_call_end(handle, result.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_tool_call_end(handle, result.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_tool_handle_free(handle);
+        nemo_relay_tool_handle_free(handle);
 
         let mut execute_out = ptr::null_mut();
         assert_eq!(
-            nemo_flow_tool_call_execute(
+            nemo_relay_tool_call_execute(
                 tool_name.as_ptr(),
                 args.as_ptr(),
                 tool_exec_cb,
@@ -650,7 +674,7 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
                 ptr::null(),
                 &mut execute_out,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let executed_json = returned_json(execute_out);
         assert_eq!(executed_json["intercepted"], json!(true));
@@ -658,6 +682,11 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
 
         let events = lock_unpoisoned(event_log()).clone();
         assert!(events.iter().any(|event| event["name"] == "ffi_tool"));
+        assert!(events.iter().any(|event| {
+            event["json"]["kind"] == json!("scope")
+                && event["json"]["name"] == json!("ffi_tool")
+                && event["json"]["category"] == json!("tool")
+        }));
         assert!(
             events
                 .iter()
@@ -673,35 +702,37 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
         let mark_data = cstring(r#"{"mark":true}"#);
         let mark_metadata = cstring(r#"{"origin":"ffi"}"#);
         assert_eq!(
-            nemo_flow_event(
+            nemo_relay_event(
                 mark_name.as_ptr(),
                 ptr::null(),
                 mark_data.as_ptr(),
                 mark_metadata.as_ptr(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let events = lock_unpoisoned(event_log()).clone();
         assert!(events.iter().any(|event| {
             event["name"] == "ffi_mark"
                 && event["kind"] == json!("mark")
+                && event["json"]["kind"] == json!("mark")
+                && event["json"]["name"] == json!("ffi_mark")
                 && event["data"] == json!({"mark": true})
                 && event["metadata"] == json!({"origin": "ffi"})
         }));
 
         assert_eq!(
-            nemo_flow_deregister_tool_request_intercept(intercept_name_c.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_tool_request_intercept(intercept_name_c.as_ptr()),
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_deregister_tool_conditional_execution_guardrail(conditional_name_c.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_tool_conditional_execution_guardrail(conditional_name_c.as_ptr()),
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_deregister_subscriber(subscriber_name_c.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_subscriber(subscriber_name_c.as_ptr()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -727,13 +758,13 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
         let subscriber_name = unique_name("ffi_timestamp_subscriber");
         let subscriber_name_c = cstring(&subscriber_name);
         assert_eq!(
-            nemo_flow_register_subscriber(
+            nemo_relay_register_subscriber(
                 subscriber_name_c.as_ptr(),
                 subscriber_cb,
                 ptr::null_mut(),
                 None,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let timestamps = [
@@ -749,9 +780,9 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
         let scope_name = cstring("ffi_ts_scope");
         let mut scope: *mut FfiScopeHandle = ptr::null_mut();
         assert_eq!(
-            api::nemo_flow_push_scope(
+            api::nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -760,26 +791,26 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
                 &timestamps[0],
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let mark_name = cstring("ffi_ts_mark");
         assert_eq!(
-            api::nemo_flow_event(
+            api::nemo_relay_event(
                 mark_name.as_ptr(),
                 scope,
                 ptr::null(),
                 ptr::null(),
                 &timestamps[1],
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let tool_name = cstring("ffi_ts_tool");
         let tool_args = cstring(r#"{"x":1}"#);
         let mut tool: *mut FfiToolHandle = ptr::null_mut();
         assert_eq!(
-            api::nemo_flow_tool_call(
+            api::nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 ptr::null(),
@@ -790,18 +821,18 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
                 &timestamps[2],
                 &mut tool,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let tool_result = cstring(r#"{"ok":true}"#);
         assert_eq!(
-            api::nemo_flow_tool_call_end(
+            api::nemo_relay_tool_call_end(
                 tool,
                 tool_result.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 &timestamps[3],
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let llm_name = cstring("ffi_ts_llm");
@@ -809,7 +840,7 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
             cstring(r#"{"headers":{},"content":{"messages":[],"model":"test-model"}}"#);
         let mut llm: *mut FfiLLMHandle = ptr::null_mut();
         assert_eq!(
-            api::nemo_flow_llm_call(
+            api::nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 llm_request.as_ptr(),
                 ptr::null(),
@@ -820,23 +851,23 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
                 &timestamps[4],
                 &mut llm,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let llm_response = cstring(r#"{"ok":true}"#);
         assert_eq!(
-            api::nemo_flow_llm_call_end(
+            api::nemo_relay_llm_call_end(
                 llm,
                 llm_response.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 &timestamps[5],
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         assert_eq!(
-            api::nemo_flow_pop_scope(scope, ptr::null(), &timestamps[6]),
-            NemoFlowStatus::Ok
+            api::nemo_relay_pop_scope(scope, ptr::null(), &timestamps[6]),
+            NemoRelayStatus::Ok
         );
 
         let events = lock_unpoisoned(event_log()).clone();
@@ -868,13 +899,13 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
         );
 
         assert_eq!(
-            nemo_flow_deregister_subscriber(subscriber_name_c.as_ptr()),
-            NemoFlowStatus::Ok
+            nemo_relay_deregister_subscriber(subscriber_name_c.as_ptr()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_tool_handle_free(tool);
-        nemo_flow_llm_handle_free(llm);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_tool_handle_free(tool);
+        nemo_relay_llm_handle_free(llm);
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -883,8 +914,8 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
 
-    fn assert_invalid_timestamp(status: NemoFlowStatus) {
-        assert_eq!(status, NemoFlowStatus::InvalidArg);
+    fn assert_invalid_timestamp(status: NemoRelayStatus) {
+        assert_eq!(status, NemoRelayStatus::InvalidArg);
         assert!(
             unsafe { read_last_error() }
                 .unwrap_or_default()
@@ -898,9 +929,9 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
 
         let invalid_scope_name = cstring("ffi_bad_ts_scope");
         let mut invalid_scope: *mut FfiScopeHandle = ptr::null_mut();
-        assert_invalid_timestamp(api::nemo_flow_push_scope(
+        assert_invalid_timestamp(api::nemo_relay_push_scope(
             invalid_scope_name.as_ptr(),
-            NemoFlowScopeType::Agent,
+            NemoRelayScopeType::Agent,
             ptr::null(),
             0,
             ptr::null(),
@@ -914,9 +945,9 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
         let scope_name = cstring("ffi_valid_ts_scope");
         let mut scope: *mut FfiScopeHandle = ptr::null_mut();
         assert_eq!(
-            api::nemo_flow_push_scope(
+            api::nemo_relay_push_scope(
                 scope_name.as_ptr(),
-                NemoFlowScopeType::Agent,
+                NemoRelayScopeType::Agent,
                 ptr::null(),
                 0,
                 ptr::null(),
@@ -925,11 +956,11 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
                 ptr::null(),
                 &mut scope,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let mark_name = cstring("ffi_bad_ts_mark");
-        assert_invalid_timestamp(api::nemo_flow_event(
+        assert_invalid_timestamp(api::nemo_relay_event(
             mark_name.as_ptr(),
             scope,
             ptr::null(),
@@ -940,7 +971,7 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
         let invalid_tool_name = cstring("ffi_bad_ts_tool");
         let tool_args = cstring(r#"{"x":1}"#);
         let mut invalid_tool: *mut FfiToolHandle = ptr::null_mut();
-        assert_invalid_timestamp(api::nemo_flow_tool_call(
+        assert_invalid_timestamp(api::nemo_relay_tool_call(
             invalid_tool_name.as_ptr(),
             tool_args.as_ptr(),
             ptr::null(),
@@ -956,7 +987,7 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
         let tool_name = cstring("ffi_valid_ts_tool");
         let mut tool: *mut FfiToolHandle = ptr::null_mut();
         assert_eq!(
-            api::nemo_flow_tool_call(
+            api::nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
                 ptr::null(),
@@ -967,10 +998,10 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
                 ptr::null(),
                 &mut tool,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let tool_result = cstring(r#"{"ok":true}"#);
-        assert_invalid_timestamp(api::nemo_flow_tool_call_end(
+        assert_invalid_timestamp(api::nemo_relay_tool_call_end(
             tool,
             tool_result.as_ptr(),
             ptr::null(),
@@ -978,21 +1009,21 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
             &invalid_timestamp,
         ));
         assert_eq!(
-            api::nemo_flow_tool_call_end(
+            api::nemo_relay_tool_call_end(
                 tool,
                 tool_result.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
         let invalid_llm_name = cstring("ffi_bad_ts_llm");
         let llm_request =
             cstring(r#"{"headers":{},"content":{"messages":[],"model":"test-model"}}"#);
         let mut invalid_llm: *mut FfiLLMHandle = ptr::null_mut();
-        assert_invalid_timestamp(api::nemo_flow_llm_call(
+        assert_invalid_timestamp(api::nemo_relay_llm_call(
             invalid_llm_name.as_ptr(),
             llm_request.as_ptr(),
             ptr::null(),
@@ -1008,7 +1039,7 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
         let llm_name = cstring("ffi_valid_ts_llm");
         let mut llm: *mut FfiLLMHandle = ptr::null_mut();
         assert_eq!(
-            api::nemo_flow_llm_call(
+            api::nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 llm_request.as_ptr(),
                 ptr::null(),
@@ -1019,10 +1050,10 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
                 ptr::null(),
                 &mut llm,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         let llm_response = cstring(r#"{"ok":true}"#);
-        assert_invalid_timestamp(api::nemo_flow_llm_call_end(
+        assert_invalid_timestamp(api::nemo_relay_llm_call_end(
             llm,
             llm_response.as_ptr(),
             ptr::null(),
@@ -1030,30 +1061,30 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
             &invalid_timestamp,
         ));
         assert_eq!(
-            api::nemo_flow_llm_call_end(
+            api::nemo_relay_llm_call_end(
                 llm,
                 llm_response.as_ptr(),
                 ptr::null(),
                 ptr::null(),
                 ptr::null(),
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
 
-        assert_invalid_timestamp(api::nemo_flow_pop_scope(
+        assert_invalid_timestamp(api::nemo_relay_pop_scope(
             scope,
             ptr::null(),
             &invalid_timestamp,
         ));
         assert_eq!(
-            api::nemo_flow_pop_scope(scope, ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
 
-        nemo_flow_tool_handle_free(tool);
-        nemo_flow_llm_handle_free(llm);
-        nemo_flow_scope_handle_free(scope);
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_tool_handle_free(tool);
+        nemo_relay_llm_handle_free(llm);
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
     }
 }
 
@@ -1075,7 +1106,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
         let mut stream: *mut FfiStream = ptr::null_mut();
 
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 name.as_ptr(),
                 args.as_ptr(),
                 ptr::null(),
@@ -1085,10 +1116,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 name.as_ptr(),
                 invalid_json.as_ptr(),
                 ptr::null(),
@@ -1098,10 +1129,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 name.as_ptr(),
                 args.as_ptr(),
                 ptr::null(),
@@ -1111,11 +1142,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
         assert_eq!(
-            nemo_flow_tool_call(
+            nemo_relay_tool_call(
                 name.as_ptr(),
                 args.as_ptr(),
                 ptr::null(),
@@ -1125,28 +1156,28 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_tool_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_tool_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_tool_call_end(handle, invalid_json.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_tool_call_end(handle, invalid_json.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_tool_call_end(handle, args.as_ptr(), invalid_json.as_ptr(), ptr::null(),),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_tool_call_end(handle, args.as_ptr(), invalid_json.as_ptr(), ptr::null(),),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_tool_call_end(handle, args.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_tool_call_end(handle, args.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_tool_handle_free(handle);
+        nemo_relay_tool_handle_free(handle);
 
         assert_eq!(
-            nemo_flow_tool_call_execute(
+            nemo_relay_tool_call_execute(
                 name.as_ptr(),
                 args.as_ptr(),
                 tool_exec_cb,
@@ -1158,10 +1189,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_tool_call_execute(
+            nemo_relay_tool_call_execute(
                 name.as_ptr(),
                 invalid_json.as_ptr(),
                 tool_exec_cb,
@@ -1173,11 +1204,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut out_json,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 ptr::null(),
@@ -1187,10 +1218,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 invalid_json.as_ptr(),
                 ptr::null(),
@@ -1200,10 +1231,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut llm_handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 invalid_request_shape.as_ptr(),
                 ptr::null(),
@@ -1213,7 +1244,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut llm_handle,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
         assert!(
             read_last_error()
@@ -1222,7 +1253,7 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
         );
 
         assert_eq!(
-            nemo_flow_llm_call(
+            nemo_relay_llm_call(
                 name.as_ptr(),
                 request.as_ptr(),
                 ptr::null(),
@@ -1232,24 +1263,24 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut llm_handle,
             ),
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         );
         assert_eq!(
-            nemo_flow_llm_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::NullPointer
+            nemo_relay_llm_call_end(ptr::null(), args.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_llm_call_end(llm_handle, invalid_json.as_ptr(), ptr::null(), ptr::null(),),
-            NemoFlowStatus::InvalidJson
+            nemo_relay_llm_call_end(llm_handle, invalid_json.as_ptr(), ptr::null(), ptr::null(),),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(
-            nemo_flow_llm_call_end(llm_handle, args.as_ptr(), ptr::null(), ptr::null()),
-            NemoFlowStatus::Ok
+            nemo_relay_llm_call_end(llm_handle, args.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
         );
-        nemo_flow_llm_handle_free(llm_handle);
+        nemo_relay_llm_handle_free(llm_handle);
 
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -1267,10 +1298,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_llm_call_execute(
+            nemo_relay_llm_call_execute(
                 name.as_ptr(),
                 invalid_request_shape.as_ptr(),
                 llm_exec_cb,
@@ -1288,11 +1319,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut out_json,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 request.as_ptr(),
                 llm_exec_cb,
@@ -1312,10 +1343,10 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 ptr::null_mut(),
             ),
-            NemoFlowStatus::NullPointer
+            NemoRelayStatus::NullPointer
         );
         assert_eq!(
-            nemo_flow_llm_stream_call_execute(
+            nemo_relay_llm_stream_call_execute(
                 name.as_ptr(),
                 invalid_request_shape.as_ptr(),
                 llm_exec_cb,
@@ -1335,9 +1366,9 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
                 ptr::null(),
                 &mut stream,
             ),
-            NemoFlowStatus::InvalidJson
+            NemoRelayStatus::InvalidJson
         );
 
-        nemo_flow_scope_stack_free(stack);
+        nemo_relay_scope_stack_free(stack);
     }
 }

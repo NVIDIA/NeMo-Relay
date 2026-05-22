@@ -600,8 +600,8 @@ fn maps_hermes_null_request_as_lossy_summary() {
 #[test]
 fn normalizes_mark_style_events_and_header_session_ids() {
     let mut headers = HeaderMap::new();
-    headers.insert("x-nemo-flow-session-id", "header-session".parse().unwrap());
-    headers.insert("x-nemo-flow-config-profile", "coverage".parse().unwrap());
+    headers.insert("x-nemo-relay-session-id", "header-session".parse().unwrap());
+    headers.insert("x-nemo-relay-config-profile", "coverage".parse().unwrap());
 
     for (event_name, expected) in [
         ("UserPromptSubmit", "prompt"),
@@ -619,7 +619,7 @@ fn normalizes_mark_style_events_and_header_session_ids() {
             &headers,
         );
         let (session_id, metadata) = match &outcome.events[0] {
-            NormalizedEvent::LlmHint(event) if expected == "prompt" => {
+            NormalizedEvent::PromptSubmitted(event) if expected == "prompt" => {
                 (event.session_id.as_str(), &event.metadata)
             }
             NormalizedEvent::LlmHint(event) if expected == "response" => {
@@ -636,6 +636,12 @@ fn normalizes_mark_style_events_and_header_session_ids() {
             }
             event => panic!("unexpected event for {event_name}: {event:?}"),
         };
+        if expected == "prompt" {
+            assert!(
+                matches!(outcome.events.get(1), Some(NormalizedEvent::LlmHint(_))),
+                "prompt hooks should also emit a private LLM hint"
+            );
+        }
         assert_eq!(session_id, "header-session");
         assert_eq!(metadata["model"], json!("model-a"));
         assert_eq!(metadata["cwd"], json!("/repo"));

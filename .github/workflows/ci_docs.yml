@@ -10,7 +10,7 @@ defaults:
     shell: bash
 
 env:
-  NEMO_FLOW_CI_WORKSPACE: "${{ github.workspace }}"
+  NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_FLOW_CI_WORKSPACE }}/uv.lock
+          cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
@@ -47,7 +47,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-flow-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -63,13 +63,13 @@ jobs:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Install Documentation Dependencies
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           uv sync --no-default-groups --group dev --no-install-project
           npm ci --ignore-scripts
 
       - name: Check Documentation
-        working-directory: ${{ env.NEMO_FLOW_CI_WORKSPACE }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
-          NEMO_FLOW_DOCS_DEPS_READY: "1"
+          NEMO_RELAY_DOCS_DEPS_READY: "1"
         run: just docs

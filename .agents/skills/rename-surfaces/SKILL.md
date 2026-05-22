@@ -1,6 +1,6 @@
 ---
 name: rename-surfaces
-description: Perform a coordinated repository, package, crate, module, or symbol rename across NeMo Flow
+description: Perform a coordinated repository, package, crate, module, or symbol rename across NeMo Relay
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -34,7 +34,7 @@ or branding text updates that must preserve functional identifiers.
 - Separate **branding text** from **functional identifiers**.
 - Preserve repository and import paths exactly where code depends on them.
 - Update generated or generated-from-build surfaces such as
-  `crates/ffi/nemo_flow.h` through the proper build step.
+  `crates/ffi/nemo_relay.h` through the proper build step.
 - Search for old names after the rename and validate every public language
   surface.
 

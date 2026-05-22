@@ -2,22 +2,27 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "nemo-flow-cli"
+name = "nemo-relay-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Coding-agent gateway CLI for NeMo Flow observability."
+description = "Coding-agent gateway CLI for NeMo Relay observability."
 
 [[bin]]
-name = "nemo-flow"
+name = "nemo-relay"
 path = "src/main.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }-{ version }{ binary-ext }"
+pkg-fmt = "bin"
 
 [lints]
 workspace = true
 
 [dependencies]
-nemo-flow = { workspace = true, features = ["openinference"] }
+nemo-relay = { workspace = true, features = ["openinference"] }
+nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 async-stream = "0.3"
 axum = "0.8"
 bytes = "1"

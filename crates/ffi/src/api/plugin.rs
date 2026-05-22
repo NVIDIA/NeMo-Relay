@@ -3,23 +3,24 @@
 
 use super::{
     Arc, CStr, ConfigDiagnostic, DiagnosticLevel, FfiPluginContext, Future,
-    NemoFlowEventSubscriberCb, NemoFlowFreeFn, NemoFlowJsonCb, NemoFlowLlmConditionalCb,
-    NemoFlowLlmExecInterceptCb, NemoFlowLlmRequestCb, NemoFlowLlmRequestInterceptCb,
-    NemoFlowPluginRegisterCb, NemoFlowPluginValidateCb, NemoFlowStatus, NemoFlowToolConditionalCb,
-    NemoFlowToolExecInterceptCb, NemoFlowToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError,
-    PluginRegistrationContext, active_plugin_report, c_char, c_str_to_json, c_str_to_string,
-    clear_last_error, clear_plugin_configuration, deregister_plugin, initialize_plugins,
-    json_to_c_string, last_error_message, list_plugin_kinds, nemo_flow_string_free,
-    register_adaptive_component, register_plugin, set_last_error, status_from_plugin_error,
-    tokio_runtime, validate_plugin_config, wrap_event_subscriber, wrap_llm_conditional_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
-    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb,
+    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb,
+    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayStatus,
+    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
+    PluginConfig, PluginError, PluginRegistrationContext, active_plugin_report, c_char,
+    c_str_to_json, c_str_to_string, clear_last_error, clear_plugin_configuration,
+    deregister_plugin, initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
+    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
+    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_subscriber,
+    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
+    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
+    wrap_tool_sanitize_fn,
 };
 
 struct FfiHostedPluginUserData {
     ptr: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
+    free_fn: NemoRelayFreeFn,
 }
 
 unsafe impl Send for FfiHostedPluginUserData {}
@@ -35,8 +36,8 @@ impl Drop for FfiHostedPluginUserData {
 
 struct FfiHostedPluginAdapter {
     plugin_kind: String,
-    validate_cb: Option<NemoFlowPluginValidateCb>,
-    register_cb: NemoFlowPluginRegisterCb,
+    validate_cb: Option<NemoRelayPluginValidateCb>,
+    register_cb: NemoRelayPluginRegisterCb,
     user_data: Arc<FfiHostedPluginUserData>,
 }
 
@@ -57,7 +58,7 @@ impl Plugin for FfiHostedPluginAdapter {
         let plugin_config_json =
             json_to_c_string(&serde_json::Value::Object(plugin_config.clone()));
         let result_ptr = unsafe { validate_cb(self.user_data.ptr, plugin_config_json) };
-        unsafe { nemo_flow_string_free(plugin_config_json) };
+        unsafe { nemo_relay_string_free(plugin_config_json) };
 
         if result_ptr.is_null() {
             let message = last_error_message().unwrap_or_else(|| {
@@ -79,7 +80,7 @@ impl Plugin for FfiHostedPluginAdapter {
             .to_str()
             .ok()
             .and_then(|text| serde_json::from_str::<Vec<ConfigDiagnostic>>(text).ok());
-        unsafe { nemo_flow_string_free(result_ptr) };
+        unsafe { nemo_relay_string_free(result_ptr) };
         diagnostics.unwrap_or_else(|| {
             vec![ConfigDiagnostic {
                 level: DiagnosticLevel::Error,
@@ -106,8 +107,8 @@ impl Plugin for FfiHostedPluginAdapter {
             let mut ffi_ctx = FfiPluginContext(ctx as *mut _);
             let status =
                 unsafe { (self.register_cb)(self.user_data.ptr, plugin_config_json, &mut ffi_ctx) };
-            unsafe { nemo_flow_string_free(plugin_config_json) };
-            if status == NemoFlowStatus::Ok {
+            unsafe { nemo_relay_string_free(plugin_config_json) };
+            if status == NemoRelayStatus::Ok {
                 Ok(())
             } else if let Some(message) = last_error_message() {
                 Err(PluginError::RegistrationFailed(message))
@@ -121,7 +122,7 @@ impl Plugin for FfiHostedPluginAdapter {
     }
 }
 
-fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoFlowStatus> {
+fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoRelayStatus> {
     register_adaptive_component().map_err(|err| status_from_plugin_error(&err))
 }
 
@@ -130,38 +131,38 @@ fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoFlowSta
 /// # Safety
 /// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_validate_plugin_config(
+pub unsafe extern "C" fn nemo_relay_validate_plugin_config(
     config_json: *const c_char,
     out_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     if let Err(status) = ensure_adaptive_component_registered() {
         return status;
     }
     let config_value = match c_str_to_json(config_json) {
         Some(value) => value,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let config: PluginConfig = match serde_json::from_value(config_value) {
         Ok(config) => config,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NemoFlowStatus::InvalidJson;
+            return NemoRelayStatus::InvalidJson;
         }
     };
     let report_json = match serde_json::to_value(validate_plugin_config(&config)) {
         Ok(value) => value,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NemoFlowStatus::Internal;
+            return NemoRelayStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&report_json) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Initialize the active global plugin components and return the resulting diagnostics report.
@@ -169,27 +170,27 @@ pub unsafe extern "C" fn nemo_flow_validate_plugin_config(
 /// # Safety
 /// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_initialize_plugins(
+pub unsafe extern "C" fn nemo_relay_initialize_plugins(
     config_json: *const c_char,
     out_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     if let Err(status) = ensure_adaptive_component_registered() {
         return status;
     }
     let config_value = match c_str_to_json(config_json) {
         Some(value) => value,
-        None => return NemoFlowStatus::InvalidJson,
+        None => return NemoRelayStatus::InvalidJson,
     };
     let config: PluginConfig = match serde_json::from_value(config_value) {
         Ok(config) => config,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NemoFlowStatus::InvalidJson;
+            return NemoRelayStatus::InvalidJson;
         }
     };
     let report = match tokio_runtime().block_on(initialize_plugins(config)) {
@@ -200,19 +201,19 @@ pub unsafe extern "C" fn nemo_flow_initialize_plugins(
         Ok(value) => value,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NemoFlowStatus::Internal;
+            return NemoRelayStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&report_json) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Clear the active global plugin configuration.
 #[unsafe(no_mangle)]
-pub extern "C" fn nemo_flow_clear_plugin_configuration() -> NemoFlowStatus {
+pub extern "C" fn nemo_relay_clear_plugin_configuration() -> NemoRelayStatus {
     clear_last_error();
     match clear_plugin_configuration() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -222,23 +223,23 @@ pub extern "C" fn nemo_flow_clear_plugin_configuration() -> NemoFlowStatus {
 /// # Safety
 /// `out_json` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_active_plugin_report_json(
+pub unsafe extern "C" fn nemo_relay_active_plugin_report_json(
     out_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let report_json = match serde_json::to_value(active_plugin_report()) {
         Ok(value) => value,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NemoFlowStatus::Internal;
+            return NemoRelayStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&report_json) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Return the registered plugin kinds as JSON.
@@ -246,13 +247,13 @@ pub unsafe extern "C" fn nemo_flow_active_plugin_report_json(
 /// # Safety
 /// `out_json` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_list_plugin_kinds_json(
+pub unsafe extern "C" fn nemo_relay_list_plugin_kinds_json(
     out_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     if let Err(status) = ensure_adaptive_component_registered() {
         return status;
@@ -261,11 +262,11 @@ pub unsafe extern "C" fn nemo_flow_list_plugin_kinds_json(
         Ok(value) => value,
         Err(err) => {
             set_last_error(&err.to_string());
-            return NemoFlowStatus::Internal;
+            return NemoRelayStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&kinds_json) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Register a plugin backed by foreign callbacks.
@@ -273,13 +274,13 @@ pub unsafe extern "C" fn nemo_flow_list_plugin_kinds_json(
 /// # Safety
 /// `plugin_kind` must be a valid C string and `register_cb` must be a valid function pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_register_plugin(
+pub unsafe extern "C" fn nemo_relay_register_plugin(
     plugin_kind: *const c_char,
-    validate_cb: Option<NemoFlowPluginValidateCb>,
-    register_cb: NemoFlowPluginRegisterCb,
+    validate_cb: Option<NemoRelayPluginValidateCb>,
+    register_cb: NemoRelayPluginRegisterCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     let plugin_kind = match c_str_to_string(plugin_kind) {
         Ok(value) => value,
@@ -296,7 +297,7 @@ pub unsafe extern "C" fn nemo_flow_register_plugin(
         }),
     });
     match register_plugin(plugin) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -306,17 +307,19 @@ pub unsafe extern "C" fn nemo_flow_register_plugin(
 /// # Safety
 /// `plugin_kind` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_deregister_plugin(plugin_kind: *const c_char) -> NemoFlowStatus {
+pub unsafe extern "C" fn nemo_relay_deregister_plugin(
+    plugin_kind: *const c_char,
+) -> NemoRelayStatus {
     clear_last_error();
     let plugin_kind = match c_str_to_string(plugin_kind) {
         Ok(value) => value,
         Err(status) => return status,
     };
     if deregister_plugin(&plugin_kind) {
-        NemoFlowStatus::Ok
+        NemoRelayStatus::Ok
     } else {
         set_last_error(&format!("not found: plugin '{plugin_kind}'"));
-        NemoFlowStatus::NotFound
+        NemoRelayStatus::NotFound
     }
 }
 
@@ -326,17 +329,17 @@ pub unsafe extern "C" fn nemo_flow_deregister_plugin(plugin_kind: *const c_char)
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_subscriber(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_subscriber(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
-    cb: NemoFlowEventSubscriberCb,
+    cb: NemoRelayEventSubscriberCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -344,7 +347,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_subscriber(
     };
     let wrapped = wrap_event_subscriber(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }.register_subscriber(&name, wrapped) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -355,18 +358,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_subscriber(
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_request_guardrail(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowToolSanitizeCb,
+    cb: NemoRelayToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -376,7 +379,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_request
     match unsafe { &mut *((*ctx).0) }
         .register_tool_sanitize_request_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -387,18 +390,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_request
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_response_guardrail(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowToolSanitizeCb,
+    cb: NemoRelayToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -408,7 +411,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_respons
     match unsafe { &mut *((*ctx).0) }
         .register_tool_sanitize_response_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -419,18 +422,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_sanitize_respons
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowToolConditionalCb,
+    cb: NemoRelayToolConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -440,7 +443,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_conditional_exec
     match unsafe { &mut *((*ctx).0) }
         .register_tool_conditional_execution_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -451,18 +454,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_conditional_exec
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_request_guardrail(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_request_guardrail(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowLlmRequestCb,
+    cb: NemoRelayLlmRequestCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -472,7 +475,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_request_
     match unsafe { &mut *((*ctx).0) }
         .register_llm_sanitize_request_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -483,18 +486,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_request_
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_response_guardrail(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_sanitize_response_guardrail(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowJsonCb,
+    cb: NemoRelayJsonCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -504,7 +507,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_response
     match unsafe { &mut *((*ctx).0) }
         .register_llm_sanitize_response_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -515,18 +518,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_sanitize_response
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_conditional_execution_guardrail(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_conditional_execution_guardrail(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowLlmConditionalCb,
+    cb: NemoRelayLlmConditionalCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -536,7 +539,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_conditional_execu
     match unsafe { &mut *((*ctx).0) }
         .register_llm_conditional_execution_guardrail(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -547,19 +550,19 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_conditional_execu
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_request_intercept(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_request_intercept(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NemoFlowLlmRequestInterceptCb,
+    cb: NemoRelayLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -572,7 +575,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_request_intercept
         break_chain,
         wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -583,19 +586,19 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_request_intercept
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_request_intercept(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_tool_request_intercept(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
     break_chain: bool,
-    cb: NemoFlowToolSanitizeCb,
+    cb: NemoRelayToolSanitizeCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -608,7 +611,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_request_intercep
         break_chain,
         wrapped,
     ) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -619,18 +622,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_request_intercep
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_execution_intercept(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowLlmExecInterceptCb,
+    cb: NemoRelayLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -638,7 +641,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_execution_interce
     };
     let wrapped = wrap_llm_exec_intercept_fn(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }.register_llm_execution_intercept(&name, priority, wrapped) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -649,18 +652,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_execution_interce
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_stream_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_llm_stream_execution_intercept(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowLlmExecInterceptCb,
+    cb: NemoRelayLlmExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -670,7 +673,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_stream_execution_
     match unsafe { &mut *((*ctx).0) }
         .register_llm_stream_execution_intercept(&name, priority, wrapped)
     {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }
@@ -681,18 +684,18 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_llm_stream_execution_
 /// `ctx` and `name` must be valid pointers and the callback must remain valid for the duration
 /// of the plugin registration lifetime.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_execution_intercept(
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_tool_execution_intercept(
     ctx: *mut FfiPluginContext,
     name: *const c_char,
     priority: i32,
-    cb: NemoFlowToolExecInterceptCb,
+    cb: NemoRelayToolExecInterceptCb,
     user_data: *mut libc::c_void,
-    free_fn: NemoFlowFreeFn,
-) -> NemoFlowStatus {
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
     clear_last_error();
     if ctx.is_null() {
         set_last_error("plugin context is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -700,7 +703,7 @@ pub unsafe extern "C" fn nemo_flow_plugin_context_register_tool_execution_interc
     };
     let wrapped = wrap_tool_exec_intercept_fn(cb, user_data, free_fn);
     match unsafe { &mut *((*ctx).0) }.register_tool_execution_intercept(&name, priority, wrapped) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
     }
 }

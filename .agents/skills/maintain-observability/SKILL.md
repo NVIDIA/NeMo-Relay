@@ -1,6 +1,6 @@
 ---
 name: maintain-observability
-description: Maintain or extend NeMo Flow observability surfaces across ATIF, OpenTelemetry, and OpenInference
+description: Maintain or extend NeMo Relay observability surfaces across ATIF, OpenTelemetry, and OpenInference
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---

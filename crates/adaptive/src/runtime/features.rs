@@ -12,15 +12,15 @@ use std::sync::{
 use std::time::Duration;
 
 use crate::acg::CacheRequestFacts;
-use nemo_flow::api::event::Event;
-use nemo_flow::api::registry::{
+use nemo_relay::api::event::Event;
+use nemo_relay::api::registry::{
     scope_deregister_llm_request_intercept, scope_register_llm_request_intercept,
 };
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmExecutionFn, LlmRequestInterceptFn, LlmStreamExecutionFn, ToolExecutionFn,
 };
-use nemo_flow::codec::request::AnnotatedLlmRequest;
-use nemo_flow::plugin::{
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::plugin::{
     ConfigReport, DiagnosticLevel, PluginError, PluginRegistration as ComponentRegistration,
     PluginRegistrationContext as HostedRegistrationContext, rollback_registrations,
 };
@@ -49,7 +49,7 @@ use crate::subscriber::create_subscriber_with_counter;
 use crate::tool_parallelism_learner::ToolParallelismLearner;
 use crate::types::cache::HotCache;
 
-/// Hosted adaptive runtime that registers NeMo Flow plugin components.
+/// Hosted adaptive runtime that registers NeMo Relay plugin components.
 ///
 /// This type validates configuration, builds the configured storage backend,
 /// registers intercepts and subscribers, and maintains the hot cache used by
@@ -294,7 +294,7 @@ impl AdaptiveRuntime {
     /// Bind the runtime's ACG request rewrite to an active scope.
     ///
     /// External framework integrations can bind the runtime to a session scope
-    /// and then invoke ``nemo_flow.llm.request_intercepts(...)`` explicitly at
+    /// and then invoke ``nemo_relay.llm.request_intercepts(...)`` explicitly at
     /// the provider boundary. Once any scope is bound, this runtime's hosted
     /// ACG execution intercept becomes pass-through so external frameworks do
     /// not double-translate requests.
@@ -395,7 +395,7 @@ impl AdaptiveRuntime {
             && let Err(error) =
                 load_persisted_acg_state(&agent_id, backend.as_ref(), &self.hot_cache).await
         {
-            eprintln!("nemo-flow-adaptive: acg hot cache seeding failed: {error}");
+            eprintln!("nemo-relay-adaptive: acg hot cache seeding failed: {error}");
         }
 
         let mut pending = self.pending_features(&agent_id);
@@ -431,7 +431,7 @@ impl AdaptiveRuntime {
                     guard.plan = plan;
                 }
             }
-            Err(error) => eprintln!("nemo-flow-adaptive: hot cache seeding failed: {error}"),
+            Err(error) => eprintln!("nemo-relay-adaptive: hot cache seeding failed: {error}"),
         }
     }
 

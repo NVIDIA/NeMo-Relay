@@ -3,6 +3,6 @@
 
 'use strict';
 
-const { PluginContext: _PluginContext, ...publicApi } = require('./nemo_flow_wasm.js');
+const { PluginContext: _PluginContext, ...publicApi } = require('./nemo_relay_wasm.js');
 
 module.exports = publicApi;

@@ -1,6 +1,6 @@
 ---
 name: test-ffi-surface
-description: Build and test the NeMo Flow FFI surface; use this for crates/ffi changes, header generation, or ABI-facing validation
+description: Build and test the NeMo Relay FFI surface; use this for crates/ffi changes, header generation, or ABI-facing validation
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -36,11 +36,11 @@ just build-go
 # Required Rust validation
 cargo fmt --all
 just test-rust
-cargo test -p nemo-flow-ffi
+cargo test -p nemo-relay-ffi
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Review header drift if the FFI surface changed
-git diff -- crates/ffi/nemo_flow.h
+git diff -- crates/ffi/nemo_relay.h
 ```
 
 ## When To Escalate
@@ -54,7 +54,7 @@ git diff -- crates/ffi/nemo_flow.h
 - `crates/ffi/Cargo.toml`
 - `crates/ffi/build.rs`
 - `crates/ffi/cbindgen.toml`
-- `crates/ffi/nemo_flow.h`
+- `crates/ffi/nemo_relay.h`
 - `just build-go`
 - `.pre-commit-config.yaml`
 - `README.md`

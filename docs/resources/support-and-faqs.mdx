@@ -6,36 +6,37 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+
 Use this page to decide where to start, which runtime surface to use, and where
-to look when a NeMo Flow workflow does not behave as expected.
+to look when a NeMo Relay workflow does not behave as expected.
 
 ## Library Positioning
 
-Use these questions to understand what NeMo Flow is, what it is not, and how it
+Use these questions to understand what NeMo Relay is, what it is not, and how it
 fits into the agent and NVIDIA NeMo ecosystem.
 
-### What Is NeMo Flow Responsible For?
+### What Is NeMo Relay Responsible For?
 
-NeMo Flow provides shared runtime instrumentation for scopes, tool calls, LLM
+NeMo Relay provides shared runtime instrumentation for scopes, tool calls, LLM
 calls, middleware, lifecycle events, subscribers, plugins, and adaptive
-optimization. It gives applications and framework integrations a consistent
+tuning. It gives applications and framework integrations a consistent
 execution model across supported bindings.
 
-NeMo Flow sits inside an application, framework, or integration and makes
+NeMo Relay sits inside an application, framework, or integration and makes
 runtime behavior observable, policy-aware, and reusable.
 
 ### Is This An Agent Framework?
 
-NeMo Flow is an agent runtime framework, not a full agent application
+NeMo Relay is an agent runtime framework, not a full agent application
 framework. It does not decide which agent pattern to use, choose a planner, own
 memory, provide a hosted workbench, or replace an existing harness.
 
-Use NeMo Flow when you want the tool calls, LLM calls, scopes, middleware,
+Use NeMo Relay when you want the tool calls, LLM calls, scopes, middleware,
 plugins, and observability inside an agent system to follow one runtime model.
 
-### What Is NeMo Flow Not?
+### What Is NeMo Relay Not?
 
-NeMo Flow is not:
+NeMo Relay is not:
 
 - A model provider
 - A vector database
@@ -49,44 +50,44 @@ middleware, lifecycle events, subscribers, plugins, and adaptive behavior.
 
 ### How Does This Differ From NeMo Agent Toolkit?
 
-NeMo Flow is the lower-level runtime layer for scopes, middleware, events,
+NeMo Relay is the lower-level runtime layer for scopes, middleware, events,
 plugins, and observability around tool and LLM execution. NeMo Agent Toolkit is
 a higher-level agent toolkit in the NVIDIA NeMo ecosystem.
 
-Use NeMo Agent Toolkit to build, optimize, and run agent workflows. Use NeMo Flow
+Use NeMo Agent Toolkit to build, optimize, and run agent workflows. Use NeMo Relay
 inside an application, harness, framework integration, or plugin when you need
 consistent runtime instrumentation and policy behavior around the actual tool
 and model calls.
 
-### How Does NeMo Flow Relate To Other NVIDIA NeMo Products?
+### How Does NeMo Relay Relate To Other NVIDIA NeMo Products?
 
-NeMo Flow belongs in the NVIDIA NeMo ecosystem, but it has a specific role: it
+NeMo Relay belongs in the NVIDIA NeMo ecosystem, but it has a specific role: it
 is a runtime instrumentation and policy layer for agent execution. It does not
 replace model training, model serving, guardrail authoring, data pipelines, or
 agent application frameworks provided by other NeMo projects.
 
-When another NeMo product or framework owns the high-level workflow, NeMo Flow
+When another NeMo product or framework owns the high-level workflow, NeMo Relay
 can be used at the execution boundaries where scopes, lifecycle events,
 middleware, subscribers, exporters, or adaptive plugins are needed.
 
-### Does NeMo Flow Orchestrate Agents?
+### Does NeMo Relay Orchestrate Agents?
 
-No. NeMo Flow does not choose the next step, schedule a multi-agent workflow,
+No. NeMo Relay does not choose the next step, schedule a multi-agent workflow,
 own a planner, or decide which tool an agent should call. That remains the
 responsibility of the application, framework, or agent harness.
 
-NeMo Flow observes and controls the execution boundaries that the orchestrator
+NeMo Relay observes and controls the execution boundaries that the orchestrator
 uses: scopes, tool calls, LLM calls, middleware, events, subscribers, and
 plugins.
 
-### Why The Name "NeMo Flow"?
+### Why The Name "NeMo Relay"?
 
 "NeMo" places the project in the NVIDIA NeMo ecosystem. "Flow" refers to the
 runtime flow of agent work through scopes, middleware, events, subscribers,
 plugins, and exporters.
 
-The name is about the execution path NeMo Flow makes visible and controllable;
-it is not a claim that NeMo Flow owns the full agent workflow or orchestration
+The name is about the execution path NeMo Relay makes visible and controllable;
+it is not a claim that NeMo Relay owns the full agent workflow or orchestration
 layer.
 
 ## Technology And Bindings
@@ -105,9 +106,9 @@ The documentation and examples also cover integration with Agent Trajectory
 Interchange Format (ATIF) trajectory export, OpenTelemetry traces,
 OpenInference-compatible data, and third-party agent framework patch sets.
 
-### Why Is NeMo Flow's Core Written In Rust?
+### Why Is NeMo Relay's Core Written In Rust?
 
-Rust gives NeMo Flow one native source of truth for runtime behavior while
+Rust gives NeMo Relay one native source of truth for runtime behavior while
 keeping overhead low at hot tool and LLM boundaries. It also gives the project
 strong ownership, error, and async primitives for scope stacks, middleware
 registries, callbacks, subscribers, and binding-facing FFI layers.
@@ -121,11 +122,11 @@ Start with Python, Node.js, or Rust. These are the primary documented bindings
 and have the broadest getting-started, concept, guide, and generated API
 coverage.
 
-- Use [Python Quick Start](/getting-started/quick-start/python) when you are adding
-  NeMo Flow to Python application code or agent harnesses.
-- Use [Node.js Quick Start](/getting-started/quick-start/nodejs) when your application,
+- Use [Python Quick Start](/getting-started/python) when you are adding
+  NeMo Relay to Python application code or agent harnesses.
+- Use [Node.js Quick Start](/getting-started/nodejs) when your application,
   framework integration, or plugin-facing code runs in Node.js.
-- Use [Rust Quick Start](/getting-started/quick-start/rust) when you want the native
+- Use [Rust Quick Start](/getting-started/rust) when you want the native
   runtime surface or are building lower-level integrations.
 
 ### Are Go, WebAssembly, And FFI Supported?
@@ -152,7 +153,7 @@ Use these questions to find the right first guide for your task.
 
 ### What Should I Read First?
 
-Use the [What Should I Read First?](/about-nemo-flow/overview#what-should-i-read-first)
+Use the [What Should I Read First?](../index.md#what-should-i-read-first)
 table on the documentation overview page to pick the right starting point for
 your task.
 
@@ -168,16 +169,16 @@ workflow step, tool call group, LLM call group, evaluator, retriever, or custom
 operation that needs ownership in the event stream.
 
 Scopes establish parent-child relationships for events and define the lifetime
-for scope-local middleware and subscribers. Refer to [Scopes](/about-nemo-flow/concepts/scopes)
+for scope-local middleware and subscribers. Refer to [Scopes](/about-nemo-relay/concepts/scopes)
 and [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
 
-### How Does NeMo Flow Handle Multiple Concurrent Agents Or Requests?
+### How Does NeMo Relay Handle Multiple Concurrent Agents Or Requests?
 
 Use an isolated scope stack for each concurrent request, tenant, worker, or
 agent run. The root scope identifies the run, and emitted events include root
 identity so subscribers and exporters can separate overlapping work.
 
-Refer to [Scopes](/about-nemo-flow/concepts/scopes#context-isolation) and the
+Refer to [Scopes](/about-nemo-relay/concepts/scopes#context-isolation) and the
 [scope and context helper examples](/instrument-applications/code-examples#scope-and-context-helpers).
 
 ### When Should I Emit A Mark Instead Of A Scope?
@@ -187,7 +188,7 @@ point-in-time milestone that should appear in the event stream but does not
 represent a full lifecycle span, such as "routing complete" or "selected
 candidate plan."
 
-Refer to [Events](/about-nemo-flow/concepts/events) and
+Refer to [Events](/about-nemo-relay/concepts/events) and
 [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks#when-to-add-marks).
 
 ### Should I Use Managed Execution Helpers Or Manual Lifecycle APIs?
@@ -213,7 +214,7 @@ streaming LLM flows can use stream-specific execution behavior.
 Start with [Instrument a Tool Call](/instrument-applications/instrument-tool-call)
 or [Instrument an LLM Call](/instrument-applications/instrument-llm-call).
 
-### Does NeMo Flow Support Streaming LLM Responses?
+### Does NeMo Relay Support Streaming LLM Responses?
 
 Yes. Streaming LLM workflows have a stream execution path so middleware can run
 around chunk delivery and finalization, not only around a single response
@@ -240,23 +241,23 @@ Choose the surface based on what must change:
 | Rewrite only emitted request or response payloads | Sanitize guardrail |
 | Wrap streaming chunk delivery and finalization | Stream execution intercept |
 
-Refer to [Middleware](/about-nemo-flow/concepts/middleware) and
+Refer to [Middleware](/about-nemo-relay/concepts/middleware) and
 [Add Middleware](/instrument-applications/advanced-guide).
 
 ### What Is The Middleware Pipeline?
 
 The middleware pipeline is the ordered runtime path that a managed tool or LLM
-call follows before, during, and after the real callback. It is how NeMo Flow
+call follows before, during, and after the real callback. It is how NeMo Relay
 applies policy, request transformation, execution wrapping, and observability
 sanitization without moving that logic into every call site.
 
 For managed execution, the pipeline runs:
 - Conditional guardrails
 - Request intercepts
-- Request sanitization for emitted start events
+- Request sanitization and start-event emission
 - Execution intercepts
-- The original callback
-- Response sanitization for emitted end events
+- The original callback, unless an execution intercept replaces it
+- Response sanitization and end-event emission
 
 ### What Is The Difference Between Guardrails And Intercepts?
 
@@ -277,27 +278,29 @@ request, workflow, or nested unit of work and disappear automatically when that
 scope closes.
 
 Use plugins when the behavior should be reusable and installed from
-configuration. Refer to [Registration Levels](/about-nemo-flow/concepts/middleware#registration-levels)
+configuration. Refer to [Registration Levels](/about-nemo-relay/concepts/middleware#registration-levels)
 and [Middleware Registration Families](/instrument-applications/advanced-guide#middleware-registration-families).
 
 ### How Does Middleware Ordering Work?
 
 Managed execution applies conditional guardrails first, then request intercepts,
-then request sanitization for emitted start events, then execution intercepts
-and the real callback, then response sanitization for emitted end events.
+then request sanitization and start-event emission, then execution intercepts
+and the real callback, then response sanitization and end-event emission.
+The start event is emitted before execution intercepts run, so subscribers see
+a lifecycle start even when an execution intercept replaces the callback.
 
-Registries are priority ordered. When scope-local behavior is present, NeMo Flow
+Registries are priority ordered. When scope-local behavior is present, NeMo Relay
 combines applicable global and ancestor scope-local entries into the execution
-chain. Refer to [Managed Execution Order](/about-nemo-flow/concepts/middleware#managed-execution-order).
+chain. Refer to [Managed Execution Order](/about-nemo-relay/concepts/middleware#managed-execution-order).
 
 ### What Data Can Middleware And Events Carry?
 
 Middleware and event payloads should be JSON-compatible. Keep SDK clients,
 streams, sockets, callbacks, file handles, and framework-specific object
-instances outside NeMo Flow payloads.
+instances outside NeMo Relay payloads.
 
 When a framework exposes non-serializable objects, pass stable IDs or summarized
-metadata through NeMo Flow and keep the original objects in framework-owned
+metadata through NeMo Relay and keep the original objects in framework-owned
 storage. Refer to [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data).
 
 ### How Do I Keep Sensitive Data Out Of Observability?
@@ -307,7 +310,7 @@ subscribers or exporters receive payloads. Keep credentials out of plugin
 configuration and source code, and emit summarized metadata when full request or
 response bodies are not needed.
 
-Refer to [Middleware](/about-nemo-flow/concepts/middleware#guardrails) and
+Refer to [Middleware](/about-nemo-relay/concepts/middleware#guardrails) and
 [Observability](/observability-plugin/about).
 
 ## Observability And Export
@@ -320,13 +323,13 @@ Subscribers consume lifecycle events in process. Start with a local subscriber
 when validating instrumentation, then add exporter-oriented subscribers for
 operational tracing, trajectory export, or analytics.
 
-Refer to [Subscribers](/about-nemo-flow/concepts/subscribers),
-[Events](/about-nemo-flow/concepts/events), and
+Refer to [Subscribers](/about-nemo-relay/concepts/subscribers),
+[Events](/about-nemo-relay/concepts/events), and
 [Observability](/observability-plugin/about).
 
 ### Which Exporter Should I Use?
 
-Use a local subscriber for debugging and dev. Use OpenTelemetry when you
+Use a local subscriber for debugging and development. Use OpenTelemetry when you
 want OTLP-compatible traces in existing observability infrastructure. Use
 OpenInference when your tracing stack expects OpenInference-style agent and LLM
 semantics. Use Agent Trajectory Interchange Format (ATIF) when you need
@@ -337,9 +340,9 @@ Refer to [Exporter Selection](/observability-plugin/about#exporter-selection),
 [OpenInference](/observability-plugin/openinference), and
 [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif).
 
-### Can I Use NeMo Flow Just For Observability Without Adaptive Optimization Or Middleware?
+### Can I Use NeMo Relay Just For Observability Without Adaptive Tuning Or Middleware?
 
-Yes. Adaptive optimization and custom middleware are optional. You can start by
+Yes. Adaptive tuning and custom middleware are optional. You can start by
 adding scopes, routing tool or LLM calls through managed execution helpers or
 manual lifecycle APIs, and registering subscribers or exporters.
 
@@ -361,7 +364,7 @@ subscribers, or related runtime helpers without requiring every application to
 hand-register the same behavior.
 
 Plugins install behavior into the same runtime model; they do not replace
-scopes, middleware, or subscribers. Refer to [Plugins](/about-nemo-flow/concepts/plugins)
+scopes, middleware, or subscribers. Refer to [Plugins](/about-nemo-relay/concepts/plugins)
 and [Build Plugins](/build-plugins/about).
 
 ### When Should I Build A Plugin Instead Of Application Code?
@@ -374,9 +377,9 @@ reported through structured activation diagnostics.
 Refer to [Define a Plugin](/build-plugins/basic-guide) and
 [Register Plugin Behavior](/build-plugins/register-behavior).
 
-### How Is Adaptive Optimization Enabled?
+### How Is Adaptive Tuning Enabled?
 
-Adaptive optimization is activated through the plugin system. Start with
+Adaptive tuning is activated through the plugin system. Start with
 telemetry and in-memory state so the runtime can observe representative
 workflows before changing behavior. Enable active behavior one area at a time,
 such as adaptive hints, tool parallelism, or cache-governor behavior.
@@ -399,17 +402,17 @@ owns execution. Use standalone conditional-execution or request-intercept
 helpers only when the framework needs those decisions before it invokes its own
 downstream code.
 
-Refer to [Framework Integrations](/about-nemo-flow/concepts/framework-integrations) and
+Refer to [Framework Integrations](/about-nemo-relay/concepts/framework-integrations) and
 [Integrate into Frameworks](/integrate-into-frameworks/about).
 
-### How Does NeMo Flow Connect To My Favorite Agent Harness Or Framework?
+### How Does NeMo Relay Connect To My Favorite Agent Harness Or Framework?
 
-Connect NeMo Flow at the stable boundaries where the harness or framework
+Connect NeMo Relay at the stable boundaries where the harness or framework
 starts a run, invokes a tool, calls an LLM provider, streams model output, or
 emits lifecycle milestones.
 
 Use managed execution wrappers when the framework can expose the real callback
-to NeMo Flow. Use explicit start and end lifecycle APIs when the framework owns
+to NeMo Relay. Use explicit start and end lifecycle APIs when the framework owns
 the invocation internally. Use codecs when the framework uses typed or
 provider-specific payloads but middleware and events need JSON-compatible data.
 
@@ -437,13 +440,13 @@ and the repository root `third_party/README.md`.
 
 ### Where Are The API Docs?
 
-Use the [Python Library Reference](/reference/api/python-library-reference),
-[Node.js Library Reference](/reference/api/nodejs-library-reference), and
-[Rust Library Reference](/reference/api/rust-library-reference) for generated
-symbol-level documentation. The Rust reference includes `nemo-flow`,
-`nemo-flow-adaptive`, and `nemo-flow-ffi`. For Go and WebAssembly surfaces, use
-the source directories, tests, and task-focused guides when you need exact
-behavior.
+Use [API](/reference/api) for generated symbol-level documentation.
+The primary generated entry points are [Python API](/reference/api/python),
+[Node.js API](/reference/api/nodejs), and
+[Rust API](/reference/api/rust).
+
+Go, WebAssembly, and raw FFI are experimental and source-first; use their source
+directories and tests when you need exact behavior.
 
 ### What Should I Know About Performance?
 
@@ -474,7 +477,7 @@ Common checks include:
 
 ### Where Are Release Notes?
 
-Use [Release Notes](/about-nemo-flow/release-notes) for
+Use [Release Notes](/about-nemo-relay/release-notes) for
 documentation-visible release status. Complete release history is published
 through the repository release page when that page is available.
 
@@ -489,20 +492,19 @@ logs or emitted events.
 Start with [Contribute](/contribute/about) and the repository root
 `CONTRIBUTING.md`, then use
 [Development Setup](/contribute/development-setup),
-[Workflow and Reviews](/contribute/workflow-and-reviews), and
+[Workflow And Reviews](/contribute/workflow-and-reviews), and
 [Testing And Documentation](/contribute/testing-and-docs).
 
-### How Will AI Coding Assistants Find NeMo Flow?
+### How Will AI Coding Assistants Find NeMo Relay?
 
 AI coding assistants should start from the repository root `AGENTS.md`,
 `README.md`, and the documentation index. Those entry points describe the
 runtime model, repository layout, supported bindings, validation commands, and
 contribution workflow.
 
-For symbol-level work, assistants should use the source directories, tests, and
-the generated Python, Node.js, and Rust library references. For
-repository-specific automation, use the NeMo Flow agent skills under `skills/`
-and keep examples aligned with the public docs.
+For symbol-level work, assistants should use the generated Rust, Python, and
+Node.js API references. For repository-specific automation, use the NeMo Relay
+agent skills under `skills/` and keep examples aligned with the public docs.
 
 ### Which Tests Should I Run For A Change?
 
@@ -510,17 +512,17 @@ Choose the smallest validation set that covers the touched surface:
 
 - Rust core or adaptive changes: `cargo test --workspace` or focused crate tests.
 - Python binding changes: `uv run pytest`.
-- Node.js binding changes: `npm test --workspace=nemo-flow-node`.
-- Go binding changes: build the release FFI library first, then run Go tests under `go/nemo_flow`.
+- Node.js binding changes: `npm test --workspace=nemo-relay-node`.
+- Go binding changes: build the release FFI library first, then run Go tests under `go/nemo_relay`.
 - WebAssembly changes: run `just test-wasm` and the WebAssembly crate tests
-  (`cargo test -p nemo-flow-wasm`) when integration behavior changed. For
+  (`cargo test -p nemo-relay-wasm`) when integration behavior changed. For
   focused debugging, you can run `wasm-pack test --node crates/wasm` directly.
-- Documentation changes: run `./scripts/build-docs.sh check`.
+- Documentation changes: run `./scripts/build-docs.sh html`.
 
 Refer to [Testing and Documentation](/contribute/testing-and-docs) for the
 current contribution workflow.
 
 ### What License Applies?
 
-NeMo Flow is licensed under Apache-2.0. Source and documentation files use SPDX
+NeMo Relay is licensed under Apache-2.0. Source and documentation files use SPDX
 headers. Refer to [Legal](/resources/legal) and the repository root `LICENSE`.

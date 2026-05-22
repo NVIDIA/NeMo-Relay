@@ -20,7 +20,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
-from nemo_flow import JsonObject, LLMRequest, llm, plugin, tools
+from nemo_relay import JsonObject, LLMRequest, llm, plugin, tools
 
 
 def _load_example_plugin() -> Any:

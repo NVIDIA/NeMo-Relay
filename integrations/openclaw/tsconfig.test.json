@@ -7,14 +7,6 @@
     "sourceMap": false,
     "outDir": ".test-dist"
   },
-  "exclude": [
-    ".test-dist/**",
-    "dist/**"
-  ],
-  "include": [
-    "index.ts",
-    "src/**/*.ts",
-    "src/**/*.d.ts",
-    "test/**/*.ts"
-  ]
+  "exclude": [".test-dist/**", "dist/**"],
+  "include": ["index.ts", "src/**/*.ts", "src/**/*.d.ts", "test/**/*.ts"]
 }

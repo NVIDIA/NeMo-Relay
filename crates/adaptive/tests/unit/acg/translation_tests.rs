@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for translation in the NeMo Flow adaptive crate.
+//! Unit tests for translation in the NeMo Relay adaptive crate.
 
 use super::{
     AnthropicHintDirective, HintPlan, HintTarget, HintTranslation, HintTranslator,
@@ -16,7 +16,7 @@ use crate::acg::types::{
     SharingScope, TranslationReport,
 };
 use chrono::Utc;
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 use serde_json::json;
 use uuid::Uuid;
 

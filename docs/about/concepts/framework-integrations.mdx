@@ -7,11 +7,11 @@ position: 6
 SPDX-License-Identifier: Apache-2.0 */}
 
 This page explains how framework integrations should attach existing application work to
-NeMo Flow runtime semantics.
+NeMo Relay runtime semantics.
 
 ## Why Framework Integrations Are Different
 
-Application code can usually call the managed NeMo Flow helpers directly.
+Application code can usually call the managed NeMo Relay helpers directly.
 Framework integrations often cannot.
 
 A framework may already own:
@@ -27,7 +27,7 @@ available rather than assuming direct runtime ownership.
 
 ## Preferred Integration Order
 
-When integrating NeMo Flow into an existing framework, prefer these choices in
+When integrating NeMo Relay into an existing framework, prefer these choices in
 order:
 
 1. Execution wrappers through managed execute helpers
@@ -44,7 +44,7 @@ real callback or handler.
 ### Managed Execute Helpers
 
 Use the managed execute helpers when the framework exposes a stable callable
-boundary that NeMo Flow can wrap.
+boundary that NeMo Relay can wrap.
 
 ### Why This Is Preferred
 
@@ -56,14 +56,14 @@ This is the best integration shape because it preserves:
 - The cleanest wrapper point for retries, routing, and timing
 
 Execution wrappers are also the natural place to align framework semantics with
-NeMo Flow execution intercepts.
+NeMo Relay execution intercepts.
 
 ## Fallback: Explicit API Calls
 
 Use explicit API calls when the framework owns part of the invocation lifecycle
-and cannot hand NeMo Flow a stable callback to wrap. Explicit calls let the
+and cannot hand NeMo Relay a stable callback to wrap. Explicit calls let the
 framework keep its own scheduler, retry loop, callback signature, or provider
-client while still using selected NeMo Flow runtime behavior.
+client while still using selected NeMo Relay runtime behavior.
 
 ### What You Lose From Managed Execution Wrappers
 
@@ -82,7 +82,7 @@ execution wrappers whenever the framework can expose the real callback.
 ### Explicit Start, End, and Mark Emission
 
 Use explicit start and end emission when the framework gives reliable lifecycle
-hooks but does not let NeMo Flow wrap the real invocation.
+hooks but does not let NeMo Relay wrap the real invocation.
 
 1. Call the explicit start API as early as the framework can identify the work.
 2. Retain the returned handle.
@@ -98,14 +98,14 @@ and end calls correctly.
 Use standalone conditional-execution helpers when the framework only needs an
 allow-or-block decision before continuing its own invocation path.
 
-This is the preferred explicit API when the framework can ask NeMo Flow for a
+This is the preferred explicit API when the framework can ask NeMo Relay for a
 policy decision but must still execute the real tool or provider call itself.
 The helper returns the guardrail decision; it does not emit a full managed
 lifecycle span by itself.
 
 ### Request Intercepts
 
-Use standalone request-intercept helpers when the framework needs NeMo Flow to
+Use standalone request-intercept helpers when the framework needs NeMo Relay to
 rewrite the request before the framework continues execution on its own.
 
 This is the preferred explicit API when the framework owns execution but can
@@ -129,7 +129,7 @@ instrumentation.
 
 ## Choosing the Right Integration Boundary
 
-Use these rules to decide where NeMo Flow should wrap framework behavior.
+Use these rules to decide where NeMo Relay should wrap framework behavior.
 
 - If you can wrap the real callback, use managed execute helpers.
 - If you cannot wrap the callback but you do have reliable start and end hooks,

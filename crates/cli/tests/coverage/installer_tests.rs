@@ -13,7 +13,7 @@ hooks:
     - command: ~/.hermes/agent-hooks/audit.sh
 "#;
     let merged =
-        merge_hermes_config(existing, hermes_hooks("nemo-flow hook-forward hermes")).unwrap();
+        merge_hermes_config(existing, hermes_hooks("nemo-relay hook-forward hermes")).unwrap();
     let yaml: Value = serde_yaml::from_str(&merged).unwrap();
 
     assert_eq!(yaml["model"]["provider"], json!("auto"));
@@ -31,7 +31,7 @@ hooks:
 fn hermes_config_merge_rejects_invalid_yaml() {
     let error = merge_hermes_config(
         "hooks: [not valid",
-        hermes_hooks("nemo-flow hook-forward hermes"),
+        hermes_hooks("nemo-relay hook-forward hermes"),
     )
     .unwrap_err()
     .to_string();
@@ -73,7 +73,7 @@ fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
             "Stop": [{ "hooks": [{ "type": "command", "command": "existing" }] }]
         }
     });
-    let generated = codex_hooks("nemo-flow hook-forward codex");
+    let generated = codex_hooks("nemo-relay hook-forward codex");
     let once = merge_hooks(existing, generated.clone()).unwrap();
     let twice = merge_hooks(once.clone(), generated).unwrap();
     assert_eq!(once, twice);
@@ -102,14 +102,14 @@ fn helper_formatting_and_headers_cover_optional_paths() {
     .unwrap();
     assert_eq!(
         headers
-            .get("x-nemo-flow-gateway-mode")
+            .get("x-nemo-relay-gateway-mode")
             .and_then(|value| value.to_str().ok()),
         Some("passthrough")
     );
     assert!(
         insert_header(
             &mut HeaderMap::new(),
-            "x-nemo-flow-config-profile",
+            "x-nemo-relay-config-profile",
             Some("bad\nvalue")
         )
         .is_err()
@@ -130,24 +130,24 @@ fn generated_hook_dispatch_covers_all_agents() {
         assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
     }
     assert_eq!(
-        hook_forward_command("nemo-flow", CodingAgent::Hermes),
-        "nemo-flow hook-forward hermes"
+        hook_forward_command("nemo-relay", CodingAgent::Hermes),
+        "nemo-relay hook-forward hermes"
     );
     assert_eq!(
-        hook_forward_command("/abs/path/to/nemo-flow", CodingAgent::Codex),
-        "/abs/path/to/nemo-flow hook-forward codex"
+        hook_forward_command("/abs/path/to/nemo-relay", CodingAgent::Codex),
+        "/abs/path/to/nemo-relay hook-forward codex"
     );
 }
 
 #[test]
 fn cursor_hooks_use_direct_command_entries() {
-    let hooks = cursor_hooks("nemo-flow hook-forward cursor");
+    let hooks = cursor_hooks("nemo-relay hook-forward cursor");
     let before_shell = &hooks["hooks"]["beforeShellExecution"][0];
 
     assert_eq!(hooks["version"], json!(1));
     assert_eq!(
         before_shell["command"],
-        json!("nemo-flow hook-forward cursor")
+        json!("nemo-relay hook-forward cursor")
     );
     assert_eq!(before_shell["timeout"], json!(30));
     assert!(before_shell.get("hooks").is_none());

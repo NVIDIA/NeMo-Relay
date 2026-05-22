@@ -4,9 +4,9 @@
 """Integration tests for LangGraph scope propagation.
 
 Validates that the LangGraph Pregel patch correctly instruments graph and
-node execution with NeMo Flow scopes across sync, async, and parallel paths.
+node execution with NeMo Relay scopes across sync, async, and parallel paths.
 
-These tests exercise the ``_nemo_flow.py`` scope helpers directly to verify
+These tests exercise the ``_nemo_relay.py`` scope helpers directly to verify
 the scope hierarchy, parallel isolation, and double-wrap prevention behavior
 without requiring the full LangGraph graph execution engine.
 """
@@ -18,11 +18,11 @@ import threading
 from typing import Any
 
 import pytest
-from langgraph._nemo_flow import (  # type: ignore[import-untyped]
+from langgraph._nemo_relay import (  # type: ignore[import-untyped]
     _graph_scope_info,
-    _langgraph_nemo_flow_active,
+    _langgraph_nemo_relay_active,
     available,
-    langgraph_nemo_flow_active,
+    langgraph_nemo_relay_active,
     pop_graph_scope,
     pop_node_scope,
     pop_subgraph_scope,
@@ -31,8 +31,8 @@ from langgraph._nemo_flow import (  # type: ignore[import-untyped]
     push_subgraph_scope,
 )
 
-import nemo_flow
-from nemo_flow import ScopeEvent, create_scope_stack, set_thread_scope_stack
+import nemo_relay
+from nemo_relay import ScopeEvent, create_scope_stack, set_thread_scope_stack
 
 
 def _is_scope_event(
@@ -86,9 +86,9 @@ class TestLangGraphScope:
     def events(self):
         """Register an event subscriber and collect events."""
         collected: list[Any] = []
-        nemo_flow.subscribers.register("test-lg-collector", lambda e: collected.append(e))
+        nemo_relay.subscribers.register("test-lg-collector", lambda e: collected.append(e))
         yield collected
-        nemo_flow.subscribers.deregister("test-lg-collector")
+        nemo_relay.subscribers.deregister("test-lg-collector")
 
     # -------------------------------------------------------------------
     # Single-node graph scope hierarchy
@@ -279,11 +279,11 @@ class TestLangGraphScope:
         graph_handle = push_graph_scope("llm_graph")
         node_handle, node_graph_handle, saved_token = push_node_scope("llm_node", "task-llm")
 
-        llm_handle = nemo_flow.llm.call(
+        llm_handle = nemo_relay.llm.call(
             "test-model",
-            nemo_flow.LLMRequest({}, {"messages": [], "model": "test-model"}),
+            nemo_relay.LLMRequest({}, {"messages": [], "model": "test-model"}),
         )
-        nemo_flow.llm.call_end(llm_handle, {"response": "hello"})
+        nemo_relay.llm.call_end(llm_handle, {"response": "hello"})
 
         _pop_node_and_restore_parent_stack(node_handle, node_graph_handle, saved_token, scope_stack)
         pop_graph_scope(graph_handle)
@@ -313,8 +313,8 @@ class TestLangGraphScope:
         graph_handle = push_graph_scope("tool_graph")
         node_handle, node_graph_handle, saved_token = push_node_scope("tool_node", "task-tool")
 
-        tool_handle = nemo_flow.tools.call("search_tool", {"query": "test"})
-        nemo_flow.tools.call_end(tool_handle, {"results": ["a", "b"]})
+        tool_handle = nemo_relay.tools.call("search_tool", {"query": "test"})
+        nemo_relay.tools.call_end(tool_handle, {"results": ["a", "b"]})
 
         _pop_node_and_restore_parent_stack(node_handle, node_graph_handle, saved_token, scope_stack)
         pop_graph_scope(graph_handle)
@@ -340,17 +340,17 @@ class TestLangGraphScope:
 
     def test_no_double_wrapping(self, scope_stack: Any, events: list[Any]) -> None:
         """Graph and node scopes are created exactly once (no double-wrap)."""
-        assert langgraph_nemo_flow_active() is False
+        assert langgraph_nemo_relay_active() is False
 
         graph_handle = push_graph_scope("single_graph")
 
-        assert langgraph_nemo_flow_active() is True
+        assert langgraph_nemo_relay_active() is True
 
         node_handle, node_graph_handle, saved_token = push_node_scope("single_node", "task-1")
         _pop_node_and_restore_parent_stack(node_handle, node_graph_handle, saved_token, scope_stack)
         pop_graph_scope(graph_handle)
 
-        assert langgraph_nemo_flow_active() is False
+        assert langgraph_nemo_relay_active() is False
 
         graph_starts = [e for e in events if _is_scope_start(e, name="single_graph", metadata_key="langgraph.graph")]
         assert sum(e.uuid == graph_handle.uuid for e in graph_starts) == 1
@@ -426,9 +426,9 @@ class TestLangGraphSubgraph:
         def _subscriber(event: Any) -> None:
             collected.append(event)
 
-        nemo_flow.subscribers.register("test_sub", _subscriber)
+        nemo_relay.subscribers.register("test_sub", _subscriber)
         yield collected
-        nemo_flow.subscribers.deregister("test_sub")
+        nemo_relay.subscribers.deregister("test_sub")
 
     # -------------------------------------------------------------------
     # Subgraph nested scope hierarchy
@@ -442,9 +442,9 @@ class TestLangGraphSubgraph:
 
         sub_handle, active_tok, info_tok = push_subgraph_scope("inner_graph")
 
-        inner_node_handle = nemo_flow.scope.push(
+        inner_node_handle = nemo_relay.scope.push(
             "inner_node",
-            nemo_flow.ScopeType.Agent,
+            nemo_relay.ScopeType.Agent,
             metadata={"langgraph.node": True},
         )
 
@@ -462,7 +462,7 @@ class TestLangGraphSubgraph:
         assert subgraph_starts[0].metadata.get("langgraph.subgraph") is True
         assert subgraph_starts[0].metadata.get("langgraph.graph") is True
 
-        nemo_flow.scope.pop(inner_node_handle)
+        nemo_relay.scope.pop(inner_node_handle)
         pop_subgraph_scope(sub_handle, active_tok, info_tok)
         _pop_node_and_restore_parent_stack(node_handle, node_graph_handle, saved_token, scope_stack)
         pop_graph_scope(graph_handle)
@@ -477,11 +477,11 @@ class TestLangGraphSubgraph:
 
         node_handle, node_graph_handle, saved_token = push_node_scope("a_node", "task-x")
 
-        assert _langgraph_nemo_flow_active.get() is True
+        assert _langgraph_nemo_relay_active.get() is True
 
         sub_handle, active_tok, info_tok = push_subgraph_scope("sub_graph")
 
-        assert _langgraph_nemo_flow_active.get() is True
+        assert _langgraph_nemo_relay_active.get() is True
 
         info = _graph_scope_info.get()
         assert info is not None
@@ -512,7 +512,7 @@ class TestLangGraphSubgraph:
         assert restored_info is not None, "_graph_scope_info should be restored, not None"
         assert restored_info.graph_name == "parent_graph", f"Expected 'parent_graph', got '{restored_info.graph_name}'"
 
-        assert _langgraph_nemo_flow_active.get() is True
+        assert _langgraph_nemo_relay_active.get() is True
 
         _pop_node_and_restore_parent_stack(node_handle, node_graph_handle, saved_token, scope_stack)
         pop_graph_scope(graph_handle)
@@ -537,7 +537,7 @@ class TestLangGraphSubgraph:
 
         graph_handle = push_graph_scope("my_graph", graph_topology=topology)
 
-        handle = nemo_flow.scope.get_handle()
+        handle = nemo_relay.scope.get_handle()
         assert handle is not None
         assert handle.metadata is not None
         assert "graph_topology" in handle.metadata
@@ -567,7 +567,7 @@ class TestLangGraphSubgraph:
             with lock:
                 all_events.append(event)
 
-        nemo_flow.subscribers.register("concurrent-collector", _collect)
+        nemo_relay.subscribers.register("concurrent-collector", _collect)
 
         results: dict[str, dict[str, Any]] = {}
         errors: list[str] = []
@@ -601,7 +601,7 @@ class TestLangGraphSubgraph:
         t_b.start()
         t_b.join()
 
-        nemo_flow.subscribers.deregister("concurrent-collector")
+        nemo_relay.subscribers.deregister("concurrent-collector")
 
         assert not errors, f"Thread errors: {errors}"
         assert "A" in results and "B" in results

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for response in the NeMo Flow core crate.
+//! Unit tests for response in the NeMo Relay core crate.
 
 use super::*;
 use serde_json::json;

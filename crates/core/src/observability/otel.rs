@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! OpenTelemetry subscriber support for NeMo Flow.
+//! OpenTelemetry subscriber support for NeMo Relay.
 //!
-//! This crate adapts NeMo Flow lifecycle events into OpenTelemetry trace spans:
+//! This crate adapts NeMo Relay lifecycle events into OpenTelemetry trace spans:
 //!
 //! - scope/tool/LLM `Start` events open spans
 //! - matching `End` events close spans
@@ -13,7 +13,7 @@
 //! The public API is intentionally small:
 //!
 //! - [`OpenTelemetryConfig`] configures the OTLP exporter and resource metadata
-//! - [`OpenTelemetrySubscriber`] exposes a NeMo Flow [`EventSubscriberFn`] and
+//! - [`OpenTelemetrySubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
 //!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
 
 use std::collections::HashMap;
@@ -120,10 +120,10 @@ impl Default for OpenTelemetryConfig {
             endpoint: None,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
-            service_name: "nemo-flow".to_string(),
+            service_name: "nemo-relay".to_string(),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: "nemo-flow-otel".to_string(),
+            instrumentation_scope: "nemo-relay-otel".to_string(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
         }
@@ -196,7 +196,7 @@ impl OpenTelemetryConfig {
     }
 }
 
-/// OpenTelemetry-backed NeMo Flow subscriber.
+/// OpenTelemetry-backed NeMo Relay subscriber.
 #[derive(Clone)]
 pub struct OpenTelemetrySubscriber {
     inner: Arc<Inner>,
@@ -261,12 +261,12 @@ impl OpenTelemetrySubscriber {
         }
     }
 
-    /// Returns the raw NeMo Flow subscriber callback for custom registration flows.
+    /// Returns the raw NeMo Relay subscriber callback for custom registration flows.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
     }
 
-    /// Registers this subscriber globally with the NeMo Flow runtime.
+    /// Registers this subscriber globally with the NeMo Relay runtime.
     pub fn register(&self, name: &str) -> Result<()> {
         register_subscriber(name, self.subscriber()).map_err(Into::into)
     }
@@ -286,7 +286,7 @@ impl OpenTelemetrySubscriber {
 
     /// Shuts down the underlying tracer provider.
     ///
-    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Flow.
+    /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
     pub fn shutdown(&self) -> Result<()> {
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
@@ -566,7 +566,7 @@ impl OtelEventProcessor {
             .with_start_time(timestamp)
             .start_with_context(&self.tracer, &self.parent_context(event));
         let mut span_attributes = attributes;
-        span_attributes.push(KeyValue::new("nemo_flow.mark.orphan", true));
+        span_attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         span.set_attributes(span_attributes);
         span.end_with_timestamp(timestamp);
     }
@@ -635,37 +635,45 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let handle_attributes = event.attributes();
     push_serialized(
         &mut attributes,
-        "nemo_flow.handle_attributes_json",
+        "nemo_relay.handle_attributes_json",
         handle_attributes,
     );
-    push_serialized(&mut attributes, "nemo_flow.start.data_json", event.data());
+    push_serialized(&mut attributes, "nemo_relay.start.data_json", event.data());
     push_serialized(
         &mut attributes,
-        "nemo_flow.start.metadata_json",
+        "nemo_relay.start.metadata_json",
         event.metadata(),
     );
-    push_serialized(&mut attributes, "nemo_flow.start.input_json", event.input());
+    push_serialized(
+        &mut attributes,
+        "nemo_relay.start.input_json",
+        event.input(),
+    );
     attributes
 }
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
-    push_serialized(&mut attributes, "nemo_flow.end.data_json", event.data());
+    push_serialized(&mut attributes, "nemo_relay.end.data_json", event.data());
     push_serialized(
         &mut attributes,
-        "nemo_flow.end.metadata_json",
+        "nemo_relay.end.metadata_json",
         event.metadata(),
     );
-    push_serialized(&mut attributes, "nemo_flow.end.output_json", event.output());
+    push_serialized(
+        &mut attributes,
+        "nemo_relay.end.output_json",
+        event.output(),
+    );
     attributes
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     let handle_attributes = event.attributes();
     let mut attributes = vec![
-        KeyValue::new("nemo_flow.mark.uuid", event.uuid().to_string()),
+        KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
-            "nemo_flow.mark.parent_uuid",
+            "nemo_relay.mark.parent_uuid",
             event
                 .parent_uuid()
                 .map(|uuid| uuid.to_string())
@@ -674,13 +682,13 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     ];
     push_serialized(
         &mut attributes,
-        "nemo_flow.mark.attributes_json",
+        "nemo_relay.mark.attributes_json",
         handle_attributes,
     );
-    push_serialized(&mut attributes, "nemo_flow.mark.data_json", event.data());
+    push_serialized(&mut attributes, "nemo_relay.mark.data_json", event.data());
     push_serialized(
         &mut attributes,
-        "nemo_flow.mark.metadata_json",
+        "nemo_relay.mark.metadata_json",
         event.metadata(),
     );
     attributes
@@ -688,29 +696,29 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
 
 fn common_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = vec![
-        KeyValue::new("nemo_flow.uuid", event.uuid().to_string()),
+        KeyValue::new("nemo_relay.uuid", event.uuid().to_string()),
         KeyValue::new(
-            "nemo_flow.parent_uuid",
+            "nemo_relay.parent_uuid",
             event
                 .parent_uuid()
                 .map(|uuid| uuid.to_string())
                 .unwrap_or_default(),
         ),
         KeyValue::new(
-            "nemo_flow.scope_type",
+            "nemo_relay.scope_type",
             scope_type_name(semantic_scope_type(event)),
         ),
     ];
 
     if let Some(model_name) = event.model_name() {
         attributes.push(KeyValue::new(
-            "nemo_flow.model_name",
+            "nemo_relay.model_name",
             model_name.to_string(),
         ));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
         attributes.push(KeyValue::new(
-            "nemo_flow.tool_call_id",
+            "nemo_relay.tool_call_id",
             tool_call_id.to_string(),
         ));
     }

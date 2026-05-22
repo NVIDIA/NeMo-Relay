@@ -577,7 +577,7 @@ impl LlmCodec for AnthropicMessagesCodec {
 /// for a non-streaming request (`{id, type, role, model, content, stop_reason, stop_sequence,
 /// usage}`). Once finalized, the assembled JSON can be fed back through
 /// [`AnthropicMessagesCodec::decode_response`] to produce an
-/// [`AnnotatedLlmResponse`](crate::codec::response::AnnotatedLlmResponse) — meaning streaming and
+/// [`AnnotatedLlmResponse`] — meaning streaming and
 /// non-streaming Anthropic requests converge on the same observability output.
 ///
 /// Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer

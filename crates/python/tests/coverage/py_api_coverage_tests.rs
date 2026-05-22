@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for py api coverage in the NeMo Flow Python crate.
+//! Coverage tests for py api coverage in the NeMo Relay Python crate.
 
 use super::*;
 
@@ -62,7 +62,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             PyScopeType::Tool,
             Some(handle.clone()),
             Some(PyScopeAttributes {
-                inner: nemo_flow::api::scope::ScopeAttributes::PARALLEL,
+                inner: nemo_relay::api::scope::ScopeAttributes::PARALLEL,
             }),
             Some(&data),
             Some(&metadata),
@@ -86,7 +86,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             &py_dict(py, json!({"arg": 1})),
             Some(child.clone()),
             Some(PyToolAttributes {
-                inner: nemo_flow::api::tool::ToolAttributes::REMOTE,
+                inner: nemo_relay::api::tool::ToolAttributes::REMOTE,
             }),
             Some(&py_dict(py, json!({"tool_data": true}))),
             Some(&py_dict(py, json!({"tool_meta": true}))),
@@ -104,7 +104,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         .unwrap();
 
         let llm_request = PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": [], "model": "demo"}),
             },
@@ -114,8 +114,8 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             llm_request,
             Some(child.clone()),
             Some(PyLLMAttributes {
-                inner: nemo_flow::api::llm::LlmAttributes::STATEFUL
-                    | nemo_flow::api::llm::LlmAttributes::STREAMING,
+                inner: nemo_relay::api::llm::LlmAttributes::STATEFUL
+                    | nemo_relay::api::llm::LlmAttributes::STREAMING,
             }),
             Some(&py_dict(py, json!({"llm_data": true}))),
             Some(&py_dict(py, json!({"llm_meta": true}))),
@@ -450,7 +450,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         );
 
         let llm_request = PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
             },
@@ -463,7 +463,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         llm_conditional_execution(llm_request.clone()).unwrap();
         assert!(
             llm_conditional_execution(PyLLMRequest {
-                inner: nemo_flow::api::llm::LlmRequest {
+                inner: nemo_relay::api::llm::LlmRequest {
                     headers: serde_json::Map::new(),
                     content: json!({"messages": [], "model": "blocked"}),
                 },
@@ -485,7 +485,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                             helpers.getattr("tool_exec").unwrap(),
                             child.clone(),
                             PyToolAttributes {
-                                inner: nemo_flow::api::tool::ToolAttributes::REMOTE,
+                                inner: nemo_relay::api::tool::ToolAttributes::REMOTE,
                             },
                         ))
                         .unwrap(),),
@@ -513,7 +513,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                             helpers.getattr("llm_exec").unwrap(),
                             child.clone(),
                             PyLLMAttributes {
-                                inner: nemo_flow::api::llm::LlmAttributes::STATEFUL,
+                                inner: nemo_relay::api::llm::LlmAttributes::STATEFUL,
                             },
                             codec,
                             response_codec,
@@ -545,7 +545,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                             helpers.getattr("finalizer").unwrap(),
                             child.clone(),
                             PyLLMAttributes {
-                                inner: nemo_flow::api::llm::LlmAttributes::STREAMING,
+                                inner: nemo_relay::api::llm::LlmAttributes::STREAMING,
                             },
                             stream_codec,
                             stream_response_codec,
@@ -787,7 +787,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
 #[test]
 fn to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
     let _python = crate::test_support::init_python_test();
-    let err = to_py_err(nemo_flow::error::FlowError::Internal("boom".into()));
+    let err = to_py_err(nemo_relay::error::FlowError::Internal("boom".into()));
     assert!(err.to_string().contains("boom"));
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -921,7 +921,7 @@ async def run_stream(api, request, func, collector, finalizer, response_codec):
 "#,
         );
         let request = PyLLMRequest {
-            inner: nemo_flow::api::llm::LlmRequest {
+            inner: nemo_relay::api::llm::LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({"messages": [{"role": "user", "content": "hello"}], "model": "demo-model"}),
             },

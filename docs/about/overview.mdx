@@ -6,7 +6,8 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-NeMo Flow is a portable execution runtime for agent systems that already have a
+
+NeMo Relay is a portable execution runtime for agent systems that already have a
 framework, model provider, policy layer, or observability backend. It gives those
 systems one consistent way to describe what is happening when an agent crosses a
 request, tool, or LLM boundary.
@@ -14,9 +15,9 @@ request, tool, or LLM boundary.
 That layer is useful because agent applications rarely live inside one clean
 abstraction. A production stack might combine NeMo Agent Toolkit, LangChain,
 LangGraph, provider SDKs, custom harness code, NeMo Guardrails, tracing systems,
-and evaluation pipelines. NeMo Flow sits underneath those choices as the shared
+and evaluation pipelines. NeMo Relay sits underneath those choices as the shared
 runtime contract for scopes, middleware, plugins, lifecycle events, adaptive
-behavior, and observability. Under the NeMo Flow scope stack and middleware, the scoped execution path is referred to as work.
+behavior, and observability. Under the NeMo Relay scope stack and middleware, the scoped execution path is referred to as work.
 
 The result is a framework-neutral substrate for agent execution. Applications
 keep their orchestration model, providers keep their native clients, and
@@ -25,7 +26,7 @@ adaptive behavior across Rust, Python, and Node.js.
 
 ## Benefits
 
-NeMo Flow is designed for teams that need agent runtime behavior to stay
+NeMo Relay is designed for teams that need agent runtime behavior to stay
 consistent as applications grow across frameworks, languages, and deployment
 targets.
 
@@ -43,7 +44,7 @@ targets.
   lifecycle stream in-process or translate it to Agent Trajectory Interchange
   Format (ATIF) trajectories, OpenTelemetry traces, and OpenInference-compatible
   traces for debugging, evaluation, and production observability.
-- **Adopt without replacing the stack**: NeMo Flow can sit below NeMo ecosystem
+- **Adopt without replacing the stack**: NeMo Relay can sit below NeMo ecosystem
   components, third-party agent frameworks, provider adapters, or direct
   application code, so teams can add shared runtime semantics without a
   framework migration.
@@ -58,17 +59,19 @@ Use the reading path that matches your task:
 
 | Task | Start With |
 |---|---|
+| Understand what NeMo Relay adds | [Agent Runtime Primer](/getting-started/agent-runtime-primer) |
 | Run a minimal example | [Quick Start](/getting-started/quick-start) |
 | Install packages | [Installation](/getting-started/installation) |
 | Develop from source | [Development Setup](/contribute/development-setup) |
-| Understand the runtime model | [Concepts](/about-nemo-flow/concepts) |
+| Understand the runtime model | [Concepts](/about-nemo-relay/concepts) |
 | Instrument an application | [Instrument Applications](/instrument-applications/about) |
 | Use a maintained integration | [Supported Integrations](/supported-integrations/about) |
 | Integrate a framework | [Integrate into Frameworks](/integrate-into-frameworks/about) |
-| Observe a local coding-agent CLI | [NeMo Flow CLI](/nemo-flow-cli/about) |
+| Observe a local coding-agent CLI | [NeMo Relay CLI](/nemo-relay-cli/about) |
 | Package reusable behavior | [Build Plugins](/build-plugins/about) |
 | Export traces or trajectories | [Observability](/observability-plugin/about) |
-| Configure adaptive behavior | [Adaptive](/adaptive-plugin/about) |
+| Debug trace incidents | [Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook) |
+| Tune performance with adaptive behavior | [Adaptive](/adaptive-plugin/about) |
 | Look up symbols | [APIs](/reference/api) |
 
 ## Conceptual Diagram

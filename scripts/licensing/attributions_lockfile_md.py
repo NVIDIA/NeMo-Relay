@@ -865,7 +865,7 @@ def _lockfile_python_packages(
 def _python_attribution_packages() -> list[RenderedPythonPackage]:
     """Return Python attribution packages directly from uv.lock artifacts."""
     lockfile_pkgs = _lockfile_registry_packages()
-    own_name = "nemo-flow"
+    own_name = "nemo-relay"
     packages = _lockfile_python_packages(lockfile_pkgs, own_name=own_name)
     packages.sort(key=lambda r: (str(r["name"]).lower(), str(r["version"])))
     return packages
@@ -874,7 +874,7 @@ def _python_attribution_packages() -> list[RenderedPythonPackage]:
 def _python_license_inventory() -> list[LicenseInventoryEntry]:
     """Return minimal Python dependency license rows directly from uv.lock artifacts."""
     lockfile_pkgs = _lockfile_registry_packages()
-    own_name = "nemo-flow"
+    own_name = "nemo-relay"
     return [
         _rendered_python_package_inventory(pkg) for pkg in _lockfile_python_packages(lockfile_pkgs, own_name=own_name)
     ]

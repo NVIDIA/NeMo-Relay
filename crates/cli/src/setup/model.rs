@@ -14,9 +14,9 @@ use crate::installer::{hermes_hooks, hook_forward_command, merge_hermes_config};
 /// Where the setup saves its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConfigScope {
-    /// `./.nemo-flow/config.toml` (walked-up workspace dir).
+    /// `./.nemo-relay/config.toml` (walked-up workspace dir).
     Project,
-    /// `~/.config/nemo-flow/config.toml` (or `$XDG_CONFIG_HOME/nemo-flow/config.toml`).
+    /// `~/.config/nemo-relay/config.toml` (or `$XDG_CONFIG_HOME/nemo-relay/config.toml`).
     Global,
     /// Both project and global; project takes precedence per merge order.
     Both,
@@ -25,8 +25,8 @@ pub(crate) enum ConfigScope {
 impl ConfigScope {
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Project => "project   ./.nemo-flow/config.toml          (recommended)",
-            Self::Global => "global    ~/.config/nemo-flow/config.toml",
+            Self::Project => "project   ./.nemo-relay/config.toml          (recommended)",
+            Self::Global => "global    ~/.config/nemo-relay/config.toml",
             Self::Both => "both      project overrides global",
         }
     }
@@ -129,7 +129,7 @@ pub(crate) fn save_config(
 ) -> Result<Vec<PathBuf>, CliError> {
     let mut written = Vec::new();
     if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
-        let project_dir = cwd.join(".nemo-flow");
+        let project_dir = cwd.join(".nemo-relay");
         std::fs::create_dir_all(&project_dir)?;
         let path = project_dir.join("config.toml");
         write_or_merge(&path, doc, merge_scope)?;
@@ -145,14 +145,14 @@ pub(crate) fn save_config(
     Ok(written)
 }
 
-// Resolves the global nemo-flow config directory. Prefers `$XDG_CONFIG_HOME/nemo-flow` (matches
-// `config::user_config_dir`), falling back to `<home>/.config/nemo-flow`. Tests that pass a
+// Resolves the global nemo-relay config directory. Prefers `$XDG_CONFIG_HOME/nemo-relay` (matches
+// `config::user_config_dir`), falling back to `<home>/.config/nemo-relay`. Tests that pass a
 // tempdir for `home` get hermetic paths unless they set XDG_CONFIG_HOME explicitly.
 pub(super) fn global_config_dir(home: &Path) -> PathBuf {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return PathBuf::from(base).join("nemo-flow");
+        return PathBuf::from(base).join("nemo-relay");
     }
-    home.join(".config").join("nemo-flow")
+    home.join(".config").join("nemo-relay")
 }
 
 // Writes the wizard-built `doc` to `path`. When `merge_scope` is `Some(agent)` and the file
@@ -225,7 +225,7 @@ pub(super) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent
 /// editing because they typically aren't owned by the wizard.
 pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let path = cwd.join(".nemo-flow").join("config.toml");
+    let path = cwd.join(".nemo-relay").join("config.toml");
     if !path.exists() {
         println!("  No project config to reset at {}", path.display());
         return Ok(());
@@ -234,7 +234,7 @@ pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
         None => {
             std::fs::remove_file(&path)?;
             println!("  ✓ Removed {}", path.display());
-            println!("  Run `nemo-flow config` to set up again.");
+            println!("  Run `nemo-relay config` to set up again.");
         }
         Some(agent) => {
             let agent_key = agent_key_and_command(agent).0;
@@ -289,7 +289,7 @@ pub(crate) fn hermes_hooks_path_for_scope(
 }
 
 /// Writes/merges `.hermes/config.yaml` hook config for every scope-applicable location so hermes
-/// fires `nemo-flow hook-forward hermes` on every hook event after setup. Idempotent: existing
+/// fires `nemo-relay hook-forward hermes` on every hook event after setup. Idempotent: existing
 /// hook entries are preserved and our generated groups are appended only when missing.
 ///
 /// Returns the list of paths actually written so callers can surface them to the user.
@@ -298,7 +298,7 @@ pub(crate) fn install_hermes_hooks(
     cwd: &Path,
     home: &Path,
 ) -> Result<Vec<PathBuf>, CliError> {
-    let generated = hermes_hooks(&hook_forward_command("nemo-flow", CodingAgent::Hermes));
+    let generated = hermes_hooks(&hook_forward_command("nemo-relay", CodingAgent::Hermes));
     let mut written = Vec::new();
     for path in hermes_hook_targets(scope, cwd, home) {
         let existing = match std::fs::read_to_string(&path) {
@@ -348,7 +348,7 @@ pub(super) fn read_existing_defaults() -> Option<Defaults> {
     let cwd = std::env::current_dir().ok()?;
     let home = home_dir();
 
-    let workspace_path = cwd.join(".nemo-flow").join("config.toml");
+    let workspace_path = cwd.join(".nemo-relay").join("config.toml");
     let global_path = home
         .as_ref()
         .map(|h| global_config_dir(h).join("config.toml"));
@@ -410,7 +410,7 @@ pub(super) fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'stat
 pub(super) fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
-        paths.push(cwd.join(".nemo-flow").join("config.toml"));
+        paths.push(cwd.join(".nemo-relay").join("config.toml"));
     }
     if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
         paths.push(global_config_dir(home).join("config.toml"));

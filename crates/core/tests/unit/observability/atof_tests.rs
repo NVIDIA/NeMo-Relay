@@ -4,12 +4,16 @@
 //! Unit tests for the ATOF JSONL exporter.
 
 use super::*;
-use crate::api::event::{BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::event::{
+    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
+};
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType};
-use serde_json::json;
+use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use serde_json::{Map, json};
 use std::fs;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -18,7 +22,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("nemo-flow-{prefix}-{id}"));
+    let path = std::env::temp_dir().join(format!("nemo-relay-{prefix}-{id}"));
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -26,7 +30,7 @@ fn temp_dir(prefix: &str) -> PathBuf {
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
-    *context.write().unwrap() = NemoFlowContextState::new();
+    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 fn make_mark_event(name: &str) -> Event {
@@ -55,6 +59,50 @@ fn make_scope_start_event(name: &str) -> Event {
     ))
 }
 
+fn make_annotated_llm_event(name: &str) -> Event {
+    let request = AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: MessageContent::Text("hello".into()),
+            name: None,
+        }],
+        model: Some("demo-model".into()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: Map::new(),
+    };
+
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name(name)
+            .data(json!({"input": true}))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("demo-model")
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
+    ))
+}
+
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
         .unwrap()
@@ -69,11 +117,11 @@ fn default_config_uses_cwd_append_and_timestamped_filename() {
 
     assert_eq!(config.output_directory, std::env::current_dir().unwrap());
     assert_eq!(config.mode, AtofExporterMode::Append);
-    assert!(config.filename.starts_with("nemo-flow-events-"));
+    assert!(config.filename.starts_with("nemo-relay-events-"));
     assert!(config.filename.ends_with(".jsonl"));
     assert_eq!(
         config.filename.len(),
-        "nemo-flow-events-YYYY-MM-DD-HH.MM.SS.jsonl".len()
+        "nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl".len()
     );
 }
 
@@ -142,6 +190,30 @@ fn subscriber_writes_scope_and_mark_events_as_raw_jsonl() {
     assert_eq!(lines[0]["category"], "agent");
     assert_eq!(lines[1]["kind"], "mark");
     assert_eq!(lines[1]["data"], json!({"step": 1}));
+}
+
+#[test]
+fn subscriber_writes_canonical_event_jsonl() {
+    let dir = temp_dir("atof-canonical");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let event = make_annotated_llm_event("llm-start");
+
+    (exporter.subscriber())(&event);
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0], event.try_to_json_value().unwrap());
+    assert!(lines[0].get("annotated_request").is_none());
+    assert_eq!(
+        lines[0]["category_profile"]["annotated_request"]["model"],
+        "demo-model"
+    );
 }
 
 #[test]

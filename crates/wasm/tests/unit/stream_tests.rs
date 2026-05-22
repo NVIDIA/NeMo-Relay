@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for stream in the NeMo Flow WebAssembly crate.
+//! Unit tests for stream in the NeMo Relay WebAssembly crate.
 
 #[cfg(target_arch = "wasm32")]
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
@@ -43,7 +43,7 @@ fn next_returns_js_error_for_stream_errors() {
 
     block_on(async {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        tx.send(Err(nemo_flow::error::FlowError::Internal(
+        tx.send(Err(nemo_relay::error::FlowError::Internal(
             "stream failed".to_string(),
         )))
         .await

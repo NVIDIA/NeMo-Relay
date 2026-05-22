@@ -3,27 +3,27 @@
 
 use super::{
     Duration, FfiAtifExporter, FfiAtofExporter, FfiOpenInferenceSubscriber,
-    FfiOpenTelemetrySubscriber, NemoFlowStatus, c_char, c_str_to_json, c_str_to_string,
+    FfiOpenTelemetrySubscriber, NemoRelayStatus, c_char, c_str_to_json, c_str_to_string,
     clear_last_error, core_subscriber_api, json_to_c_string, set_last_error, status_from_error,
     str_to_c_string, tokio_runtime,
 };
 
-type AtofExporter = nemo_flow::observability::atof::AtofExporter;
-type AtofExporterConfig = nemo_flow::observability::atof::AtofExporterConfig;
-type AtofExporterError = nemo_flow::observability::atof::AtofExporterError;
-type AtofExporterMode = nemo_flow::observability::atof::AtofExporterMode;
-type OpenTelemetryConfig = nemo_flow::observability::otel::OpenTelemetryConfig;
-type OpenTelemetrySubscriber = nemo_flow::observability::otel::OpenTelemetrySubscriber;
-type OpenInferenceConfig = nemo_flow::observability::openinference::OpenInferenceConfig;
-type OpenInferenceSubscriber = nemo_flow::observability::openinference::OpenInferenceSubscriber;
-type ObservabilityComponentSpec = nemo_flow::observability::plugin_component::ComponentSpec;
-type ObservabilityConfig = nemo_flow::observability::plugin_component::ObservabilityConfig;
+type AtofExporter = nemo_relay::observability::atof::AtofExporter;
+type AtofExporterConfig = nemo_relay::observability::atof::AtofExporterConfig;
+type AtofExporterError = nemo_relay::observability::atof::AtofExporterError;
+type AtofExporterMode = nemo_relay::observability::atof::AtofExporterMode;
+type OpenTelemetryConfig = nemo_relay::observability::otel::OpenTelemetryConfig;
+type OpenTelemetrySubscriber = nemo_relay::observability::otel::OpenTelemetrySubscriber;
+type OpenInferenceConfig = nemo_relay::observability::openinference::OpenInferenceConfig;
+type OpenInferenceSubscriber = nemo_relay::observability::openinference::OpenInferenceSubscriber;
+type ObservabilityComponentSpec = nemo_relay::observability::plugin_component::ComponentSpec;
+type ObservabilityConfig = nemo_relay::observability::plugin_component::ObservabilityConfig;
 
-fn status_from_atof_error(error: &AtofExporterError) -> NemoFlowStatus {
+fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
     set_last_error(&error.to_string());
     match error {
         AtofExporterError::Runtime(error) => status_from_error(error),
-        _ => NemoFlowStatus::Internal,
+        _ => NemoRelayStatus::Internal,
     }
 }
 
@@ -33,10 +33,10 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoFlowStatus {
 
 /// Return the built-in observability plugin kind.
 ///
-/// The caller owns the returned string and must free it with `nemo_flow_string_free`.
+/// The caller owns the returned string and must free it with `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
-pub extern "C" fn nemo_flow_observability_plugin_kind() -> *mut c_char {
-    str_to_c_string(nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND)
+pub extern "C" fn nemo_relay_observability_plugin_kind() -> *mut c_char {
+    str_to_c_string(nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND)
 }
 
 /// Return the default observability plugin config as JSON.
@@ -44,23 +44,23 @@ pub extern "C" fn nemo_flow_observability_plugin_kind() -> *mut c_char {
 /// # Safety
 /// `out_json` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_observability_default_config_json(
+pub unsafe extern "C" fn nemo_relay_observability_default_config_json(
     out_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let config_json = match serde_json::to_value(ObservabilityConfig::default()) {
         Ok(value) => value,
         Err(error) => {
             set_last_error(&error.to_string());
-            return NemoFlowStatus::Internal;
+            return NemoRelayStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&config_json) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Wrap an observability config JSON object as a top-level plugin component.
@@ -72,41 +72,41 @@ pub unsafe extern "C" fn nemo_flow_observability_default_config_json(
 /// `config_json`, when non-null, must be a valid C string. `out_json` must be a
 /// valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_observability_component_spec_json(
+pub unsafe extern "C" fn nemo_relay_observability_component_spec_json(
     config_json: *const c_char,
     enabled: bool,
     out_json: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out_json.is_null() {
         set_last_error("out_json pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let config = if config_json.is_null() {
         ObservabilityConfig::default()
     } else {
         let Some(config_value) = c_str_to_json(config_json) else {
-            return NemoFlowStatus::InvalidJson;
+            return NemoRelayStatus::InvalidJson;
         };
         match serde_json::from_value::<ObservabilityConfig>(config_value) {
             Ok(config) => config,
             Err(error) => {
                 set_last_error(&error.to_string());
-                return NemoFlowStatus::InvalidJson;
+                return NemoRelayStatus::InvalidJson;
             }
         }
     };
-    let component: nemo_flow::plugin::PluginComponentSpec =
+    let component: nemo_relay::plugin::PluginComponentSpec =
         ObservabilityComponentSpec { enabled, config }.into();
     let component_json = match serde_json::to_value(component) {
         Ok(value) => value,
         Err(error) => {
             set_last_error(&error.to_string());
-            return NemoFlowStatus::Internal;
+            return NemoRelayStatus::Internal;
         }
     };
     unsafe { *out_json = json_to_c_string(&component_json) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 // ---------------------------------------------------------------------------
@@ -125,17 +125,17 @@ pub unsafe extern "C" fn nemo_flow_observability_component_spec_json(
 /// # Safety
 /// All non-null string pointers must be valid C strings. `out` must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
+pub unsafe extern "C" fn nemo_relay_atif_exporter_create(
     session_id: *const c_char,
     agent_name: *const c_char,
     agent_version: *const c_char,
     model_name: *const c_char,
     out: *mut *mut FfiAtifExporter,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let session_id = match c_str_to_string(session_id) {
         Ok(s) => s,
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
         }
     };
 
-    let agent_info = nemo_flow::observability::atif::AtifAgentInfo {
+    let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
         name: agent_name,
         version: agent_version,
         model_name: model_name_opt,
@@ -166,9 +166,9 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
         extra: None,
     };
 
-    let exporter = nemo_flow::observability::atif::AtifExporter::new(session_id, agent_info);
+    let exporter = nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info);
     unsafe { *out = Box::into_raw(Box::new(FfiAtifExporter(exporter))) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Registers the exporter as an event subscriber.
@@ -180,14 +180,14 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_create(
 /// # Safety
 /// `exporter` and `name` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atif_exporter_register(
+pub unsafe extern "C" fn nemo_relay_atif_exporter_register(
     exporter: *const FfiAtifExporter,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -195,7 +195,7 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_register(
     };
     let subscriber = unsafe { &*exporter }.0.subscriber();
     match core_subscriber_api::register_subscriber(&name, subscriber) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -208,14 +208,16 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_register(
 /// # Safety
 /// `name` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atif_exporter_deregister(name: *const c_char) -> NemoFlowStatus {
+pub unsafe extern "C" fn nemo_relay_atif_exporter_deregister(
+    name: *const c_char,
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     match core_subscriber_api::deregister_subscriber(&name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -225,33 +227,33 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_deregister(name: *const c_char)
 /// # Parameters
 /// - `exporter`: The exporter handle.
 /// - `out`: On success, receives a JSON string (caller must free with
-///   `nemo_flow_string_free`).
+///   `nemo_relay_string_free`).
 ///
 /// # Safety
 /// `exporter` and `out` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atif_exporter_export(
+pub unsafe extern "C" fn nemo_relay_atif_exporter_export(
     exporter: *const FfiAtifExporter,
     out: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let trajectory = unsafe { &*exporter }.0.export();
     match serde_json::to_string(&trajectory) {
         Ok(json_str) => {
             unsafe { *out = str_to_c_string(&json_str) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(e) => {
             set_last_error(&format!("failed to serialize trajectory: {e}"));
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -264,16 +266,16 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_export(
 /// # Safety
 /// `exporter` must be a valid, non-null `FfiAtifExporter` pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atif_exporter_clear(
+pub unsafe extern "C" fn nemo_relay_atif_exporter_clear(
     exporter: *const FfiAtifExporter,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     unsafe { &*exporter }.0.clear();
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 // ---------------------------------------------------------------------------
@@ -291,12 +293,12 @@ pub unsafe extern "C" fn nemo_flow_atif_exporter_clear(
 /// # Safety
 /// All non-null string pointers must be valid C strings. `out` must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_create(
+pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
     output_directory: *const c_char,
     mode: *const c_char,
     filename: *const c_char,
     out: *mut *mut FfiAtofExporter,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -317,7 +319,7 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_create(
 
     let Some(mode) = AtofExporterMode::parse(&mode) else {
         set_last_error("ATOF exporter mode must be 'append' or 'overwrite'");
-        return NemoFlowStatus::InvalidArg;
+        return NemoRelayStatus::InvalidArg;
     };
 
     let mut config = AtofExporterConfig::new().with_mode(mode);
@@ -331,7 +333,7 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_create(
     match AtofExporter::new(config) {
         Ok(exporter) => {
             unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
-            NemoFlowStatus::Ok
+            NemoRelayStatus::Ok
         }
         Err(error) => status_from_atof_error(&error),
     }
@@ -342,21 +344,21 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_create(
 /// # Safety
 /// `exporter` and `name` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_register(
+pub unsafe extern "C" fn nemo_relay_atof_exporter_register(
     exporter: *const FfiAtofExporter,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     match unsafe { &*exporter }.0.register(&name) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_atof_error(&error),
     }
 }
@@ -366,14 +368,16 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_register(
 /// # Safety
 /// `name` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_deregister(name: *const c_char) -> NemoFlowStatus {
+pub unsafe extern "C" fn nemo_relay_atof_exporter_deregister(
+    name: *const c_char,
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
     };
     match core_subscriber_api::deregister_subscriber(&name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -383,16 +387,16 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_deregister(name: *const c_char)
 /// # Safety
 /// `exporter` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_force_flush(
+pub unsafe extern "C" fn nemo_relay_atof_exporter_force_flush(
     exporter: *const FfiAtofExporter,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     match unsafe { &*exporter }.0.force_flush() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_atof_error(&error),
     }
 }
@@ -402,16 +406,16 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_force_flush(
 /// # Safety
 /// `exporter` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_shutdown(
+pub unsafe extern "C" fn nemo_relay_atof_exporter_shutdown(
     exporter: *const FfiAtofExporter,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     match unsafe { &*exporter }.0.shutdown() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_atof_error(&error),
     }
 }
@@ -421,22 +425,22 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_shutdown(
 /// # Safety
 /// `exporter` and `out` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_atof_exporter_path(
+pub unsafe extern "C" fn nemo_relay_atof_exporter_path(
     exporter: *const FfiAtofExporter,
     out: *mut *mut c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if exporter.is_null() {
         set_last_error("exporter pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     if out.is_null() {
         set_last_error("out pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let path = unsafe { &*exporter }.0.path().to_string_lossy();
     unsafe { *out = str_to_c_string(&path) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +450,7 @@ pub unsafe extern "C" fn nemo_flow_atof_exporter_path(
 fn parse_string_map_json(
     json_ptr: *const c_char,
     field_name: &str,
-) -> Result<std::collections::HashMap<String, String>, NemoFlowStatus> {
+) -> Result<std::collections::HashMap<String, String>, NemoRelayStatus> {
     if json_ptr.is_null() {
         return Ok(std::collections::HashMap::new());
     }
@@ -454,14 +458,14 @@ fn parse_string_map_json(
     let json_string = c_str_to_string(json_ptr)?;
     let value: serde_json::Value = serde_json::from_str(&json_string).map_err(|e| {
         set_last_error(&format!("invalid {field_name} JSON: {e}"));
-        NemoFlowStatus::InvalidJson
+        NemoRelayStatus::InvalidJson
     })?;
 
     let serde_json::Value::Object(map) = value else {
         set_last_error(&format!(
             "{field_name} must be a JSON object of string values"
         ));
-        return Err(NemoFlowStatus::InvalidArg);
+        return Err(NemoRelayStatus::InvalidArg);
     };
 
     let mut out = std::collections::HashMap::with_capacity(map.len());
@@ -470,22 +474,22 @@ fn parse_string_map_json(
             set_last_error(&format!(
                 "{field_name} must be a JSON object of string values"
             ));
-            return Err(NemoFlowStatus::InvalidArg);
+            return Err(NemoRelayStatus::InvalidArg);
         };
         out.insert(key, value);
     }
     Ok(out)
 }
 
-fn required_out_ptr<T>(out: *mut *mut T) -> Result<(), NemoFlowStatus> {
+fn required_out_ptr<T>(out: *mut *mut T) -> Result<(), NemoRelayStatus> {
     if out.is_null() {
         set_last_error("out pointer is null");
-        return Err(NemoFlowStatus::NullPointer);
+        return Err(NemoRelayStatus::NullPointer);
     }
     Ok(())
 }
 
-fn parse_optional_string(ptr: *const c_char) -> Result<Option<String>, NemoFlowStatus> {
+fn parse_optional_string(ptr: *const c_char) -> Result<Option<String>, NemoRelayStatus> {
     if ptr.is_null() {
         Ok(None)
     } else {
@@ -493,11 +497,15 @@ fn parse_optional_string(ptr: *const c_char) -> Result<Option<String>, NemoFlowS
     }
 }
 
-fn parse_string_or_default(ptr: *const c_char, default: &str) -> Result<String, NemoFlowStatus> {
+fn parse_string_or_default(ptr: *const c_char, default: &str) -> Result<String, NemoRelayStatus> {
     parse_optional_string(ptr).map(|value| value.unwrap_or_else(|| default.to_string()))
 }
 
-fn apply_optional_string<T, F>(config: T, ptr: *const c_char, apply: F) -> Result<T, NemoFlowStatus>
+fn apply_optional_string<T, F>(
+    config: T,
+    ptr: *const c_char,
+    apply: F,
+) -> Result<T, NemoRelayStatus>
 where
     F: FnOnce(T, String) -> T,
 {
@@ -523,7 +531,7 @@ fn apply_string_map<T, F>(
     json_ptr: *const c_char,
     field_name: &str,
     mut apply: F,
-) -> Result<T, NemoFlowStatus>
+) -> Result<T, NemoRelayStatus>
 where
     F: FnMut(T, String, String) -> T,
 {
@@ -533,14 +541,14 @@ where
     Ok(config)
 }
 
-fn parse_transport(ptr: *const c_char) -> Result<String, NemoFlowStatus> {
+fn parse_transport(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
     parse_string_or_default(ptr, "http_binary")
 }
 
 fn otel_config_for_transport(
     transport: &str,
     service_name: String,
-) -> Result<OpenTelemetryConfig, NemoFlowStatus> {
+) -> Result<OpenTelemetryConfig, NemoRelayStatus> {
     match transport {
         "http_binary" => Ok(OpenTelemetryConfig::http_binary(service_name)),
         "grpc" => Ok(OpenTelemetryConfig::grpc(service_name)),
@@ -548,45 +556,45 @@ fn otel_config_for_transport(
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
             ));
-            Err(NemoFlowStatus::InvalidArg)
+            Err(NemoRelayStatus::InvalidArg)
         }
     }
 }
 
 fn openinference_config_for_transport(
     transport: &str,
-) -> Result<OpenInferenceConfig, NemoFlowStatus> {
+) -> Result<OpenInferenceConfig, NemoRelayStatus> {
     match transport {
         "http_binary" => Ok(OpenInferenceConfig::new()
-            .with_transport(nemo_flow::observability::openinference::OtlpTransport::HttpBinary)),
+            .with_transport(nemo_relay::observability::openinference::OtlpTransport::HttpBinary)),
         "grpc" => Ok(OpenInferenceConfig::new()
-            .with_transport(nemo_flow::observability::openinference::OtlpTransport::Grpc)),
+            .with_transport(nemo_relay::observability::openinference::OtlpTransport::Grpc)),
         other => {
             set_last_error(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}"
             ));
-            Err(NemoFlowStatus::InvalidArg)
+            Err(NemoRelayStatus::InvalidArg)
         }
     }
 }
 
 fn create_otel_subscriber(
     config: OpenTelemetryConfig,
-) -> Result<OpenTelemetrySubscriber, NemoFlowStatus> {
+) -> Result<OpenTelemetrySubscriber, NemoRelayStatus> {
     let _runtime_guard = tokio_runtime().enter();
     OpenTelemetrySubscriber::new(config).map_err(|error| {
         set_last_error(&error.to_string());
-        NemoFlowStatus::Internal
+        NemoRelayStatus::Internal
     })
 }
 
 fn create_openinference_subscriber(
     config: OpenInferenceConfig,
-) -> Result<OpenInferenceSubscriber, NemoFlowStatus> {
+) -> Result<OpenInferenceSubscriber, NemoRelayStatus> {
     let _runtime_guard = tokio_runtime().enter();
     OpenInferenceSubscriber::new(config).map_err(|error| {
         set_last_error(&error.to_string());
-        NemoFlowStatus::Internal
+        NemoRelayStatus::Internal
     })
 }
 
@@ -599,7 +607,7 @@ fn create_openinference_subscriber(
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -610,7 +618,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
     instrumentation_scope: *const c_char,
     timeout_millis: u64,
     out: *mut *mut FfiOpenTelemetrySubscriber,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -620,7 +628,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
         Ok(value) => value,
         Err(status) => return status,
     };
-    let service_name = match parse_string_or_default(service_name, "nemo-flow") {
+    let service_name = match parse_string_or_default(service_name, "nemo-relay") {
         Ok(value) => value,
         Err(status) => return status,
     };
@@ -682,7 +690,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
         Err(status) => return status,
     };
     unsafe { *out = Box::into_raw(Box::new(FfiOpenTelemetrySubscriber(subscriber))) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Registers the OpenTelemetry subscriber as an event subscriber.
@@ -690,14 +698,14 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_create(
 /// # Safety
 /// `subscriber` and `name` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_otel_subscriber_register(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_register(
     subscriber: *const FfiOpenTelemetrySubscriber,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -705,10 +713,10 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_register(
     };
 
     match unsafe { &*subscriber }.0.register(&name) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -718,9 +726,9 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_register(
 /// # Safety
 /// `name` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_otel_subscriber_deregister(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_deregister(
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -728,7 +736,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_deregister(
     };
 
     match core_subscriber_api::deregister_subscriber(&name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -738,20 +746,20 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_deregister(
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_otel_subscriber_force_flush(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_force_flush(
     subscriber: *const FfiOpenTelemetrySubscriber,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.force_flush() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -761,20 +769,20 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_force_flush(
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_otel_subscriber_shutdown(
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_shutdown(
     subscriber: *const FfiOpenTelemetrySubscriber,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.shutdown() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -788,7 +796,7 @@ pub unsafe extern "C" fn nemo_flow_otel_subscriber_shutdown(
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_create(
     transport: *const c_char,
     endpoint: *const c_char,
     headers_json: *const c_char,
@@ -799,7 +807,7 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
     instrumentation_scope: *const c_char,
     timeout_millis: u64,
     out: *mut *mut FfiOpenInferenceSubscriber,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -871,7 +879,7 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
         Err(status) => return status,
     };
     unsafe { *out = Box::into_raw(Box::new(FfiOpenInferenceSubscriber(subscriber))) };
-    NemoFlowStatus::Ok
+    NemoRelayStatus::Ok
 }
 
 /// Registers the OpenInference subscriber as an event subscriber.
@@ -879,14 +887,14 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_create(
 /// # Safety
 /// `subscriber` and `name` must be valid, non-null pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_openinference_subscriber_register(
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_register(
     subscriber: *const FfiOpenInferenceSubscriber,
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -894,10 +902,10 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_register(
     };
 
     match unsafe { &*subscriber }.0.register(&name) {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -907,9 +915,9 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_register(
 /// # Safety
 /// `name` must be a valid C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_openinference_subscriber_deregister(
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_deregister(
     name: *const c_char,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -917,7 +925,7 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_deregister(
     };
 
     match core_subscriber_api::deregister_subscriber(&name) {
-        Ok(_) => NemoFlowStatus::Ok,
+        Ok(_) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
     }
 }
@@ -927,20 +935,20 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_deregister(
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_openinference_subscriber_force_flush(
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_force_flush(
     subscriber: *const FfiOpenInferenceSubscriber,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.force_flush() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }
@@ -950,20 +958,20 @@ pub unsafe extern "C" fn nemo_flow_openinference_subscriber_force_flush(
 /// # Safety
 /// `subscriber` must be a valid, non-null pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_flow_openinference_subscriber_shutdown(
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_shutdown(
     subscriber: *const FfiOpenInferenceSubscriber,
-) -> NemoFlowStatus {
+) -> NemoRelayStatus {
     clear_last_error();
     if subscriber.is_null() {
         set_last_error("subscriber pointer is null");
-        return NemoFlowStatus::NullPointer;
+        return NemoRelayStatus::NullPointer;
     }
 
     match unsafe { &*subscriber }.0.shutdown() {
-        Ok(()) => NemoFlowStatus::Ok,
+        Ok(()) => NemoRelayStatus::Ok,
         Err(e) => {
             set_last_error(&e.to_string());
-            NemoFlowStatus::Internal
+            NemoRelayStatus::Internal
         }
     }
 }

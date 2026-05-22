@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! NeMo Flow coding-agent gateway CLI.
+//! NeMo Relay coding-agent gateway CLI.
 
 mod adapters;
+mod alignment;
 mod banner;
 mod completions_install;
 mod config;
@@ -33,8 +34,13 @@ async fn main() -> ExitCode {
     match run().await {
         Ok(code) => code,
         Err(error) => {
+            let exit_code = if error.guardrail_rejection_reason().is_some() {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            };
             eprintln!("{error}");
-            ExitCode::FAILURE
+            exit_code
         }
     }
 }
@@ -93,21 +99,21 @@ async fn run() -> Result<ExitCode, error::CliError> {
                 clap_complete::generate(
                     shell,
                     &mut clap_command,
-                    "nemo-flow",
+                    "nemo-relay",
                     &mut std::io::stdout(),
                 );
             }
             Ok(ExitCode::SUCCESS)
         }
         None => {
-            // Bare `nemo-flow` with no subcommand:
+            // Bare `nemo-relay` with no subcommand:
             // - If the user passed any daemon-specific flag (`--bind`, upstream URLs, ATIF dir,
             //   OpenInference endpoint), they obviously want the long-running gateway daemon —
             //   keep that path so existing scripts that explicitly invoke daemon mode stay
             //   compatible.
             // - Otherwise — no flags, no subcommand — use the first-run path only when no config
-            //   exists. Once configured, bare `nemo-flow` becomes a quick health check; explicit
-            //   `nemo-flow config` remains the reconfiguration path.
+            //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
+            //   `nemo-relay config` remains the reconfiguration path.
             if cli.server.requested_daemon_mode() {
                 let config = config::resolve_server_config(&cli.server)?;
                 server::serve(config.gateway).await?;

@@ -1,13 +1,13 @@
 ---
 name: prepare-code-freeze
-description: Prepare a NeMo Flow code freeze by creating the release branch, updating nightly alpha branch config, bumping main to the next version, and opening the required PR
+description: Prepare a NeMo Relay code freeze by creating the release branch, updating nightly alpha branch config, bumping main to the next version, and opening the required PR
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
 
 # Prepare Code Freeze
 
-Use this skill when the user asks to start, prepare, or automate a NeMo Flow
+Use this skill when the user asks to start, prepare, or automate a NeMo Relay
 code freeze.
 
 ## Companion Guidance
@@ -18,7 +18,7 @@ opening the PR.
 ## Workflow
 
 This workflow assumes `upstream` is the NVIDIA repository remote
-(`NVIDIA/NeMo-Flow`). The `origin` remote can be a maintainer's personal fork.
+(`NVIDIA/NeMo-Relay`). The `origin` remote can be a maintainer's personal fork.
 
 1. Confirm or infer the target release version from `upstream/main:Cargo.toml`.
    Derive the release branch as `release/<major>.<minor>`.

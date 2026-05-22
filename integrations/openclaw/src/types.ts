@@ -7,23 +7,23 @@
  * These types avoid importing OpenClaw implementation modules outside the public
  * plugin SDK surface and keep runtime-state constructor signatures explicit.
  */
-import type { OpenClawPluginApi, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, OpenClawPluginServiceContext } from 'openclaw/plugin-sdk/plugin-entry';
 
-import type { NemoFlowHookBackendConfig } from "./config.js";
-import type { HookReplayBackendStatus } from "./health.js";
-import type { NemoFlowModuleLoader } from "./modules.js";
+import type { NemoRelayHookBackendConfig } from './config.js';
+import type { HookReplayBackendStatus } from './health.js';
+import type { NemoRelayModuleLoader } from './modules.js';
 
 export type RuntimeStateOptions = {
   api: OpenClawPluginApi;
-  config: NemoFlowHookBackendConfig;
-  moduleLoader?: NemoFlowModuleLoader;
+  config: NemoRelayHookBackendConfig;
+  moduleLoader?: NemoRelayModuleLoader;
 };
 
 export type StartContext = {
   stateDir: string;
   workspaceDir?: string;
-  logger: OpenClawPluginServiceContext["logger"];
-  resolvePath: OpenClawPluginApi["resolvePath"];
+  logger: OpenClawPluginServiceContext['logger'];
+  resolvePath: OpenClawPluginApi['resolvePath'];
   agentVersion: string;
 };
 

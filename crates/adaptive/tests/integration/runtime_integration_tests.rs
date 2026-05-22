@@ -1,47 +1,47 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for runtime integration in the NeMo Flow adaptive crate.
+//! Integration tests for runtime integration in the NeMo Relay adaptive crate.
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use chrono::Utc;
-use nemo_flow::api::event::Event;
-use nemo_flow::api::llm::LlmRequest;
-use nemo_flow::api::llm::{
+use nemo_relay::api::event::Event;
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
     llm_stream_call_execute,
 };
-use nemo_flow::api::runtime::NemoFlowContextState;
-use nemo_flow::api::runtime::global_context;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::subscriber::{deregister_subscriber, register_subscriber};
-use nemo_flow::api::tool::tool_call_execute;
-use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use nemo_flow::codec::response::AnnotatedLlmResponse;
-use nemo_flow::codec::traits::LlmResponseCodec;
-use nemo_flow::error::{FlowError, Result as FlowResult};
-use nemo_flow::plugin::{
+use nemo_relay::api::runtime::NemoRelayContextState;
+use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::tool::tool_call_execute;
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, clear_plugin_configuration, deregister_plugin, initialize_plugins,
     register_plugin, validate_plugin_config,
 };
-use nemo_flow::plugin::{ConfigPolicy, UnsupportedBehavior};
-use nemo_flow_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
-use nemo_flow_adaptive::acg_learner::AcgLearner;
-use nemo_flow_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
-use nemo_flow_adaptive::config::{
+use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
+use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
+use nemo_relay_adaptive::acg_learner::AcgLearner;
+use nemo_relay_adaptive::cache_diagnostics::{CacheDiagnosticsTracker, build_cache_request_facts};
+use nemo_relay_adaptive::config::{
     AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig,
     TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
-use nemo_flow_adaptive::learner::traits::Learner;
-use nemo_flow_adaptive::plugin_component::{
+use nemo_relay_adaptive::learner::traits::Learner;
+use nemo_relay_adaptive::plugin_component::{
     ComponentSpec as AdaptiveComponent, register_adaptive_component,
 };
-use nemo_flow_adaptive::types::cache::HotCache;
-use nemo_flow_adaptive::types::records::{CallKind, CallRecord, RunRecord};
-use nemo_flow_adaptive::{InMemoryBackend, StorageBackendDyn};
+use nemo_relay_adaptive::types::cache::HotCache;
+use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
+use nemo_relay_adaptive::{InMemoryBackend, StorageBackendDyn};
 use serde_json::{Map, Value as Json, json};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
@@ -60,7 +60,7 @@ fn reset_global() {
 
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
-    *state = NemoFlowContextState::new();
+    *state = NemoRelayContextState::new();
 }
 
 fn sample_annotated_request(model: &str) -> AnnotatedLlmRequest {
@@ -344,7 +344,7 @@ struct FailingResponseCodec;
 impl LlmResponseCodec for FailingResponseCodec {
     fn decode_response(
         &self,
-        _response: &nemo_flow::json::Json,
+        _response: &nemo_relay::json::Json,
     ) -> FlowResult<AnnotatedLlmResponse> {
         Err(FlowError::Internal(
             "response annotation intentionally failed for test".to_string(),
@@ -393,8 +393,8 @@ async fn runtime_integration_response_codec_decode_failure_keeps_annotations_opt
         .unwrap()
         .iter()
         .find(|event| {
-            event.scope_type() == Some(nemo_flow::api::scope::ScopeType::Llm)
-                && event.scope_category() == Some(nemo_flow::api::event::ScopeCategory::End)
+            event.scope_type() == Some(nemo_relay::api::scope::ScopeType::Llm)
+                && event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
         })
         .cloned()
         .expect("llm end event should still emit");
@@ -506,9 +506,9 @@ async fn runtime_integration_acg_learner_reuses_learning_buckets_across_growing_
         "{agent_id}::model=claude-3-5-sonnet::seed={}::system={}::tools=no-tools",
         short_hash(&format!(
             "user:{}",
-            nemo_flow_adaptive::acg::sha256_hex("Summarize the latest findings")
+            nemo_relay_adaptive::acg::sha256_hex("Summarize the latest findings")
         )),
-        short_hash(&nemo_flow_adaptive::acg::sha256_hex(
+        short_hash(&nemo_relay_adaptive::acg::sha256_hex(
             "You are a careful planner"
         )),
     );
@@ -608,7 +608,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let tool_result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("search")
             .args(json!({"query": "test"}))
             .func(tool_func)
@@ -718,7 +718,7 @@ impl Plugin for HeaderPlugin {
                 "header_plugin",
                 priority,
                 false,
-                Box::new(|_name, mut request, annotated| {
+                Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!("set"));
                     Ok((request, annotated))
                 }),
@@ -727,7 +727,7 @@ impl Plugin for HeaderPlugin {
                 "tool_request_plugin",
                 priority,
                 false,
-                Box::new(|_name, mut args| {
+                Arc::new(|_name, mut args| {
                     if let Json::Object(ref mut map) = args {
                         map.insert("x-tool-plugin".into(), json!(true));
                     }
@@ -809,7 +809,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let tool_result = tool_call_execute(
-        nemo_flow::api::tool::ToolCallExecuteParams::builder()
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("search")
             .args(json!({"query": "test"}))
             .func(tool_func)

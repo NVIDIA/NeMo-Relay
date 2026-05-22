@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for context helpers in the NeMo Flow adaptive crate.
+//! Unit tests for context helpers in the NeMo Relay adaptive crate.
 
 use super::*;
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 
 #[test]
 fn test_latency_sensitivity_pointer_is_valid_json_pointer() {

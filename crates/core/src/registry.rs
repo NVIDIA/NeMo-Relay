@@ -3,17 +3,30 @@
 
 //! Priority-sorted named registry.
 //!
-//! [`SortedRegistry`] is the backbone data structure for all guardrail and intercept
-//! registries in the NeMo Flow runtime. It stores entries by unique name and provides
-//! iteration in ascending priority order, with eager re-sorting on every mutation.
+//! [`SortedRegistry`] is the backbone data structure for all guardrail and
+//! intercept registries in the NeMo Relay runtime. It stores self-describing
+//! entries by unique name and provides iteration in ascending priority order,
+//! with eager re-sorting on every mutation.
 
 use std::collections::HashMap;
 
+/// A named, priority-ordered registry entry.
+///
+/// Registry entries carry their own identity so snapshots can be cloned or
+/// copied without pairing a separately stored map key with the entry value.
+pub(crate) trait RegistryEntry {
+    /// Unique entry name within one registry.
+    fn name(&self) -> &str;
+
+    /// Entry priority. Lower values run earlier.
+    fn priority(&self) -> i32;
+}
+
 /// A named registry that maintains a sorted order by priority.
 ///
-/// Items are stored by unique string name and sorted by an integer priority
-/// extracted via a caller-provided function. The sort is performed eagerly:
-/// every [`register`](SortedRegistry::register) or
+/// Items are stored by their embedded [`RegistryEntry::name`] value and sorted
+/// by [`RegistryEntry::priority`]. The sort is performed eagerly: every
+/// [`register`](SortedRegistry::register) or
 /// [`deregister`](SortedRegistry::deregister) call re-sorts immediately, so
 /// [`sorted_values`](SortedRegistry::sorted_values) is a read-only lookup.
 ///
@@ -27,45 +40,41 @@ use std::collections::HashMap;
 /// Names must be unique within a registry. Attempting to [`register`](SortedRegistry::register)
 /// a duplicate name returns an error. Use [`deregister`](SortedRegistry::deregister) first
 /// to remove an existing entry before re-registering.
-pub struct SortedRegistry<T> {
+pub(crate) struct SortedRegistry<T: RegistryEntry> {
     entries: HashMap<String, T>,
     sorted_keys: Vec<String>,
-    priority_fn: fn(&T) -> i32,
 }
 
-impl<T> SortedRegistry<T> {
-    /// Create a new empty registry with the given priority extraction function.
-    ///
-    /// The runtime calls `priority_fn` on each stored entry to determine its
-    /// sort key. Lower values are ordered first.
-    ///
-    /// # Parameters
-    /// - `priority_fn`: Function used to extract the integer priority from a
-    ///   stored entry.
+impl<T: RegistryEntry> SortedRegistry<T> {
+    /// Create a new empty registry.
     ///
     /// # Returns
     /// A new empty [`SortedRegistry`] with no entries.
-    pub fn new(priority_fn: fn(&T) -> i32) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             entries: HashMap::new(),
             sorted_keys: Vec::new(),
-            priority_fn,
         }
     }
 
     /// Re-sorts the cached key order by priority. Called eagerly on every mutation.
     fn resort(&mut self) {
-        let pf = self.priority_fn;
         let entries = &self.entries;
         let mut keys: Vec<String> = entries.keys().cloned().collect();
-        keys.sort_by_key(|k| pf(entries.get(k).unwrap()));
+        keys.sort_by(|left, right| {
+            let left_entry = entries.get(left).unwrap();
+            let right_entry = entries.get(right).unwrap();
+            left_entry
+                .priority()
+                .cmp(&right_entry.priority())
+                .then_with(|| left.cmp(right))
+        });
         self.sorted_keys = keys;
     }
 
-    /// Register a new entry under a unique name.
+    /// Register a new entry under its embedded name.
     ///
     /// # Parameters
-    /// - `name`: Unique name used to address the entry later.
     /// - `entry`: Value to store in the registry.
     ///
     /// # Returns
@@ -76,7 +85,8 @@ impl<T> SortedRegistry<T> {
     ///
     /// # Notes
     /// Successful registration eagerly re-sorts the cached priority order.
-    pub fn register(&mut self, name: String, entry: T) -> Result<(), String> {
+    pub(crate) fn register(&mut self, entry: T) -> Result<(), String> {
+        let name = entry.name().to_string();
         if self.entries.contains_key(&name) {
             return Err(format!("{name} already exists"));
         }
@@ -96,7 +106,7 @@ impl<T> SortedRegistry<T> {
     ///
     /// # Notes
     /// Successful removal eagerly re-sorts the cached priority order.
-    pub fn deregister(&mut self, name: &str) -> bool {
+    pub(crate) fn deregister(&mut self, name: &str) -> bool {
         if self.entries.remove(name).is_some() {
             self.resort();
             true
@@ -113,51 +123,17 @@ impl<T> SortedRegistry<T> {
     /// # Returns
     /// A newly allocated [`Vec`] of shared references ordered from lowest
     /// priority to highest priority.
-    pub fn sorted_values(&self) -> Vec<&T> {
+    pub(crate) fn sorted_values(&self) -> Vec<&T> {
         self.sorted_keys
             .iter()
             .filter_map(|k| self.entries.get(k))
             .collect()
     }
+}
 
-    /// Return a shared reference to an entry by name.
-    ///
-    /// # Parameters
-    /// - `name`: Name of the entry to resolve.
-    ///
-    /// # Returns
-    /// `Some(&T)` when an entry exists under `name`, otherwise `None`.
-    pub fn get(&self, name: &str) -> Option<&T> {
-        self.entries.get(name)
-    }
-
-    /// Remove and return an entry by name.
-    ///
-    /// # Parameters
-    /// - `name`: Name of the entry to remove.
-    ///
-    /// # Returns
-    /// `Some(T)` when an entry was removed, otherwise `None`.
-    ///
-    /// # Notes
-    /// Successful removal eagerly re-sorts the cached priority order.
-    pub fn remove(&mut self, name: &str) -> Option<T> {
-        let removed = self.entries.remove(name);
-        if removed.is_some() {
-            self.resort();
-        }
-        removed
-    }
-
-    /// Report whether an entry with the given name exists.
-    ///
-    /// # Parameters
-    /// - `name`: Name to test for membership.
-    ///
-    /// # Returns
-    /// `true` when the registry contains `name`, otherwise `false`.
-    pub fn contains(&self, name: &str) -> bool {
-        self.entries.contains_key(name)
+impl<T: RegistryEntry> Default for SortedRegistry<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

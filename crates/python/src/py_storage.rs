@@ -13,17 +13,17 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use nemo_flow_adaptive::acg::prompt_ir::PromptIR;
-use nemo_flow_adaptive::acg::stability::StabilityAnalysisResult;
+use nemo_relay_adaptive::acg::prompt_ir::PromptIR;
+use nemo_relay_adaptive::acg::stability::StabilityAnalysisResult;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::TaskLocals;
 
-use nemo_flow_adaptive::error::{AdaptiveError, Result};
-use nemo_flow_adaptive::storage::traits::StorageBackendDyn;
-use nemo_flow_adaptive::trie::accumulator::AccumulatorState;
-use nemo_flow_adaptive::trie::serialization::TrieEnvelope;
-use nemo_flow_adaptive::types::plan::ExecutionPlan;
-use nemo_flow_adaptive::types::records::RunRecord;
+use nemo_relay_adaptive::error::{AdaptiveError, Result};
+use nemo_relay_adaptive::storage::traits::StorageBackendDyn;
+use nemo_relay_adaptive::trie::accumulator::AccumulatorState;
+use nemo_relay_adaptive::trie::serialization::TrieEnvelope;
+use nemo_relay_adaptive::types::plan::ExecutionPlan;
+use nemo_relay_adaptive::types::records::RunRecord;
 
 use crate::convert::{json_to_py, py_to_json};
 

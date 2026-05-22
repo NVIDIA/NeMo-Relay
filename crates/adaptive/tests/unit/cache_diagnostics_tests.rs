@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for cache diagnostics in the NeMo Flow adaptive crate.
+//! Unit tests for cache diagnostics in the NeMo Relay adaptive crate.
 
 use std::sync::{Arc, RwLock};
 
@@ -13,7 +13,7 @@ use crate::acg::prompt_ir::{
 };
 use crate::acg::stability::StabilityAnalysisResult;
 use chrono::{Duration, TimeZone, Utc};
-use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::Map;
 use uuid::Uuid;
 

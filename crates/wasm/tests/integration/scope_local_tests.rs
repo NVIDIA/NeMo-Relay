@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for scope local in the NeMo Flow WebAssembly crate.
+//! Integration tests for scope local in the NeMo Relay WebAssembly crate.
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_test::*;
 
-use nemo_flow_wasm::api::*;
-use nemo_flow_wasm::types::*;
+use nemo_relay_wasm::api::*;
+use nemo_relay_wasm::types::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,7 +36,7 @@ fn push_scope(
     data: JsValue,
     metadata: JsValue,
 ) -> Result<ScopeHandle, JsValue> {
-    nemo_flow_wasm::api::push_scope(
+    nemo_relay_wasm::api::push_scope(
         name,
         scope_type,
         parent_handle(handle),
@@ -49,7 +49,7 @@ fn push_scope(
 }
 
 fn pop_scope(handle: &ScopeHandle) -> Result<(), JsValue> {
-    nemo_flow_wasm::api::pop_scope(handle, JsValue::NULL, None)
+    nemo_relay_wasm::api::pop_scope(handle, JsValue::NULL, None)
 }
 
 async fn tool_call_execute(
@@ -61,7 +61,7 @@ async fn tool_call_execute(
     data: JsValue,
     metadata: JsValue,
 ) -> Result<JsValue, JsValue> {
-    nemo_flow_wasm::api::tool_call_execute(
+    nemo_relay_wasm::api::tool_call_execute(
         name,
         args,
         func,

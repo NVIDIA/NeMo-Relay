@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for callable private in the NeMo Flow FFI crate.
+//! Unit tests for callable private in the NeMo Relay FFI crate.
 
 use super::*;
 
@@ -15,5 +15,5 @@ fn test_callable_private_helper_paths() {
 
     let raw = CString::new("ffi-string").unwrap().into_raw();
     assert_eq!(ptr_to_opt_string(raw), Some("ffi-string".into()));
-    unsafe { nemo_flow_string_free_internal(raw) };
+    unsafe { nemo_relay_string_free_internal(raw) };
 }

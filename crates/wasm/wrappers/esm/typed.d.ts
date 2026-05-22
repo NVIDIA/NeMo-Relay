@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Typed wrappers for NeMo Flow WebAssembly execute APIs.
+ * Typed wrappers for NeMo Relay WebAssembly execute APIs.
  *
  * Provides generic typed versions of `toolCallExecute`, `llmCallExecute`,
  * and `llmStreamCallExecute` that use explicit `Codec<T>` objects to
  * serialize/deserialize at the API boundary.
  */
 
-import { ScopeHandle, LlmStream } from './nemo_flow_wasm.js';
+import { ScopeHandle, LlmStream } from './nemo_relay_wasm.js';
 
 /** One JSON scalar value accepted by the typed wrapper APIs. */
 export type JsonPrimitive = string | number | boolean | null;

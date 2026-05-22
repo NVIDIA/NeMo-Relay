@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for acg learner in the NeMo Flow adaptive crate.
+//! Unit tests for acg learner in the NeMo Relay adaptive crate.
 
 use std::future::Future;
 use std::pin::Pin;
 
 use chrono::Utc;
-use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use uuid::Uuid;
 
 use super::*;

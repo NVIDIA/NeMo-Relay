@@ -6,9 +6,9 @@ SPDX-License-Identifier: Apache-2.0
 # NeMo Guardrails Plugin Example
 
 This directory contains an example Python plugin that uses the NeMo Guardrails
-Python API from NeMo Flow.
+Python API from NeMo Relay.
 
-It is intentionally outside the `nemo_flow` package. Applications can copy,
+It is intentionally outside the `nemo_relay` package. Applications can copy,
 vendor, or package this plugin if they want to use it.
 
 The single-file plugin implementation, runnable agent, and Guardrails config
@@ -22,7 +22,7 @@ artifacts live under `example`.
   output rails.
 - Input and output checks around non-streaming `llm.execute(...)` calls.
 - Optional checks around managed `tools.execute(...)` arguments and results.
-- Request and response decoding with NeMo Flow's built-in OpenAI Chat, OpenAI
+- Request and response decoding with NeMo Relay's built-in OpenAI Chat, OpenAI
   Responses, and Anthropic Messages codecs.
 - A concrete example agent that exercises the plugin with a live NVIDIA
   OpenAI-compatible chat request.
@@ -32,12 +32,12 @@ artifacts live under `example`.
 ## Boundaries
 
 This example keeps provider response rewriting out of the plugin. Guardrails can
-rewrite LLM input because NeMo Flow request codecs support decode and encode.
+rewrite LLM input because NeMo Relay request codecs support decode and encode.
 If Guardrails returns modified LLM output, the example raises instead of
 mutating provider-shaped responses.
 
 The example also does not cover streaming calls or a full `generate_async`
-agent-runtime integration. Tool checks use NeMo Flow tool middleware and
+agent-runtime integration. Tool checks use NeMo Relay tool middleware and
 serialized JSON payloads.
 
 ## Use It
@@ -64,16 +64,16 @@ Register and initialize the plugin:
 ```python
 import asyncio
 
-import nemo_flow
+import nemo_relay
 import plugin as nemoguardrails_plugin
 
 
 async def main() -> None:
     nemoguardrails_plugin.register()
     try:
-        config = nemo_flow.plugin.PluginConfig(
+        config = nemo_relay.plugin.PluginConfig(
             components=[
-                nemo_flow.plugin.ComponentSpec(
+                nemo_relay.plugin.ComponentSpec(
                     kind=nemoguardrails_plugin.DEFAULT_KIND,
                     config={
                         "config_path": "./rails",
@@ -82,9 +82,9 @@ async def main() -> None:
                 )
             ]
         )
-        await nemo_flow.plugin.initialize(config)
+        await nemo_relay.plugin.initialize(config)
     finally:
-        nemo_flow.plugin.clear()
+        nemo_relay.plugin.clear()
         nemoguardrails_plugin.deregister()
 
 
@@ -98,7 +98,7 @@ initializes this plugin, runs a managed `tools.execute(...)` call, and sends the
 tool result through a managed `llm.execute(...)` call to NVIDIA-hosted
 inference.
 
-Run it from a checkout where NeMo Flow and NeMo Guardrails are installed. The
+Run it from a checkout where NeMo Relay and NeMo Guardrails are installed. The
 default lane uses a passthrough Guardrails config and the `current_time` tool.
 This is the fastest live validation path because it exercises the real plugin,
 real `nemoguardrails` initialization, tool execution, and LLM execution without

@@ -9,7 +9,7 @@
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use nemo_flow::error::Result as FlowResult;
+use nemo_relay::error::Result as FlowResult;
 use serde_json::Value as Json;
 
 /// An async iterator over chunks from a streaming LLM response.

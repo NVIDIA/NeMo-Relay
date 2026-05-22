@@ -12,19 +12,19 @@ from uuid import uuid4
 import pytest
 
 if typing.TYPE_CHECKING:
-    import nemo_flow
+    import nemo_relay
 
 
 @pytest.fixture(name="subscribed_events")
-def subscribed_events_fixture() -> Iterator[list[nemo_flow.Event]]:
-    import nemo_flow
+def subscribed_events_fixture() -> Iterator[list[nemo_relay.Event]]:
+    import nemo_relay
 
-    events: list[nemo_flow.Event] = []
+    events: list[nemo_relay.Event] = []
 
-    def event_recorder(event: nemo_flow.Event) -> None:
+    def event_recorder(event: nemo_relay.Event) -> None:
         events.append(event)
 
     subscriber_name = f"test-{uuid4()}"
-    nemo_flow.subscribers.register(subscriber_name, event_recorder)
+    nemo_relay.subscribers.register(subscriber_name, event_recorder)
     yield events
-    nemo_flow.subscribers.deregister(subscriber_name)
+    nemo_relay.subscribers.deregister(subscriber_name)

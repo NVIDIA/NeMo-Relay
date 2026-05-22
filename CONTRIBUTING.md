@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Contributing to NeMo Flow
+# Contributing to NeMo Relay
 
-Thank you for your interest in contributing to NeMo Flow. This guide covers the development workflow, coding standards, and pull request process.
+Thank you for your interest in contributing to NeMo Relay. This guide covers the development workflow, coding standards, and pull request process.
 
 ## Development Setup
 
@@ -14,12 +14,12 @@ changes.
 
 ### Package Installation
 
-If you are consuming NeMo Flow rather than developing this repository, install
+If you are consuming NeMo Relay rather than developing this repository, install
 the published package for your language:
 
-- **Rust crate** -- `cargo add nemo-flow`
-- **Python package** -- `uv add nemo-flow` or `pip install nemo-flow`
-- **Node.js package** -- `npm install nemo-flow-node`
+- **Rust crate** -- `cargo add nemo-relay`
+- **Python package** -- `uv add nemo-relay` or `pip install nemo-relay`
+- **Node.js package** -- `npm install nemo-relay-node`
 
 Go, WebAssembly, and the raw FFI surface are currently experimental and remain
 source-first.
@@ -42,7 +42,7 @@ bindings from source in the same branch.
 Clone the repository and build the workspace:
 
 ```bash
-git clone <repo-url> && cd NeMo-Flow
+git clone <repo-url> && cd NeMo-Relay
 
 uv sync
 cargo install just --locked
@@ -56,7 +56,7 @@ Validate the source builds for the experimental bindings when you touch them:
 
 ```bash
 # Go binding (requires the release FFI library)
-cd go/nemo_flow
+cd go/nemo_relay
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 cd ../..
 
@@ -130,7 +130,7 @@ Use these Go commands and conventions when changing the experimental Go binding.
 
 These general conventions apply across files and language surfaces.
 
-- Use the naming conventions appropriate to each language: Rust `snake_case`, C FFI exports prefixed `nemo_flow_`, Go `PascalCase`, Node.js `camelCase`, Python `snake_case`.
+- Use the naming conventions appropriate to each language: Rust `snake_case`, C FFI exports prefixed `nemo_relay_`, Go `PascalCase`, Node.js `camelCase`, Python `snake_case`.
 
 ## Pre-commit Hooks
 
@@ -145,7 +145,7 @@ The hooks enforce:
 - **General**: trailing whitespace removal, end-of-file fixup, YAML/TOML/JSON validity, merge conflict marker detection, large file check (500 KB max)
 - **Docs**: Fern validation for `docs/` and `fern/`, plus external Markdown/MDX link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`
 - **Python**: Ruff linting and formatting, ty type checking
-- **Rust**: FFI header sync for `crates/ffi/nemo_flow.h` through Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
+- **Rust**: FFI header sync for `crates/ffi/nemo_relay.h` through Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
 - **Go**: `gofmt` formatting, `go vet` static analysis
 
 To run all hooks manually against the entire codebase:

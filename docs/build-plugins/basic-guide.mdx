@@ -6,14 +6,15 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this guide when you want to package reusable NeMo Flow behavior as a plugin that can be activated from configuration.
+
+Use this guide when you want to package reusable NeMo Relay behavior as a plugin that can be activated from configuration.
 
 ## What You Build
 
 You will define the plugin's purpose, stable kind name, configuration boundary, runtime surfaces, and activation lifecycle. The result is a small plugin contract that can be validated and registered through the more focused follow-on guides.
 
 <Note>
-NeMo Flow plugin configuration keys use `snake_case` in every language and file
+NeMo Relay plugin configuration keys use `snake_case` in every language and file
 format. Node.js helper function names are `camelCase`, but the objects passed to
 `plugin.initialize(...)` use the same canonical `snake_case` keys as Python,
 Rust, JSON, and TOML plugin configuration.

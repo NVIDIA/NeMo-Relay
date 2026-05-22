@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for drain in the NeMo Flow adaptive crate.
+//! Unit tests for drain in the NeMo Relay adaptive crate.
 
 use super::*;
 use crate::storage::memory::InMemoryBackend;
@@ -12,10 +12,10 @@ use crate::types::cache::HotCache;
 use crate::types::metadata::MetadataEnvelope;
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
-use nemo_flow::api::event::{
+use nemo_relay::api::event::{
     BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
 };
-use nemo_flow::api::scope::ScopeType;
+use nemo_relay::api::scope::ScopeType;
 use serde_json::json;
 use std::future::Future;
 use std::pin::Pin;
@@ -805,7 +805,7 @@ fn make_llm_end_with_annotated(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
     name: &str,
-    annotated: nemo_flow::codec::response::AnnotatedLlmResponse,
+    annotated: nemo_relay::codec::response::AnnotatedLlmResponse,
 ) -> Event {
     Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
@@ -817,7 +817,7 @@ fn make_llm_end_with_annotated(
         Vec::new(),
         EventCategory::llm(),
         Some(
-            nemo_flow::api::event::CategoryProfile::builder()
+            nemo_relay::api::event::CategoryProfile::builder()
                 .annotated_response(std::sync::Arc::new(annotated))
                 .build(),
         ),
@@ -826,7 +826,7 @@ fn make_llm_end_with_annotated(
 
 #[test]
 fn test_accumulator_extracts_annotated_response() {
-    use nemo_flow::codec::response::{AnnotatedLlmResponse, ResponseToolCall, Usage};
+    use nemo_relay::codec::response::{AnnotatedLlmResponse, ResponseToolCall, Usage};
 
     let mut acc = RunAccumulator::new("agent-1".to_string());
 
@@ -962,7 +962,7 @@ fn test_accumulator_llm_end_no_annotated_response() {
 
 #[test]
 fn test_accumulator_annotated_response_partial_data() {
-    use nemo_flow::codec::response::AnnotatedLlmResponse;
+    use nemo_relay::codec::response::AnnotatedLlmResponse;
 
     let mut acc = RunAccumulator::new("agent-1".to_string());
 

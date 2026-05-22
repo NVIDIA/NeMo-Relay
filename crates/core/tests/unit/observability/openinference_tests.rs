@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for openinference in the NeMo Flow core crate.
+//! Unit tests for openinference in the NeMo Relay core crate.
 
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     tool_attributes_to_strings,
 };
-use crate::api::runtime::NemoFlowContextState;
+use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::response::{AnnotatedLlmResponse, Usage};
 use crate::json::Json;
+use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
@@ -27,7 +28,7 @@ use uuid::Uuid;
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
-    *context.write().unwrap() = NemoFlowContextState::new();
+    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 fn make_provider() -> (
@@ -278,8 +279,8 @@ fn config_defaults_and_builder_overrides_are_applied() {
 
     let defaults = OpenInferenceConfig::default();
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
-    assert_eq!(defaults.service_name, "nemo-flow");
-    assert_eq!(defaults.instrumentation_scope, "nemo-flow-openinference");
+    assert_eq!(defaults.service_name, "nemo-relay");
+    assert_eq!(defaults.instrumentation_scope, "nemo-relay-openinference");
     assert_eq!(defaults.timeout, Duration::from_secs(3));
     assert!(defaults.headers.is_empty());
     assert!(defaults.resource_attributes.is_empty());
@@ -379,10 +380,10 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
         attributes.get("openinference.span.kind"),
         Some(&"AGENT".to_string())
     );
-    assert!(!attributes.contains_key("nemo_flow.start.data_json"));
-    assert!(!attributes.contains_key("nemo_flow.start.metadata_json"));
+    assert!(!attributes.contains_key("nemo_relay.start.data_json"));
+    assert!(!attributes.contains_key("nemo_relay.start.metadata_json"));
     assert_eq!(
-        attributes.get("nemo_flow.start.input_json"),
+        attributes.get("nemo_relay.start.input_json"),
         Some(&"{\"task\":\"scope-start\"}".to_string())
     );
     assert_eq!(
@@ -400,11 +401,11 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 
     let event_attributes = attr_map(&span.events.events[0].attributes);
     assert_eq!(
-        event_attributes.get("nemo_flow.mark.data_json"),
+        event_attributes.get("nemo_relay.mark.data_json"),
         Some(&"{\"step\":1}".to_string())
     );
     assert_eq!(
-        event_attributes.get("nemo_flow.mark.metadata_json"),
+        event_attributes.get("nemo_relay.mark.metadata_json"),
         Some(&"{\"source\":\"rust-test\"}".to_string())
     );
 }
@@ -503,15 +504,15 @@ fn records_span_start_mark_and_end() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_flow.uuid"),
+        attributes.get("nemo_relay.uuid"),
         Some(&root_uuid.to_string())
     );
     assert_eq!(
-        attributes.get("nemo_flow.start.input_json"),
+        attributes.get("nemo_relay.start.input_json"),
         Some(&"{\"query\":\"hello\"}".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_flow.end.output_json"),
+        attributes.get("nemo_relay.end.output_json"),
         Some(&"{\"result\":\"ok\"}".to_string())
     );
 }
@@ -551,7 +552,7 @@ fn llm_input_value_omits_request_headers() {
         attributes.get("input.mime_type"),
         Some(&"text/plain".to_string())
     );
-    assert!(!attributes.contains_key("nemo_flow.start.input_json"));
+    assert!(!attributes.contains_key("nemo_relay.start.input_json"));
     assert!(!attributes["input.value"].contains("authorization"));
     assert!(!attributes["input.value"].contains("secret-token"));
 }
@@ -649,13 +650,13 @@ fn output_value_prefers_display_content() {
         Some(&"text/plain".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_flow.end.output_json"),
+        attributes.get("nemo_relay.end.output_json"),
         Some(
             &"{\"content\":\"Tool edit completed.\",\"details\":{\"diff\":\"-old\\n+new\"}}"
                 .to_string()
         )
     );
-    assert!(!attributes.contains_key("nemo_flow.end.data_json"));
+    assert!(!attributes.contains_key("nemo_relay.end.data_json"));
 }
 
 #[test]
@@ -806,6 +807,92 @@ fn preserves_parent_child_relationships() {
 }
 
 #[test]
+fn atif_lineage_correlates_with_openinference_span_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+
+    let agent_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+    let atif_exporter = AtifExporter::new(
+        agent_uuid.to_string(),
+        AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    );
+    let atif_subscriber = atif_exporter.subscriber();
+
+    let events = vec![
+        make_start_event(agent_uuid, None, "agent", ScopeType::Agent, None),
+        make_start_event(
+            llm_uuid,
+            Some(agent_uuid),
+            "model-call",
+            ScopeType::Llm,
+            Some(json!({"messages": [{"role": "user", "content": "hello"}]})),
+        ),
+        make_end_event(
+            llm_uuid,
+            Some(agent_uuid),
+            "model-call",
+            ScopeType::Llm,
+            Some(json!({"content": "hi", "role": "assistant"})),
+        ),
+        make_end_event(agent_uuid, None, "agent", ScopeType::Agent, None),
+    ];
+
+    for event in &events {
+        processor.process(event);
+        atif_subscriber(event);
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let agent_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "agent")
+        .unwrap();
+    let llm_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "model-call")
+        .unwrap();
+    let agent_attributes = attr_map(&agent_span.attributes);
+    let llm_attributes = attr_map(&llm_span.attributes);
+
+    assert_eq!(
+        agent_attributes.get("nemo_relay.uuid"),
+        Some(&agent_uuid.to_string())
+    );
+    assert_eq!(
+        llm_attributes.get("nemo_relay.uuid"),
+        Some(&llm_uuid.to_string())
+    );
+    assert_eq!(
+        llm_attributes.get("nemo_relay.parent_uuid"),
+        Some(&agent_uuid.to_string())
+    );
+
+    let trajectory = atif_exporter.export();
+    assert_eq!(trajectory.session_id, agent_uuid.to_string());
+    let agent_step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .unwrap();
+    let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+
+    assert_eq!(
+        llm_attributes.get("nemo_relay.uuid"),
+        Some(&extra.ancestry.function_id)
+    );
+    assert_eq!(extra.ancestry.parent_id, Some(trajectory.session_id));
+}
+
+#[test]
 fn orphan_marks_become_zero_duration_spans() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -823,7 +910,7 @@ fn orphan_marks_become_zero_duration_spans() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_flow.mark.orphan"),
+        attributes.get("nemo_relay.mark.orphan"),
         Some(&"true".to_string())
     );
     assert_eq!(
@@ -919,7 +1006,7 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
     );
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(
-            attributes.get("nemo_flow.end.output_json").unwrap(),
+            attributes.get("nemo_relay.end.output_json").unwrap(),
         )
         .unwrap(),
         json!({"status": "done", "metrics": {"tokens": 42}})
@@ -994,7 +1081,7 @@ fn helper_functions_cover_additional_openinference_branches() {
         Some(CategoryProfile::builder().model_name("demo-model").build()),
     ));
     let llm_attributes = attr_map(&common_attributes(&llm_end));
-    assert!(!llm_attributes.contains_key("nemo_flow.model_name"));
+    assert!(!llm_attributes.contains_key("nemo_relay.model_name"));
     assert_eq!(
         llm_attributes.get(oi::llm::MODEL_NAME.as_str()),
         Some(&"demo-model".to_string())
@@ -1070,11 +1157,11 @@ fn helper_functions_cover_additional_openinference_branches() {
     ));
     let mark_attributes = attr_map(&mark_attributes(&mark));
     assert_eq!(
-        mark_attributes.get("nemo_flow.mark.data_json"),
+        mark_attributes.get("nemo_relay.mark.data_json"),
         Some(&"{\"kind\":\"aux\"}".to_string())
     );
     assert_eq!(
-        mark_attributes.get("nemo_flow.mark.metadata_json"),
+        mark_attributes.get("nemo_relay.mark.metadata_json"),
         Some(&"{\"source\":\"unit\"}".to_string())
     );
 

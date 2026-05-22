@@ -3,7 +3,7 @@
 
 //! Built-in observability plugin component.
 //!
-//! This module packages NeMo Flow's first-party observability exporters behind
+//! This module packages NeMo Relay's first-party observability exporters behind
 //! the shared plugin configuration system. Each exporter section is opt-in:
 //! omitted sections and sections with `enabled = false` validate but do not
 //! register subscribers or construct exporters.
@@ -12,14 +12,16 @@
 //! so configuration remains portable across bindings. Agent Trajectory
 //! Observability Format (ATOF), OpenTelemetry, and OpenInference each register
 //! one global subscriber when enabled. Agent Trajectory Interchange Format
-//! (ATIF) uses a global dispatcher that detects direct child agent scopes and
-//! creates one scope-local exporter for each top-level agent run.
+//! (ATIF) uses a global dispatcher that detects top-level agent scopes and
+//! creates one scope-local exporter for each trajectory run. Coding-agent turns
+//! that need bounded traces are represented as agent scopes with role metadata.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+#[cfg(any(feature = "otel", feature = "openinference"))]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -170,12 +172,12 @@ impl Default for AtofSectionConfig {
     }
 }
 
-/// Per-agent ATIF trajectory exporter config.
+/// Per-trajectory ATIF exporter config.
 ///
 /// When enabled, this section creates a dispatcher that opens a separate
-/// [`crate::observability::atif::AtifExporter`] for each top-level agent scope. The `{session_id}`
-/// placeholder in [`AtifSectionConfig::filename_template`] is required so
-/// concurrent sibling agents cannot overwrite each other's trajectory files.
+/// [`crate::observability::atif::AtifExporter`] for each top-level agent or turn scope. The
+/// `{session_id}` placeholder in [`AtifSectionConfig::filename_template`] is required so
+/// concurrent sibling trajectories cannot overwrite each other's files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtifSectionConfig {
@@ -200,7 +202,7 @@ pub struct AtifSectionConfig {
     /// Directory containing trajectory JSON files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
-    /// Filename template. `{session_id}` is replaced with the top-level agent scope UUID.
+    /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID.
     #[serde(default = "default_atif_filename_template")]
     pub filename_template: String,
 }
@@ -642,11 +644,11 @@ impl AtifDispatcher {
     }
 
     fn observe_global(&mut self, event: &Event, subscriber_prefix: &str, state: Arc<Mutex<Self>>) {
-        if self.last_error.is_some() || !is_top_level_agent_start(event) {
+        if self.last_error.is_some() || !is_top_level_trajectory_start(event) {
             return;
         }
 
-        // The top-level agent scope UUID is the ATIF session ID. The global
+        // The top-level trajectory scope UUID is the ATIF session ID. The global
         // dispatcher records the start event itself because the scope-local
         // subscriber is attached after that start event has already been
         // emitted.
@@ -667,8 +669,8 @@ impl AtifDispatcher {
         let agent_uuid = event.uuid();
         let name = format!("{subscriber_prefix}{agent_uuid}");
         let callback = atif_scope_subscriber(state, agent_uuid);
-        // Attach the per-agent subscriber to the agent scope rather than the
-        // global registry so sibling top-level agents never share events.
+        // Attach the scoped subscriber to the trajectory root rather than the
+        // global registry so sibling top-level trajectories never share events.
         if let Err(err) = scope_register_subscriber(&agent_uuid, &name, callback) {
             self.last_error = Some(format!("failed to register ATIF scope subscriber: {err}"));
         } else {
@@ -858,10 +860,11 @@ fn write_atif_file(write: &PendingAtifWrite) -> std::io::Result<()> {
     Ok(())
 }
 
-fn is_top_level_agent_start(event: &Event) -> bool {
-    if event.scope_category() != Some(ScopeCategory::Start)
-        || event.scope_type() != Some(ScopeType::Agent)
-    {
+fn is_top_level_trajectory_start(event: &Event) -> bool {
+    if event.scope_category() != Some(ScopeCategory::Start) {
+        return false;
+    }
+    if event.scope_type() != Some(ScopeType::Agent) {
         return false;
     }
     let Some(parent_uuid) = event.parent_uuid() else {
@@ -1265,7 +1268,7 @@ fn default_atof_mode() -> String {
 }
 
 fn default_agent_name() -> String {
-    "NeMo Flow".to_string()
+    "NeMo Relay".to_string()
 }
 
 fn default_agent_version() -> String {
@@ -1277,7 +1280,7 @@ fn default_model_name() -> String {
 }
 
 fn default_atif_filename_template() -> String {
-    "nemo-flow-atif-{session_id}.json".to_string()
+    "nemo-relay-atif-{session_id}.json".to_string()
 }
 
 fn default_otlp_transport() -> String {
@@ -1285,7 +1288,7 @@ fn default_otlp_transport() -> String {
 }
 
 fn default_service_name() -> String {
-    "nemo-flow".to_string()
+    "nemo-relay".to_string()
 }
 
 fn default_timeout_millis() -> u64 {

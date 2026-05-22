@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for intercepts in the NeMo Flow adaptive crate.
+//! Unit tests for intercepts in the NeMo Relay adaptive crate.
 
 use super::*;
 use crate::acg::stability::StabilityAnalysisResult;
 use crate::types::cache::HotCache;
 use crate::types::metadata::{MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
-use nemo_flow::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_flow::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;

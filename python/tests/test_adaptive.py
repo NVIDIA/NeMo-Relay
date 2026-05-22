@@ -9,9 +9,9 @@ from typing import cast
 
 import pytest
 
-from nemo_flow import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, plugin, scope, tools
-from nemo_flow import adaptive as adaptive_module
-from nemo_flow.adaptive import (
+from nemo_relay import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, plugin, scope, tools
+from nemo_relay import adaptive as adaptive_module
+from nemo_relay.adaptive import (
     ADAPTIVE_PLUGIN_KIND,
     AcgConfig,
     AcgStabilityThresholds,
@@ -37,7 +37,7 @@ class TestAdaptiveConfigHelpers:
         assert BackendSpec.in_memory().to_dict() == {"kind": "in_memory", "config": {}}
         assert BackendSpec.redis("redis://127.0.0.1:6379").to_dict() == {
             "kind": "redis",
-            "config": {"url": "redis://127.0.0.1:6379", "key_prefix": "nemo_flow:"},
+            "config": {"url": "redis://127.0.0.1:6379", "key_prefix": "nemo_relay:"},
         }
 
     def test_backend_helper_normalizes_nested_dataclass_config(self):

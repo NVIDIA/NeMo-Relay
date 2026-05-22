@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use nemo_flow::api::runtime::{
+use nemo_relay::api::runtime::{
     ScopeStack, TASK_SCOPE_STACK, create_scope_stack, current_scope_stack,
     propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
     task_scope_push, task_scope_remove, task_scope_top,
 };
-use nemo_flow::api::scope::{ScopeHandle, ScopeType};
-use nemo_flow::error::FlowError;
+use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::error::FlowError;
 use uuid::Uuid;
 
 /// Two ScopeStackHandles push different scopes → verify independent.
@@ -312,11 +312,6 @@ fn test_scope_stack_helpers_cover_lookup_mutation_and_remove_paths() {
     stack.top_mut().name = "root-renamed".into();
     assert_eq!(stack.top().name, "root-renamed");
 
-    assert!(stack.local_registries_mut(&Uuid::now_v7()).is_none());
-    assert!(stack.scope_registries_get(&root_uuid).is_none());
-    assert!(stack.local_registries_mut(&root_uuid).is_some());
-    assert!(stack.scope_registries_get(&root_uuid).is_some());
-
     let child = ScopeHandle::builder()
         .name("child")
         .scope_type(ScopeType::Function)
@@ -337,7 +332,6 @@ fn test_scope_stack_helpers_cover_lookup_mutation_and_remove_paths() {
     let removed = stack.remove(&child_uuid).unwrap();
     assert_eq!(removed.name, "child");
     assert!(stack.find(&child_uuid).is_none());
-    assert!(stack.scope_registries_get(&child_uuid).is_none());
 
     match stack.remove(&root_uuid) {
         Err(FlowError::InvalidArgument(message)) => {

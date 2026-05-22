@@ -4,7 +4,7 @@
 /**
  * Runtime lifecycle coordinator for the OpenClaw plugin.
  *
- * This module validates config, lazy-loads NeMo Flow Node bindings, registers
+ * This module validates config, lazy-loads NeMo Relay Node bindings, registers
  * OpenClaw service/lifecycle/gateway surfaces, and forwards hooks to the replay
  * backend once runtime state is ready.
  */
@@ -13,35 +13,46 @@ import type {
   OpenClawPluginServiceContext,
   PluginLogger,
   PluginRuntimeLifecycleRegistration,
-} from "openclaw/plugin-sdk/plugin-entry";
+} from 'openclaw/plugin-sdk/plugin-entry';
 
-import { parseConfig } from "./config.js";
-import type { NemoFlowHookBackendConfig } from "./config.js";
-import { createHealthSnapshot, type HookReplayBackendStatus } from "./health.js";
-import type { HookReplayCounters } from "./hook-replay/session.js";
-import { HookReplayBackend } from "./hooks-backend.js";
+import { parseConfig } from './config.js';
+import type { NemoRelayHookBackendConfig } from './config.js';
+import { createHealthSnapshot, type HookReplayBackendStatus } from './health.js';
+import type { HookReplayCounters } from './hook-replay/session.js';
+import { HookReplayBackend } from './hooks-backend.js';
+import type { PluginAgentToolCallMiddlewareContext } from './openclaw-hook-types.js';
 import {
-  defaultNemoFlowModuleLoader,
+  defaultNemoRelayModuleLoader,
   type ConfigDiagnostic,
-  type NemoFlowModules,
-  type NemoFlowModuleLoader,
-} from "./modules.js";
-import type { RuntimeStateOptions, StartContext } from "./types.js";
+  type NemoRelayModules,
+  type NemoRelayModuleLoader,
+} from './modules.js';
+import type { RuntimeStateOptions, StartContext } from './types.js';
 
-const SERVICE_ID = "nemo-flow-observability";
-const LIFECYCLE_ID = "nemo-flow-observability-cleanup";
-const STATUS_METHOD = "nemoFlow.status";
-type RuntimeCleanupContext = Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0];
+const SERVICE_ID = 'nemo-relay-observability';
+const LIFECYCLE_ID = 'nemo-relay-observability-cleanup';
+const STATUS_METHOD = 'nemoRelay.status';
+type RuntimeCleanupContext = Parameters<NonNullable<PluginRuntimeLifecycleRegistration['cleanup']>>[0];
+type ToolCallMiddlewareOptions = {
+  runtimes?: string[];
+  priority?: number;
+};
+type ToolCallMiddlewareApi = {
+  registerAgentToolCallMiddleware?: (
+    handler: (ctx: PluginAgentToolCallMiddlewareContext) => Promise<unknown>,
+    options?: ToolCallMiddlewareOptions,
+  ) => void;
+};
 
 /** Owns one plugin runtime instance across OpenClaw service start/stop cycles. */
-export class NemoFlowRuntimeState {
+export class NemoRelayRuntimeState {
   private readonly api: OpenClawPluginApi;
-  private readonly config: NemoFlowHookBackendConfig;
-  private readonly moduleLoader: NemoFlowModuleLoader;
-  private loadPromise: Promise<NemoFlowModules> | undefined;
+  private readonly config: NemoRelayHookBackendConfig;
+  private readonly moduleLoader: NemoRelayModuleLoader;
+  private loadPromise: Promise<NemoRelayModules> | undefined;
   private startPromise: Promise<void> | undefined;
-  private statusValue: HookReplayBackendStatus = { state: "not_initialized" };
-  private modulesValue?: NemoFlowModules;
+  private statusValue: HookReplayBackendStatus = { state: 'not_initialized' };
+  private modulesValue?: NemoRelayModules;
   private backendValue: HookReplayBackend | undefined;
   private initializedPluginHost = false;
   private pluginHostOutputsHealthy = false;
@@ -55,7 +66,7 @@ export class NemoFlowRuntimeState {
   constructor(options: RuntimeStateOptions) {
     this.api = options.api;
     this.config = options.config;
-    this.moduleLoader = options.moduleLoader ?? defaultNemoFlowModuleLoader;
+    this.moduleLoader = options.moduleLoader ?? defaultNemoRelayModuleLoader;
   }
 
   /** Return the current coarse backend status. */
@@ -81,12 +92,12 @@ export class NemoFlowRuntimeState {
     });
   }
 
-  /** Start NeMo Flow modules, generic plugins, and the hook replay backend. */
+  /** Start NeMo Relay modules, generic plugins, and the hook replay backend. */
   async start(ctx: StartContext): Promise<void> {
     this.lastStartContext = copyStartContext(ctx);
     this.missingStartContextLogged = false;
 
-    if (this.started || this.statusValue.state === "ready" || this.statusValue.state === "degraded") {
+    if (this.started || this.statusValue.state === 'ready' || this.statusValue.state === 'degraded') {
       return;
     }
 
@@ -109,14 +120,14 @@ export class NemoFlowRuntimeState {
     this.initializedPluginHost = false;
     this.pluginHostOutputsHealthy = false;
 
-    let modules: NemoFlowModules;
+    let modules: NemoRelayModules;
     try {
       this.loadPromise ??= this.moduleLoader();
       modules = await this.loadPromise;
       this.modulesValue = modules;
     } catch (error) {
       this.loadPromise = undefined;
-      this.statusValue = { state: "degraded", reason: `failed to load nemo-flow-node: ${toMessage(error)}` };
+      this.statusValue = { state: 'degraded', reason: `failed to load nemo-relay-node: ${toMessage(error)}` };
       if (!this.unavailableLogged) {
         ctx.logger.warn?.(this.statusValue.reason);
         this.unavailableLogged = true;
@@ -124,7 +135,7 @@ export class NemoFlowRuntimeState {
       return;
     }
 
-    const hostConfig = this.config.plugins as Parameters<NemoFlowModules["pluginHost"]["validate"]>[0];
+    const hostConfig = this.config.plugins as Parameters<NemoRelayModules['pluginHost']['validate']>[0];
     let degradedReason;
 
     const validationReport = validatePluginHostConfig(modules, hostConfig, ctx.logger);
@@ -132,27 +143,27 @@ export class NemoFlowRuntimeState {
     if (!validationReport.ok) {
       degradedReason = validationReport.reason;
       ctx.logger.warn?.(degradedReason);
-    } else if (validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
-      degradedReason = "NeMo Flow plugin host config validation failed";
+    } else if (validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
+      degradedReason = 'NeMo Relay plugin host config validation failed';
     } else {
       if (
-        validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === "warning") &&
+        validationReport.report.diagnostics.some((diagnostic) => diagnostic.level === 'warning') &&
         degradedReason === undefined
       ) {
-        degradedReason = "NeMo Flow plugin host config validation produced warnings";
+        degradedReason = 'NeMo Relay plugin host config validation produced warnings';
       }
 
       try {
         const activationReport = await modules.pluginHost.initialize(hostConfig);
         logDiagnostics(ctx.logger, activationReport.diagnostics);
         this.initializedPluginHost = true;
-        const hasInitializationErrors = activationReport.diagnostics.some((diagnostic) => diagnostic.level === "error");
+        const hasInitializationErrors = activationReport.diagnostics.some((diagnostic) => diagnostic.level === 'error');
         this.pluginHostOutputsHealthy = !hasInitializationErrors;
         if (hasInitializationErrors) {
-          degradedReason ??= "NeMo Flow plugin host initialization reported errors";
+          degradedReason ??= 'NeMo Relay plugin host initialization reported errors';
         }
       } catch (error) {
-        degradedReason = `failed to initialize NeMo Flow plugin host: ${toMessage(error)}`;
+        degradedReason = `failed to initialize NeMo Relay plugin host: ${toMessage(error)}`;
         ctx.logger.warn?.(degradedReason);
       }
     }
@@ -165,12 +176,30 @@ export class NemoFlowRuntimeState {
     });
     this.registerBeforeExit(ctx.logger);
     this.started = true;
-    this.statusValue = degradedReason === undefined ? { state: "ready" } : { state: "degraded", reason: degradedReason };
+    this.statusValue =
+      degradedReason === undefined ? { state: 'ready' } : { state: 'degraded', reason: degradedReason };
   }
 
   /** Stop the runtime because OpenClaw service or gateway shutdown is happening. */
   async stop(reason: string, logger?: PluginLogger): Promise<void> {
-    await this.stopWithStatus(reason, logger, { state: "stopped", reason });
+    await this.stopWithStatus(reason, logger, { state: 'stopped', reason });
+  }
+
+  /** Apply conditional-execution guardrails before an OpenClaw tool call proceeds. */
+  async guardToolCall(ctx: PluginAgentToolCallMiddlewareContext): Promise<void> {
+    const backend = await this.backendForHook(ctx.workspaceDir);
+    if (!backend) {
+      return;
+    }
+    await backend.onBeforeToolCall(
+      {
+        toolName: ctx.toolName,
+        params: ctx.params,
+        runId: ctx.runId,
+        toolCallId: ctx.toolCallId,
+      },
+      ctx,
+    );
   }
 
   /** Shared stop implementation that controls the final health status. */
@@ -180,9 +209,9 @@ export class NemoFlowRuntimeState {
     finalStatus: HookReplayBackendStatus,
   ): Promise<void> {
     if (
-      this.statusValue.state === "stopped" ||
-      this.statusValue.state === "disabled" ||
-      this.statusValue.state === "stopping"
+      this.statusValue.state === 'stopped' ||
+      this.statusValue.state === 'disabled' ||
+      this.statusValue.state === 'stopping'
     ) {
       return;
     }
@@ -190,18 +219,18 @@ export class NemoFlowRuntimeState {
     if (this.startPromise) {
       await this.startPromise.catch((error) => {
         const log = logger ?? this.api.logger;
-        log.warn?.(`failed to finish NeMo Flow startup before stop: ${toMessage(error)}`);
+        log.warn?.(`failed to finish NeMo Relay startup before stop: ${toMessage(error)}`);
       });
     }
 
-    this.statusValue = { state: "stopping" };
+    this.statusValue = { state: 'stopping' };
     const log = logger ?? this.api.logger;
     this.removeBeforeExitListener();
 
     try {
       await this.backendValue?.drainForGatewayStop(reason);
     } catch (error) {
-      log.warn?.(`failed to stop NeMo Flow hook backend: ${toMessage(error)}`);
+      log.warn?.(`failed to stop NeMo Relay hook backend: ${toMessage(error)}`);
     }
     const backendState = this.backendValue?.state();
     if (backendState) {
@@ -213,7 +242,7 @@ export class NemoFlowRuntimeState {
       try {
         this.modulesValue.pluginHost.clear();
       } catch (error) {
-        log.warn?.(`failed to clear NeMo Flow plugin host: ${toMessage(error)}`);
+        log.warn?.(`failed to clear NeMo Relay plugin host: ${toMessage(error)}`);
       }
       this.initializedPluginHost = false;
       this.pluginHostOutputsHealthy = false;
@@ -237,7 +266,9 @@ export class NemoFlowRuntimeState {
     await this.stopWithStatus(
       ctx.reason,
       this.api.logger,
-      ctx.reason === "restart" ? { state: "not_initialized", reason: "restart" } : { state: "stopped", reason: ctx.reason },
+      ctx.reason === 'restart'
+        ? { state: 'not_initialized', reason: 'restart' }
+        : { state: 'stopped', reason: ctx.reason },
     );
   }
 
@@ -247,14 +278,14 @@ export class NemoFlowRuntimeState {
       return this.backendValue;
     }
 
-    if (this.statusValue.state === "disabled" || this.statusValue.state === "stopping") {
+    if (this.statusValue.state === 'disabled' || this.statusValue.state === 'stopping') {
       return undefined;
     }
 
     const startContext = this.lastStartContext ?? this.startContextFromRuntime(workspaceDir);
     if (!startContext) {
       if (!this.missingStartContextLogged) {
-        this.api.logger.warn?.("nemo-flow skipped hook replay because OpenClaw service start context is unavailable");
+        this.api.logger.warn?.('nemo-relay skipped hook replay because OpenClaw service start context is unavailable');
         this.missingStartContextLogged = true;
       }
       return undefined;
@@ -294,78 +325,70 @@ export class NemoFlowRuntimeState {
 
   /** Register every OpenClaw hook used by the observability backend. */
   registerHooks(): void {
-    this.api.on("gateway_start", async (event, ctx) => {
-      await this.replayWithBackend("gateway_start", ctx.workspaceDir, (backend) =>
-        backend.onGatewayStart(event, ctx),
-      );
+    this.api.on('gateway_start', async (event, ctx) => {
+      await this.replayWithBackend('gateway_start', ctx.workspaceDir, (backend) => backend.onGatewayStart(event, ctx));
     });
 
-    this.api.on("gateway_stop", async (event) => {
-      await this.stop(event.reason ?? "gateway_stop", this.api.logger);
+    this.api.on('gateway_stop', async (event) => {
+      await this.stop(event.reason ?? 'gateway_stop', this.api.logger);
     });
 
-    this.api.on("session_start", async (event, ctx) => {
-      await this.replayWithBackend("session_start", undefined, (backend) => backend.onSessionStart(event, ctx));
+    this.api.on('session_start', async (event, ctx) => {
+      await this.replayWithBackend('session_start', undefined, (backend) => backend.onSessionStart(event, ctx));
     });
 
-    this.api.on("session_end", async (event, ctx) => {
-      await this.replayWithBackendAsync("session_end", undefined, (backend) => backend.onSessionEnd(event, ctx));
+    this.api.on('session_end', async (event, ctx) => {
+      await this.replayWithBackendAsync('session_end', undefined, (backend) => backend.onSessionEnd(event, ctx));
     });
 
-    this.api.on("llm_input", async (event, ctx) => {
-      await this.replayWithBackend("llm_input", ctx.workspaceDir, (backend) => backend.onLlmInput(event, ctx));
+    this.api.on('llm_input', async (event, ctx) => {
+      await this.replayWithBackend('llm_input', ctx.workspaceDir, (backend) => backend.onLlmInput(event, ctx));
     });
 
-    this.api.on("llm_output", async (event, ctx) => {
-      await this.replayWithBackend("llm_output", ctx.workspaceDir, (backend) => backend.onLlmOutput(event, ctx));
+    this.api.on('llm_output', async (event, ctx) => {
+      await this.replayWithBackend('llm_output', ctx.workspaceDir, (backend) => backend.onLlmOutput(event, ctx));
     });
 
-    this.api.on("model_call_started", async (event, ctx) => {
-      await this.replayWithBackend("model_call_started", ctx.workspaceDir, (backend) =>
+    this.api.on('model_call_started', async (event, ctx) => {
+      await this.replayWithBackend('model_call_started', ctx.workspaceDir, (backend) =>
         backend.onModelCallStarted(event, ctx),
       );
     });
 
-    this.api.on("model_call_ended", async (event, ctx) => {
-      await this.replayWithBackend("model_call_ended", ctx.workspaceDir, (backend) =>
+    this.api.on('model_call_ended', async (event, ctx) => {
+      await this.replayWithBackend('model_call_ended', ctx.workspaceDir, (backend) =>
         backend.onModelCallEnded(event, ctx),
       );
     });
 
-    this.api.on("after_tool_call", async (event, ctx) => {
-      await this.replayWithBackend("after_tool_call", undefined, (backend) =>
-        backend.onAfterToolCall(event, ctx),
-      );
+    this.api.on('after_tool_call', async (event, ctx) => {
+      await this.replayWithBackend('after_tool_call', undefined, (backend) => backend.onAfterToolCall(event, ctx));
     });
 
-    this.api.on("before_message_write", (event, ctx) => {
+    this.api.on('before_message_write', (event, ctx) => {
       const backend = this.backendValue;
       if (!backend) {
         return;
       }
-      backend.safeReplay("before_message_write", undefined, () => backend.onBeforeMessageWrite(event, ctx));
+      backend.safeReplay('before_message_write', undefined, () => backend.onBeforeMessageWrite(event, ctx));
     });
 
-    this.api.on("agent_end", async (event, ctx) => {
-      await this.replayWithBackend("agent_end", ctx.workspaceDir, (backend) => backend.onAgentEnd(event, ctx));
+    this.api.on('agent_end', async (event, ctx) => {
+      await this.replayWithBackend('agent_end', ctx.workspaceDir, (backend) => backend.onAgentEnd(event, ctx));
     });
 
-    this.api.on("before_agent_finalize", async (event, ctx) => {
-      await this.replayWithBackend("before_agent_finalize", ctx.workspaceDir, (backend) =>
+    this.api.on('before_agent_finalize', async (event, ctx) => {
+      await this.replayWithBackend('before_agent_finalize', ctx.workspaceDir, (backend) =>
         backend.onBeforeAgentFinalize(event, ctx),
       );
     });
 
-    this.api.on("subagent_spawned", async (event, ctx) => {
-      await this.replayWithBackend("subagent_spawned", undefined, (backend) =>
-        backend.onSubagentSpawned(event, ctx),
-      );
+    this.api.on('subagent_spawned', async (event, ctx) => {
+      await this.replayWithBackend('subagent_spawned', undefined, (backend) => backend.onSubagentSpawned(event, ctx));
     });
 
-    this.api.on("subagent_ended", async (event, ctx) => {
-      await this.replayWithBackend("subagent_ended", undefined, (backend) =>
-        backend.onSubagentEnded(event, ctx),
-      );
+    this.api.on('subagent_ended', async (event, ctx) => {
+      await this.replayWithBackend('subagent_ended', undefined, (backend) => backend.onSubagentEnded(event, ctx));
     });
   }
 
@@ -377,11 +400,11 @@ export class NemoFlowRuntimeState {
         stateDir,
         logger: this.api.logger,
         resolvePath: this.api.resolvePath,
-        agentVersion: this.api.version ?? "unknown",
+        agentVersion: this.api.version ?? 'unknown',
         ...(workspaceDir === undefined ? {} : { workspaceDir }),
       };
     } catch (error) {
-      this.api.logger.warn?.(`nemo-flow could not resolve OpenClaw runtime state dir: ${toMessage(error)}`);
+      this.api.logger.warn?.(`nemo-relay could not resolve OpenClaw runtime state dir: ${toMessage(error)}`);
       return undefined;
     }
   }
@@ -392,11 +415,11 @@ export class NemoFlowRuntimeState {
       return;
     }
     const listener = () => {
-      void this.stop("beforeExit", logger).catch((error) => {
-        logger.warn?.(`nemo-flow beforeExit cleanup failed: ${toMessage(error)}`);
+      void this.stop('beforeExit', logger).catch((error) => {
+        logger.warn?.(`nemo-relay beforeExit cleanup failed: ${toMessage(error)}`);
       });
     };
-    process.on("beforeExit", listener);
+    process.on('beforeExit', listener);
     this.beforeExitListener = listener;
   }
 
@@ -405,17 +428,14 @@ export class NemoFlowRuntimeState {
     if (!this.beforeExitListener) {
       return;
     }
-    process.removeListener("beforeExit", this.beforeExitListener);
+    process.removeListener('beforeExit', this.beforeExitListener);
     delete this.beforeExitListener;
   }
 }
 
-/** Register the NeMo Flow observability plugin with the OpenClaw plugin API. */
-export function registerNemoFlowPlugin(
-  api: OpenClawPluginApi,
-  moduleLoader?: NemoFlowModuleLoader,
-): void {
-  if (api.registrationMode !== "full") {
+/** Register the NeMo Relay observability plugin with the OpenClaw plugin API. */
+export function registerNemoRelayPlugin(api: OpenClawPluginApi, moduleLoader?: NemoRelayModuleLoader): void {
+  if (api.registrationMode !== 'full') {
     return;
   }
 
@@ -423,18 +443,16 @@ export function registerNemoFlowPlugin(
   try {
     config = parseConfig(api.pluginConfig);
   } catch (error) {
-    api.logger.warn?.(
-      `nemo-flow observability disabled because plugin config is invalid: ${toMessage(error)}`,
-    );
+    api.logger.warn?.(`nemo-relay observability disabled because plugin config is invalid: ${toMessage(error)}`);
     return;
   }
 
   if (!config.enabled) {
-    api.logger.info?.("nemo-flow observability disabled by plugin config");
+    api.logger.info?.('nemo-relay observability disabled by plugin config');
     return;
   }
 
-  const runtime = new NemoFlowRuntimeState(
+  const runtime = new NemoRelayRuntimeState(
     moduleLoader === undefined ? { api, config } : { api, config, moduleLoader },
   );
 
@@ -445,15 +463,15 @@ export function registerNemoFlowPlugin(
         stateDir: ctx.stateDir,
         logger: ctx.logger,
         resolvePath: api.resolvePath,
-        agentVersion: api.version ?? "unknown",
+        agentVersion: api.version ?? 'unknown',
         ...(ctx.workspaceDir === undefined ? {} : { workspaceDir: ctx.workspaceDir }),
       }),
-    stop: (ctx: OpenClawPluginServiceContext) => runtime.stop("service_stop", ctx.logger),
+    stop: (ctx: OpenClawPluginServiceContext) => runtime.stop('service_stop', ctx.logger),
   });
 
   api.registerRuntimeLifecycle({
     id: LIFECYCLE_ID,
-    description: "Clean up NeMo Flow OpenClaw observability plugin state",
+    description: 'Clean up NeMo Relay OpenClaw observability plugin state',
     cleanup: (ctx) => runtime.cleanup(ctx),
   });
 
@@ -463,21 +481,36 @@ export function registerNemoFlowPlugin(
       respond(true, runtime.health());
     },
     {
-      scope: "operator.admin",
+      scope: 'operator.admin',
     },
   );
 
   runtime.registerHooks();
+  registerToolCallMiddleware(api, runtime);
 }
 
-/** Validate the NeMo Flow plugin-host config and log diagnostics. */
+function registerToolCallMiddleware(api: OpenClawPluginApi, runtime: NemoRelayRuntimeState): void {
+  const register = (api as OpenClawPluginApi & ToolCallMiddlewareApi).registerAgentToolCallMiddleware;
+  if (typeof register !== 'function') {
+    return;
+  }
+
+  register.call(
+    api,
+    async (ctx: PluginAgentToolCallMiddlewareContext) => {
+      await runtime.guardToolCall(ctx);
+      return await ctx.execute(ctx.params);
+    },
+    { runtimes: ['pi'], priority: 100 },
+  );
+}
+
+/** Validate the NeMo Relay plugin-host config and log diagnostics. */
 function validatePluginHostConfig(
-  modules: NemoFlowModules,
-  config: Parameters<NemoFlowModules["pluginHost"]["validate"]>[0],
+  modules: NemoRelayModules,
+  config: Parameters<NemoRelayModules['pluginHost']['validate']>[0],
   logger: PluginLogger,
-):
-  | { ok: true; report: ReturnType<NemoFlowModules["pluginHost"]["validate"]> }
-  | { ok: false; reason: string } {
+): { ok: true; report: ReturnType<NemoRelayModules['pluginHost']['validate']> } | { ok: false; reason: string } {
   try {
     const report = modules.pluginHost.validate(config);
     logDiagnostics(logger, report.diagnostics);
@@ -485,7 +518,7 @@ function validatePluginHostConfig(
   } catch (error) {
     return {
       ok: false,
-      reason: `failed to validate NeMo Flow plugin host config: ${toMessage(error)}`,
+      reason: `failed to validate NeMo Relay plugin host config: ${toMessage(error)}`,
     };
   }
 }
@@ -493,9 +526,9 @@ function validatePluginHostConfig(
 /** Log plugin-host diagnostics at warning or info level based on severity. */
 function logDiagnostics(logger: PluginLogger, diagnostics: ConfigDiagnostic[]): void {
   for (const diagnostic of diagnostics) {
-    const prefix = diagnostic.component ? `${diagnostic.component}: ` : "";
+    const prefix = diagnostic.component ? `${diagnostic.component}: ` : '';
     const message = `${prefix}${diagnostic.code}: ${diagnostic.message}`;
-    if (diagnostic.level === "error") {
+    if (diagnostic.level === 'error') {
       logger.warn?.(message);
     } else {
       logger.info?.(message);

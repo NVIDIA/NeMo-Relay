@@ -7,7 +7,8 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_flow::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use reqwest::Client;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -42,11 +43,11 @@ pub(crate) async fn serve(config: GatewayConfig) -> Result<(), CliError> {
         if err.kind() == std::io::ErrorKind::AddrInUse {
             CliError::Launch(format!(
                 "cannot bind {} — port is already in use. Most likely cause: another \
-                 `nemo-flow` daemon is already running. Fix one of:\n  \
-                 • stop the running daemon (Unix: `pkill -f nemo-flow`, Windows: \
-                 `taskkill /IM nemo-flow.exe`)\n  \
-                 • use an ephemeral port: `nemo-flow --bind 127.0.0.1:0`\n  \
-                 • pick a free port: `nemo-flow --bind 127.0.0.1:4041`",
+                 `nemo-relay` daemon is already running. Fix one of:\n  \
+                 • stop the running daemon (Unix: `pkill -f nemo-relay`, Windows: \
+                 `taskkill /IM nemo-relay.exe`)\n  \
+                 • use an ephemeral port: `nemo-relay --bind 127.0.0.1:0`\n  \
+                 • pick a free port: `nemo-relay --bind 127.0.0.1:4041`",
                 config.bind
             ))
         } else {
@@ -107,6 +108,7 @@ impl AppState {
     fn new(config: GatewayConfig) -> Self {
         crate::tls::install_rustls_crypto_provider();
         let sessions = SessionManager::new(config.clone());
+        sessions.start_idle_sweeper();
         let http = Client::builder()
             .connect_timeout(HTTP_CONNECT_TIMEOUT)
             .timeout(HTTP_REQUEST_TIMEOUT)
@@ -152,6 +154,9 @@ impl PluginActivation {
         let Some(config) = config else {
             return Ok(Self { active: false });
         };
+        register_adaptive_component().map_err(|error| {
+            CliError::Config(format!("adaptive plugin registration failed: {error}"))
+        })?;
         let plugin_config: PluginConfig = serde_json::from_value(config)
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
         initialize_plugins(plugin_config)

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Intercept factories for the `nemo-flow-adaptive` crate, including Adaptive
+//! Intercept factories for the `nemo-relay-adaptive` crate, including Adaptive
 //! Cache Governor (ACG) intercepts.
 
 use std::collections::HashMap;
@@ -11,9 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use nemo_flow::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
-use nemo_flow::error::Result as FlowResult;
-use nemo_flow::json::Json;
+use nemo_relay::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
+use nemo_relay::error::Result as FlowResult;
+use nemo_relay::json::Json;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
@@ -22,7 +22,7 @@ use crate::context_helpers::resolve_shared_parent_scope_identity;
 use crate::types::cache::HotCache;
 
 /// Header key used to propagate serialized adaptive agent hints.
-pub const AGENT_HINTS_HEADER_KEY: &str = "x-nemo-flow-adaptive-agent-hints";
+pub const AGENT_HINTS_HEADER_KEY: &str = "x-nemo-relay-adaptive-agent-hints";
 pub(crate) const WARM_FIRST_MAX_WAIT_MS: u64 = 150;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

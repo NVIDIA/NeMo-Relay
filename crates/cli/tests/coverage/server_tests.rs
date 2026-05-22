@@ -12,7 +12,10 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
-use nemo_flow::plugin::{
+use nemo_relay::api::registry::{
+    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+};
+use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
     register_plugin,
 };
@@ -29,6 +32,14 @@ static PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+
+struct ToolGuardrailCleanup(&'static str);
+
+impl Drop for ToolGuardrailCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
 
 fn test_http_client() -> reqwest::Client {
     crate::tls::install_rustls_crypto_provider();
@@ -50,7 +61,7 @@ impl Plugin for GenericTestPlugin {
         &'a self,
         _plugin_config: &Map<String, Value>,
         ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = nemo_flow::plugin::Result<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = nemo_relay::plugin::Result<()>> + Send + 'a>> {
         Box::pin(async move {
             GENERIC_TEST_PLUGIN_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
             ctx.add_registration(PluginRegistration::new(
@@ -143,7 +154,7 @@ async fn healthz_returns_ok() {
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -183,7 +194,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    assert!(nemo_flow::plugin::active_plugin_report().is_some());
+    assert!(nemo_relay::plugin::active_plugin_report().is_some());
 
     let client = test_http_client();
     for hook_event_name in ["on_session_start", "on_session_finalize"] {
@@ -201,7 +212,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     assert!(
@@ -225,7 +236,7 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
 #[tokio::test]
 async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
     let atof_dir = temp.path().join("atof");
@@ -273,7 +284,8 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
             "SessionEnd",
         ),
     ] {
-        for hook_event_name in [start_event, end_event] {
+        let hook_events = vec![start_event, "UserPromptSubmit", end_event];
+        for hook_event_name in hook_events {
             let response = client
                 .post(format!("{url}{path}"))
                 .json(&json!({
@@ -289,7 +301,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     let agent_starts = events
@@ -302,14 +314,15 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
         })
         .filter_map(|event| event["name"].as_str().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
-    assert!(agent_starts.contains(&"codex".to_string()));
-    assert!(agent_starts.contains(&"claude-code".to_string()));
+    assert!(agent_starts.contains(&"codex-turn".to_string()));
+    assert!(agent_starts.contains(&"claude-code-turn".to_string()));
+    assert!(!agent_starts.contains(&"claude-code".to_string()));
 }
 
 #[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
     GENERIC_TEST_PLUGIN_DEREGISTRATIONS.store(0, Ordering::SeqCst);
@@ -354,14 +367,56 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
         GENERIC_TEST_PLUGIN_DEREGISTRATIONS.load(Ordering::SeqCst),
         1
     );
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+}
+
+#[tokio::test]
+async fn serve_listener_activates_adaptive_plugin_config() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "adaptive",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "agent_id": "cli-test",
+                    "state": {
+                        "backend": {
+                            "kind": "in_memory",
+                            "config": {}
+                        }
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let report = nemo_relay::plugin::active_plugin_report().unwrap();
+    assert!(report.diagnostics.is_empty());
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
 async fn serve_listener_rejects_invalid_plugin_config() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
-    let _ = nemo_flow::plugin::clear_plugin_configuration();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
     config.plugin_config = Some(json!({
@@ -387,7 +442,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
         .unwrap_err();
 
     assert!(error.to_string().contains("ATOF mode"));
-    assert!(nemo_flow::plugin::active_plugin_report().is_none());
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
@@ -397,7 +452,7 @@ async fn gateway_errors_render_structured_json_responses() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["error"]["type"], json!("nemo_flow_gateway_error"));
+    assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
     assert!(
         body["error"]["message"]
             .as_str()
@@ -466,6 +521,53 @@ async fn cursor_hook_returns_cursor_permission_fields() {
     assert_eq!(body["permission"], json!("allow"));
     assert!(body.get("user_message").is_none());
     assert!(body.get("agent_message").is_none());
+}
+
+#[tokio::test]
+async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");
+    const BLOCKED_TEST_TOOL: &str = "Nmf137BlockedTool";
+    register_tool_conditional_execution_guardrail(
+        "cli-pre-tool-blocker",
+        1,
+        Arc::new(|name, _args| {
+            Ok((name == BLOCKED_TEST_TOOL).then(|| "blocked by policy".to_string()))
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolGuardrailCleanup("cli-pre-tool-blocker");
+
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "guardrail-session",
+                        "hook_event_name": "PreToolUse",
+                        "tool_use_id": "tool-1",
+                        "tool_name": BLOCKED_TEST_TOOL,
+                        "tool_input": { "command": "rm -rf /tmp/demo" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["error"]["type"],
+        json!("nemo_relay_guardrail_rejected")
+    );
+    assert_eq!(body["error"]["reason"], json!("blocked by policy"));
 }
 
 #[tokio::test]
@@ -751,8 +853,12 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
         let payload: Value = serde_json::from_slice(&body).unwrap();
         Json(json!({
             "model": payload["model"],
+            "input": payload["input"],
             "authorization": headers
                 .get(header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            "x_test_intercept": headers
+                .get("x-test-intercept")
                 .and_then(|value| value.to_str().ok()),
             "connection": headers
                 .get(header::CONNECTION)

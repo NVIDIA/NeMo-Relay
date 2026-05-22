@@ -168,7 +168,7 @@ describe('adaptive helpers', () => {
       kind: 'redis',
       config: {
         url: 'redis://127.0.0.1:6379',
-        key_prefix: 'nemo_flow:',
+        key_prefix: 'nemo_relay:',
       },
     });
   });

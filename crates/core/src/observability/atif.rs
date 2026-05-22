@@ -4,7 +4,7 @@
 //! Agent Trajectory Interchange Format (ATIF) exporter.
 //!
 //! This module provides types and an exporter that collects lifecycle events
-//! from the NeMo Flow runtime and converts them into ATIF trajectories conforming
+//! from the NeMo Relay runtime and converts them into ATIF trajectories conforming
 //! to the ATIF v1.6 schema.
 //!
 //! # Overview
@@ -14,9 +14,9 @@
 //!
 //! # Event-to-Step Mapping
 //!
-//! The core conversion from NeMo Flow events to ATIF steps follows these rules:
+//! The core conversion from NeMo Relay events to ATIF steps follows these rules:
 //!
-//! | NeMo Flow Event     | ATIF Step               | Notes                                |
+//! | NeMo Relay Event     | ATIF Step               | Notes                                |
 //! |-----------------|-------------------------|--------------------------------------|
 //! | LLM Start       | `user` step             | Messages extracted from LlmRequest   |
 //! | LLM End         | `agent` step            | Response content, tool_calls promoted|
@@ -306,7 +306,7 @@ impl AtifExporter {
         }
     }
 
-    /// Return an event subscriber function that records NeMo Flow events.
+    /// Return an event subscriber function that records NeMo Relay events.
     ///
     /// The returned callback can be registered with
     /// [`register_subscriber`](crate::api::subscriber::register_subscriber).
@@ -366,7 +366,7 @@ impl AtifExporter {
 /// If `input` looks like an `LlmRequest` envelope (`{"content": ..., "headers": ...}`),
 /// return the inner `content` value. Otherwise return the input unchanged.
 ///
-/// This avoids leaking the NeMo Flow transport wrapper into the trajectory.
+/// This avoids leaking the NeMo Relay transport wrapper into the trajectory.
 fn unwrap_llm_request(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && obj.contains_key("content")
@@ -430,7 +430,7 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 
 /// Try to extract `AtifMetrics` from a `token_usage` object in the LLM response.
 ///
-/// Supports NeMo Flow `token_usage` and provider-native `usage` payloads.
+/// Supports NeMo Relay `token_usage` and provider-native `usage` payloads.
 /// Populates `extra` with any unknown usage keys (e.g. reasoning_tokens or total_tokens).
 /// Returns `None` if the response has no recognized token counts.
 fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
@@ -567,7 +567,7 @@ fn extract_user_messages(input: &Json) -> Json {
 /// "tool_calls": [{ "id": "...", "type": "function", "function": { "name": "...", "arguments": "..." } }]
 /// ```
 ///
-/// String `arguments` are parsed into JSON for consistency with NeMo Flow tool events
+/// String `arguments` are parsed into JSON for consistency with NeMo Relay tool events
 /// which always provide parsed arguments.
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
@@ -661,7 +661,7 @@ fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
 // AtifStepExtra helpers
 // ---------------------------------------------------------------------------
 
-/// Build an [`AtifAncestry`] from a NeMo Flow [`Event`].
+/// Build an [`AtifAncestry`] from a NeMo Relay [`Event`].
 ///
 /// `name_map` is a pre-pass uuid → name lookup used to resolve `parent_name`.
 fn build_ancestry(
@@ -884,7 +884,7 @@ impl StepConversionState {
             start_ts,
             *event.timestamp(),
             Some(event.uuid().to_string()),
-            "nemo_flow",
+            "nemo_relay",
         );
 
         self.steps.push(AtifStep {
@@ -934,7 +934,7 @@ impl StepConversionState {
                 .tool_call_id()
                 .map(ToOwned::to_owned)
                 .or_else(|| Some(event.uuid().to_string())),
-            "nemo_flow",
+            "nemo_relay",
         );
         self.current_agent
             .push_tool_metadata(build_ancestry(event, &lookups.name_map), invocation);
@@ -955,7 +955,7 @@ impl StepConversionState {
                 end_timestamp: None,
                 invocation_id: Some(mark.uuid().to_string()),
                 status: Some("completed".to_string()),
-                framework: Some("nemo_flow".to_string()),
+                framework: Some("nemo_relay".to_string()),
             }),
             llm_request: None,
             tool_ancestry: Vec::new(),

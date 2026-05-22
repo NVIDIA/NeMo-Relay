@@ -3,8 +3,34 @@
 
 use super::*;
 use crate::config::{global_plugin_config_path, project_plugin_config_path};
-use nemo_flow::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
-use nemo_flow::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_relay_adaptive::AdaptiveConfig;
+use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+
+fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
+    json!({
+        "agent_id": agent_id,
+        "state": {
+            "backend": {
+                "kind": "in_memory",
+                "config": {}
+            }
+        },
+        "telemetry": {
+            "learners": ["tool_parallelism"]
+        },
+        "adaptive_hints": {
+            "priority": 100,
+            "break_chain": false,
+            "inject_header": true,
+            "inject_body_path": "nvext.agent_hints"
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
 
 #[test]
 fn target_scope_defaults_to_user_and_rejects_conflicts() {
@@ -60,6 +86,35 @@ fn typed_editor_model_contains_observability_sections() {
 }
 
 #[test]
+fn typed_editor_model_contains_adaptive_options() {
+    let schema = AdaptiveConfig::editor_schema();
+    assert!(!schema.fields.iter().any(|field| field.name == "version"));
+    let agent_id = schema.field("agent_id").unwrap();
+    assert_eq!(agent_id.label, "fallback_agent_id");
+
+    let state = schema.field("state").unwrap().schema().unwrap();
+    let backend = state.field("backend").unwrap().schema().unwrap();
+    assert_eq!(
+        backend.field("kind").unwrap().enum_values,
+        &["in_memory", "redis"]
+    );
+    assert_eq!(backend.field("config").unwrap().kind, EditorFieldKind::Json);
+
+    let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
+    assert_eq!(
+        telemetry.field("learners").unwrap().kind,
+        EditorFieldKind::Json
+    );
+
+    let acg = schema.field("acg").unwrap().schema().unwrap();
+    let thresholds = acg.field("stability_thresholds").unwrap().schema().unwrap();
+    assert_eq!(
+        thresholds.field("stable_threshold").unwrap().kind,
+        EditorFieldKind::Float
+    );
+}
+
+#[test]
 fn plugin_menu_uses_setup_theme_markers() {
     let theme = ColorfulTheme::default();
     let lines = render_menu(
@@ -75,6 +130,16 @@ fn plugin_menu_uses_setup_theme_markers() {
     assert!(rendered.contains('❯'));
     assert!(rendered.contains("↑/↓"));
     assert!(!rendered.contains("> First"));
+}
+
+#[test]
+fn menu_response_index_tracks_selected_and_shortcut_positions() {
+    assert_eq!(menu_response_index(&MenuResponse::Selected(3)), Some(3));
+    assert_eq!(
+        menu_response_index(&MenuResponse::Shortcut(MenuShortcut::Reset, 4)),
+        Some(4)
+    );
+    assert_eq!(menu_response_index(&MenuResponse::Cancel), None);
 }
 
 #[test]
@@ -111,6 +176,19 @@ fn editor_model_renders_valid_observability_plugin_config() {
 }
 
 #[test]
+fn editor_model_adds_disabled_adaptive_component() {
+    let mut config = PluginConfig::default();
+
+    ensure_adaptive_component(&mut config).unwrap();
+
+    let component = adaptive_component(&config).unwrap();
+    assert_eq!(component.kind, ADAPTIVE_PLUGIN_KIND);
+    assert!(!component.enabled);
+    assert!(!component.config.contains_key("version"));
+    assert!(component.config.contains_key("policy"));
+}
+
+#[test]
 fn typed_editor_serializes_explicit_observability_overrides() {
     let mut observability = ObservabilityConfig::default();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
@@ -143,7 +221,7 @@ fn typed_editor_serializes_disabled_section_override() {
     assert_eq!(atif.get("enabled"), Some(&Value::Bool(false)));
     assert_eq!(
         atif.get("filename_template"),
-        Some(&json!("nemo-flow-atif-{session_id}.json"))
+        Some(&json!("nemo-relay-atif-{session_id}.json"))
     );
 }
 
@@ -191,6 +269,237 @@ fn editor_save_preserves_unknown_observability_fields() {
     );
     assert_eq!(atof_config.get("filename"), Some(&json!("events.jsonl")));
     assert!(!atof_config.contains_key("output_directory"));
+}
+
+#[test]
+fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
+    let mut config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "version": 1,
+                "future_top_level": "preserve",
+                "state": {
+                    "future_state": "preserve",
+                    "backend": {
+                        "kind": "in_memory",
+                        "config": {},
+                        "future_backend": "preserve"
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+    let mut adaptive = component_adaptive_config(&config).unwrap();
+    let schema = AdaptiveConfig::editor_schema();
+    let state = schema.field("state").unwrap();
+    let telemetry = schema.field("telemetry").unwrap();
+    let adaptive_hints = schema.field("adaptive_hints").unwrap();
+    let tool_parallelism = schema.field("tool_parallelism").unwrap();
+    let acg = schema.field("acg").unwrap();
+
+    set_struct_field(&mut adaptive, "agent_id", json!("planner")).unwrap();
+    set_section_field(
+        &mut adaptive,
+        state,
+        "backend",
+        json!({
+            "kind": "redis",
+            "config": {
+                "url": "redis://127.0.0.1/",
+                "key_prefix": "adaptive:"
+            }
+        }),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        telemetry,
+        "learners",
+        json!(["tool_parallelism", "acg"]),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        telemetry,
+        "subscriber_name",
+        json!("adaptive"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        adaptive_hints,
+        "inject_body_path",
+        json!("nvext.agent_hints"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut adaptive,
+        tool_parallelism,
+        "mode",
+        json!("inject_hints"),
+    )
+    .unwrap();
+    set_section_field(&mut adaptive, acg, "provider", json!("anthropic")).unwrap();
+    set_section_field(
+        &mut adaptive,
+        acg,
+        "stability_thresholds",
+        json!({
+            "stable_threshold": 0.9,
+            "semi_stable_threshold": 0.4,
+            "min_observations_for_full_confidence": 10
+        }),
+    )
+    .unwrap();
+
+    store_adaptive_config(&mut config, &adaptive).unwrap();
+
+    let component = adaptive_component(&config).unwrap();
+    assert!(!component.config.contains_key("version"));
+    assert_eq!(
+        component.config.get("future_top_level"),
+        Some(&json!("preserve"))
+    );
+    let state = component.config["state"].as_object().unwrap();
+    assert_eq!(state.get("future_state"), Some(&json!("preserve")));
+    let backend = state["backend"].as_object().unwrap();
+    assert_eq!(backend.get("kind"), Some(&json!("redis")));
+    assert_eq!(backend.get("future_backend"), Some(&json!("preserve")));
+    assert_eq!(backend["config"]["key_prefix"], json!("adaptive:"));
+    assert_eq!(
+        component.config["telemetry"]["learners"],
+        json!(["tool_parallelism", "acg"])
+    );
+    assert_eq!(
+        component.config["adaptive_hints"]["inject_body_path"],
+        json!("nvext.agent_hints")
+    );
+    assert_eq!(
+        component.config["tool_parallelism"]["mode"],
+        json!("inject_hints")
+    );
+    assert_eq!(
+        component.config["acg"]["stability_thresholds"]["stable_threshold"],
+        json!(0.9)
+    );
+}
+
+#[test]
+fn adaptive_config_field_reset_handles_optional_and_default_fields() {
+    let mut adaptive = AdaptiveConfig {
+        agent_id: Some("planner".into()),
+        acg: Some(Default::default()),
+        ..AdaptiveConfig::default()
+    };
+    let schema = AdaptiveConfig::editor_schema();
+
+    reset_config_field(&mut adaptive, schema.field("agent_id").unwrap()).unwrap();
+    reset_config_field(&mut adaptive, schema.field("acg").unwrap()).unwrap();
+
+    assert!(adaptive.agent_id.is_none());
+    assert!(adaptive.acg.is_none());
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct OptionalSectionHarness {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    optional: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<Value>,
+}
+
+fn optional_section_without_default(name: &'static str) -> EditorFieldSpec {
+    EditorFieldSpec {
+        name,
+        label: name,
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: true,
+        nested_schema: None,
+        nested_default: None,
+    }
+}
+
+#[test]
+fn reset_section_clears_optional_section_without_default() {
+    let section = optional_section_without_default("optional");
+    let mut config = OptionalSectionHarness {
+        optional: Some(json!({})),
+        parent: None,
+    };
+
+    reset_section(&mut config, section);
+
+    assert!(config.optional.is_none());
+}
+
+#[test]
+fn nested_edit_empty_optional_section_without_default_clears_field() {
+    let optional = optional_section_without_default("optional");
+    let parent = optional_section_without_default("parent");
+    let child = optional_section_without_default("child");
+    let mut config = OptionalSectionHarness {
+        optional: Some(json!({ "old": true })),
+        parent: Some(json!({
+            "child": {},
+            "kept": true
+        })),
+    };
+
+    store_edited_config_section(&mut config, optional, json!({})).unwrap();
+    assert!(config.optional.is_none());
+
+    store_edited_section_field(&mut config, parent, child, json!({})).unwrap();
+    let parent = config.parent.as_ref().unwrap().as_object().unwrap();
+    assert!(!parent.contains_key("child"));
+    assert_eq!(parent.get("kept"), Some(&json!(true)));
+
+    let mut value = json!({ "child": {}, "kept": true });
+    store_edited_value_section(&mut value, child, json!({}));
+    let value = value.as_object().unwrap();
+    assert!(!value.contains_key("child"));
+    assert_eq!(value.get("kept"), Some(&json!(true)));
+}
+
+#[test]
+fn observability_config_field_reset_clears_optional_section() {
+    let mut observability = ObservabilityConfig::default();
+    let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
+    toggle_section(&mut observability, atof);
+
+    reset_config_field(&mut observability, atof).unwrap();
+
+    assert!(observability.atof.is_none());
+}
+
+#[test]
+fn adaptive_summary_tracks_component_and_configured_fields() {
+    let mut config = PluginConfig::default();
+    ensure_adaptive_component(&mut config).unwrap();
+    let mut adaptive = component_adaptive_config(&config).unwrap();
+
+    assert_eq!(
+        adaptive_summary(&config, &adaptive),
+        "component disabled, fields none"
+    );
+
+    set_adaptive_component_enabled(&mut config, true);
+    set_struct_field(&mut adaptive, "agent_id", json!("planner")).unwrap();
+    let adaptive_hints = AdaptiveConfig::editor_schema()
+        .field("adaptive_hints")
+        .unwrap();
+    set_section_field(&mut adaptive, adaptive_hints, "inject_header", json!(true)).unwrap();
+
+    assert_eq!(
+        adaptive_summary(&config, &adaptive),
+        "component enabled, fields fallback_agent_id, adaptive_hints"
+    );
 }
 
 #[test]
@@ -262,15 +571,39 @@ fn write_plugin_config_prunes_defaults_and_round_trips() {
     let path = temp.path().join("plugins.toml");
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();
+    config.components.push(PluginComponentSpec {
+        kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+        enabled: true,
+        config: adaptive_component_config("cli-roundtrip"),
+    });
 
     write_plugin_config(&path, &config).unwrap();
 
     let rendered = std::fs::read_to_string(&path).unwrap();
     assert!(rendered.contains("kind = \"observability\""));
+    assert!(rendered.contains("kind = \"adaptive\""));
     assert!(!rendered.contains("enabled = true"));
     let round_tripped = read_plugin_config(&path).unwrap();
-    assert_eq!(round_tripped.components.len(), 1);
+    assert_eq!(round_tripped.components.len(), 2);
     assert_eq!(round_tripped.components[0].kind, OBSERVABILITY_PLUGIN_KIND);
+    let adaptive = round_tripped
+        .components
+        .iter()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+        .unwrap();
+    assert_eq!(
+        adaptive.config.get("agent_id"),
+        Some(&json!("cli-roundtrip"))
+    );
+    let adaptive_hints = adaptive
+        .config
+        .get("adaptive_hints")
+        .and_then(Value::as_object)
+        .unwrap();
+    assert_eq!(
+        adaptive_hints.get("inject_body_path"),
+        Some(&json!("nvext.agent_hints"))
+    );
 }
 
 #[test]
@@ -323,6 +656,20 @@ fn validate_config_reports_plugin_diagnostics() {
 }
 
 #[test]
+fn validate_config_accepts_adaptive_component() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: ADAPTIVE_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: adaptive_component_config("cli-validation"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
 fn display_helpers_render_scalars_json_and_defaults() {
     assert_eq!(display_value(&json!("logs")), "logs");
     assert_eq!(display_value(&json!(true)), "true");
@@ -339,6 +686,30 @@ fn display_helpers_render_scalars_json_and_defaults() {
         display_field_value(atof, mode, &json!("overwrite")),
         "overwrite"
     );
+}
+
+#[test]
+fn parse_float_value_rejects_non_finite_numbers() {
+    let field = EditorFieldSpec {
+        name: "stable_threshold",
+        label: "Stable threshold",
+        kind: EditorFieldKind::Float,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+    };
+
+    assert_eq!(parse_float_value(&field, "0.75").unwrap(), json!(0.75));
+
+    for value in ["inf", "-inf", "NaN"] {
+        let error = parse_float_value(&field, value).unwrap_err().to_string();
+        assert!(
+            error.contains("stable_threshold must be a finite number"),
+            "error was: {error}"
+        );
+        assert!(error.contains(value), "error was: {error}");
+    }
 }
 
 #[test]

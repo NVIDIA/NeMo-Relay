@@ -3,7 +3,7 @@
 
 //! OpenAI Chat request-surface applier.
 
-use nemo_flow::api::llm::LlmRequest;
+use nemo_relay::api::llm::LlmRequest;
 
 use crate::acg::prompt_ir::PromptIR;
 use crate::acg::request_surfaces::RequestSurfaceApplier;

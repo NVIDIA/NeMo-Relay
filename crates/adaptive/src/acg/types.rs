@@ -358,7 +358,7 @@ pub struct OptimizationIntentBundle {
 /// # Examples
 ///
 /// ```
-/// use nemo_flow_adaptive::acg::AgentIdentity;
+/// use nemo_relay_adaptive::acg::AgentIdentity;
 /// use std::collections::HashMap;
 ///
 /// let id = AgentIdentity {

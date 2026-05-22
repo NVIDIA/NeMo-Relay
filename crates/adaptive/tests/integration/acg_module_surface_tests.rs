@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for acg module surface in the NeMo Flow adaptive crate.
+//! Integration tests for acg module surface in the NeMo Relay adaptive crate.
 
-use nemo_flow_adaptive::acg::prompt_ir::PromptIR;
-use nemo_flow_adaptive::acg::{
+use nemo_relay_adaptive::acg::prompt_ir::PromptIR;
+use nemo_relay_adaptive::acg::{
     AcgError, AgentIdentity, CacheTelemetryEvent, CapabilityRegistry, sha256_hex,
 };
 use std::sync::Arc;
@@ -40,13 +40,13 @@ fn acg_module_surface_shared_utility_symbols_compile_from_canonical_namespace() 
 
 #[test]
 fn acg_module_surface_analysis_symbols_compile_from_canonical_namespace() {
-    use nemo_flow_adaptive::acg::profile::{BlockStabilityScore, StabilityClass};
-    use nemo_flow_adaptive::acg::prompt_ir::{
+    use nemo_relay_adaptive::acg::profile::{BlockStabilityScore, StabilityClass};
+    use nemo_relay_adaptive::acg::prompt_ir::{
         BlockContentType, PromptBlock, PromptIR, PromptRole, ProvenanceLabel, SensitivityLabel,
         SpanId,
     };
-    use nemo_flow_adaptive::acg::retention::RetentionThresholds;
-    use nemo_flow_adaptive::acg::stability::{StabilityThresholds, analyze_stability};
+    use nemo_relay_adaptive::acg::retention::RetentionThresholds;
+    use nemo_relay_adaptive::acg::stability::{StabilityThresholds, analyze_stability};
 
     let _: Option<BlockStabilityScore> = None;
     let thresholds = RetentionThresholds::default();
@@ -77,8 +77,8 @@ fn acg_module_surface_analysis_symbols_compile_from_canonical_namespace() {
 
 #[test]
 fn acg_module_surface_variable_extractor_keeps_regex_detection_behavior() {
-    use nemo_flow_adaptive::acg::prompt_ir::SpanId;
-    use nemo_flow_adaptive::acg::variable_extractor::{
+    use nemo_relay_adaptive::acg::prompt_ir::SpanId;
+    use nemo_relay_adaptive::acg::variable_extractor::{
         default_variable_patterns, extract_variables,
     };
 
@@ -101,10 +101,10 @@ fn acg_module_surface_variable_extractor_keeps_regex_detection_behavior() {
 
 #[test]
 fn acg_module_surface_policy_and_ir_builder_symbols_compile_from_canonical_namespace() {
-    use nemo_flow::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-    use nemo_flow_adaptive::acg::ir_builder::build_prompt_ir;
-    use nemo_flow_adaptive::acg::policy::{CachePolicy, PolicyEnvelope};
-    use nemo_flow_adaptive::acg::{ModelClass, SharingScope};
+    use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+    use nemo_relay_adaptive::acg::ir_builder::build_prompt_ir;
+    use nemo_relay_adaptive::acg::policy::{CachePolicy, PolicyEnvelope};
+    use nemo_relay_adaptive::acg::{ModelClass, SharingScope};
 
     let _: Option<PolicyEnvelope<CachePolicy>> = None;
 
@@ -168,11 +168,11 @@ fn acg_module_surface_policy_and_ir_builder_symbols_compile_from_canonical_names
 
 #[test]
 fn acg_module_surface_build_prompt_ir_inserts_tool_schema_before_first_non_system_message() {
-    use nemo_flow::codec::request::{
+    use nemo_relay::codec::request::{
         AnnotatedLlmRequest, FunctionDefinition, Message, MessageContent, ToolDefinition,
     };
-    use nemo_flow_adaptive::acg::ir_builder::build_prompt_ir;
-    use nemo_flow_adaptive::acg::prompt_ir::{BlockContentType, PromptRole};
+    use nemo_relay_adaptive::acg::ir_builder::build_prompt_ir;
+    use nemo_relay_adaptive::acg::prompt_ir::{BlockContentType, PromptRole};
 
     let request = AnnotatedLlmRequest {
         messages: vec![
@@ -233,12 +233,12 @@ fn acg_module_surface_build_prompt_ir_inserts_tool_schema_before_first_non_syste
 
 #[test]
 fn acg_module_surface_analyze_stability_limits_stable_prefix_when_later_span_is_missing() {
-    use nemo_flow_adaptive::acg::profile::StabilityClass;
-    use nemo_flow_adaptive::acg::prompt_ir::{
+    use nemo_relay_adaptive::acg::profile::StabilityClass;
+    use nemo_relay_adaptive::acg::prompt_ir::{
         BlockContentType, PromptBlock, PromptIR, PromptRole, ProvenanceLabel, SensitivityLabel,
         SpanId,
     };
-    use nemo_flow_adaptive::acg::stability::{StabilityThresholds, analyze_stability};
+    use nemo_relay_adaptive::acg::stability::{StabilityThresholds, analyze_stability};
 
     let make_block = |span: &str, index: u32, role: PromptRole, content: &str| PromptBlock {
         span_id: SpanId(span.to_string()),
@@ -290,11 +290,11 @@ fn acg_module_surface_analyze_stability_limits_stable_prefix_when_later_span_is_
 
 #[test]
 fn acg_module_surface_provider_plugin_symbols_compile_from_canonical_namespace() {
-    use nemo_flow_adaptive::acg::anthropic_plugin::AnthropicCachePlugin;
-    use nemo_flow_adaptive::acg::openai_plugin::OpenAICachePlugin;
-    use nemo_flow_adaptive::acg::passthrough::PassthroughPlugin;
-    use nemo_flow_adaptive::acg::plugin::ProviderPlugin;
-    use nemo_flow_adaptive::acg::plugin_registry::PluginRegistry;
+    use nemo_relay_adaptive::acg::anthropic_plugin::AnthropicCachePlugin;
+    use nemo_relay_adaptive::acg::openai_plugin::OpenAICachePlugin;
+    use nemo_relay_adaptive::acg::passthrough::PassthroughPlugin;
+    use nemo_relay_adaptive::acg::plugin::ProviderPlugin;
+    use nemo_relay_adaptive::acg::plugin_registry::PluginRegistry;
 
     let capabilities = CapabilityRegistry::with_defaults();
     let anthropic: Arc<dyn ProviderPlugin> = Arc::new(AnthropicCachePlugin::new(&capabilities));

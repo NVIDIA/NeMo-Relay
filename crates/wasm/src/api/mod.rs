@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Top-level NeMo Flow API functions exposed to JavaScript via `wasm_bindgen`.
+//! Top-level NeMo Relay API functions exposed to JavaScript via `wasm_bindgen`.
 //!
 //! This module contains all public entry points for:
 //!
@@ -35,22 +35,22 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
-use nemo_flow::api::llm as flow_llm_api;
-use nemo_flow::api::llm::{LlmAttributes, LlmRequest as CoreLlmRequest};
-use nemo_flow::api::registry as flow_registry_api;
-use nemo_flow::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_flow::api::runtime::{
+use nemo_relay::api::llm as relay_llm_api;
+use nemo_relay::api::llm::{LlmAttributes, LlmRequest as CoreLlmRequest};
+use nemo_relay::api::registry as relay_registry_api;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
     set_thread_scope_stack as bind_thread_scope_stack, task_scope_top,
 };
-use nemo_flow::api::scope as flow_scope_api;
-use nemo_flow::api::scope::{ScopeAttributes, ScopeHandle as CoreScopeHandle};
-use nemo_flow::api::subscriber as flow_subscriber_api;
-use nemo_flow::api::tool as flow_tool_api;
-use nemo_flow::api::tool::ToolAttributes;
-use nemo_flow::error::{FlowError, Result as FlowResult};
-use nemo_flow::plugin::{
+use nemo_relay::api::scope as relay_scope_api;
+use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle as CoreScopeHandle};
+use nemo_relay::api::subscriber as relay_subscriber_api;
+use nemo_relay::api::tool as relay_tool_api;
+use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
     PluginRegistration as ComponentRegistration, PluginRegistrationContext,
     active_plugin_report as active_plugin_report_impl,
@@ -59,7 +59,7 @@ use nemo_flow::plugin::{
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
     validate_plugin_config as validate_plugin_config_impl,
 };
-use nemo_flow_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 
 use crate::callable;
 use crate::convert::{
@@ -91,10 +91,10 @@ impl Default for WasmOpenTelemetryConfig {
             endpoint: None,
             headers: Some(HashMap::new()),
             resource_attributes: Some(HashMap::new()),
-            service_name: Some("nemo-flow".to_string()),
+            service_name: Some("nemo-relay".to_string()),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: Some("nemo-flow-otel".to_string()),
+            instrumentation_scope: Some("nemo-relay-otel".to_string()),
             timeout_millis: Some(3_000),
         }
     }
@@ -121,10 +121,10 @@ impl Default for WasmOpenInferenceConfig {
             endpoint: None,
             headers: Some(HashMap::new()),
             resource_attributes: Some(HashMap::new()),
-            service_name: Some("nemo-flow".to_string()),
+            service_name: Some("nemo-relay".to_string()),
             service_namespace: None,
             service_version: None,
-            instrumentation_scope: Some("nemo-flow-openinference".to_string()),
+            instrumentation_scope: Some("nemo-relay-openinference".to_string()),
             timeout_millis: Some(3_000),
         }
     }
@@ -237,24 +237,24 @@ fn clone_scope_handle_arg(handle: &JsValue) -> Result<Option<CoreScopeHandle>, J
 
 fn build_otel_config(
     config: Option<WasmOpenTelemetryConfig>,
-) -> Result<nemo_flow::observability::otel::OpenTelemetryConfig, JsValue> {
+) -> Result<nemo_relay::observability::otel::OpenTelemetryConfig, JsValue> {
     let config = config.unwrap_or_default();
     let transport = config
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = config
         .service_name
-        .unwrap_or_else(|| "nemo-flow".to_string());
+        .unwrap_or_else(|| "nemo-relay".to_string());
     let instrumentation_scope = config
         .instrumentation_scope
-        .unwrap_or_else(|| "nemo-flow-otel".to_string());
+        .unwrap_or_else(|| "nemo-relay-otel".to_string());
     let timeout_millis = config.timeout_millis.unwrap_or(3_000);
 
     let mut otel_config = match transport.as_str() {
         "http_binary" => {
-            nemo_flow::observability::otel::OpenTelemetryConfig::http_binary(service_name)
+            nemo_relay::observability::otel::OpenTelemetryConfig::http_binary(service_name)
         }
-        "grpc" => nemo_flow::observability::otel::OpenTelemetryConfig::grpc(service_name),
+        "grpc" => nemo_relay::observability::otel::OpenTelemetryConfig::grpc(service_name),
         other => {
             return Err(JsValue::from_str(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -284,22 +284,22 @@ fn build_otel_config(
 
 fn build_openinference_config(
     config: Option<WasmOpenInferenceConfig>,
-) -> Result<nemo_flow::observability::openinference::OpenInferenceConfig, JsValue> {
+) -> Result<nemo_relay::observability::openinference::OpenInferenceConfig, JsValue> {
     let config = config.unwrap_or_default();
     let transport = config
         .transport
         .unwrap_or_else(|| "http_binary".to_string());
     let service_name = config
         .service_name
-        .unwrap_or_else(|| "nemo-flow".to_string());
+        .unwrap_or_else(|| "nemo-relay".to_string());
     let instrumentation_scope = config
         .instrumentation_scope
-        .unwrap_or_else(|| "nemo-flow-openinference".to_string());
+        .unwrap_or_else(|| "nemo-relay-openinference".to_string());
     let timeout_millis = config.timeout_millis.unwrap_or(3_000);
 
     let transport = match transport.as_str() {
-        "http_binary" => nemo_flow::observability::openinference::OtlpTransport::HttpBinary,
-        "grpc" => nemo_flow::observability::openinference::OtlpTransport::Grpc,
+        "http_binary" => nemo_relay::observability::openinference::OtlpTransport::HttpBinary,
+        "grpc" => nemo_relay::observability::openinference::OtlpTransport::Grpc,
         other => {
             return Err(JsValue::from_str(&format!(
                 "transport must be 'http_binary' or 'grpc', got {other:?}",
@@ -308,7 +308,7 @@ fn build_openinference_config(
     };
 
     let mut openinference_config =
-        nemo_flow::observability::openinference::OpenInferenceConfig::new()
+        nemo_relay::observability::openinference::OpenInferenceConfig::new()
             .with_transport(transport)
             .with_service_name(service_name)
             .with_instrumentation_scope(instrumentation_scope)
@@ -341,7 +341,7 @@ fn build_openinference_config(
 /// Throws if the scope stack is empty.
 #[wasm_bindgen(js_name = "getHandle")]
 pub fn get_handle() -> Result<ScopeHandle, JsValue> {
-    flow_scope_api::get_handle()
+    relay_scope_api::get_handle()
         .map(ScopeHandle::from)
         .map_err(to_js_err)
 }
@@ -374,8 +374,8 @@ pub fn push_scope(
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let handle = clone_scope_handle_arg(&handle)?;
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    flow_scope_api::push_scope(
-        flow_scope_api::PushScopeParams::builder()
+    relay_scope_api::push_scope(
+        relay_scope_api::PushScopeParams::builder()
             .name(name)
             .scope_type(scope_type.into())
             .parent_opt(handle.as_ref())
@@ -403,8 +403,8 @@ pub fn pop_scope(
     #[wasm_bindgen(unchecked_param_type = "number | null | undefined")] timestamp: Option<f64>,
 ) -> Result<(), JsValue> {
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    flow_scope_api::pop_scope(
-        flow_scope_api::PopScopeParams::builder()
+    relay_scope_api::pop_scope(
+        relay_scope_api::PopScopeParams::builder()
             .handle_uuid(&handle.inner.uuid)
             .output_opt(opt_js_to_json(&output)?)
             .timestamp_opt(timestamp)
@@ -463,8 +463,8 @@ pub fn with_scope(
 ) -> Result<js_sys::Promise, JsValue> {
     let attrs = ScopeAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let handle = clone_scope_handle_arg(&handle)?;
-    let scope_handle = flow_scope_api::push_scope(
-        flow_scope_api::PushScopeParams::builder()
+    let scope_handle = relay_scope_api::push_scope(
+        relay_scope_api::PushScopeParams::builder()
             .name(name)
             .scope_type(scope_type.into())
             .parent_opt(handle.as_ref())
@@ -490,8 +490,8 @@ pub fn with_scope(
 
             let then_uuid = scope_uuid;
             let then_cb = Closure::once(move |resolved: JsValue| -> JsValue {
-                let _ = flow_scope_api::pop_scope(
-                    flow_scope_api::PopScopeParams::builder()
+                let _ = relay_scope_api::pop_scope(
+                    relay_scope_api::PopScopeParams::builder()
                         .handle_uuid(&then_uuid)
                         .build(),
                 );
@@ -500,8 +500,8 @@ pub fn with_scope(
 
             let catch_uuid = scope_uuid;
             let catch_cb = Closure::once(move |rejected: JsValue| -> JsValue {
-                let _ = flow_scope_api::pop_scope(
-                    flow_scope_api::PopScopeParams::builder()
+                let _ = relay_scope_api::pop_scope(
+                    relay_scope_api::PopScopeParams::builder()
                         .handle_uuid(&catch_uuid)
                         .build(),
                 );
@@ -519,8 +519,8 @@ pub fn with_scope(
         }
         Ok(val) => {
             // Synchronous return — pop immediately.
-            let _ = flow_scope_api::pop_scope(
-                flow_scope_api::PopScopeParams::builder()
+            let _ = relay_scope_api::pop_scope(
+                relay_scope_api::PopScopeParams::builder()
                     .handle_uuid(&scope_uuid)
                     .build(),
             );
@@ -528,8 +528,8 @@ pub fn with_scope(
         }
         Err(err) => {
             // Callback threw — pop and propagate the error.
-            let _ = flow_scope_api::pop_scope(
-                flow_scope_api::PopScopeParams::builder()
+            let _ = relay_scope_api::pop_scope(
+                relay_scope_api::PopScopeParams::builder()
                     .handle_uuid(&scope_uuid)
                     .build(),
             );
@@ -556,8 +556,8 @@ pub fn event(
 ) -> Result<(), JsValue> {
     let handle = clone_scope_handle_arg(&handle)?;
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    flow_scope_api::event(
-        flow_scope_api::EmitMarkEventParams::builder()
+    relay_scope_api::event(
+        relay_scope_api::EmitMarkEventParams::builder()
             .name(name)
             .parent_opt(handle.as_ref())
             .data_opt(opt_js_to_json(&data)?)
@@ -610,8 +610,8 @@ pub fn tool_call(
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let handle = clone_scope_handle_arg(&handle)?;
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    flow_tool_api::tool_call(
-        flow_tool_api::ToolCallParams::builder()
+    relay_tool_api::tool_call(
+        relay_tool_api::ToolCallParams::builder()
             .name(name)
             .args(args_json)
             .parent_opt(handle.as_ref())
@@ -648,8 +648,8 @@ pub fn tool_call_end(
 ) -> Result<(), JsValue> {
     let result_json = js_to_json(&result)?;
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    flow_tool_api::tool_call_end(
-        flow_tool_api::ToolCallEndParams::builder()
+    relay_tool_api::tool_call_end(
+        relay_tool_api::ToolCallEndParams::builder()
             .handle(&handle.inner)
             .result(result_json)
             .data_opt(opt_js_to_json(&data)?)
@@ -695,8 +695,8 @@ pub async fn tool_call_execute(
     let metadata_json = opt_js_to_json(&metadata)?;
     let result = TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            flow_tool_api::tool_call_execute(
-                flow_tool_api::ToolCallExecuteParams::builder()
+            relay_tool_api::tool_call_execute(
+                relay_tool_api::ToolCallExecuteParams::builder()
                     .name(name)
                     .args(args_json)
                     .func(default_fn)
@@ -758,7 +758,7 @@ pub fn llm_call(
     let attrs = LlmAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let handle = clone_scope_handle_arg(&handle)?;
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    let params = flow_llm_api::LlmCallParams::builder()
+    let params = relay_llm_api::LlmCallParams::builder()
         .name(name)
         .request(&llm_request)
         .parent_opt(handle.as_ref())
@@ -768,7 +768,7 @@ pub fn llm_call(
         .model_name_opt(model_name)
         .timestamp_opt(timestamp)
         .build();
-    flow_llm_api::llm_call(params)
+    relay_llm_api::llm_call(params)
         .map(LlmHandle::from)
         .map_err(to_js_err)
 }
@@ -795,8 +795,8 @@ pub fn llm_call_end(
 ) -> Result<(), JsValue> {
     let response_json = js_to_json(&response)?;
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
-    flow_llm_api::llm_call_end(
-        flow_llm_api::LlmCallEndParams::builder()
+    relay_llm_api::llm_call_end(
+        relay_llm_api::LlmCallEndParams::builder()
             .handle(&handle.inner)
             .response(response_json)
             .data_opt(opt_js_to_json(&data)?)
@@ -876,7 +876,7 @@ pub async fn llm_call_execute(
     let metadata_json = opt_js_to_json(&metadata)?;
     let result = TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            let params = flow_llm_api::LlmCallExecuteParams::builder()
+            let params = relay_llm_api::LlmCallExecuteParams::builder()
                 .name(name)
                 .request(llm_request)
                 .func(default_fn)
@@ -888,7 +888,7 @@ pub async fn llm_call_execute(
                 .codec_opt(codec)
                 .response_codec_opt(response_codec)
                 .build();
-            flow_llm_api::llm_call_execute(params).await
+            relay_llm_api::llm_call_execute(params).await
         })
         .await
         .map_err(to_js_err)?;
@@ -994,7 +994,7 @@ pub async fn llm_stream_call_execute(
     let metadata_json = opt_js_to_json(&metadata)?;
     let rust_stream = TASK_SCOPE_STACK
         .scope(scope_stack, async move {
-            let params = flow_llm_api::LlmStreamCallExecuteParams::builder()
+            let params = relay_llm_api::LlmStreamCallExecuteParams::builder()
                 .name(name)
                 .request(llm_request)
                 .func(default_fn)
@@ -1008,7 +1008,7 @@ pub async fn llm_stream_call_execute(
                 .codec_opt(codec)
                 .response_codec_opt(response_codec)
                 .build();
-            flow_llm_api::llm_stream_call_execute(params).await
+            relay_llm_api::llm_stream_call_execute(params).await
         })
         .await
         .map_err(to_js_err)?;
@@ -1044,7 +1044,7 @@ pub fn register_tool_sanitize_request_guardrail(
     priority: i32,
     #[wasm_bindgen(unchecked_param_type = "(name: string, args: Json) => any")] guardrail: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_tool_sanitize_request_guardrail(
+    relay_registry_api::register_tool_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -1057,7 +1057,7 @@ pub fn register_tool_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeRequestGuardrail")]
 pub fn deregister_tool_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
+    relay_registry_api::deregister_tool_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes tool response data after execution.
@@ -1072,7 +1072,7 @@ pub fn register_tool_sanitize_response_guardrail(
     #[wasm_bindgen(unchecked_param_type = "(name: string, result: Json) => any")]
     guardrail: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_tool_sanitize_response_guardrail(
+    relay_registry_api::register_tool_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_tool_fn(guardrail),
@@ -1085,7 +1085,7 @@ pub fn register_tool_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolSanitizeResponseGuardrail")]
 pub fn deregister_tool_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
+    relay_registry_api::deregister_tool_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates tool execution.
@@ -1102,7 +1102,7 @@ pub fn register_tool_conditional_execution_guardrail(
     priority: i32,
     #[wasm_bindgen(unchecked_param_type = "(name: string, args: Json) => string | null")] guardrail: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_tool_conditional_execution_guardrail(
+    relay_registry_api::register_tool_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_tool_conditional_fn(guardrail),
@@ -1115,7 +1115,7 @@ pub fn register_tool_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolConditionalExecutionGuardrail")]
 pub fn deregister_tool_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_tool_conditional_execution_guardrail(name).map_err(to_js_err)
+    relay_registry_api::deregister_tool_conditional_execution_guardrail(name).map_err(to_js_err)
 }
 
 // Tool intercepts
@@ -1137,7 +1137,7 @@ pub fn register_tool_request_intercept(
     )]
     func: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_tool_request_intercept(
+    relay_registry_api::register_tool_request_intercept(
         name,
         priority,
         break_chain,
@@ -1151,7 +1151,7 @@ pub fn register_tool_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolRequestIntercept")]
 pub fn deregister_tool_request_intercept(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_tool_request_intercept(name).map_err(to_js_err)
+    relay_registry_api::deregister_tool_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a tool execution intercept following the middleware chain pattern.
@@ -1170,7 +1170,7 @@ pub fn register_tool_execution_intercept(
     )]
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_tool_execution_intercept(
+    relay_registry_api::register_tool_execution_intercept(
         name,
         priority,
         callable::wrap_js_tool_exec_intercept_fn(exec_fn),
@@ -1183,7 +1183,7 @@ pub fn register_tool_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterToolExecutionIntercept")]
 pub fn deregister_tool_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_tool_execution_intercept(name).map_err(to_js_err)
+    relay_registry_api::deregister_tool_execution_intercept(name).map_err(to_js_err)
 }
 
 // LLM guardrails
@@ -1199,7 +1199,7 @@ pub fn register_llm_sanitize_request_guardrail(
     priority: i32,
     #[wasm_bindgen(unchecked_param_type = "(request: Json) => any")] guardrail: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_llm_sanitize_request_guardrail(
+    relay_registry_api::register_llm_sanitize_request_guardrail(
         name,
         priority,
         callable::wrap_js_llm_sanitize_request_fn(guardrail),
@@ -1212,7 +1212,7 @@ pub fn register_llm_sanitize_request_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeRequestGuardrail")]
 pub fn deregister_llm_sanitize_request_guardrail(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
+    relay_registry_api::deregister_llm_sanitize_request_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that sanitizes LLM response data after the call.
@@ -1226,7 +1226,7 @@ pub fn register_llm_sanitize_response_guardrail(
     priority: i32,
     #[wasm_bindgen(unchecked_param_type = "(response: Json) => any")] guardrail: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_llm_sanitize_response_guardrail(
+    relay_registry_api::register_llm_sanitize_response_guardrail(
         name,
         priority,
         callable::wrap_js_llm_response_fn(guardrail),
@@ -1239,7 +1239,7 @@ pub fn register_llm_sanitize_response_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmSanitizeResponseGuardrail")]
 pub fn deregister_llm_sanitize_response_guardrail(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
+    relay_registry_api::deregister_llm_sanitize_response_guardrail(name).map_err(to_js_err)
 }
 
 /// Registers a guardrail that conditionally gates LLM execution.
@@ -1256,7 +1256,7 @@ pub fn register_llm_conditional_execution_guardrail(
     priority: i32,
     #[wasm_bindgen(unchecked_param_type = "(request: Json) => string | null")] guardrail: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_llm_conditional_execution_guardrail(
+    relay_registry_api::register_llm_conditional_execution_guardrail(
         name,
         priority,
         callable::wrap_js_llm_conditional_fn(guardrail),
@@ -1269,7 +1269,7 @@ pub fn register_llm_conditional_execution_guardrail(
 /// Returns `true` if the guardrail was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmConditionalExecutionGuardrail")]
 pub fn deregister_llm_conditional_execution_guardrail(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_llm_conditional_execution_guardrail(name).map_err(to_js_err)
+    relay_registry_api::deregister_llm_conditional_execution_guardrail(name).map_err(to_js_err)
 }
 
 // LLM intercepts
@@ -1288,7 +1288,7 @@ pub fn register_llm_request_intercept(
     #[wasm_bindgen(js_name = "callable", unchecked_param_type = "(request: Json) => any")]
     func: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_llm_request_intercept(
+    relay_registry_api::register_llm_request_intercept(
         name,
         priority,
         break_chain,
@@ -1302,7 +1302,7 @@ pub fn register_llm_request_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmRequestIntercept")]
 pub fn deregister_llm_request_intercept(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_llm_request_intercept(name).map_err(to_js_err)
+    relay_registry_api::deregister_llm_request_intercept(name).map_err(to_js_err)
 }
 
 /// Registers an LLM execution intercept following the middleware chain pattern.
@@ -1321,7 +1321,7 @@ pub fn register_llm_execution_intercept(
     )]
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_llm_execution_intercept(
+    relay_registry_api::register_llm_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_exec_intercept_fn(exec_fn),
@@ -1334,7 +1334,7 @@ pub fn register_llm_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmExecutionIntercept")]
 pub fn deregister_llm_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_llm_execution_intercept(name).map_err(to_js_err)
+    relay_registry_api::deregister_llm_execution_intercept(name).map_err(to_js_err)
 }
 
 /// Registers a streaming LLM execution intercept following the middleware chain pattern.
@@ -1355,7 +1355,7 @@ pub fn register_llm_stream_execution_intercept(
     )]
     exec_fn: Function,
 ) -> Result<(), JsValue> {
-    flow_registry_api::register_llm_stream_execution_intercept(
+    relay_registry_api::register_llm_stream_execution_intercept(
         name,
         priority,
         callable::wrap_js_llm_stream_exec_intercept_fn(exec_fn),
@@ -1368,7 +1368,7 @@ pub fn register_llm_stream_execution_intercept(
 /// Returns `true` if the intercept was found and removed.
 #[wasm_bindgen(js_name = "deregisterLlmStreamExecutionIntercept")]
 pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsValue> {
-    flow_registry_api::deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
+    relay_registry_api::deregister_llm_stream_execution_intercept(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,7 +1384,7 @@ pub fn register_subscriber(
     name: &str,
     #[wasm_bindgen(unchecked_param_type = "(event: Json) => any")] callback: Function,
 ) -> Result<(), JsValue> {
-    flow_subscriber_api::register_subscriber(name, callable::wrap_js_event_subscriber(callback))
+    relay_subscriber_api::register_subscriber(name, callable::wrap_js_event_subscriber(callback))
         .map_err(to_js_err)
 }
 
@@ -1393,7 +1393,7 @@ pub fn register_subscriber(
 /// Returns `true` if the subscriber was found and removed.
 #[wasm_bindgen(js_name = "deregisterSubscriber")]
 pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
-    flow_subscriber_api::deregister_subscriber(name).map_err(to_js_err)
+    relay_subscriber_api::deregister_subscriber(name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1415,7 +1415,7 @@ pub fn scope_register_tool_sanitize_request_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_tool_sanitize_request_guardrail(
+    relay_registry_api::scope_register_tool_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1434,7 +1434,7 @@ pub fn scope_deregister_tool_sanitize_request_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_tool_sanitize_request_guardrail(&uuid, name)
+    relay_registry_api::scope_deregister_tool_sanitize_request_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1454,7 +1454,7 @@ pub fn scope_register_tool_sanitize_response_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_tool_sanitize_response_guardrail(
+    relay_registry_api::scope_register_tool_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1473,7 +1473,7 @@ pub fn scope_deregister_tool_sanitize_response_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_tool_sanitize_response_guardrail(&uuid, name)
+    relay_registry_api::scope_deregister_tool_sanitize_response_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1495,7 +1495,7 @@ pub fn scope_register_tool_conditional_execution_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_tool_conditional_execution_guardrail(
+    relay_registry_api::scope_register_tool_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1514,7 +1514,7 @@ pub fn scope_deregister_tool_conditional_execution_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
+    relay_registry_api::scope_deregister_tool_conditional_execution_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1543,7 +1543,7 @@ pub fn scope_register_tool_request_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_tool_request_intercept(
+    relay_registry_api::scope_register_tool_request_intercept(
         &uuid,
         name,
         priority,
@@ -1563,7 +1563,7 @@ pub fn scope_deregister_tool_request_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_tool_request_intercept(&uuid, name).map_err(to_js_err)
+    relay_registry_api::scope_deregister_tool_request_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local tool execution intercept following the middleware chain pattern.
@@ -1586,7 +1586,7 @@ pub fn scope_register_tool_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_tool_execution_intercept(
+    relay_registry_api::scope_register_tool_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1605,7 +1605,7 @@ pub fn scope_deregister_tool_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_js_err)
+    relay_registry_api::scope_deregister_tool_execution_intercept(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1627,7 +1627,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_llm_sanitize_request_guardrail(
+    relay_registry_api::scope_register_llm_sanitize_request_guardrail(
         &uuid,
         name,
         priority,
@@ -1646,7 +1646,7 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
+    relay_registry_api::scope_deregister_llm_sanitize_request_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1665,7 +1665,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_llm_sanitize_response_guardrail(
+    relay_registry_api::scope_register_llm_sanitize_response_guardrail(
         &uuid,
         name,
         priority,
@@ -1684,7 +1684,7 @@ pub fn scope_deregister_llm_sanitize_response_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
+    relay_registry_api::scope_deregister_llm_sanitize_response_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1706,7 +1706,7 @@ pub fn scope_register_llm_conditional_execution_guardrail(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_llm_conditional_execution_guardrail(
+    relay_registry_api::scope_register_llm_conditional_execution_guardrail(
         &uuid,
         name,
         priority,
@@ -1725,7 +1725,7 @@ pub fn scope_deregister_llm_conditional_execution_guardrail(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
+    relay_registry_api::scope_deregister_llm_conditional_execution_guardrail(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1751,7 +1751,7 @@ pub fn scope_register_llm_request_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_llm_request_intercept(
+    relay_registry_api::scope_register_llm_request_intercept(
         &uuid,
         name,
         priority,
@@ -1771,7 +1771,7 @@ pub fn scope_deregister_llm_request_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_llm_request_intercept(&uuid, name).map_err(to_js_err)
+    relay_registry_api::scope_deregister_llm_request_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local LLM execution intercept following the middleware chain pattern.
@@ -1794,7 +1794,7 @@ pub fn scope_register_llm_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_llm_execution_intercept(
+    relay_registry_api::scope_register_llm_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1813,7 +1813,7 @@ pub fn scope_deregister_llm_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_js_err)
+    relay_registry_api::scope_deregister_llm_execution_intercept(&uuid, name).map_err(to_js_err)
 }
 
 /// Registers a scope-local streaming LLM execution intercept following the middleware chain pattern.
@@ -1838,7 +1838,7 @@ pub fn scope_register_llm_stream_execution_intercept(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_register_llm_stream_execution_intercept(
+    relay_registry_api::scope_register_llm_stream_execution_intercept(
         &uuid,
         name,
         priority,
@@ -1857,7 +1857,7 @@ pub fn scope_deregister_llm_stream_execution_intercept(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_registry_api::scope_deregister_llm_stream_execution_intercept(&uuid, name)
+    relay_registry_api::scope_deregister_llm_stream_execution_intercept(&uuid, name)
         .map_err(to_js_err)
 }
 
@@ -1879,7 +1879,7 @@ pub fn scope_register_subscriber(
 ) -> Result<(), JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_subscriber_api::scope_register_subscriber(
+    relay_subscriber_api::scope_register_subscriber(
         &uuid,
         name,
         callable::wrap_js_event_subscriber(callback),
@@ -1897,7 +1897,7 @@ pub fn scope_deregister_subscriber(
 ) -> Result<bool, JsValue> {
     let uuid = uuid::Uuid::parse_str(scope_uuid)
         .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
-    flow_subscriber_api::scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
+    relay_subscriber_api::scope_deregister_subscriber(&uuid, name).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1947,7 +1947,7 @@ pub fn tool_request_intercepts_wasm(
     #[wasm_bindgen(unchecked_param_type = "Json")] args: JsValue,
 ) -> Result<JsValue, JsValue> {
     let args_json = js_to_json(&args)?;
-    let result = flow_tool_api::tool_request_intercepts(name, args_json).map_err(to_js_err)?;
+    let result = relay_tool_api::tool_request_intercepts(name, args_json).map_err(to_js_err)?;
     Ok(json_to_js(&result))
 }
 
@@ -1958,7 +1958,7 @@ pub fn tool_conditional_execution_wasm(
     #[wasm_bindgen(unchecked_param_type = "Json")] args: JsValue,
 ) -> Result<(), JsValue> {
     let args_json = js_to_json(&args)?;
-    flow_tool_api::tool_conditional_execution(name, &args_json).map_err(to_js_err)
+    relay_tool_api::tool_conditional_execution(name, &args_json).map_err(to_js_err)
 }
 
 /// Runs the registered LLM request intercept chain on the given `LlmRequest`.
@@ -1970,7 +1970,7 @@ pub fn llm_request_intercepts_wasm(
     let request_json = js_to_json(&request)?;
     let llm_request: CoreLlmRequest = serde_json::from_value(request_json)
         .map_err(|e| to_js_err(FlowError::Internal(e.to_string())))?;
-    let result = flow_llm_api::llm_request_intercepts(name, llm_request).map_err(to_js_err)?;
+    let result = relay_llm_api::llm_request_intercepts(name, llm_request).map_err(to_js_err)?;
     let result_json =
         serde_json::to_value(&result).map_err(|e| to_js_err(FlowError::Internal(e.to_string())))?;
     Ok(json_to_js(&result_json))
@@ -1986,7 +1986,7 @@ pub fn llm_conditional_execution_wasm(
     let request_json = js_to_json(&request)?;
     let llm_request: CoreLlmRequest = serde_json::from_value(request_json)
         .map_err(|e| to_js_err(FlowError::Internal(e.to_string())))?;
-    flow_llm_api::llm_conditional_execution(&llm_request).map_err(to_js_err)
+    relay_llm_api::llm_conditional_execution(&llm_request).map_err(to_js_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -1996,7 +1996,7 @@ pub fn llm_conditional_execution_wasm(
 /// ATIF trajectory exporter for collecting events and producing ATIF JSON.
 #[wasm_bindgen(js_name = AtifExporter)]
 pub struct AtifExporter {
-    inner: nemo_flow::observability::atif::AtifExporter,
+    inner: nemo_relay::observability::atif::AtifExporter,
 }
 
 #[wasm_bindgen(js_class = AtifExporter)]
@@ -2014,7 +2014,7 @@ impl AtifExporter {
         )]
         model_name: Option<String>,
     ) -> Self {
-        let agent_info = nemo_flow::observability::atif::AtifAgentInfo {
+        let agent_info = nemo_relay::observability::atif::AtifAgentInfo {
             name: agent_name,
             version: agent_version,
             model_name,
@@ -2022,20 +2022,20 @@ impl AtifExporter {
             extra: None,
         };
         Self {
-            inner: nemo_flow::observability::atif::AtifExporter::new(session_id, agent_info),
+            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
         }
     }
 
     /// Registers the exporter as an event subscriber.
     pub fn register(&self, name: &str) -> Result<(), JsValue> {
         let subscriber = self.inner.subscriber();
-        flow_subscriber_api::register_subscriber(name, subscriber)
+        relay_subscriber_api::register_subscriber(name, subscriber)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Deregisters the exporter subscriber.
     pub fn deregister(&self, name: &str) -> Result<bool, JsValue> {
-        flow_subscriber_api::deregister_subscriber(name)
+        relay_subscriber_api::deregister_subscriber(name)
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
@@ -2066,7 +2066,7 @@ pub fn default_open_telemetry_config() -> Result<JsValue, JsValue> {
 /// OpenTelemetry-backed event subscriber.
 #[wasm_bindgen(js_name = OpenTelemetrySubscriber)]
 pub struct OpenTelemetrySubscriber {
-    inner: nemo_flow::observability::otel::OpenTelemetrySubscriber,
+    inner: nemo_relay::observability::otel::OpenTelemetrySubscriber,
 }
 
 #[wasm_bindgen(js_class = OpenTelemetrySubscriber)]
@@ -2089,7 +2089,7 @@ impl OpenTelemetrySubscriber {
             _ => None,
         };
 
-        let inner = nemo_flow::observability::otel::OpenTelemetrySubscriber::new(
+        let inner = nemo_relay::observability::otel::OpenTelemetrySubscriber::new(
             build_otel_config(config)?,
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -2203,7 +2203,7 @@ impl PluginContext {
         #[wasm_bindgen(unchecked_param_type = "(event: Json) => any")] callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_subscriber_api::register_subscriber(
+        relay_subscriber_api::register_subscriber(
             &qualified_name,
             crate::callable::wrap_js_event_subscriber(callback),
         )
@@ -2214,7 +2214,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_subscriber_api::deregister_subscriber(&name_owned)
+                relay_subscriber_api::deregister_subscriber(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2243,7 +2243,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_tool_sanitize_request_guardrail(
+        relay_registry_api::register_tool_sanitize_request_guardrail(
             &qualified_name,
             priority,
             crate::callable::wrap_js_tool_fn(callback),
@@ -2255,7 +2255,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_tool_sanitize_request_guardrail(&name_owned)
+                relay_registry_api::deregister_tool_sanitize_request_guardrail(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2284,7 +2284,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_tool_sanitize_response_guardrail(
+        relay_registry_api::register_tool_sanitize_response_guardrail(
             &qualified_name,
             priority,
             crate::callable::wrap_js_tool_fn(callback),
@@ -2296,7 +2296,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_tool_sanitize_response_guardrail(&name_owned)
+                relay_registry_api::deregister_tool_sanitize_response_guardrail(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2326,7 +2326,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_tool_conditional_execution_guardrail(
+        relay_registry_api::register_tool_conditional_execution_guardrail(
             &qualified_name,
             priority,
             crate::callable::wrap_js_tool_conditional_fn(callback),
@@ -2338,7 +2338,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_tool_conditional_execution_guardrail(&name_owned)
+                relay_registry_api::deregister_tool_conditional_execution_guardrail(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2366,7 +2366,7 @@ impl PluginContext {
         #[wasm_bindgen(unchecked_param_type = "(request: Json) => any")] callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_llm_sanitize_request_guardrail(
+        relay_registry_api::register_llm_sanitize_request_guardrail(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_sanitize_request_fn(callback),
@@ -2378,7 +2378,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_llm_sanitize_request_guardrail(&name_owned)
+                relay_registry_api::deregister_llm_sanitize_request_guardrail(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2406,7 +2406,7 @@ impl PluginContext {
         #[wasm_bindgen(unchecked_param_type = "(response: Json) => any")] callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_llm_sanitize_response_guardrail(
+        relay_registry_api::register_llm_sanitize_response_guardrail(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_response_fn(callback),
@@ -2418,7 +2418,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_llm_sanitize_response_guardrail(&name_owned)
+                relay_registry_api::deregister_llm_sanitize_response_guardrail(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2448,7 +2448,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_llm_conditional_execution_guardrail(
+        relay_registry_api::register_llm_conditional_execution_guardrail(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_conditional_fn(callback),
@@ -2460,7 +2460,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_llm_conditional_execution_guardrail(&name_owned)
+                relay_registry_api::deregister_llm_conditional_execution_guardrail(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2490,7 +2490,7 @@ impl PluginContext {
         #[wasm_bindgen(unchecked_param_type = "(request: Json) => any")] callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_llm_request_intercept(
+        relay_registry_api::register_llm_request_intercept(
             &qualified_name,
             priority,
             break_chain,
@@ -2503,7 +2503,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_llm_request_intercept(&name_owned)
+                relay_registry_api::deregister_llm_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2535,7 +2535,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_llm_execution_intercept(
+        relay_registry_api::register_llm_execution_intercept(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_exec_intercept_fn(callback),
@@ -2547,7 +2547,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_llm_execution_intercept(&name_owned)
+                relay_registry_api::deregister_llm_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2579,7 +2579,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_llm_stream_execution_intercept(
+        relay_registry_api::register_llm_stream_execution_intercept(
             &qualified_name,
             priority,
             crate::callable::wrap_js_llm_stream_exec_intercept_fn(callback),
@@ -2591,7 +2591,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_llm_stream_execution_intercept(&name_owned)
+                relay_registry_api::deregister_llm_stream_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2622,7 +2622,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_tool_request_intercept(
+        relay_registry_api::register_tool_request_intercept(
             &qualified_name,
             priority,
             break_chain,
@@ -2635,7 +2635,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_tool_request_intercept(&name_owned)
+                relay_registry_api::deregister_tool_request_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2667,7 +2667,7 @@ impl PluginContext {
         callback: Function,
     ) -> Result<(), JsValue> {
         let qualified_name = self.qualify_name(name);
-        flow_registry_api::register_tool_execution_intercept(
+        relay_registry_api::register_tool_execution_intercept(
             &qualified_name,
             priority,
             crate::callable::wrap_js_tool_exec_intercept_fn(callback),
@@ -2679,7 +2679,7 @@ impl PluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                flow_registry_api::deregister_tool_execution_intercept(&name_owned)
+                relay_registry_api::deregister_tool_execution_intercept(&name_owned)
                     .map(|_| ())
                     .map_err(|e| {
                         PluginError::RegistrationFailed(format!(
@@ -2847,7 +2847,7 @@ pub fn list_plugin_kinds() -> Result<JsValue, JsValue> {
 /// OpenInference-backed event subscriber.
 #[wasm_bindgen(js_name = OpenInferenceSubscriber)]
 pub struct OpenInferenceSubscriber {
-    inner: nemo_flow::observability::openinference::OpenInferenceSubscriber,
+    inner: nemo_relay::observability::openinference::OpenInferenceSubscriber,
 }
 
 #[wasm_bindgen(js_class = OpenInferenceSubscriber)]
@@ -2866,7 +2866,7 @@ impl OpenInferenceSubscriber {
             _ => None,
         };
 
-        let inner = nemo_flow::observability::openinference::OpenInferenceSubscriber::new(
+        let inner = nemo_relay::observability::openinference::OpenInferenceSubscriber::new(
             build_openinference_config(config)?,
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;

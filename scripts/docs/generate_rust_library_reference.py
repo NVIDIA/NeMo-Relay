@@ -18,12 +18,12 @@ from bs4.element import NavigableString, PageElement, Tag
 from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 
 CRATES = (
-    ("nemo-flow", "nemo_flow", "Core Rust runtime APIs for NeMo Flow."),
-    ("nemo-flow-adaptive", "nemo_flow_adaptive", "Adaptive runtime primitives and plugin components."),
-    ("nemo-flow-ffi", "nemo_flow_ffi", "C-compatible FFI surface for NeMo Flow."),
+    ("nemo-relay", "nemo_relay", "Core Rust runtime APIs for NeMo Relay."),
+    ("nemo-relay-adaptive", "nemo_relay_adaptive", "Adaptive runtime primitives and plugin components."),
+    ("nemo-relay-ffi", "nemo_relay_ffi", "C-compatible FFI surface for NeMo Relay."),
 )
 BASE_URL = "/reference/api/rust-library-reference"
-GENERATED_BY = "Generated from `cargo doc --no-deps -p nemo-flow -p nemo-flow-adaptive -p nemo-flow-ffi`."
+GENERATED_BY = "Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`."
 TRANSLATION_TABLE = str.maketrans(
     {
         "\xa0": " ",
@@ -135,11 +135,11 @@ def _run_cargo_doc(repo_root: Path) -> None:
             "doc",
             "--no-deps",
             "-p",
-            "nemo-flow",
+            "nemo-relay",
             "-p",
-            "nemo-flow-adaptive",
+            "nemo-relay-adaptive",
             "-p",
-            "nemo-flow-ffi",
+            "nemo-relay-ffi",
         ],
         cwd=repo_root,
         env=env,
@@ -513,7 +513,7 @@ def _write_index(output_dir: Path) -> None:
     lines = [
         frontmatter(
             "Rust Library Reference",
-            "Generated Rust API reference for NeMo Flow crates.",
+            "Generated Rust API reference for NeMo Relay crates.",
             3,
             normalize=_ascii,
         ),

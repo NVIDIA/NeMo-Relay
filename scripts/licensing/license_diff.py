@@ -227,7 +227,7 @@ def _filter_inventory(inventory: Inventory, languages: list[str]) -> Inventory:
 
 def _worktree_inventory(root: Path, ref: str, languages: list[str]) -> Inventory:
     """Generate inventory for a git ref in a temporary detached worktree."""
-    tmp_parent = Path(tempfile.mkdtemp(prefix="nemo-flow-license-base-"))
+    tmp_parent = Path(tempfile.mkdtemp(prefix="nemo-relay-license-base-"))
     worktree = tmp_parent / "repo"
     try:
         _status(f"checking out base ref {ref} into a temporary worktree")

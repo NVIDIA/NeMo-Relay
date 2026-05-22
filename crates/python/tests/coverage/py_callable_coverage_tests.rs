@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Coverage tests for py callable coverage in the NeMo Flow Python crate.
+//! Coverage tests for py callable coverage in the NeMo Relay Python crate.
 
 use super::*;
 

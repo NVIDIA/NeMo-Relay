@@ -1,8 +1,8 @@
 {
-  "name": "nemo-flow-wasm",
+  "name": "nemo-relay-wasm",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "build:pkg": "node scripts/build_pkg.mjs",

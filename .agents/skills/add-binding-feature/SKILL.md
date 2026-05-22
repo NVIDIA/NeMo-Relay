@@ -1,6 +1,6 @@
 ---
 name: add-binding-feature
-description: Add or change a public NeMo Flow API surface across the core runtime and every affected binding
+description: Add or change a public NeMo Relay API surface across the core runtime and every affected binding
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -32,7 +32,7 @@ Do not use this skill for:
 2. **FFI / shared C surface**
    Add or update FFI wrappers in the relevant `crates/ffi/src/api/*.rs`
    module, re-export them through `crates/ffi/src/api/mod.rs`, and ensure the
-   generated `crates/ffi/nemo_flow.h` stays correct.
+   generated `crates/ffi/nemo_relay.h` stays correct.
 3. **Language-native bindings**
    Update Python, Go, Node.js, and WebAssembly for every surface that should expose the
    capability.
@@ -50,10 +50,10 @@ Do not use this skill for:
 
 | Layer       | Convention        | Example                              |
 |-------------|-------------------|--------------------------------------|
-| Rust        | `snake_case`      | `nemo_flow_tool_call`                |
-| C FFI       | `nemo_flow_` prefix | `nemo_flow_tool_call`              |
-| Python      | `snake_case`      | `nemo_flow.tools.call`               |
-| Go          | `PascalCase`      | `nemo_flow.ToolCall`                 |
+| Rust        | `snake_case`      | `nemo_relay_tool_call`                |
+| C FFI       | `nemo_relay_` prefix | `nemo_relay_tool_call`              |
+| Python      | `snake_case`      | `nemo_relay.tools.call`               |
+| Go          | `PascalCase`      | `nemo_relay.ToolCall`                 |
 | Node.js     | `camelCase`       | `toolCall`                           |
 | WebAssembly | `camelCase`       | `toolCall`                           |
 
@@ -66,9 +66,9 @@ Do not use this skill for:
       re-export in `crates/ffi/src/api/mod.rs`
 - [ ] Regenerate the shared library/header path with `just build-go`
 - [ ] Python native binding in `crates/python/src/py_api/mod.rs`
-- [ ] Python wrapper with docstring in `python/nemo_flow/<module>.py`
-- [ ] Python type stubs updated in the relevant `python/nemo_flow/*.pyi` modules
-- [ ] Go wrapper in `go/nemo_flow/nemo_flow.go` with doc comment
+- [ ] Python wrapper with docstring in `python/nemo_relay/<module>.py`
+- [ ] Python type stubs updated in the relevant `python/nemo_relay/*.pyi` modules
+- [ ] Go wrapper in `go/nemo_relay/nemo_relay.go` with doc comment
 - [ ] Go shorthand package updated if the capability belongs there
 - [ ] Node.js binding in `crates/node/src/api/mod.rs`
 - [ ] WebAssembly binding in `crates/wasm/src/api/mod.rs`
@@ -101,6 +101,6 @@ Lock these before implementing:
 - Typed wrappers and codecs: `docs/integrate-frameworks/using-codecs.md`,
   `docs/integrate-frameworks/provider-codecs.md`
 - Adaptive config/plugins: `docs/about/concepts/plugins.md`,
-  `docs/build-plugins/about.md`, `docs/use-adaptive-optimization/configure.md`
+  `docs/build-plugins/about.md`, `docs/plugins/adaptive/configuration.md`
 - Existing pattern: follow a surface already implemented across core, FFI,
   Python, Go, Node.js, and WebAssembly rather than inventing a new shape

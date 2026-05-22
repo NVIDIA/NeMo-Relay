@@ -11,8 +11,8 @@ test('WebAssembly package exposes OpenTelemetry config defaults', () => {
   const config = wasm.defaultOpenTelemetryConfig();
   assert.equal(config.transport, 'http_binary');
   assert.equal(config.endpoint, undefined);
-  assert.equal(config.serviceName, 'nemo-flow');
-  assert.equal(config.instrumentationScope, 'nemo-flow-otel');
+  assert.equal(config.serviceName, 'nemo-relay');
+  assert.equal(config.instrumentationScope, 'nemo-relay-otel');
   assert.equal(config.timeoutMillis, 3000);
   assert.equal(config.headers instanceof Map, true);
   assert.equal(config.headers.size, 0);

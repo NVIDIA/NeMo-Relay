@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: Enhancement
-description: Propose a focused improvement to existing NeMo Flow behavior.
+description: Propose a focused improvement to existing NeMo Relay behavior.
 title: "[Enhancement]: "
 type: Enhancement
 body:

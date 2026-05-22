@@ -4,9 +4,9 @@
 //! Agent Trajectory Observability Format (ATOF) JSONL exporter support for NeMo
 //! Flow.
 //!
-//! The [`AtofExporter`] registers as an event subscriber and writes each raw
-//! NeMo Flow Agent Trajectory Observability Format (ATOF) event as one JSON
-//! object per JSONL line.
+//! The [`AtofExporter`] registers as an event subscriber and writes each
+//! canonical NeMo Relay Agent Trajectory Observability Format (ATOF) event as
+//! one JSON object per JSONL line.
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -227,7 +227,7 @@ impl AtofExporter {
 
 fn default_filename() -> String {
     format!(
-        "nemo-flow-events-{}.jsonl",
+        "nemo-relay-events-{}.jsonl",
         Utc::now().format("%Y-%m-%d-%H.%M.%S")
     )
 }
@@ -252,7 +252,10 @@ fn open_file(path: &Path, mode: AtofExporterMode) -> Result<File> {
 }
 
 fn write_event(writer: &mut BufWriter<File>, event: &Event) -> std::result::Result<(), String> {
-    serde_json::to_writer(&mut *writer, event).map_err(|error| error.to_string())?;
+    let value = event
+        .try_to_json_value()
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut *writer, &value).map_err(|error| error.to_string())?;
     writer.write_all(b"\n").map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())
 }

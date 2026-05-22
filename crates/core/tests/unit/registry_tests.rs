@@ -1,45 +1,43 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for registry in the NeMo Flow core crate.
+//! Unit tests for registry in the NeMo Relay core crate.
 
 use super::*;
 
 struct PriorityItem {
+    name: String,
     priority: i32,
     value: String,
 }
 
+impl RegistryEntry for PriorityItem {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn priority(&self) -> i32 {
+        self.priority
+    }
+}
+
+fn item(name: &str, priority: i32, value: &str) -> PriorityItem {
+    PriorityItem {
+        name: name.into(),
+        priority,
+        value: value.into(),
+    }
+}
+
 #[test]
 fn test_sorted_registry() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
+    let mut reg = SortedRegistry::new();
 
-    reg.register(
-        "b".into(),
-        PriorityItem {
-            priority: 20,
-            value: "B".into(),
-        },
-    )
-    .unwrap();
+    reg.register(item("b", 20, "B")).unwrap();
 
-    reg.register(
-        "a".into(),
-        PriorityItem {
-            priority: 10,
-            value: "A".into(),
-        },
-    )
-    .unwrap();
+    reg.register(item("a", 10, "A")).unwrap();
 
-    reg.register(
-        "c".into(),
-        PriorityItem {
-            priority: 30,
-            value: "C".into(),
-        },
-    )
-    .unwrap();
+    reg.register(item("c", 30, "C")).unwrap();
 
     let sorted: Vec<&str> = reg
         .sorted_values()
@@ -49,16 +47,7 @@ fn test_sorted_registry() {
     assert_eq!(sorted, vec!["A", "B", "C"]);
 
     // duplicate
-    assert!(
-        reg.register(
-            "a".into(),
-            PriorityItem {
-                priority: 5,
-                value: "A2".into(),
-            },
-        )
-        .is_err()
-    );
+    assert!(reg.register(item("a", 5, "A2")).is_err());
 
     // deregister
     assert!(reg.deregister("b"));
@@ -74,56 +63,17 @@ fn test_sorted_registry() {
 
 #[test]
 fn test_empty_registry() {
-    let reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
+    let reg = SortedRegistry::<PriorityItem>::new();
     let sorted = reg.sorted_values();
     assert!(sorted.is_empty());
 }
 
 #[test]
-fn test_contains() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    assert!(!reg.contains("x"));
-    reg.register(
-        "x".into(),
-        PriorityItem {
-            priority: 1,
-            value: "X".into(),
-        },
-    )
-    .unwrap();
-    assert!(reg.contains("x"));
-    assert!(!reg.contains("y"));
-    reg.deregister("x");
-    assert!(!reg.contains("x"));
-}
-
-#[test]
 fn test_negative_priorities() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    reg.register(
-        "pos".into(),
-        PriorityItem {
-            priority: 10,
-            value: "P".into(),
-        },
-    )
-    .unwrap();
-    reg.register(
-        "neg".into(),
-        PriorityItem {
-            priority: -5,
-            value: "N".into(),
-        },
-    )
-    .unwrap();
-    reg.register(
-        "zero".into(),
-        PriorityItem {
-            priority: 0,
-            value: "Z".into(),
-        },
-    )
-    .unwrap();
+    let mut reg = SortedRegistry::new();
+    reg.register(item("pos", 10, "P")).unwrap();
+    reg.register(item("neg", -5, "N")).unwrap();
+    reg.register(item("zero", 0, "Z")).unwrap();
 
     let sorted: Vec<&str> = reg
         .sorted_values()
@@ -135,24 +85,10 @@ fn test_negative_priorities() {
 
 #[test]
 fn test_re_register_after_deregister() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    reg.register(
-        "a".into(),
-        PriorityItem {
-            priority: 10,
-            value: "A1".into(),
-        },
-    )
-    .unwrap();
+    let mut reg = SortedRegistry::new();
+    reg.register(item("a", 10, "A1")).unwrap();
     reg.deregister("a");
-    reg.register(
-        "a".into(),
-        PriorityItem {
-            priority: 5,
-            value: "A2".into(),
-        },
-    )
-    .unwrap();
+    reg.register(item("a", 5, "A2")).unwrap();
     let sorted: Vec<&str> = reg
         .sorted_values()
         .iter()
@@ -163,45 +99,23 @@ fn test_re_register_after_deregister() {
 
 #[test]
 fn test_deregister_nonexistent() {
-    let mut reg = SortedRegistry::<PriorityItem>::new(|item| item.priority);
+    let mut reg = SortedRegistry::<PriorityItem>::new();
     assert!(!reg.deregister("nope"));
 }
 
 #[test]
 fn test_duplicate_error_message() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    reg.register(
-        "dup".into(),
-        PriorityItem {
-            priority: 1,
-            value: "D".into(),
-        },
-    )
-    .unwrap();
-    let err = reg
-        .register(
-            "dup".into(),
-            PriorityItem {
-                priority: 2,
-                value: "D2".into(),
-            },
-        )
-        .unwrap_err();
+    let mut reg = SortedRegistry::new();
+    reg.register(item("dup", 1, "D")).unwrap();
+    let err = reg.register(item("dup", 2, "D2")).unwrap_err();
     assert!(err.contains("dup"));
     assert!(err.contains("already exists"));
 }
 
 #[test]
 fn test_sorted_values_caching() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    reg.register(
-        "a".into(),
-        PriorityItem {
-            priority: 1,
-            value: "A".into(),
-        },
-    )
-    .unwrap();
+    let mut reg = SortedRegistry::new();
+    reg.register(item("a", 1, "A")).unwrap();
     // Sort order is already maintained eagerly by register()
     let s1: Vec<&str> = reg
         .sorted_values()
@@ -220,15 +134,13 @@ fn test_sorted_values_caching() {
 
 #[test]
 fn test_many_entries_ordering() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
+    let mut reg = SortedRegistry::new();
     for i in (0..20).rev() {
-        reg.register(
-            format!("item_{i}"),
-            PriorityItem {
-                priority: i,
-                value: format!("V{i}"),
-            },
-        )
+        reg.register(PriorityItem {
+            name: format!("item_{i}"),
+            priority: i,
+            value: format!("V{i}"),
+        })
         .unwrap();
     }
     let sorted: Vec<i32> = reg.sorted_values().iter().map(|i| i.priority).collect();
@@ -238,65 +150,13 @@ fn test_many_entries_ordering() {
 
 #[test]
 fn test_same_priority_stable() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    reg.register(
-        "x".into(),
-        PriorityItem {
-            priority: 1,
-            value: "X".into(),
-        },
-    )
-    .unwrap();
-    reg.register(
-        "y".into(),
-        PriorityItem {
-            priority: 1,
-            value: "Y".into(),
-        },
-    )
-    .unwrap();
-    // Both should be present
+    let mut reg = SortedRegistry::new();
+    reg.register(item("x", 1, "X")).unwrap();
+    reg.register(item("y", 1, "Y")).unwrap();
     let sorted: Vec<&str> = reg
         .sorted_values()
         .iter()
         .map(|i| i.value.as_str())
         .collect();
-    assert_eq!(sorted.len(), 2);
-    assert!(sorted.contains(&"X"));
-    assert!(sorted.contains(&"Y"));
-}
-
-#[test]
-fn test_get_and_remove_cover_lookup_and_resort_paths() {
-    let mut reg = SortedRegistry::new(|item: &PriorityItem| item.priority);
-    reg.register(
-        "alpha".into(),
-        PriorityItem {
-            priority: 2,
-            value: "A".into(),
-        },
-    )
-    .unwrap();
-    reg.register(
-        "beta".into(),
-        PriorityItem {
-            priority: 1,
-            value: "B".into(),
-        },
-    )
-    .unwrap();
-
-    assert_eq!(reg.get("beta").map(|item| item.value.as_str()), Some("B"));
-    assert!(reg.get("missing").is_none());
-
-    let removed = reg.remove("beta").unwrap();
-    assert_eq!(removed.value, "B");
-    assert!(reg.remove("beta").is_none());
-
-    let sorted: Vec<&str> = reg
-        .sorted_values()
-        .iter()
-        .map(|item| item.value.as_str())
-        .collect();
-    assert_eq!(sorted, vec!["A"]);
+    assert_eq!(sorted, vec!["X", "Y"]);
 }

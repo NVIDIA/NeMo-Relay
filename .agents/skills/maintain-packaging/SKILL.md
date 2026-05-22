@@ -1,6 +1,6 @@
 ---
 name: maintain-packaging
-description: Maintain NeMo Flow package metadata, module paths, generated artifacts, and release-facing build surfaces
+description: Maintain NeMo Relay package metadata, module paths, generated artifacts, and release-facing build surfaces
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,14 +14,14 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when a change affects how NeMo Flow is built, packaged, named, or
+Use this skill when a change affects how NeMo Relay is built, packaged, named, or
 consumed outside the source tree.
 
 ## Audit Areas
 
 - Rust `Cargo.toml` package names and workspace metadata
 - Python packaging in `pyproject.toml`
-- Go module path in `go/nemo_flow/go.mod`
+- Go module path in `go/nemo_relay/go.mod`
 - Node workspace metadata in root `package.json` and `package-lock.json`
 - Node package metadata in `crates/node/package.json`
 - WebAssembly package naming and generated package expectations
@@ -42,7 +42,7 @@ consumed outside the source tree.
 ## References
 
 - `pyproject.toml`
-- `go/nemo_flow/go.mod`
+- `go/nemo_relay/go.mod`
 - `package.json`
 - `package-lock.json`
 - `crates/node/package.json`

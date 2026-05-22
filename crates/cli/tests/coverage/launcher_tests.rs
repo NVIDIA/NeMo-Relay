@@ -113,7 +113,7 @@ fn inference_failure_has_actionable_message() {
 
 #[test]
 fn missing_command_without_agent_errors() {
-    // Bare `nemo-flow run` (no command, no --agent) errors — we have nothing to spawn and no
+    // Bare `nemo-relay run` (no command, no --agent) errors — we have nothing to spawn and no
     // argv[0] to infer an agent from. With --agent set, we fall back to the agent's default
     // binary name (e.g., `cursor-agent`), so that branch is exercised in the resolution test
     // below rather than here.
@@ -159,7 +159,7 @@ fn agent_without_configured_command_falls_back_to_default_binary() {
 
 #[test]
 fn agent_with_passthrough_args_appends_to_configured_command() {
-    // The easy-path uses this code path: `nemo-flow codex -- --model X` resolves to the
+    // The easy-path uses this code path: `nemo-relay codex -- --model X` resolves to the
     // configured (or default) codex command with `--model X` appended.
     let command = RunCommand {
         agent: Some(CodingAgent::Codex),
@@ -200,13 +200,13 @@ fn prepares_codex_config_overrides() {
         prepared
             .argv
             .iter()
-            .any(|arg| arg == "model_provider=\"nemo-flow-openai\"")
+            .any(|arg| arg == "model_provider=\"nemo-relay-openai\"")
     );
     assert!(
         prepared
             .argv
             .iter()
-            .any(|arg| arg.contains("model_providers.nemo-flow-openai")
+            .any(|arg| arg.contains("model_providers.nemo-relay-openai")
                 && arg.contains("base_url=\"http://127.0.0.1:1234\"")
                 // Codex sends its own credentials (ChatGPT-Plus OAuth or OPENAI_API_KEY).
                 // When OPENAI_API_KEY is in the environment the gateway substitutes it;
@@ -381,7 +381,7 @@ fn prepares_hermes_hook_environment() {
 
     assert_eq!(prepared.argv, vec!["hermes", "chat"]);
     assert!(prepared.env.contains(&(
-        "NEMO_FLOW_GATEWAY_URL".into(),
+        "NEMO_RELAY_GATEWAY_URL".into(),
         "http://127.0.0.1:1234".into()
     )));
     assert!(
@@ -390,7 +390,7 @@ fn prepares_hermes_hook_environment() {
             .iter()
             .any(|(name, _)| name == "HERMES_ACCEPT_HOOKS")
     );
-    assert!(prepared.notes[0].contains("nemo-flow config hermes"));
+    assert!(prepared.notes[0].contains("nemo-relay config hermes"));
 }
 
 #[test]
@@ -668,7 +668,7 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s' \"$NEMO_FLOW_GATEWAY_URL\" > \"{}\"\nexit 7\n",
+            "#!/bin/sh\nprintf '%s' \"$NEMO_RELAY_GATEWAY_URL\" > \"{}\"\nexit 7\n",
             output.display()
         ),
     )
