@@ -17,12 +17,24 @@ use crate::plugin::{
     lookup_plugin, register_plugin,
 };
 
+#[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 #[path = "remote.rs"]
 mod remote;
+#[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 use remote::register_remote_backend;
 
 /// The plugin kind reserved for the planned first-party component.
 pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemo_guardrails";
+
+#[cfg(any(target_arch = "wasm32", not(feature = "guardrails-remote")))]
+fn register_remote_backend(
+    _config: NeMoGuardrailsConfig,
+    _ctx: &mut PluginRegistrationContext,
+) -> PluginResult<()> {
+    Err(PluginError::RegistrationFailed(
+        "built-in NeMo Guardrails remote backend is unavailable in this build".to_string(),
+    ))
+}
 
 /// Top-level NeMo Guardrails component wrapper.
 #[derive(Debug, Clone)]
@@ -941,30 +953,27 @@ fn validate_request_defaults(
         "request_defaults.context",
         "request_defaults.context must be a JSON object",
     );
-    if let Some(thread_id) = &request_defaults.thread_id
-        && thread_id.trim().is_empty()
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("request_defaults.thread_id".to_string()),
-            "request_defaults.thread_id must not be empty".to_string(),
-        );
-    }
-    if let Some(thread_id) = &request_defaults.thread_id
-        && !thread_id.trim().is_empty()
-        && thread_id.len() < 16
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("request_defaults.thread_id".to_string()),
-            "request_defaults.thread_id must be at least 16 characters long".to_string(),
-        );
+    if let Some(thread_id) = &request_defaults.thread_id {
+        let trimmed_thread_id = thread_id.trim();
+        if trimmed_thread_id.is_empty() {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "nemo_guardrails.unsupported_value",
+                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                Some("request_defaults.thread_id".to_string()),
+                "request_defaults.thread_id must not be empty".to_string(),
+            );
+        } else if trimmed_thread_id.len() < 16 {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "nemo_guardrails.unsupported_value",
+                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                Some("request_defaults.thread_id".to_string()),
+                "request_defaults.thread_id must be at least 16 characters long".to_string(),
+            );
+        }
     }
     validate_json_object_field(
         diagnostics,
