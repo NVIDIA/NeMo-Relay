@@ -12,7 +12,7 @@ These pages are generated from the exported TypeScript declaration surfaces in `
 This summary lists the package identity and support status for the binding.
 
 - Package name: `nemo-relay-node`
-- Runtime requirement: Node.js `>=20`
+- Runtime requirement: Node.js `>=24`
 - Local development path: `crates/node`
 
 The Node.js binding is built with `napi-rs`. The package root exports the core
