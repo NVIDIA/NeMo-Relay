@@ -986,18 +986,20 @@ fn validate_request_defaults(
         .state
         .as_ref()
         .and_then(|value| value.as_object())
-        && !state.is_empty()
-        && !state.contains_key("events")
-        && !state.contains_key("state")
     {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("request_defaults.state".to_string()),
-            "request_defaults.state must be empty or contain 'events' or 'state'".to_string(),
-        );
+        let contains_supported_key = state.contains_key("events") || state.contains_key("state");
+        let contains_unsupported_key = state.keys().any(|key| key != "events" && key != "state");
+        if (!state.is_empty() && !contains_supported_key) || contains_unsupported_key {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "nemo_guardrails.unsupported_value",
+                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                Some("request_defaults.state".to_string()),
+                "request_defaults.state must be empty or contain only 'events' or 'state'"
+                    .to_string(),
+            );
+        }
     }
     validate_json_object_field(
         diagnostics,

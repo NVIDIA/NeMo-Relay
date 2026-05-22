@@ -178,7 +178,7 @@ impl RemoteBackendRuntime {
                     &self.config_id,
                     &self.config_ids,
                     Some(status.as_u16()),
-                    Some(payload.clone()),
+                    Some(redact_remote_error_payload(status.as_u16(), &payload)),
                 ),
             );
             return Err(FlowError::Internal(format!(
@@ -302,7 +302,7 @@ impl RemoteBackendRuntime {
                     &self.config_id,
                     &self.config_ids,
                     Some(status.as_u16()),
-                    Some(payload.clone()),
+                    Some(redact_remote_error_payload(status.as_u16(), &payload)),
                 ),
             );
             return Err(FlowError::Internal(format!(
@@ -615,7 +615,7 @@ impl RemoteBackendRuntime {
                     &self.config_id,
                     &self.config_ids,
                     Some(status.as_u16()),
-                    Some(payload.clone()),
+                    Some(redact_remote_error_payload(status.as_u16(), &payload)),
                 ),
             );
             return Err(FlowError::Internal(format!(
@@ -679,20 +679,20 @@ impl RemoteBackendRuntime {
         let mut options = Map::new();
         let rails = match kind {
             RemoteCheckKind::Input => json!({
-                "input": true,
+                "input": false,
                 "output": false,
                 "dialog": false,
                 "retrieval": false,
-                "tool_input": false,
+                "tool_input": true,
                 "tool_output": false,
             }),
             RemoteCheckKind::Output => json!({
                 "input": false,
-                "output": true,
+                "output": false,
                 "dialog": false,
                 "retrieval": false,
                 "tool_input": false,
-                "tool_output": false,
+                "tool_output": true,
             }),
         };
         options.insert("rails".to_string(), rails);
@@ -728,6 +728,14 @@ fn tool_input_content(tool_name: &str, args: &Json) -> String {
         "arguments": args,
     }))
     .expect("tool input payload should serialize to JSON")
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
+fn redact_remote_error_payload(status: u16, payload: &str) -> String {
+    format!(
+        "remote request failed with status {status}; error body omitted from marks ({} bytes)",
+        payload.len()
+    )
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]

@@ -11,6 +11,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use crate::api::event::Event;
 use crate::api::llm::{
@@ -36,6 +37,8 @@ use crate::plugin::{
 };
 use futures::StreamExt;
 use serde_json::json;
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn reset_runtime() {
     let _ = clear_plugin_configuration();
@@ -189,6 +192,12 @@ fn header_value<'a>(headers_text: &'a str, header_name: &str) -> Option<&'a str>
             None
         }
     })
+}
+
+fn recv_captured_request(request_rx: &mpsc::Receiver<CapturedHttpRequest>) -> CapturedHttpRequest {
+    request_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("timed out waiting for captured HTTP request")
 }
 
 fn make_chat_request(stream: bool) -> LlmRequest {
@@ -749,7 +758,7 @@ fn invalid_shapes_and_values_are_reported() {
     );
     assert!(invalid_request_defaults.diagnostics.iter().any(|diag| {
         diag.message
-            .contains("request_defaults.state must be empty or contain 'events' or 'state'")
+            .contains("request_defaults.state must be empty or contain only 'events' or 'state'")
     }));
     assert!(
         invalid_request_defaults
@@ -943,7 +952,7 @@ async fn remote_initialization_installs_non_streaming_execution_intercept() {
         json!("server-state")
     );
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     assert_eq!(captured.path, "/v1/chat/completions");
     assert!(captured.content_type.starts_with("application/json"));
 
@@ -1061,7 +1070,7 @@ async fn remote_request_uses_config_ids_when_config_id_is_not_set() {
     .await
     .unwrap();
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
         request_json["guardrails"]["config_ids"],
@@ -1136,7 +1145,10 @@ async fn remote_initialization_installs_stream_execution_intercept() {
     .unwrap();
 
     let mut chunks = Vec::new();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = tokio::time::timeout(TEST_TIMEOUT, stream.next())
+        .await
+        .expect("timed out waiting for remote stream chunk")
+    {
         chunks.push(chunk.unwrap());
     }
 
@@ -1145,7 +1157,7 @@ async fn remote_initialization_installs_stream_execution_intercept() {
     assert_eq!(chunks[0]["choices"][0]["delta"]["content"], json!("guard"));
     assert_eq!(chunks[1]["choices"][0]["delta"]["content"], json!("ed"));
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(request_json["stream"], json!(true));
     assert_eq!(
@@ -1246,7 +1258,7 @@ async fn remote_non_streaming_http_errors_are_reported_and_marked() {
         error_mark.data().unwrap()["error"]
             .as_str()
             .unwrap()
-            .contains("backend unavailable")
+            .contains("error body omitted from marks")
     );
 
     deregister_subscriber("nemo-guardrails-remote-error-events").unwrap();
@@ -1341,7 +1353,7 @@ async fn remote_streaming_http_errors_are_reported_and_marked() {
         error_mark.data().unwrap()["error"]
             .as_str()
             .unwrap()
-            .contains("stream backend unavailable")
+            .contains("error body omitted from marks")
     );
 
     deregister_subscriber("nemo-guardrails-remote-stream-error-events").unwrap();
@@ -1470,7 +1482,11 @@ async fn remote_streaming_malformed_chunk_is_reported_and_marked() {
     .await
     .unwrap();
 
-    let error = stream.next().await.unwrap().unwrap_err();
+    let error = tokio::time::timeout(TEST_TIMEOUT, stream.next())
+        .await
+        .expect("timed out waiting for remote stream error")
+        .unwrap()
+        .unwrap_err();
     match error {
         crate::error::FlowError::Internal(message) => {
             assert!(!message.is_empty());
@@ -1759,14 +1775,14 @@ async fn remote_tool_input_block_rejects_before_tool_execution() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
-        request_json["guardrails"]["options"]["rails"]["input"],
+        request_json["guardrails"]["options"]["rails"]["tool_input"],
         json!(true)
     );
     assert_eq!(
-        request_json["guardrails"]["options"]["rails"]["output"],
+        request_json["guardrails"]["options"]["rails"]["tool_output"],
         json!(false)
     );
 
@@ -1860,7 +1876,7 @@ async fn remote_tool_input_can_rewrite_tool_arguments() {
     assert_eq!(result, json!({"forecast": "sunny"}));
     assert_eq!(*seen_args.lock().unwrap(), Some(json!({"city": "Boston"})));
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(request_json["messages"][0]["role"], json!("user"));
 }
@@ -1932,14 +1948,14 @@ async fn remote_tool_output_can_rewrite_tool_result() {
 
     assert_eq!(result, json!({"forecast": "cloudy"}));
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
-        request_json["guardrails"]["options"]["rails"]["input"],
+        request_json["guardrails"]["options"]["rails"]["tool_input"],
         json!(false)
     );
     assert_eq!(
-        request_json["guardrails"]["options"]["rails"]["output"],
+        request_json["guardrails"]["options"]["rails"]["tool_output"],
         json!(true)
     );
 }
@@ -2307,19 +2323,19 @@ async fn remote_tool_input_and_output_run_in_order() {
     assert_eq!(*seen_args.lock().unwrap(), Some(json!({"city": "Boston"})));
     assert_eq!(result, json!({"forecast": "cloudy"}));
 
-    let first_request = request_rx.recv().unwrap();
+    let first_request = recv_captured_request(&request_rx);
     let first_request_json: Json = serde_json::from_slice(&first_request.body).unwrap();
     assert_eq!(first_request_json["messages"][0]["role"], json!("user"));
     assert_eq!(
-        first_request_json["guardrails"]["options"]["rails"]["input"],
+        first_request_json["guardrails"]["options"]["rails"]["tool_input"],
         json!(true)
     );
     assert_eq!(
-        first_request_json["guardrails"]["options"]["rails"]["output"],
+        first_request_json["guardrails"]["options"]["rails"]["tool_output"],
         json!(false)
     );
 
-    let second_request = request_rx.recv().unwrap();
+    let second_request = recv_captured_request(&request_rx);
     let second_request_json: Json = serde_json::from_slice(&second_request.body).unwrap();
     assert_eq!(second_request_json["messages"][0]["role"], json!("user"));
     assert_eq!(
@@ -2327,11 +2343,11 @@ async fn remote_tool_input_and_output_run_in_order() {
         json!("assistant")
     );
     assert_eq!(
-        second_request_json["guardrails"]["options"]["rails"]["input"],
+        second_request_json["guardrails"]["options"]["rails"]["tool_input"],
         json!(false)
     );
     assert_eq!(
-        second_request_json["guardrails"]["options"]["rails"]["output"],
+        second_request_json["guardrails"]["options"]["rails"]["tool_output"],
         json!(true)
     );
 }
@@ -2408,7 +2424,7 @@ async fn remote_tool_checks_forward_context_state_and_thread_id() {
 
     assert_eq!(result, json!({"forecast": "sunny"}));
 
-    let captured = request_rx.recv().unwrap();
+    let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
         request_json["guardrails"]["context"],
