@@ -39,11 +39,7 @@ Use a request or response codec when provider payloads need normalization before
 The examples below wrap one provider call and attach it to the active parent scope.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from typing import TypedDict
 
@@ -71,9 +67,7 @@ async def framework_llm(provider_name: str, payload: object) -> LlmResponse:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { getHandle, LlmRequest, llmCallExecute, type ScopeHandle } from 'nemo-relay-node';
 
@@ -97,9 +91,7 @@ export async function frameworkLlm(providerName: string, payload: unknown): Prom
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::api::scope::get_handle;

@@ -47,11 +47,7 @@ Follow this sequence to keep framework work attached to the expected runtime con
 The examples below create one `agent-run` scope and emit two marks.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -73,9 +69,7 @@ finally:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const {
   ScopeType,
@@ -116,9 +110,7 @@ main().catch((error) => {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,

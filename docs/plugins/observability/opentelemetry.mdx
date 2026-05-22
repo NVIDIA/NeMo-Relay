@@ -83,11 +83,7 @@ Use plugin configuration when the application should let NeMo Relay own the
 OpenTelemetry subscriber lifecycle.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import plugin
 from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
@@ -127,9 +123,7 @@ finally:
 </Tab>
 </Tabs>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
@@ -167,9 +161,7 @@ try {
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::plugin_component::{
     ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
@@ -212,11 +204,7 @@ Use the manual subscriber API when you need an explicit subscriber name or
 direct `force_flush` control.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
 
@@ -239,9 +227,7 @@ subscriber.shutdown()
 </Tab>
 </Tabs>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const { OpenTelemetrySubscriber } = require("nemo-relay-node");
 
@@ -267,9 +253,7 @@ try {
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 

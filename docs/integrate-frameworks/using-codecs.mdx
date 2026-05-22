@@ -65,11 +65,7 @@ Python exposes:
 Node.js exposes `JsonPassthrough` and custom `Codec<T>` implementations.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from dataclasses import dataclass
 
@@ -90,9 +86,7 @@ passthrough = JsonPassthrough()
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { JsonPassthrough, type Codec, type JsonValue } from 'nemo-relay-node/typed';
 
@@ -116,11 +110,7 @@ Use `BestEffortAnyCodec` only at boundary code where strict schemas are unavaila
 Use typed value codecs when the framework wants native objects but NeMo Relay should emit JSON payloads.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from dataclasses import dataclass
 
@@ -144,9 +134,7 @@ result = await tool_execute(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { JsonPassthrough, typedToolExecute, type Codec, type JsonValue } from 'nemo-relay-node/typed';
 

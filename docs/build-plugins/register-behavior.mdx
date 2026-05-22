@@ -37,11 +37,7 @@ Use the plugin APIs in this order:
 6. Clear active config during teardown when needed.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -61,9 +57,7 @@ nemo_relay.plugin.clear()
 
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import * as plugin from 'nemo-relay-node/plugin';
 
@@ -84,9 +78,7 @@ plugin.clear();
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::{
     clear_plugin_configuration, initialize_plugins, list_plugin_kinds, validate_plugin_config,
@@ -114,11 +106,7 @@ clear_plugin_configuration()?;
 The same model applies in every binding: validate component-local config, then install middleware through the component-scoped registration context.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -144,9 +132,7 @@ nemo_relay.plugin.register("header-plugin", HeaderPlugin())
 
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import * as plugin from 'nemo-relay-node/plugin';
 
@@ -180,9 +166,7 @@ plugin.register('header-plugin', headerPlugin);
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::{
     register_plugin, ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext,

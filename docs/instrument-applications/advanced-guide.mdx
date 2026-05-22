@@ -45,11 +45,7 @@ This example adds three behaviors around a `search` tool:
 - Measure execution duration.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import time
 
@@ -80,9 +76,7 @@ nemo_relay.intercepts.register_tool_execution("search.measure", 30, measure_tool
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const {
   registerToolConditionalExecutionGuardrail,
@@ -112,9 +106,7 @@ registerToolExecutionIntercept("search.measure", 30, async (args, next) => {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::registry::{
     register_tool_conditional_execution_guardrail,

@@ -43,11 +43,7 @@ The scope end hook should:
 - Clear any framework request state used for handle lookup
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -67,9 +63,7 @@ def on_request_end(request_state, status: str) -> None:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { popScope, pushScope, ScopeType, type ScopeHandle } from 'nemo-relay-node';
 
@@ -104,9 +98,7 @@ export function onRequestEnd(state: RequestState, status: string): void {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,

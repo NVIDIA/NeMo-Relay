@@ -75,6 +75,8 @@ repos:
           - --accept
           - '200..=299,403,429'
           - --exclude
+          - '^https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$'
+          - --exclude
           - '^https://www\.npmjs\.com/package/nemo-relay-(node|wasm)$'
           - --exclude
           - '^https://github\.com/NVIDIA/NeMo-Relay(?:/.*)?$'

@@ -40,11 +40,7 @@ Flow.
 Keep framework objects in your own map, but send only the JSON projection through NeMo Relay.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from typing import TypedDict
 
@@ -73,9 +69,7 @@ result = await nemo_relay.tools.execute(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { toolCallExecute } from 'nemo-relay-node';
 
@@ -99,9 +93,7 @@ const result = await toolCallExecute(
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use serde_json::json;

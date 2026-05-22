@@ -26,11 +26,7 @@ Each component has:
 Disabled components are still validated. This lets operators detect config problems before enabling a component in a later rollout.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay.plugin import ComponentSpec, ConfigPolicy, PluginConfig
 
@@ -52,9 +48,7 @@ config = PluginConfig(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import type { PluginConfig } from 'nemo-relay-node/plugin';
 
@@ -76,9 +70,7 @@ const config: PluginConfig = {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 
@@ -135,11 +127,7 @@ Prefer stable diagnostic codes over prose-only messages. The message can improve
 Use the validation API before initialization and fail deployment if the report contains errors.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -150,9 +138,7 @@ if has_errors:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import * as plugin from 'nemo-relay-node/plugin';
 
@@ -164,9 +150,7 @@ if (hasErrors) {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::validate_plugin_config;
 

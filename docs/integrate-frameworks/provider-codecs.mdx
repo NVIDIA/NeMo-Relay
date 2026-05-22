@@ -79,11 +79,7 @@ Choose the provider codec that matches the payload shape the framework already s
 This example uses a request intercept to edit the normalized request. The codec writes the edited messages back into the provider payload before the provider callback runs.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -136,9 +132,7 @@ response = await nemo_relay.llm.execute(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import {
   OpenAIChatCodec,
@@ -201,9 +195,7 @@ const response = await typedLlmExecute(
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
@@ -255,11 +247,7 @@ let response = llm_call_execute(
 Use a custom codec when a framework uses a payload shape that does not directly match a built-in provider format. The codec decodes the framework shape into `AnnotatedLLMRequest`, and encodes edits back into the framework shape.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import AnnotatedLLMRequest, LLMRequest
 from nemo_relay.codecs import LlmCodec
@@ -294,9 +282,7 @@ class FrameworkChatCodec(LlmCodec):
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import type { JsonValue, LlmCodec } from 'nemo-relay-node/typed';
 

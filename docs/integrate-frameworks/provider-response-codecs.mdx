@@ -62,11 +62,7 @@ The examples below attach built-in response codecs for supported provider respon
 shapes.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -96,9 +92,7 @@ response = await nemo_relay.llm.execute(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { OpenAIChatCodec } from 'nemo-relay-node';
 import { JsonPassthrough, typedLlmExecute } from 'nemo-relay-node/typed';
@@ -128,9 +122,7 @@ const response = await typedLlmExecute(
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
@@ -181,11 +173,7 @@ let response = llm_call_execute(
 Subscribers can inspect `annotated_response` on LLM end events. The exact event category fields are binding-provided, so defensive checks should confirm the annotation exists before reading it.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -202,9 +190,7 @@ nemo_relay.subscribers.register("response-debugger", on_event)
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { registerSubscriber } from 'nemo-relay-node';
 

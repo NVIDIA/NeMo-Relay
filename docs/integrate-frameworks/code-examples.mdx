@@ -51,11 +51,7 @@ What you lose from managed execution wrappers:
 - Error paths need deliberate end-event or mark-event handling.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -75,9 +71,7 @@ def framework_llm_finished(handle, response: dict) -> None:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { LlmRequest, llmCall, llmCallEnd, toolCall, toolCallEnd } from 'nemo-relay-node';
 
@@ -100,9 +94,7 @@ export function frameworkLlmFinished(handle: unknown, response: unknown): void {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call, llm_call_end, LlmCallEndParams, LlmCallParams, LlmRequest};
 use nemo_relay::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
@@ -148,11 +140,7 @@ llm_call_end(
 Use conditional-execution helpers when the framework needs an allow-or-block decision before it continues down its own invocation path.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -162,9 +150,7 @@ nemo_relay.llm.conditional_execution(LLMRequest({}, {"messages": []}))
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { LlmRequest, llmConditionalExecution, toolConditionalExecution } from 'nemo-relay-node';
 
@@ -173,9 +159,7 @@ await llmConditionalExecution(new LlmRequest({}, { messages: [] }));
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_conditional_execution, LlmRequest};
 use nemo_relay::api::tool::tool_conditional_execution;
@@ -194,11 +178,7 @@ llm_conditional_execution(&request)?;
 Use request-intercept helpers when the framework wants NeMo Relay to rewrite arguments or provider requests before the framework invokes its own downstream code.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -211,9 +191,7 @@ rewritten_request = nemo_relay.llm.request_intercepts(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { LlmRequest, llmRequestIntercepts, toolRequestIntercepts } from 'nemo-relay-node';
 
@@ -222,9 +200,7 @@ const rewrittenRequest = await llmRequestIntercepts('demo-provider', new LlmRequ
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_request_intercepts, LlmRequest};
 use nemo_relay::api::tool::tool_request_intercepts;
@@ -243,11 +219,7 @@ let rewritten_request = llm_request_intercepts("demo-provider", request)?;
 Use mark events when the framework exposes important milestones but not a full lifecycle boundary.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -255,9 +227,7 @@ nemo_relay.scope.event("scheduler.retry", data={"attempt": 2})
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { event } from 'nemo-relay-node';
 
@@ -265,9 +235,7 @@ event('scheduler.retry', null, { attempt: 2 }, null);
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::scope::{event, EmitMarkEventParams};
 use serde_json::json;

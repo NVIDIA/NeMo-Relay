@@ -39,11 +39,7 @@ Managed wrappers are the first choice because NeMo Relay owns the full call boun
 The examples below wrap one framework tool callback and attach it to the active parent scope.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from typing import TypedDict
 
@@ -71,9 +67,7 @@ async def framework_tool(tool_name: str, raw_args: SearchArgs) -> SearchResult:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { getHandle, toolCallExecute, type ScopeHandle } from 'nemo-relay-node';
 
@@ -96,9 +90,7 @@ export async function frameworkTool(toolName: string, rawArgs: SearchArgs): Prom
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::scope::get_handle;
 use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams};

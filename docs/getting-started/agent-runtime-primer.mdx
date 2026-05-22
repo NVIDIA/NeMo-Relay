@@ -45,13 +45,16 @@ The core runtime model has five parts:
 
 The simplest mental model is:
 
-```text
-app or framework boundary
-  -> NeMo Relay scope
-  -> managed tool or LLM call
-  -> middleware
-  -> lifecycle event
-  -> subscriber or exporter
+```mermaid
+flowchart LR
+  boundary["App or framework boundary"]
+  scope["NeMo Relay scope"]
+  call["Managed tool or LLM call"]
+  middleware["Middleware"]
+  event["Lifecycle event"]
+  sink["Subscriber or exporter"]
+
+  boundary --> scope --> call --> middleware --> event --> sink
 ```
 
 ## What NeMo Relay Does Not Replace

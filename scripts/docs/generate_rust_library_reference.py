@@ -6,10 +6,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import posixpath
 import re
 import subprocess
 from dataclasses import dataclass
+from html import escape as html_escape
 from pathlib import Path
 from urllib.parse import urldefrag
 
@@ -50,6 +53,7 @@ TRANSLATION_TABLE = str.maketrans(
 FERN_COMPONENT_TAGS = (
     "Tabs",
     "Tab",
+    "CardGroup",
     "Cards",
     "Card",
     "Accordion",
@@ -111,6 +115,14 @@ def _inline_code(value: str) -> str:
 def _rust_fence(value: str) -> str:
     code = _mdx_safe_code(value)
     return f"```rust\n{code}\n```\n\n" if code else ""
+
+
+def _html_text(value: str) -> str:
+    return html_escape(_ascii(value), quote=False).replace("{", "&#123;").replace("}", "&#125;")
+
+
+def _html_attr(value: str) -> str:
+    return html_escape(_ascii(value), quote=True)
 
 
 def _slug_part(value: str) -> str:
@@ -261,6 +273,83 @@ def _heading_text(node: Tag) -> str:
     return re.sub(r"_\s+", "_", text)
 
 
+def _signature_link_target(page: Page, href: str, pages_by_html: dict[Path, Page]) -> str | None:
+    if not href or href.startswith("#"):
+        return None
+    target = _resolve_href(page, href, pages_by_html)
+    if target is None or not target.startswith("/"):
+        return target
+    return posixpath.relpath(target, start=posixpath.dirname(page.url))
+
+
+def _linked_signature_html(node: PageElement, page: Page, pages_by_html: dict[Path, Page]) -> str:
+    if isinstance(node, NavigableString):
+        return _html_text(str(node))
+    if not isinstance(node, Tag):
+        return ""
+
+    classes = _tag_classes(node)
+    if classes & {"anchor", "doc-anchor", "src"} or node.name in {"script", "style", "wbr", "button"}:
+        return ""
+    if node.name == "br":
+        return "\n"
+    if node.name == "a":
+        label = "".join(_linked_signature_html(child, page, pages_by_html) for child in node.children)
+        if not label:
+            return ""
+        target = _signature_link_target(page, _tag_href(node), pages_by_html)
+        if target is None:
+            return label
+        return f'<a href="{_html_attr(target)}">{label}</a>'
+    return "".join(_linked_signature_html(child, page, pages_by_html) for child in node.children)
+
+
+def _linked_signature_block(node: Tag, page: Page, pages_by_html: dict[Path, Page]) -> str:
+    signature = _linked_signature_html(node, page, pages_by_html).strip()
+    while "\n\n" in signature:
+        signature = signature.replace("\n\n", "\n&#8203;\n")
+    if not signature:
+        return ""
+    payload = json.dumps({"__html": signature})
+    return f'<pre className="rust-signature"><code dangerouslySetInnerHTML={{{payload}}} /></pre>\n\n'
+
+
+def _code_header_label(node: Tag) -> str:
+    if node.name in {"h2", "h3"}:
+        text = re.sub(r"\s+", " ", _plain_code(node)).strip()
+        return _inline_code(text) if text else ""
+
+    for class_name in (
+        "fn",
+        "associatedtype",
+        "constant",
+        "struct",
+        "enum",
+        "trait",
+        "type",
+        "macro",
+        "derive",
+        "attribute",
+    ):
+        link = node.find("a", class_=class_name)
+        if link is None:
+            continue
+        text = _clean_text(link.get_text("", strip=True))
+        if text:
+            return _inline_code(text)
+
+    text = re.sub(r"\s+", " ", _plain_code(node)).strip()
+    return _inline_code(text) if text else ""
+
+
+def _code_header_markdown(node: Tag, page: Page, pages_by_html: dict[Path, Page]) -> str:
+    level = {"h2": "##", "h3": "###", "h4": "####", "h5": "#####"}[node.name]
+    label = _code_header_label(node)
+    if not label:
+        return _linked_signature_block(node, page, pages_by_html)
+    return f"{level} {label}\n\n{_linked_signature_block(node, page, pages_by_html)}"
+
+
 def _block_markdown(node: PageElement, page: Page, pages_by_html: dict[Path, Page], depth: int = 0) -> str:
     if isinstance(node, NavigableString):
         return ""
@@ -278,7 +367,7 @@ def _block_markdown(node: PageElement, page: Page, pages_by_html: dict[Path, Pag
         return ""
 
     if node.name in {"h2", "h3", "h4", "h5"} and "code-header" in classes:
-        return _rust_fence(_plain_code(node))
+        return _code_header_markdown(node, page, pages_by_html)
 
     if node.name in {"h2", "h3", "h4", "h5"}:
         level = {"h2": "##", "h3": "###", "h4": "####", "h5": "#####"}[node.name]
@@ -296,6 +385,8 @@ def _block_markdown(node: PageElement, page: Page, pages_by_html: dict[Path, Pag
         return f"{text}\n\n" if text else ""
 
     if node.name == "pre":
+        if node.find("a", href=True) is not None:
+            return _linked_signature_block(node, page, pages_by_html)
         return _rust_fence(_plain_code(node))
 
     if node.name == "ul":
@@ -471,8 +562,8 @@ def _render_page(page: Page, pages_by_html: dict[Path, Page], position: int) -> 
             slug=page.url if _needs_explicit_slug(page) else None,
             normalize=_ascii,
         ),
-        f"{GENERATED_BY}\n\n",
     ]
+    lines.append(f"{GENERATED_BY}\n\n")
     if body:
         lines.append(body + "\n")
     return "".join(lines)

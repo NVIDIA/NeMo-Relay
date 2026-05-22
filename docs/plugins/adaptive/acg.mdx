@@ -55,11 +55,7 @@ Use plugin configuration when the application should let NeMo Relay own the
 Adaptive Cache Governor (ACG) runtime lifecycle.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -89,9 +85,7 @@ finally:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const adaptive = require("nemo-relay-node/adaptive");
 const plugin = require("nemo-relay-node/plugin");
@@ -119,9 +113,7 @@ try {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 use nemo_relay_adaptive::plugin_component::ComponentSpec;
@@ -161,11 +153,7 @@ Use the manual runtime API when an integration needs to own adaptive lifecycle
 directly instead of activating the top-level plugin component.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -188,16 +176,12 @@ finally:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 The Node.js binding exposes ACG through the adaptive plugin component helpers.
 Use the Plugin Configuration example above when activating ACG from Node.js.
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, AdaptiveRuntime, BackendSpec, StateConfig,

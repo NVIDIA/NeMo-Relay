@@ -49,11 +49,7 @@ Follow these steps to route the provider invocation through NeMo Relay:
 The examples below wrap a demo provider callback and print emitted events.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import asyncio
 
@@ -93,9 +89,7 @@ asyncio.run(main())
 
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const {
   LlmRequest,
@@ -146,9 +140,7 @@ main().catch((error) => {
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::api::scope::{

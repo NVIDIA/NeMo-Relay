@@ -47,11 +47,7 @@ Follow this sequence to keep framework work attached to the expected runtime con
 The examples below wrap a `search` callback and print emitted events.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import asyncio
 
@@ -85,9 +81,7 @@ asyncio.run(main())
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const {
   ScopeType,
@@ -131,9 +125,7 @@ main().catch((error) => {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,

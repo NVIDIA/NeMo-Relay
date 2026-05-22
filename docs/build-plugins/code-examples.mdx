@@ -14,11 +14,7 @@ This page collects concrete examples for the surrounding guide area.
 Use an LLM request intercept when a plugin needs to inject tenant or routing metadata into every provider request.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -43,9 +39,7 @@ nemo_relay.plugin.register("header-plugin", HeaderPlugin())
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import * as plugin from 'nemo-relay-node/plugin';
 
@@ -92,11 +86,7 @@ This pattern is useful for:
 Use a subscriber-oriented plugin when the component should watch the full lifecycle rather than rewrite requests.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -122,9 +112,7 @@ nemo_relay.plugin.register("openinference-export", OpenInferencePlugin())
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import * as plugin from 'nemo-relay-node/plugin';
 

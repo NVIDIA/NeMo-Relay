@@ -29,11 +29,7 @@ If you are replaying events or bridging a framework clock, pass an explicit time
 Python accepts timezone-aware `datetime` values, Node.js and WebAssembly accept Unix microseconds since epoch, Rust accepts `DateTime<Utc>`, and Go accepts `time.Time`.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 
@@ -45,9 +41,7 @@ finally:
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { toolCall, toolCallEnd } from 'nemo-relay-node';
 
@@ -57,9 +51,7 @@ toolCallEnd(handle, result, null, null);
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
 use serde_json::json;
@@ -88,11 +80,7 @@ tool_call_end(
 Use managed execution when NeMo Relay should run the full middleware pipeline around the provider call.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -111,9 +99,7 @@ response = await nemo_relay.llm.execute(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { LlmRequest, llmCallExecute } from 'nemo-relay-node';
 
@@ -132,9 +118,7 @@ const response = await llmCallExecute(
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use serde_json::json;
@@ -165,11 +149,7 @@ let response = llm_call_execute(
 Use the streaming helper when subscribers need chunk collection plus one final response payload.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from dataclasses import dataclass
 
@@ -202,9 +182,7 @@ stream = await llm_stream_execute(
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { LlmRequest } from 'nemo-relay-node';
 import { typedLlmStreamExecute, type Codec } from 'nemo-relay-node/typed';
@@ -238,9 +216,7 @@ const stream = await typedLlmStreamExecute(
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{
     llm_stream_call_execute, LlmAttributes, LlmRequest, LlmStreamCallExecuteParams,
@@ -275,11 +251,7 @@ let stream = llm_stream_call_execute(
 These helpers are useful when framework code cannot use managed execution but still wants a request rewrite or block decision.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 import nemo_relay
 from nemo_relay import LLMRequest
@@ -293,9 +265,7 @@ nemo_relay.llm.conditional_execution(llm_request)
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import {
   LlmRequest,
@@ -314,9 +284,7 @@ await llmConditionalExecution(rewritten);
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_conditional_execution, llm_request_intercepts, LlmRequest};
 use nemo_relay::api::tool::{tool_conditional_execution, tool_request_intercepts};
@@ -341,11 +309,7 @@ llm_conditional_execution(&rewritten)?;
 Use normal scope helpers first. Reach for explicit stack helpers only when work crosses thread, task, worker, or request boundaries.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
@@ -364,9 +328,7 @@ with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
 ```
 </Tab>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```ts
 import { ScopeType, createScopeStack, event, setThreadScopeStack, withScope } from 'nemo-relay-node';
 
@@ -379,9 +341,7 @@ await withScope('request', ScopeType.Agent, async (handle) => {
 ```
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack, TASK_SCOPE_STACK};
 use nemo_relay::api::scope::{event, EmitMarkEventParams};

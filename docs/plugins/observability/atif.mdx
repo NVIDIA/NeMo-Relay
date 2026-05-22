@@ -74,11 +74,7 @@ Use plugin configuration when the application should let NeMo Relay own the ATIF
 dispatcher lifecycle.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import plugin
 from nemo_relay.observability import AtifConfig, ComponentSpec, ObservabilityConfig
@@ -115,9 +111,7 @@ finally:
 </Tab>
 </Tabs>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
@@ -148,9 +142,7 @@ try {
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, ComponentSpec, ObservabilityConfig,
@@ -190,11 +182,7 @@ Use the manual `AtifExporter` API when you need explicit collection boundaries
 or one exporter object per run.
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import AtifExporter
 
@@ -211,9 +199,7 @@ exporter.clear()
 </Tab>
 </Tabs>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const { AtifExporter } = require("nemo-relay-node");
 
@@ -233,9 +219,7 @@ try {
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};

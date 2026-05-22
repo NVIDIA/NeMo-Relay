@@ -120,11 +120,7 @@ disable an inherited section.
 ## Per-Language Plugin Configuration
 
 <Tabs>
-:sync-group: language
-
-<Tab title="Python">
-:sync: python
-
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import plugin, scope, ScopeType
 from nemo_relay.observability import (
@@ -188,9 +184,7 @@ finally:
 </Tab>
 </Tabs>
 
-<Tab title="Node.js">
-:sync: node
-
+<Tab title="Node.js" language="node">
 ```js
 const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
@@ -246,9 +240,7 @@ try {
 
 </Tab>
 
-<Tab title="Rust">
-:sync: rust
-
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,

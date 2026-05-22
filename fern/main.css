@@ -1592,6 +1592,17 @@ svg.card-icon{
     text-decoration-style: underline !important;
 }
 
+.rust-signature {
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.rust-signature a {
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-underline-offset: 1px;
+}
+
 /* Mobile Styles */
 @media (max-width: 768px) {
     .hero-section {
