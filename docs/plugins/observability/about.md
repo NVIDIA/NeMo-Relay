@@ -60,6 +60,10 @@ Choose the exporter based on the downstream system:
 Start with local event inspection before production export. Add sanitize
 guardrails before exporters receive sensitive payloads.
 
+For production incidents involving missing traces, wrong scope attachment,
+export failures, duplicate events, or sensitive telemetry, use the
+[Production Incident Runbook](../../troubleshooting/production-incident-runbook.md).
+
 ## Correlating Trajectories And Traces
 
 When ATIF and trace exporters observe the same NeMo Relay events, they share

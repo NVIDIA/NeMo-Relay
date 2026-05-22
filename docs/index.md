@@ -68,6 +68,7 @@ Use the reading path that matches your task:
 | Observe a local coding-agent CLI | [NeMo Relay CLI](nemo-relay-cli/about.md) |
 | Package reusable behavior | [Build Plugins](build-plugins/about.md) |
 | Export traces or trajectories | [Observability](plugins/observability/about.md) |
+| Debug production trace incidents | [Production Incident Runbook](troubleshooting/production-incident-runbook.md) |
 | Tune performance with adaptive behavior | [Adaptive](plugins/adaptive/about.md) |
 | Look up symbols | [APIs](reference/api/index.md) |
 
@@ -270,6 +271,7 @@ reference/performance
 :maxdepth: 2
 
 Troubleshooting Guide <troubleshooting/troubleshooting-guide>
+Production Incident Runbook <troubleshooting/production-incident-runbook>
 ```
 
 ```{toctree}

@@ -7,6 +7,10 @@ SPDX-License-Identifier: Apache-2.0
 
 Use this page when a NeMo Relay setup, build, or runtime workflow does not behave as expected.
 
+For production incidents involving missing traces, wrong scope attachment,
+export failures, duplicate events, or sensitive telemetry, start with the
+[Production Incident Runbook](production-incident-runbook.md).
+
 ## Package Or Build Setup Fails
 
 Confirm that your environment matches [Prerequisites](../getting-started/prerequisites.md), then rerun the binding-specific setup command from [Installation](../getting-started/installation.md).
