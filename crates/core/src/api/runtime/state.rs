@@ -10,7 +10,8 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
@@ -26,6 +27,7 @@ use crate::api::runtime::callbacks::{
     ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
+use crate::api::subscriber::EVENT_TRACE_TARGET;
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{CreateToolHandleParams, EndToolHandleParams};
 use crate::codec::request::AnnotatedLlmRequest;
@@ -33,11 +35,359 @@ use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
     merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
 };
+use crate::error::{FlowError, Result};
 use crate::json::{Json, merge_json};
 use crate::registry::SortedRegistry;
 use chrono::{Duration, Utc};
 use serde_json::json;
+use tracing::Span;
+use tracing::dispatcher::{self, Dispatch};
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct TracedSpan {
+    span: Span,
+    dispatch: Dispatch,
+}
+
+/// Snapshot of subscribers visible to one emitted event.
+///
+/// Global subscribers are stored behind a copy-on-write `Arc<Vec<_>>` so event
+/// emission can clone one pointer instead of cloning every global callback on
+/// every event. Scope-local subscribers are still cloned per event because
+/// their visibility depends on the active scope stack.
+pub(crate) struct EventSubscriberSnapshot {
+    global: Arc<Vec<EventSubscriberFn>>,
+    scope_local: Vec<EventSubscriberFn>,
+}
+
+impl EventSubscriberSnapshot {
+    fn new(global: Arc<Vec<EventSubscriberFn>>, scope_local: &[EventSubscriberFn]) -> Self {
+        Self {
+            global,
+            scope_local: scope_local.to_vec(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.global.len() + self.scope_local.len()
+    }
+
+    fn for_each(&self, mut f: impl FnMut(&EventSubscriberFn)) {
+        for subscriber in self.global.iter().chain(self.scope_local.iter()) {
+            f(subscriber);
+        }
+    }
+}
+
+fn traced_spans() -> &'static Mutex<HashMap<Uuid, TracedSpan>> {
+    static SPANS: OnceLock<Mutex<HashMap<Uuid, TracedSpan>>> = OnceLock::new();
+    SPANS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn current_host_dispatch() -> Dispatch {
+    dispatcher::get_default(Clone::clone)
+}
+
+fn emit_runtime_event(event: &Event, subscribers: &EventSubscriberSnapshot) {
+    let inserted_traced_scope =
+        should_emit_tracing_event(event) && emit_tracing_event_best_effort(event);
+
+    let delivery = catch_unwind(AssertUnwindSafe(|| {
+        subscribers.for_each(|subscriber| subscriber(event));
+    }));
+    if let Err(payload) = delivery {
+        if inserted_traced_scope {
+            remove_traced_span(event.uuid());
+        }
+        resume_unwind(payload);
+    }
+}
+
+fn should_emit_tracing_event(event: &Event) -> bool {
+    host_tracing_enabled() || has_traced_span_context(event)
+}
+
+fn host_tracing_enabled() -> bool {
+    catch_unwind(AssertUnwindSafe(
+        || tracing::enabled!(target: EVENT_TRACE_TARGET, tracing::Level::INFO),
+    ))
+    .unwrap_or(false)
+}
+
+fn has_traced_span_context(event: &Event) -> bool {
+    let tracked_uuid = match event.scope_category() {
+        Some(ScopeCategory::End) => Some(event.uuid()),
+        Some(ScopeCategory::Start) | None => event.parent_uuid(),
+    };
+    tracked_uuid.is_some_and(|uuid| {
+        traced_spans()
+            .lock()
+            .is_ok_and(|guard| guard.contains_key(&uuid))
+    })
+}
+
+fn emit_tracing_event_best_effort(event: &Event) -> bool {
+    match event.scope_category() {
+        Some(ScopeCategory::Start) => emit_scope_start(event),
+        Some(ScopeCategory::End) => {
+            emit_scope_end(event);
+            false
+        }
+        None => {
+            emit_mark(event);
+            false
+        }
+    }
+}
+
+fn emit_scope_start(event: &Event) -> bool {
+    let mut inserted_span = false;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let parent = event.parent_uuid().and_then(|uuid| {
+            traced_spans()
+                .lock()
+                .ok()
+                .and_then(|guard| guard.get(&uuid).cloned())
+        });
+        let dispatch = parent
+            .as_ref()
+            .map(|parent| parent.dispatch.clone())
+            .unwrap_or_else(current_host_dispatch);
+        let event_json = event.to_json_string().unwrap_or_default();
+        let parent_uuid = event.parent_uuid().map(|uuid| uuid.to_string());
+        let category = event
+            .category()
+            .map(|category| category.as_str())
+            .unwrap_or("");
+        let scope_category = scope_category(event);
+        let input = event_data(event.input());
+
+        let span = dispatcher::with_default(&dispatch, || match parent.as_ref() {
+            Some(parent) => tracing::info_span!(
+                target: EVENT_TRACE_TARGET,
+                parent: &parent.span,
+                "nemo_relay.scope",
+                atof.version = crate::api::event::ATOF_VERSION,
+                event.kind = event.kind(),
+                event.uuid = %event.uuid(),
+                event.parent_uuid = parent_uuid.as_deref().unwrap_or(""),
+                event.name = event.name(),
+                event.category = category,
+                event.scope_category = scope_category,
+                event.json = event_json.as_str(),
+                event.input = input.as_deref().unwrap_or(""),
+                event.output = tracing::field::Empty,
+            ),
+            None => tracing::info_span!(
+                target: EVENT_TRACE_TARGET,
+                "nemo_relay.scope",
+                atof.version = crate::api::event::ATOF_VERSION,
+                event.kind = event.kind(),
+                event.uuid = %event.uuid(),
+                event.parent_uuid = parent_uuid.as_deref().unwrap_or(""),
+                event.name = event.name(),
+                event.category = category,
+                event.scope_category = scope_category,
+                event.json = event_json.as_str(),
+                event.input = input.as_deref().unwrap_or(""),
+                event.output = tracing::field::Empty,
+            ),
+        });
+
+        if let Ok(mut guard) = traced_spans().lock() {
+            guard.insert(
+                event.uuid(),
+                TracedSpan {
+                    span: span.clone(),
+                    dispatch: dispatch.clone(),
+                },
+            );
+            inserted_span = true;
+        }
+
+        dispatcher::with_default(&dispatch, || {
+            let _entered = span.enter();
+            tracing::info!(
+                target: EVENT_TRACE_TARGET,
+                {
+                    atof.version = crate::api::event::ATOF_VERSION,
+                    event.kind = event.kind(),
+                    event.uuid = %event.uuid(),
+                    event.parent_uuid = parent_uuid.as_deref().unwrap_or(""),
+                    event.name = event.name(),
+                    event.category = category,
+                    event.scope_category = scope_category,
+                    event.json = event_json.as_str(),
+                    event.input = input.as_deref().unwrap_or(""),
+                },
+                "nemo_relay.event"
+            );
+        });
+    }));
+
+    match result {
+        Ok(()) => inserted_span,
+        Err(_) => {
+            if inserted_span {
+                remove_traced_span(event.uuid());
+            }
+            false
+        }
+    }
+}
+
+fn remove_traced_span(uuid: Uuid) {
+    let _ = traced_spans().lock().map(|mut guard| guard.remove(&uuid));
+}
+
+fn emit_scope_end(event: &Event) {
+    let traced_span = traced_spans()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&event.uuid()).cloned());
+    let dispatch = traced_span
+        .as_ref()
+        .map(|span| span.dispatch.clone())
+        .unwrap_or_else(current_host_dispatch);
+    let event_json = event.to_json_string().unwrap_or_default();
+    let parent_uuid = event.parent_uuid().map(|uuid| uuid.to_string());
+    let category = event
+        .category()
+        .map(|category| category.as_str())
+        .unwrap_or("");
+    let scope_category = scope_category(event);
+    let output = event_data(event.output());
+
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        dispatcher::with_default(&dispatch, || match traced_span.as_ref() {
+            Some(traced_span) => {
+                traced_span
+                    .span
+                    .record("event.output", output.as_deref().unwrap_or(""));
+                let _entered = traced_span.span.enter();
+                emit_scope_end_tracing_event(
+                    event,
+                    parent_uuid.as_deref().unwrap_or(""),
+                    category,
+                    scope_category,
+                    event_json.as_str(),
+                    output.as_deref().unwrap_or(""),
+                );
+            }
+            None => emit_scope_end_tracing_event(
+                event,
+                parent_uuid.as_deref().unwrap_or(""),
+                category,
+                scope_category,
+                event_json.as_str(),
+                output.as_deref().unwrap_or(""),
+            ),
+        });
+    }));
+
+    if let Some(uuid) = traced_span.as_ref().map(|_| event.uuid()) {
+        remove_traced_span(uuid);
+    }
+}
+
+fn emit_scope_end_tracing_event(
+    event: &Event,
+    parent_uuid: &str,
+    category: &str,
+    scope_category: &str,
+    event_json: &str,
+    output: &str,
+) {
+    tracing::info!(
+        target: EVENT_TRACE_TARGET,
+        {
+            atof.version = crate::api::event::ATOF_VERSION,
+            event.kind = event.kind(),
+            event.uuid = %event.uuid(),
+            event.parent_uuid = parent_uuid,
+            event.name = event.name(),
+            event.category = category,
+            event.scope_category = scope_category,
+            event.json = event_json,
+            event.output = output,
+        },
+        "nemo_relay.event"
+    );
+}
+
+fn emit_mark(event: &Event) {
+    let parent = event.parent_uuid().and_then(|uuid| {
+        traced_spans()
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(&uuid).cloned())
+    });
+    let dispatch = parent
+        .as_ref()
+        .map(|parent| parent.dispatch.clone())
+        .unwrap_or_else(current_host_dispatch);
+    let event_json = event.to_json_string().unwrap_or_default();
+    let parent_uuid = event.parent_uuid().map(|uuid| uuid.to_string());
+    let category = event
+        .category()
+        .map(|category| category.as_str())
+        .unwrap_or("");
+    let data = event_data(event.data());
+
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        dispatcher::with_default(&dispatch, || match parent.as_ref() {
+            Some(parent) => {
+                let _entered = parent.span.enter();
+                tracing::info!(
+                    target: EVENT_TRACE_TARGET,
+                    {
+                        atof.version = crate::api::event::ATOF_VERSION,
+                        event.kind = event.kind(),
+                        event.uuid = %event.uuid(),
+                        event.parent_uuid = parent_uuid.as_deref().unwrap_or(""),
+                        event.name = event.name(),
+                        event.category = category,
+                        event.scope_category = "",
+                        event.json = event_json.as_str(),
+                        event.data = data.as_deref().unwrap_or(""),
+                    },
+                    "nemo_relay.event"
+                );
+            }
+            None => {
+                tracing::info!(
+                    target: EVENT_TRACE_TARGET,
+                    {
+                        atof.version = crate::api::event::ATOF_VERSION,
+                        event.kind = event.kind(),
+                        event.uuid = %event.uuid(),
+                        event.parent_uuid = parent_uuid.as_deref().unwrap_or(""),
+                        event.name = event.name(),
+                        event.category = category,
+                        event.scope_category = "",
+                        event.json = event_json.as_str(),
+                        event.data = data.as_deref().unwrap_or(""),
+                    },
+                    "nemo_relay.event"
+                );
+            }
+        });
+    }));
+}
+
+fn scope_category(event: &Event) -> &'static str {
+    match event.scope_category() {
+        Some(ScopeCategory::Start) => "start",
+        Some(ScopeCategory::End) => "end",
+        None => "",
+    }
+}
+
+fn event_data(data: Option<&serde_json::Value>) -> Option<String> {
+    data.and_then(|value| serde_json::to_string(value).ok())
+}
 
 /// Process-global runtime state backing middleware and event emission.
 ///
@@ -69,7 +419,15 @@ pub struct NemoRelayContextState {
     pub(crate) llm_stream_execution_intercepts:
         SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Global lifecycle subscribers notified after runtime events are emitted.
-    pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
+    event_subscribers: HashMap<String, EventSubscriberFn>,
+    /// Anonymous global lifecycle subscribers owned by closeable handles.
+    anonymous_event_subscribers: HashMap<Uuid, EventSubscriberFn>,
+    /// Copy-on-write snapshot of global subscribers used by event emission.
+    event_subscriber_snapshot: Arc<Vec<EventSubscriberFn>>,
+    /// Monotonic version bumped whenever global subscriber registrations change.
+    event_subscriber_generation: u64,
+    /// Generation represented by `event_subscriber_snapshot`.
+    event_subscriber_snapshot_generation: u64,
     /// Arbitrary binding- or integration-specific runtime extensions.
     pub(crate) extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
@@ -94,6 +452,10 @@ impl NemoRelayContextState {
             llm_execution_intercepts: SortedRegistry::new(),
             llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),
+            anonymous_event_subscribers: HashMap::new(),
+            event_subscriber_snapshot: Arc::new(Vec::new()),
+            event_subscriber_generation: 0,
+            event_subscriber_snapshot_generation: 0,
             extensions: HashMap::new(),
         }
     }
@@ -162,12 +524,87 @@ impl NemoRelayContextState {
     pub(crate) fn collect_event_subscribers(
         &self,
         scope_local_subscribers: &[EventSubscriberFn],
-    ) -> Vec<EventSubscriberFn> {
-        let mut subscribers =
-            Vec::with_capacity(self.event_subscribers.len() + scope_local_subscribers.len());
+    ) -> EventSubscriberSnapshot {
+        EventSubscriberSnapshot::new(
+            self.global_event_subscriber_snapshot(),
+            scope_local_subscribers,
+        )
+    }
+
+    pub(crate) fn insert_anonymous_event_subscriber(
+        &mut self,
+        id: Uuid,
+        callback: EventSubscriberFn,
+    ) {
+        self.anonymous_event_subscribers.insert(id, callback);
+        self.refresh_event_subscriber_snapshot();
+    }
+
+    pub(crate) fn remove_anonymous_event_subscriber(&mut self, id: &Uuid) -> bool {
+        let removed = self.anonymous_event_subscribers.remove(id).is_some();
+        if removed {
+            self.refresh_event_subscriber_snapshot();
+        }
+        removed
+    }
+
+    pub(crate) fn register_event_subscriber(
+        &mut self,
+        name: &str,
+        callback: EventSubscriberFn,
+    ) -> Result<()> {
+        if self.event_subscribers.contains_key(name) {
+            return Err(FlowError::AlreadyExists(format!(
+                "{name} subscriber already exists"
+            )));
+        }
+        self.event_subscribers.insert(name.to_string(), callback);
+        self.refresh_event_subscriber_snapshot();
+        Ok(())
+    }
+
+    pub(crate) fn deregister_event_subscriber(&mut self, name: &str) -> bool {
+        let removed = self.event_subscribers.remove(name).is_some();
+        if removed {
+            self.refresh_event_subscriber_snapshot();
+        }
+        removed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn event_subscribers_is_empty(&self) -> bool {
+        self.event_subscribers.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn event_subscriber_names(&self) -> Vec<String> {
+        self.event_subscribers.keys().cloned().collect()
+    }
+
+    fn build_global_event_subscriber_snapshot(&self) -> Vec<EventSubscriberFn> {
+        let mut subscribers = Vec::with_capacity(
+            self.event_subscribers.len() + self.anonymous_event_subscribers.len(),
+        );
         subscribers.extend(self.event_subscribers.values().cloned());
-        subscribers.extend(scope_local_subscribers.iter().cloned());
+        subscribers.extend(self.anonymous_event_subscribers.values().cloned());
         subscribers
+    }
+
+    fn global_event_subscriber_snapshot(&self) -> Arc<Vec<EventSubscriberFn>> {
+        let expected_len = self.event_subscribers.len() + self.anonymous_event_subscribers.len();
+        if self.event_subscriber_snapshot_generation == self.event_subscriber_generation
+            && self.event_subscriber_snapshot.len() == expected_len
+        {
+            self.event_subscriber_snapshot.clone()
+        } else {
+            Arc::new(self.build_global_event_subscriber_snapshot())
+        }
+    }
+
+    pub(crate) fn refresh_event_subscriber_snapshot(&mut self) {
+        self.event_subscriber_generation = self.event_subscriber_generation.wrapping_add(1);
+        self.event_subscriber_snapshot = Arc::new(self.build_global_event_subscriber_snapshot());
+        self.event_subscriber_snapshot_generation = self.event_subscriber_generation;
     }
 
     /// Deliver an event to every subscriber in order.
@@ -175,10 +612,8 @@ impl NemoRelayContextState {
     /// # Parameters
     /// - `event`: Fully constructed lifecycle event to deliver.
     /// - `subscribers`: Subscribers that should observe the event.
-    pub(crate) fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
-        for subscriber in subscribers {
-            subscriber(event);
-        }
+    pub(crate) fn emit_event(event: &Event, subscribers: &EventSubscriberSnapshot) {
+        emit_runtime_event(event, subscribers);
     }
 
     /// Build a standalone mark event.
@@ -535,7 +970,7 @@ impl NemoRelayContextState {
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
         input: Json,
-        subscribers: &[EventSubscriberFn],
+        subscribers: &EventSubscriberSnapshot,
     ) -> ScopeHandle {
         let handle = ScopeHandle::builder()
             .name(name)
@@ -564,7 +999,7 @@ impl NemoRelayContextState {
     fn emit_guardrail_scope_end(
         handle: &ScopeHandle,
         output: Json,
-        subscribers: &[EventSubscriberFn],
+        subscribers: &EventSubscriberSnapshot,
     ) {
         let event = Event::Scope(ScopeEvent::new(
             BaseEvent::builder()
@@ -681,7 +1116,7 @@ impl NemoRelayContextState {
         name: &str,
         args: &Json,
         entries: &[Guardrail<ToolConditionalFn>],
-        subscribers: &[EventSubscriberFn],
+        subscribers: &EventSubscriberSnapshot,
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {
@@ -874,7 +1309,7 @@ impl NemoRelayContextState {
     pub(crate) fn llm_conditional_execution_snapshot_chain(
         request: &LlmRequest,
         entries: &[Guardrail<LlmConditionalFn>],
-        subscribers: &[EventSubscriberFn],
+        subscribers: &EventSubscriberSnapshot,
         parent_uuid: Option<Uuid>,
         metadata: Option<Json>,
     ) -> crate::error::Result<Option<String>> {

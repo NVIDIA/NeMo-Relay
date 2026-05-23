@@ -91,6 +91,9 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     scope_register_tool_sanitize_response_guardrail as _register_tool_sanitize_response,
 )
+from nemo_relay._native import (
+    scope_subscribe as _subscribe,
+)
 
 # ---------------------------------------------------------------------------
 # Tool guardrails (scope-local)
@@ -588,6 +591,22 @@ def register_subscriber(scope_handle, name, callback):
     return _register_subscriber(scope_handle.uuid, name, callback)
 
 
+def subscribe(scope_handle, callback):
+    """Register a closeable event subscriber for ``scope_handle``.
+
+    Args:
+        scope_handle: Owning scope handle. The registration is removed when
+            this scope is popped.
+        callback: Callable invoked as ``callback(event)`` for each lifecycle
+            event emitted while the scope remains active.
+
+    Returns:
+        Subscription: A native handle with ``close()`` and context-manager
+        support.
+    """
+    return _subscribe(scope_handle.uuid, callback)
+
+
 def deregister_subscriber(scope_handle, name):
     """Remove a scope-local event subscriber.
 
@@ -634,5 +653,6 @@ __all__ = [
     "deregister_llm_stream_execution",
     # Subscribers
     "register_subscriber",
+    "subscribe",
     "deregister_subscriber",
 ]

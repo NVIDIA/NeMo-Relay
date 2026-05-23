@@ -6,8 +6,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::api::llm::LlmRequest;
-use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::global_context;
+use crate::api::runtime::{EventSubscriberFn, EventSubscriberSnapshot};
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
 use crate::codec::request::AnnotatedLlmRequest;
@@ -25,7 +25,7 @@ pub(crate) fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> 
 
 pub(crate) fn snapshot_event_subscribers(
     scope_local_subscribers: Vec<EventSubscriberFn>,
-) -> Result<Vec<EventSubscriberFn>> {
+) -> Result<EventSubscriberSnapshot> {
     let context = global_context();
     let state = context
         .read()

@@ -5,7 +5,11 @@
 
 #![allow(clippy::await_holding_lock)]
 
+use std::fmt;
+use std::io::Write;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -46,12 +50,12 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::scope::{event, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{
-    deregister_subscriber, register_subscriber, scope_deregister_subscriber,
-    scope_register_subscriber,
+    Subscriber as NemoSubscriber, deregister_subscriber, register_subscriber,
+    scope_deregister_subscriber, scope_register_subscriber, scope_subscribe, subscribe,
 };
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::api::tool::{
@@ -62,8 +66,128 @@ use nemo_relay::error::{FlowError, Result};
 use nemo_relay::json::Json;
 use serde_json::{Map, json};
 use tokio_stream::Stream;
+use tracing::field::{Field, Visit};
+use tracing_subscriber::prelude::*;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+struct TraceBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl Write for TraceBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct RecordingTracingSubscriber {
+    events: Arc<Mutex<Vec<String>>>,
+    next_span_id: AtomicU64,
+    panic_on_any_event: bool,
+    panic_on_scope_category: Option<&'static str>,
+}
+
+impl RecordingTracingSubscriber {
+    fn new(events: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            events,
+            next_span_id: AtomicU64::new(1),
+            panic_on_any_event: false,
+            panic_on_scope_category: None,
+        }
+    }
+
+    fn panic_on_any_event(events: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            panic_on_any_event: true,
+            ..Self::new(events)
+        }
+    }
+
+    fn panic_on_scope_category(
+        events: Arc<Mutex<Vec<String>>>,
+        scope_category: &'static str,
+    ) -> Self {
+        Self {
+            panic_on_scope_category: Some(scope_category),
+            ..Self::new(events)
+        }
+    }
+}
+
+impl tracing::Subscriber for RecordingTracingSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "nemo_relay::events"
+    }
+
+    fn register_callsite(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        if self.enabled(metadata) {
+            tracing::subscriber::Interest::always()
+        } else {
+            tracing::subscriber::Interest::never()
+        }
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(self.next_span_id.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut visitor = TracingEventJsonVisitor::default();
+        event.record(&mut visitor);
+
+        let mut should_panic = self.panic_on_any_event;
+        if let Some(event_json) = visitor.event_json
+            && let Ok(event) = serde_json::from_str::<Json>(&event_json)
+        {
+            if let Some(name) = event.get("name").and_then(Json::as_str) {
+                self.events.lock().unwrap().push(name.to_owned());
+            }
+            if let Some(scope_category) = self.panic_on_scope_category {
+                should_panic |= event
+                    .get("scope_category")
+                    .and_then(Json::as_str)
+                    .is_some_and(|value| value == scope_category);
+            }
+        }
+
+        assert!(!should_panic, "test tracing subscriber panic");
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[derive(Default)]
+struct TracingEventJsonVisitor {
+    event_json: Option<String>,
+}
+
+impl Visit for TracingEventJsonVisitor {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "event.json" {
+            self.event_json = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == "event.json" && self.event_json.is_none() {
+            self.event_json = Some(format!("{value:?}"));
+        }
+    }
+}
 
 fn reset_global() {
     let ctx = global_context();
@@ -112,6 +236,477 @@ fn expect_not_found(error: FlowError, needle: &str) {
         FlowError::NotFound(message) => assert!(message.contains(needle)),
         other => panic!("expected NotFound, got {other}"),
     }
+}
+
+#[test]
+fn test_anonymous_subscriber_handle_receives_events_and_closes_idempotently() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let subscription = subscribe(Arc::new(move |event| {
+        sink.lock().unwrap().push(event.name().to_owned());
+    }))
+    .unwrap();
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("anonymous-subscription-before-close")
+            .build(),
+    )
+    .unwrap();
+    assert!(subscription.close().unwrap());
+    assert!(!subscription.close().unwrap());
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("anonymous-subscription-after-close")
+            .build(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["anonymous-subscription-before-close"]
+    );
+}
+
+#[test]
+fn test_scope_subscriber_handle_closes_and_scope_pop_cleans_up() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let scope_handle = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("scope-subscription-owner")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+
+    let explicit_events = Arc::new(Mutex::new(Vec::new()));
+    let explicit_sink = explicit_events.clone();
+    let explicit = scope_subscribe(
+        &scope_handle.uuid,
+        Arc::new(move |event| explicit_sink.lock().unwrap().push(event.name().to_owned())),
+    )
+    .unwrap();
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("scope-subscription-before-close")
+            .parent(&scope_handle)
+            .build(),
+    )
+    .unwrap();
+    assert!(explicit.close().unwrap());
+    assert!(!explicit.close().unwrap());
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("scope-subscription-after-close")
+            .parent(&scope_handle)
+            .build(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        explicit_events.lock().unwrap().as_slice(),
+        ["scope-subscription-before-close"]
+    );
+
+    let cleanup_events = Arc::new(Mutex::new(Vec::new()));
+    let cleanup_sink = cleanup_events.clone();
+    let cleanup = scope_subscribe(
+        &scope_handle.uuid,
+        Arc::new(move |event| cleanup_sink.lock().unwrap().push(event.name().to_owned())),
+    )
+    .unwrap();
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope_handle.uuid)
+            .build(),
+    )
+    .unwrap();
+    assert!(!cleanup.close().unwrap());
+
+    assert_eq!(
+        cleanup_events.lock().unwrap().as_slice(),
+        ["scope-subscription-owner"]
+    );
+}
+
+#[test]
+fn test_runtime_tracing_emits_scoped_trace_events_without_global_subscriber() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let writer_output = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .with_writer(move || TraceBuffer(writer_output.clone()))
+        .finish();
+
+    tracing::subscriber::with_default(subscriber, || {
+        let scope_handle = push_scope(
+            nemo_relay::api::scope::PushScopeParams::builder()
+                .name("runtime-tracing-scope")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+        .unwrap();
+        event(
+            nemo_relay::api::scope::EmitMarkEventParams::builder()
+                .name("runtime-tracing-mark")
+                .parent(&scope_handle)
+                .data(json!({"step": 1}))
+                .build(),
+        )
+        .unwrap();
+        pop_scope(
+            nemo_relay::api::scope::PopScopeParams::builder()
+                .handle_uuid(&scope_handle.uuid)
+                .output(json!({"done": true}))
+                .build(),
+        )
+        .unwrap();
+    });
+
+    let rendered = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert!(rendered.contains("atof.version"));
+    assert!(rendered.contains("event.uuid"));
+    assert!(rendered.contains("runtime-tracing-scope"));
+    assert!(rendered.contains("runtime-tracing-mark"));
+}
+
+#[test]
+fn test_subscriber_adapter_implements_tracing_subscriber_trait() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    fn assert_tracing_subscriber<T: tracing::Subscriber + Send + Sync + 'static>(_subscriber: &T) {}
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let subscriber = NemoSubscriber::new(Arc::new(move |event| {
+        sink.lock().unwrap().push(event.name().to_owned());
+    }));
+    assert_tracing_subscriber(&subscriber);
+
+    tracing::subscriber::with_default(subscriber, || {
+        event(
+            nemo_relay::api::scope::EmitMarkEventParams::builder()
+                .name("tracing-subscriber-adapter-mark")
+                .build(),
+        )
+        .unwrap();
+    });
+
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["tracing-subscriber-adapter-mark"]
+    );
+}
+
+#[test]
+fn test_subscriber_adapter_composes_as_tracing_subscriber_layer() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let layer = NemoSubscriber::new(Arc::new(move |event| {
+        sink.lock().unwrap().push(event.name().to_owned());
+    }));
+    let subscriber = tracing_subscriber::registry().with(layer);
+
+    tracing::subscriber::with_default(subscriber, || {
+        event(
+            nemo_relay::api::scope::EmitMarkEventParams::builder()
+                .name("tracing-subscriber-layer-mark")
+                .build(),
+        )
+        .unwrap();
+        tracing::info!("external-layer-event");
+    });
+
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["tracing-subscriber-layer-mark"]
+    );
+}
+
+#[test]
+fn test_subscriber_adapter_ignores_external_tracing_events() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_sink = observed.clone();
+    let subscriber = NemoSubscriber::new(Arc::new(move |event| {
+        observed_sink.lock().unwrap().push(event.name().to_owned());
+    }));
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!("external-host-event");
+    });
+
+    assert!(observed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn test_tracing_first_delivery_forwards_to_host_and_compat_subscribers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let compat_events = capture_events("trace-compat-events");
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let writer_output = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .with_writer(move || TraceBuffer(writer_output.clone()))
+        .finish();
+
+    tracing::subscriber::with_default(subscriber, || {
+        event(
+            nemo_relay::api::scope::EmitMarkEventParams::builder()
+                .name("trace-first-compat-mark")
+                .data(json!({"compat": true}))
+                .build(),
+        )
+        .unwrap();
+    });
+
+    deregister_subscriber("trace-compat-events").unwrap();
+
+    let captured = compat_events.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].name(), "trace-first-compat-mark");
+    assert_eq!(captured[0].data().unwrap(), &json!({"compat": true}));
+
+    let rendered = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    assert!(rendered.contains("nemo_relay.event"));
+    assert!(rendered.contains("trace-first-compat-mark"));
+}
+
+#[test]
+fn test_host_tracing_panics_do_not_skip_compat_subscriber_delivery() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let compat_events = capture_events("panic-host-compat-events");
+    let traced_events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = RecordingTracingSubscriber::panic_on_any_event(traced_events);
+
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        tracing::subscriber::with_default(subscriber, || {
+            event(
+                nemo_relay::api::scope::EmitMarkEventParams::builder()
+                    .name("host-tracing-panic-mark")
+                    .build(),
+            )
+            .unwrap();
+        });
+    }));
+
+    deregister_subscriber("panic-host-compat-events").unwrap();
+
+    assert!(result.is_ok());
+    let captured = compat_events.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].name(), "host-tracing-panic-mark");
+}
+
+#[test]
+fn test_scope_start_compat_panic_cleans_traced_span_context() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_subscriber(
+        "panic-on-scope-start",
+        Arc::new(|event| {
+            if event.scope_category() == Some(ScopeCategory::Start) {
+                panic!("test compatibility subscriber panic");
+            }
+        }),
+    )
+    .unwrap();
+
+    let traced_events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = RecordingTracingSubscriber::new(traced_events.clone());
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        tracing::subscriber::with_default(subscriber, || {
+            push_scope(
+                nemo_relay::api::scope::PushScopeParams::builder()
+                    .name("compat-panic-scope")
+                    .scope_type(ScopeType::Agent)
+                    .build(),
+            )
+            .unwrap();
+        });
+    }));
+    assert!(result.is_err());
+
+    deregister_subscriber("panic-on-scope-start").unwrap();
+    let scope_handle = current_scope_stack().read().unwrap().top().clone();
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("after-compat-panic-mark")
+            .parent(&scope_handle)
+            .build(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        traced_events.lock().unwrap().as_slice(),
+        ["compat-panic-scope"]
+    );
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope_handle.uuid)
+            .build(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_scope_end_tracing_panic_cleans_traced_span_context() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let traced_events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber =
+        RecordingTracingSubscriber::panic_on_scope_category(traced_events.clone(), "end");
+
+    let scope_handle = tracing::subscriber::with_default(subscriber, || {
+        let scope_handle = push_scope(
+            nemo_relay::api::scope::PushScopeParams::builder()
+                .name("panic-cleanup-scope")
+                .scope_type(ScopeType::Agent)
+                .build(),
+        )
+        .unwrap();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            pop_scope(
+                nemo_relay::api::scope::PopScopeParams::builder()
+                    .handle_uuid(&scope_handle.uuid)
+                    .build(),
+            )
+            .unwrap();
+        }));
+        assert!(result.is_ok());
+        scope_handle
+    });
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("stale-context-mark")
+            .parent(&scope_handle)
+            .build(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        traced_events.lock().unwrap().as_slice(),
+        ["panic-cleanup-scope", "panic-cleanup-scope"]
+    );
+}
+
+#[test]
+fn test_compat_subscribers_do_not_store_noop_tracing_context() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let subscription = subscribe(Arc::new(|_| {})).unwrap();
+    let scope_handle = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("compat-only-scope")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+
+    let traced_events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = RecordingTracingSubscriber::new(traced_events.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        event(
+            nemo_relay::api::scope::EmitMarkEventParams::builder()
+                .name("host-inside-compat-only-scope")
+                .parent(&scope_handle)
+                .build(),
+        )
+        .unwrap();
+    });
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope_handle.uuid)
+            .build(),
+    )
+    .unwrap();
+    subscription.close().unwrap();
+
+    assert_eq!(
+        traced_events.lock().unwrap().as_slice(),
+        ["host-inside-compat-only-scope"]
+    );
+}
+
+#[test]
+fn test_tracing_first_nested_compat_delivery_is_not_duplicated() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let sink = names.clone();
+    let emitted_nested = Arc::new(AtomicBool::new(false));
+    let nested_flag = emitted_nested.clone();
+    let subscription = subscribe(Arc::new(move |observed| {
+        let name = observed.name().to_owned();
+        sink.lock().unwrap().push(name.clone());
+
+        if name == "trace-first-outer" && !nested_flag.swap(true, Ordering::SeqCst) {
+            nemo_relay::api::scope::event(
+                nemo_relay::api::scope::EmitMarkEventParams::builder()
+                    .name("trace-first-inner")
+                    .build(),
+            )
+            .unwrap();
+        }
+    }))
+    .unwrap();
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("trace-first-outer")
+            .build(),
+    )
+    .unwrap();
+    subscription.close().unwrap();
+
+    assert_eq!(
+        names.lock().unwrap().as_slice(),
+        ["trace-first-outer", "trace-first-inner"]
+    );
 }
 
 #[test]

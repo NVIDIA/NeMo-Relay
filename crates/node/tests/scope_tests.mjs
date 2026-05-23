@@ -8,7 +8,18 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 
-const { getHandle, pushScope, popScope, event, withScope, registerSubscriber, deregisterSubscriber, ScopeType } = lib;
+const {
+  getHandle,
+  pushScope,
+  popScope,
+  event,
+  withScope,
+  registerSubscriber,
+  deregisterSubscriber,
+  subscribe,
+  scopeSubscribe,
+  ScopeType,
+} = lib;
 
 const SCOPE_ATTR_PARALLEL = 0b01;
 const SCOPE_ATTR_RELOCATABLE = 0b10;
@@ -240,6 +251,62 @@ describe('Subscribers', () => {
       assert.ok(events.length > 0, 'Expected at least one event');
     } finally {
       deregisterSubscriber('node_event_collector');
+    }
+  });
+
+  it('subscription handle closes idempotently', async () => {
+    const events = [];
+    const subscription = subscribe((e) => events.push(e));
+    event('node_handle_before_close', null, null, null);
+
+    const deadline = Date.now() + 2000;
+    while (!events.some((e) => e.name === 'node_handle_before_close') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    assert.equal(subscription.close(), true);
+    assert.equal(subscription.close(), false);
+    event('node_handle_after_close', null, null, null);
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(events.some((e) => e.name === 'node_handle_before_close'), true);
+    assert.equal(events.some((e) => e.name === 'node_handle_after_close'), false);
+  });
+
+  it('scope subscription handle closes and scope pop cleans up', async () => {
+    const scope = pushScope('node_scope_handle_owner', ScopeType.Agent, null, null);
+    try {
+      const explicitEvents = [];
+      const explicit = scopeSubscribe(scope.uuid, (e) => explicitEvents.push(e));
+      event('node_scope_handle_before_close', scope, null, null);
+
+      let deadline = Date.now() + 2000;
+      while (!explicitEvents.some((e) => e.name === 'node_scope_handle_before_close') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      assert.equal(explicit.close(), true);
+      assert.equal(explicit.close(), false);
+      event('node_scope_handle_after_close', scope, null, null);
+      await new Promise((r) => setTimeout(r, 20));
+      assert.equal(explicitEvents.some((e) => e.name === 'node_scope_handle_before_close'), true);
+      assert.equal(explicitEvents.some((e) => e.name === 'node_scope_handle_after_close'), false);
+
+      const cleanupEvents = [];
+      const cleanup = scopeSubscribe(scope.uuid, (e) => cleanupEvents.push(e));
+      popScope(scope);
+      assert.equal(cleanup.close(), false);
+
+      deadline = Date.now() + 2000;
+      while (!cleanupEvents.some((e) => e.name === 'node_scope_handle_owner') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.equal(cleanupEvents.some((e) => e.name === 'node_scope_handle_owner'), true);
+    } catch (error) {
+      try {
+        popScope(scope);
+      } catch {}
+      throw error;
     }
   });
 

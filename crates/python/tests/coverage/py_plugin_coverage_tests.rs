@@ -8,6 +8,7 @@ use super::*;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
+use nemo_relay::api::subscriber::deregister_subscriber;
 use nemo_relay::plugin::rollback_registrations;
 use pyo3::types::PyModule;
 use serde_json::json;

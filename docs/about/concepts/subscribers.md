@@ -38,18 +38,64 @@ Global subscribers remain active process-wide until they are removed.
 Scope-local subscribers are owned by one active scope and disappear when that
 scope closes.
 
+Scope-local subscription handles remember the owning scope stack. This allows a
+caller to close the handle from outside the original current-stack context, while
+scope pop still remains the cleanup boundary for any open scope-local
+registrations.
+
 ### Plugin-Installed Subscribers
 
 Plugins can install subscribers as reusable, configuration-driven runtime
 components.
 
+## Subscription Handles and Named APIs
+
+Rust applications can use closeable subscription handles for new code:
+`subscribe(callback)` returns a global subscriber handle, and
+`scope_subscribe(scope_uuid, callback)` returns a scope-local subscriber handle.
+Calling `close()` removes the registration and is idempotent.
+
+Rust also exposes `nemo_relay::api::subscriber::Subscriber`, a callback-backed
+adapter that implements both `tracing::Subscriber` and
+`tracing_subscriber::Layer`. Host applications can install it directly as a
+tracing subscriber or compose it into an existing `tracing-subscriber` registry
+alongside formatting, filtering, OpenTelemetry, or other host layers.
+
+The Rust named APIs remain available under their original names:
+`register_subscriber(name, callback)`, `deregister_subscriber(name)`,
+`scope_register_subscriber(scope_uuid, name, callback)`, and
+`scope_deregister_subscriber(scope_uuid, name)`. Python, JavaScript, Go, and
+WebAssembly keep their existing named APIs unchanged and also expose additive
+closeable subscription handles for code that does not need a stable subscriber
+name.
+
 ## What Subscribers Consume
 
-Subscribers consume the canonical event stream. They do not define the event
-model. They react to it.
+Subscribers consume the canonical event stream. The Rust core runtime emits each
+runtime event through a structured `tracing` record that carries the canonical
+ATOF JSON payload, then delivers the original canonical `Event` directly to
+registered callbacks.
 
-This lets plain subscribers, exporters, and tracing adapters share one runtime
-source of truth.
+This keeps plain subscribers, exporters, and Rust `tracing` integrations aligned
+around one runtime source of truth.
+
+## Rust `tracing` Base
+
+The Rust core uses `tracing` and `tracing-subscriber` as the internal emission
+substrate for lifecycle events. Library code does not install a global tracing
+subscriber; Rust host applications remain responsible for configuring their own
+`tracing-subscriber` layers, filters, and exporters.
+
+For each emitted event, NeMo Relay's core runtime emits `nemo_relay.event`
+records through the host's current tracing dispatcher when one is installed.
+Scope spans remember the dispatcher that created them so child marks and scope
+end events can stay attached to the original host span. Active NeMo subscriber
+callbacks stored in the runtime registry receive the original canonical `Event`
+directly, avoiding a JSON round trip on the compatibility callback path.
+
+`Event`, ATOF JSON, binding callback delivery, and the built-in ATIF,
+OpenTelemetry, OpenInference, and ATOF exporters remain NeMo-owned public
+behavior. Missing host subscribers do not change runtime behavior.
 
 ## Common Subscriber Roles
 

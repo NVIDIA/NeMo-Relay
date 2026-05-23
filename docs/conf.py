@@ -632,9 +632,17 @@ def _strip_rustdoc_hostile_lines(crate_dir: Path) -> None:
         skip_saw_brace = False
         skip_brace_depth = 0
         skip_paren_depth = 0
+        skip_attr = False
+        skip_attr_bracket_depth = 0
 
         for line in _read_text(rust_file).splitlines():
             line_stripped = line.strip()
+
+            if skip_attr:
+                skip_attr_bracket_depth += line.count("[") - line.count("]")
+                if skip_attr_bracket_depth <= 0:
+                    skip_attr = False
+                continue
 
             if skip_item:
                 skip_item, skip_brace_depth, skip_paren_depth, skip_saw_brace = _rust_skip_item_continues(
@@ -653,11 +661,12 @@ def _strip_rustdoc_hostile_lines(crate_dir: Path) -> None:
                 skip_paren_depth = 0
                 continue
 
-            if (
-                line.lstrip().startswith("#[")
-                or line_stripped in _REMOVED_RUST_LINES
-                or _TEST_MODULE_DECL.fullmatch(line_stripped) is not None
-            ):
+            if line_stripped in _REMOVED_RUST_LINES or _TEST_MODULE_DECL.fullmatch(line_stripped) is not None:
+                continue
+
+            if line.lstrip().startswith("#["):
+                skip_attr_bracket_depth = line.count("[") - line.count("]")
+                skip_attr = skip_attr_bracket_depth > 0
                 continue
 
             stripped.append(line)

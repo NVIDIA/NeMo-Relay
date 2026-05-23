@@ -5,25 +5,36 @@
 // registration.
 //
 // Subscribers receive discriminated lifecycle events emitted by the runtime as
-// scopes, tool calls, and LLM calls progress. Each subscriber is identified by
-// a unique name.
+// scopes, tool calls, and LLM calls progress. Subscribers can be named for
+// explicit deregistration or anonymous with a closeable subscription handle.
 //
 // Example usage:
 //
-//	import "github.com/NVIDIA/NeMo-Relay/go/nemo_relay/subscribers"
+//	import (
+//	    "fmt"
 //
-//	// Register a subscriber that logs every event.
-//	err := subscribers.Register("logger", func(event nemo_relay.Event) {
+//	    "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
+//	    "github.com/NVIDIA/NeMo-Relay/go/nemo_relay/subscribers"
+//	)
+//
+//	// Subscribe logs every event until the handle is closed.
+//	sub, err := subscribers.Subscribe(func(event nemo_relay.Event) {
 //	    fmt.Printf("[%s] %s: %s\n", event.Timestamp(), event.Kind(), event.Name())
 //	})
 //
 //	// Later, remove it.
-//	_ = subscribers.Deregister("logger")
+//	_, _ = sub.Close()
 package subscribers
 
 import (
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 )
+
+// Subscribe registers an anonymous event subscriber and returns a closeable
+// handle. This is a shorthand for [nemo_relay.Subscribe].
+func Subscribe(fn nemo_relay.EventSubscriberFunc) (*nemo_relay.Subscription, error) {
+	return nemo_relay.Subscribe(fn)
+}
 
 // Register registers a named event subscriber that will be called for every
 // lifecycle event emitted by the runtime. The name must be unique;
@@ -40,6 +51,13 @@ func Register(name string, fn nemo_relay.EventSubscriberFunc) error {
 // [nemo_relay.DeregisterSubscriber].
 func Deregister(name string) error {
 	return nemo_relay.DeregisterSubscriber(name)
+}
+
+// ScopeSubscribe registers an anonymous scope-local event subscriber and
+// returns a closeable handle. This is a shorthand for
+// [nemo_relay.ScopeSubscribe].
+func ScopeSubscribe(scopeUUID string, fn nemo_relay.EventSubscriberFunc) (*nemo_relay.Subscription, error) {
+	return nemo_relay.ScopeSubscribe(scopeUUID, fn)
 }
 
 // ScopeRegister registers a scope-local event subscriber that will be called

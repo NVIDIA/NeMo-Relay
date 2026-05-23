@@ -200,7 +200,13 @@ impl ScopeStack {
         self.stack
             .iter()
             .filter_map(|handle| self.scope_registries.get(&handle.uuid))
-            .flat_map(|registries| registries.event_subscribers.values().cloned())
+            .flat_map(|registries| {
+                registries
+                    .event_subscribers
+                    .values()
+                    .chain(registries.anonymous_event_subscribers.values())
+                    .cloned()
+            })
             .collect()
     }
 }

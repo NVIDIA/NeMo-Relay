@@ -424,7 +424,7 @@ impl Event {
 
     /// Return this event as canonical JSON.
     pub fn to_json_string(&self) -> serde_json::Result<String> {
-        serde_json::to_string(&self.try_to_json_value()?)
+        serde_json::to_string(self)
     }
 
     /// Return the lifecycle phase for scope events.

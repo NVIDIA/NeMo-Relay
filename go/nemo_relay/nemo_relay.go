@@ -38,6 +38,7 @@ typedef struct FfiLLMRequest FfiLLMRequest;
 typedef struct FfiEvent FfiEvent;
 typedef struct FfiStream FfiStream;
 typedef struct FfiCodecHandle FfiCodecHandle;
+typedef struct FfiSubscriptionHandle FfiSubscriptionHandle;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
@@ -163,6 +164,9 @@ extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* 
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
 extern int32_t nemo_relay_register_subscriber(const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_subscriber(const char* name);
+extern int32_t nemo_relay_subscribe(NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn, FfiSubscriptionHandle** out);
+extern int32_t nemo_relay_subscription_close(FfiSubscriptionHandle* handle, bool* removed);
+extern void nemo_relay_subscription_free(FfiSubscriptionHandle* handle);
 
 // Scope-local tool guardrails
 extern int32_t nemo_relay_scope_register_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -197,6 +201,7 @@ extern int32_t nemo_relay_scope_deregister_llm_stream_execution_intercept(const 
 // Scope-local subscribers
 extern int32_t nemo_relay_scope_register_subscriber(const char* scope_uuid, const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_subscriber(const char* scope_uuid, const char* name);
+extern int32_t nemo_relay_scope_subscribe(const char* scope_uuid, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn, FfiSubscriptionHandle** out);
 
 // Standalone middleware chains
 extern int32_t nemo_relay_tool_request_intercepts(const char* name, const char* args_json, char** out);
@@ -275,6 +280,7 @@ import (
 	"encoding/json"
 	"errors"
 	"runtime"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -287,6 +293,46 @@ func checkedValue[T any](status int32, value T) (T, error) {
 		return zero, err
 	}
 	return value, nil
+}
+
+func validateUUID(value string) error {
+	if len(value) >= len("urn:uuid:") && value[:len("urn:uuid:")] == "urn:uuid:" {
+		value = value[len("urn:uuid:"):]
+	}
+	if len(value) == 38 && value[0] == '{' && value[len(value)-1] == '}' {
+		value = value[1 : len(value)-1]
+	}
+	switch len(value) {
+	case 32:
+		for _, ch := range value {
+			if !isHexDigit(ch) {
+				return errors.New("invalid UUID")
+			}
+		}
+		return nil
+	case 36:
+		for index, ch := range value {
+			switch index {
+			case 8, 13, 18, 23:
+				if ch != '-' {
+					return errors.New("invalid UUID")
+				}
+			default:
+				if !isHexDigit(ch) {
+					return errors.New("invalid UUID")
+				}
+			}
+		}
+		return nil
+	default:
+		return errors.New("invalid UUID")
+	}
+}
+
+func isHexDigit(ch rune) bool {
+	return ('0' <= ch && ch <= '9') ||
+		('a' <= ch && ch <= 'f') ||
+		('A' <= ch && ch <= 'F')
 }
 
 var (
@@ -1447,6 +1493,68 @@ func DeregisterLlmStreamExecutionIntercept(name string) error {
 // Subscriber registration
 // ---------------------------------------------------------------------------
 
+// Subscription owns an event subscriber registration returned by [Subscribe] or
+// [ScopeSubscribe]. Close removes the registration and releases the callback.
+type Subscription struct {
+	mu  sync.Mutex
+	ptr *C.FfiSubscriptionHandle
+}
+
+func newSubscription(ptr *C.FfiSubscriptionHandle) *Subscription {
+	if ptr == nil {
+		return nil
+	}
+	sub := &Subscription{ptr: ptr}
+	runtime.SetFinalizer(sub, func(sub *Subscription) {
+		_, _ = sub.Close()
+	})
+	return sub
+}
+
+// Close removes the subscription registration. Close is idempotent; calling it
+// after the subscription has already been removed is a no-op. The boolean is
+// true only when this call closed a live subscription handle.
+func (s *Subscription) Close() (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ptr == nil {
+		return false, nil
+	}
+	ptr := s.ptr
+
+	var removed C.bool
+	status := C.nemo_relay_subscription_close(ptr, &removed)
+	if err := checkStatus(status); err != nil {
+		return false, err
+	}
+	C.nemo_relay_subscription_free(ptr)
+	s.ptr = nil
+	runtime.SetFinalizer(s, nil)
+	return bool(removed), nil
+}
+
+// Subscribe registers an anonymous event subscriber and returns a closeable
+// handle. The callback is called for every lifecycle event (Start, End, Mark)
+// emitted by the runtime and receives an owned [Event] snapshot that is safe to
+// retain after the callback returns.
+func Subscribe(fn EventSubscriberFunc) (*Subscription, error) {
+	id := registerClosure(fn)
+	var out *C.FfiSubscriptionHandle
+	status := C.nemo_relay_subscribe(
+		C.NemoRelayEventSubscriberFn(C.goEventSubscriberTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+		&out,
+	)
+	if status != 0 {
+		unregisterClosure(id)
+	}
+	return checkedValue(int32(status), newSubscription(out))
+}
+
 // RegisterSubscriber registers a named event subscriber that will be called for
 // every lifecycle event (Start, End, Mark) emitted by the runtime. Subscribers
 // are identified by a unique name; registering a duplicate returns an
@@ -2299,6 +2407,30 @@ func ScopeDeregisterLlmStreamExecutionIntercept(scopeUUID, name string) error {
 // ---------------------------------------------------------------------------
 // Scope-local subscriber registration
 // ---------------------------------------------------------------------------
+
+// ScopeSubscribe registers an anonymous scope-local event subscriber and
+// returns a closeable handle. The subscriber receives events visible to the
+// given scope and is also removed automatically when that scope is popped.
+func ScopeSubscribe(scopeUUID string, fn EventSubscriberFunc) (*Subscription, error) {
+	if err := validateUUID(scopeUUID); err != nil {
+		return nil, err
+	}
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	var out *C.FfiSubscriptionHandle
+	status := C.nemo_relay_scope_subscribe(
+		cScopeUUID,
+		C.NemoRelayEventSubscriberFn(C.goEventSubscriberTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+		&out,
+	)
+	if status != 0 {
+		unregisterClosure(id)
+	}
+	return checkedValue(int32(status), newSubscription(out))
+}
 
 // ScopeRegisterSubscriber registers a scope-local event subscriber. The
 // callback receives an owned [Event] snapshot that is safe to retain after the

@@ -306,7 +306,7 @@ fn empty_and_disabled_config_register_nothing() {
     futures::executor::block_on(initialize_plugins(config)).unwrap();
 
     let state = global_context();
-    assert!(state.read().unwrap().event_subscribers.is_empty());
+    assert!(state.read().unwrap().event_subscribers_is_empty());
 }
 
 #[test]
@@ -487,13 +487,7 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
 
     {
         let state = global_context();
-        let names = state
-            .read()
-            .unwrap()
-            .event_subscribers
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+        let names = state.read().unwrap().event_subscriber_names();
         assert_eq!(names, vec!["__nemo_relay_plugin__observability__atof"]);
     }
 
@@ -624,7 +618,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         .unwrap()
         .complete_scope_write(agent.uuid, Ok(()));
     if let Some((scope_uuid, name)) = scope_subscriber {
-        let _ = scope_deregister_subscriber(&scope_uuid, &name);
+        let _ = crate::api::subscriber::scope_deregister_subscriber(&scope_uuid, &name);
     }
 
     let dispatcher = manager.lock().unwrap();
@@ -742,13 +736,7 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
     futures::executor::block_on(initialize_plugins(config)).unwrap();
 
     let state = global_context();
-    let names = state
-        .read()
-        .unwrap()
-        .event_subscribers
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
+    let names = state.read().unwrap().event_subscriber_names();
     assert!(names.contains(&"__nemo_relay_plugin__observability__opentelemetry".to_string()));
     assert!(names.contains(&"__nemo_relay_plugin__observability__openinference".to_string()));
     clear_plugin_configuration().unwrap();
