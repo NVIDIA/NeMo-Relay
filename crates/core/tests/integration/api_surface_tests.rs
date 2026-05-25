@@ -54,8 +54,9 @@ use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thre
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::scope::{event, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{
-    Subscriber as NemoSubscriber, deregister_subscriber, register_subscriber,
-    scope_deregister_subscriber, scope_register_subscriber, scope_subscribe, subscribe,
+    Subscriber as NemoSubscriber, deregister_subscriber, event_from_tracing, is_nemo_relay_event,
+    register_subscriber, scope_deregister_subscriber, scope_register_subscriber, scope_subscribe,
+    subscribe, tracing_layer,
 };
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::api::tool::{
@@ -423,7 +424,7 @@ fn test_subscriber_adapter_composes_as_tracing_subscriber_layer() {
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
-    let layer = NemoSubscriber::new(Arc::new(move |event| {
+    let layer = tracing_layer(Arc::new(move |event| {
         sink.lock().unwrap().push(event.name().to_owned());
     }));
     let subscriber = tracing_subscriber::registry().with(layer);
@@ -441,6 +442,54 @@ fn test_subscriber_adapter_composes_as_tracing_subscriber_layer() {
     assert_eq!(
         events.lock().unwrap().as_slice(),
         ["tracing-subscriber-layer-mark"]
+    );
+}
+
+#[test]
+fn test_public_tracing_event_decoder_supports_custom_layers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    struct DecodingLayer {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for DecodingLayer
+    where
+        S: tracing::Subscriber,
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if is_nemo_relay_event(event.metadata())
+                && let Some(event) = event_from_tracing(event)
+            {
+                self.events.lock().unwrap().push(event.name().to_owned());
+            }
+        }
+    }
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(DecodingLayer {
+        events: events.clone(),
+    });
+
+    tracing::subscriber::with_default(subscriber, || {
+        event(
+            nemo_relay::api::scope::EmitMarkEventParams::builder()
+                .name("public-tracing-decoder-mark")
+                .build(),
+        )
+        .unwrap();
+        tracing::info!("external-event");
+    });
+
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        ["public-tracing-decoder-mark"]
     );
 }
 

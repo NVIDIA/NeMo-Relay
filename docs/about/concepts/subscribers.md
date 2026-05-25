@@ -61,6 +61,35 @@ adapter that implements both `tracing::Subscriber` and
 tracing subscriber or compose it into an existing `tracing-subscriber` registry
 alongside formatting, filtering, OpenTelemetry, or other host layers.
 
+For Rust libraries that want to consume NeMo Relay events through tracing
+subscriber mechanisms, the canonical path is
+`nemo_relay::api::subscriber::tracing_layer(callback)`. The layer decodes NeMo
+Relay tracing records back into canonical `Event` values and invokes the
+callback. Libraries should return or document this layer for host applications
+to compose; they should not call `tracing::subscriber::set_global_default`.
+
+```rust
+use std::sync::Arc;
+use nemo_relay::api::subscriber;
+use tracing_subscriber::prelude::*;
+
+let nemo_events = subscriber::tracing_layer(Arc::new(|event| {
+    // Consume the canonical NeMo Relay Event.
+}));
+
+let tracing_stack = tracing_subscriber::registry()
+    .with(nemo_events);
+
+// Application code owns installation of the tracing subscriber.
+tracing::subscriber::set_global_default(tracing_stack)?;
+```
+
+Libraries that already implement their own `tracing_subscriber::Layer` can use
+`subscriber::is_nemo_relay_event(metadata)` as a target filter and
+`subscriber::event_from_tracing(event)` to decode the canonical event payload.
+These helpers are the supported way to consume NeMo Relay tracing records
+without depending on the raw tracing field layout.
+
 The Rust named APIs remain available under their original names:
 `register_subscriber(name, callback)`, `deregister_subscriber(name)`,
 `scope_register_subscriber(scope_uuid, name, callback)`, and

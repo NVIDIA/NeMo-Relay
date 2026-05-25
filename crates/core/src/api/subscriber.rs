@@ -18,8 +18,18 @@ use tracing::{Event as TracingEvent, Metadata, Subscriber as TracingSubscriber};
 use tracing_subscriber::layer::Context as LayerContext;
 use uuid::Uuid;
 
-pub(crate) const EVENT_TRACE_TARGET: &str = "nemo_relay::events";
-pub(crate) const EVENT_JSON_FIELD: &str = "event.json";
+/// `tracing` target used by NeMo Relay lifecycle event records.
+///
+/// External tracing layers can filter on this target before decoding records
+/// with [`event_from_tracing`].
+pub const EVENT_TRACE_TARGET: &str = "nemo_relay::events";
+
+/// `tracing` field containing the canonical ATOF JSON representation.
+///
+/// The field is part of NeMo Relay's Rust tracing integration contract. Prefer
+/// [`event_from_tracing`] over reading this field directly when a library wants
+/// a canonical [`Event`].
+pub const EVENT_JSON_FIELD: &str = "event.json";
 
 /// Callback-backed NeMo Relay event subscriber.
 ///
@@ -53,7 +63,7 @@ impl Subscriber {
     }
 
     fn observe_tracing_event(&self, event: &TracingEvent<'_>) {
-        if let Some(event) = event_from_tracing_event(event) {
+        if let Some(event) = event_from_tracing(event) {
             (self.callback)(&event);
         }
     }
@@ -61,11 +71,11 @@ impl Subscriber {
 
 impl TracingSubscriber for Subscriber {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        is_nemo_event_metadata(metadata)
+        is_nemo_relay_event(metadata)
     }
 
     fn register_callsite(&self, metadata: &'static Metadata<'static>) -> Interest {
-        if is_nemo_event_metadata(metadata) {
+        if is_nemo_relay_event(metadata) {
             Interest::always()
         } else {
             Interest::never()
@@ -104,12 +114,29 @@ where
     }
 }
 
-pub(crate) fn is_nemo_event_metadata(metadata: &Metadata<'_>) -> bool {
+/// Create a tracing-subscriber layer that consumes NeMo Relay lifecycle events.
+///
+/// This is the canonical Rust integration point for libraries that want to
+/// receive NeMo Relay events through `tracing-subscriber` composition instead
+/// of registering directly in the NeMo Relay subscriber registry.
+pub fn tracing_layer(callback: EventSubscriberFn) -> Subscriber {
+    Subscriber::new(callback)
+}
+
+/// Return `true` when tracing metadata belongs to a NeMo Relay lifecycle event.
+///
+/// External layers can use this as a cheap filter before calling
+/// [`event_from_tracing`].
+pub fn is_nemo_relay_event(metadata: &Metadata<'_>) -> bool {
     metadata.target() == EVENT_TRACE_TARGET
 }
 
-pub(crate) fn event_from_tracing_event(event: &TracingEvent<'_>) -> Option<Event> {
-    if !is_nemo_event_metadata(event.metadata()) {
+/// Decode a canonical NeMo Relay [`Event`] from a `tracing` event record.
+///
+/// Returns `None` when the tracing event is not a NeMo Relay lifecycle record or
+/// when the record does not contain a valid canonical event payload.
+pub fn event_from_tracing(event: &TracingEvent<'_>) -> Option<Event> {
+    if !is_nemo_relay_event(event.metadata()) {
         return None;
     }
 
