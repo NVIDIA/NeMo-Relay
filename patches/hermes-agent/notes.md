@@ -88,7 +88,7 @@ the project `.env` only fills in missing variables.
 mkdir -p "${HERMES_HOME:-$HOME/.hermes}"
 cat > "${HERMES_HOME:-$HOME/.hermes}/.env" <<'EOF'
 # Optional: required only for a real Anthropic-backed agent turn.
-ANTHROPIC_API_KEY=<paste-your-key-here>
+# Add provider API credentials locally if needed; do not commit them.
 HERMES_NEMO_RELAY_ENABLED=1
 HERMES_NEMO_RELAY_ACG_ENABLED=1
 HERMES_NEMO_RELAY_ATIF_DIR=${HERMES_HOME:-$HOME/.hermes}/atif
