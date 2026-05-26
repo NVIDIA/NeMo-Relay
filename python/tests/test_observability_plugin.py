@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import json
+import typing
+
+import pytest
 
 from nemo_relay import ScopeType, plugin, scope
 from nemo_relay.observability import (
@@ -17,6 +20,8 @@ from nemo_relay.observability import (
     OtlpConfig,
 )
 
+if typing.TYPE_CHECKING:
+    from pathlib import Path
 
 class TestObservabilityConfigHelpers:
     def test_defaults_and_component_wrapper(self):
@@ -63,7 +68,8 @@ class TestObservabilityConfigHelpers:
     def test_list_kinds_includes_builtin_observability(self):
         assert OBSERVABILITY_PLUGIN_KIND in plugin.list_kinds()
 
-    async def test_atof_and_atif_file_outputs(self, tmp_path):
+    @pytest.mark.parametrize("use_context_manager", [True, False])
+    async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool):
         config = ObservabilityConfig(
             atof=AtofConfig(
                 enabled=True,
@@ -83,12 +89,22 @@ class TestObservabilityConfigHelpers:
             ),
         )
 
-        await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
-        try:
+        def _inner():
             with scope.scope("python-observability-agent", ScopeType.Agent) as handle:
                 scope.event("python-mark", handle=handle, data={"step": 1})
-        finally:
-            plugin.clear()
+
+            return handle
+
+        plugin_config = plugin.PluginConfig(components=[ComponentSpec(config)])
+        if use_context_manager:
+            async with plugin.plugin(plugin_config):
+                handle = _inner()
+        else:
+            await plugin.initialize(plugin_config)
+            try:
+                handle = _inner()
+            finally:
+                plugin.clear()
 
         lines = (tmp_path / "events.jsonl").read_text().strip().splitlines()
         assert len(lines) == 3
