@@ -136,7 +136,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAnnotatedLLMResponse>()?;
     m.add_class::<PyScopeEvent>()?;
     m.add_class::<PyMarkEvent>()?;
-    m.add_class::<PyAtifSubagentExportMode>()?;
     m.add_class::<PyAtifExporter>()?;
     m.add_class::<PyAtofExporterMode>()?;
     m.add_class::<PyAtofExporterConfig>()?;

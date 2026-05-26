@@ -998,7 +998,6 @@ fn test_exporter_embeds_nested_subagent_trajectory() {
     assert!(result.content.is_none());
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
-    assert_eq!(refs[0].trajectory_path, None);
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
 
     let subagents = trajectory.subagent_trajectories.as_ref().unwrap();
@@ -1012,74 +1011,6 @@ fn test_exporter_embeds_nested_subagent_trajectory() {
 
     let serialized = serde_json::to_value(&trajectory).unwrap();
     assert!(serialized["steps"][0]["observation"]["results"][0]["content"].is_null());
-}
-
-#[test]
-fn test_exporter_file_ref_subagent_mode_omits_embedded_child_body() {
-    let root_uuid = Uuid::now_v7();
-    let child_uuid = Uuid::now_v7();
-    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info())
-        .with_subagent_export_mode(AtifSubagentExportMode::FileRef);
-    let base = base_timestamp();
-
-    let mut root_start = event_builder(root_uuid, EventType::Start)
-        .name("root-agent")
-        .scope_type(ScopeType::Agent)
-        .build();
-    let mut child_start = event_builder(child_uuid, EventType::Start)
-        .name("worker-agent")
-        .scope_type(ScopeType::Agent)
-        .parent_uuid(root_uuid)
-        .metadata(json!({"session_id": "child-session"}))
-        .build();
-    let mut child_end = event_builder(child_uuid, EventType::End)
-        .name("worker-agent")
-        .scope_type(ScopeType::Agent)
-        .parent_uuid(root_uuid)
-        .build();
-    let mut root_end = event_builder(root_uuid, EventType::End)
-        .name("root-agent")
-        .scope_type(ScopeType::Agent)
-        .build();
-
-    for (offset, event) in [
-        &mut root_start,
-        &mut child_start,
-        &mut child_end,
-        &mut root_end,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        set_event_timestamp(event, base + chrono::Duration::seconds(offset as i64));
-    }
-
-    {
-        let mut state = exporter.state.lock().unwrap();
-        state
-            .events
-            .extend([root_start, child_start, child_end, root_end]);
-    }
-
-    let trajectory = exporter.export();
-    assert!(trajectory.subagent_trajectories.is_none());
-
-    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
-    let refs = result.subagent_trajectory_ref.as_ref().unwrap();
-    assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
-    assert_eq!(
-        refs[0].trajectory_path,
-        Some(format!("{}.json", child_uuid))
-    );
-    assert_eq!(refs[0].session_id, Some("child-session".to_string()));
-    assert_eq!(
-        refs[0].extra.as_ref().unwrap()["subagent_export_mode"],
-        json!("file_ref")
-    );
-    assert_eq!(
-        result.extra.as_ref().unwrap()["event_uuid"],
-        json!(child_uuid.to_string())
-    );
 }
 
 #[test]

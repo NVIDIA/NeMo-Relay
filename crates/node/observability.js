@@ -44,7 +44,6 @@ function atifConfig(config = {}) {
     agent_name: 'NeMo Relay',
     model_name: 'unknown',
     filename_template: 'nemo-relay-atif-{session_id}.json',
-    subagent_export_mode: 'embedded',
     ...config,
   };
 }

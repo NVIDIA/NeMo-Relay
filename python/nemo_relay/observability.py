@@ -85,7 +85,6 @@ class AtifConfig:
     extra: JsonObject | None = None
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
-    subagent_export_mode: str = "embedded"
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""
@@ -98,7 +97,6 @@ class AtifConfig:
             "extra": self.extra,
             "output_directory": self.output_directory,
             "filename_template": self.filename_template,
-            "subagent_export_mode": self.subagent_export_mode,
         }
         if value["agent_version"] is None:
             value.pop("agent_version")

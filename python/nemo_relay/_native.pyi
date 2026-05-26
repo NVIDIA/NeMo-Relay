@@ -672,12 +672,6 @@ class MarkEvent:
         """Return this event as canonical subscriber JSON."""
         ...
 
-class AtifSubagentExportMode:
-    """Subagent trajectory representation for ATIF export."""
-
-    Embedded: "AtifSubagentExportMode"
-    FileRef: "AtifSubagentExportMode"
-
 class AtifExporter:
     """ATIF trajectory exporter that collects events and exports trajectories.
 
@@ -699,7 +693,6 @@ class AtifExporter:
         model_name: Optional[str] = None,
         tool_definitions: Optional[list[_JsonObject]] = None,
         extra: Optional[_Json] = None,
-        subagent_export_mode: Optional[AtifSubagentExportMode] = None,
     ) -> None:
         """Create an ATIF exporter.
 
@@ -710,8 +703,6 @@ class AtifExporter:
             model_name: Optional primary model name.
             tool_definitions: Optional tool schema objects.
             extra: Optional additional JSON-compatible trajectory metadata.
-            subagent_export_mode: Optional subagent export shape. Defaults to
-                ``AtifSubagentExportMode.Embedded``.
 
         Returns:
             ``None``.

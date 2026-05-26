@@ -204,9 +204,6 @@ pub struct AtifSubagentTrajectoryRef {
     /// Embedded trajectory identifier, resolved against `subagent_trajectories`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trajectory_id: Option<String>,
-    /// External trajectory location when using multi-file references.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trajectory_path: Option<String>,
     /// Run identity for debug/search/display correlation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -312,18 +309,6 @@ pub struct AtifTrajectory {
     pub extra: Option<Json>,
 }
 
-/// How delegated subagent trajectories should be represented in ATIF output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum AtifSubagentExportMode {
-    /// Embed child trajectories under `subagent_trajectories`.
-    #[default]
-    Embedded,
-    /// Emit `subagent_trajectory_ref` entries without embedding child bodies.
-    FileRef,
-}
-
 // ---------------------------------------------------------------------------
 // AtifExporter
 // ---------------------------------------------------------------------------
@@ -332,7 +317,6 @@ struct AtifExporterState {
     session_id: String,
     agent_info: AtifAgentInfo,
     events: Vec<Event>,
-    subagent_export_mode: AtifSubagentExportMode,
 }
 
 /// Collects lifecycle events and exports them as ATIF trajectories.
@@ -358,27 +342,8 @@ impl AtifExporter {
                 session_id,
                 agent_info,
                 events: Vec::new(),
-                subagent_export_mode: AtifSubagentExportMode::Embedded,
             })),
         }
-    }
-
-    /// Set how delegated subagent trajectories should be represented.
-    ///
-    /// The default is [`AtifSubagentExportMode::Embedded`], which matches the
-    /// ATIF v1.7 single-document shape. Use
-    /// [`AtifSubagentExportMode::FileRef`] when a host writes child
-    /// trajectories as separate artifacts and wants parent trajectories to
-    /// contain references only.
-    pub fn set_subagent_export_mode(&self, mode: AtifSubagentExportMode) {
-        let mut state = self.state.lock().unwrap();
-        state.subagent_export_mode = mode;
-    }
-
-    /// Builder-style variant of [`set_subagent_export_mode`].
-    pub fn with_subagent_export_mode(self, mode: AtifSubagentExportMode) -> Self {
-        self.set_subagent_export_mode(mode);
-        self
     }
 
     /// Return an event subscriber function that records NeMo Relay events.
@@ -413,7 +378,6 @@ impl AtifExporter {
             &state.session_id,
             state.agent_info.clone(),
             &collected_events,
-            state.subagent_export_mode,
         )
     }
 
@@ -1304,12 +1268,7 @@ impl StepConversionState {
         });
     }
 
-    fn handle_subagent_start(
-        &mut self,
-        child: &AgentScopeNode,
-        event: &Event,
-        subagent_export_mode: AtifSubagentExportMode,
-    ) {
+    fn handle_subagent_start(&mut self, child: &AgentScopeNode, event: &Event) {
         self.flush_observations();
         self.finalize_agent_extra();
 
@@ -1328,18 +1287,10 @@ impl StepConversionState {
                     content: None,
                     subagent_trajectory_ref: Some(vec![AtifSubagentTrajectoryRef {
                         trajectory_id: Some(child.uuid.to_string()),
-                        trajectory_path: match subagent_export_mode {
-                            AtifSubagentExportMode::Embedded => None,
-                            AtifSubagentExportMode::FileRef => Some(format!("{}.json", child.uuid)),
-                        },
                         session_id: child.session_id.clone(),
                         extra: Some(serde_json::json!({
                             "name": child.name.clone(),
                             "scope_uuid": child.uuid.to_string(),
-                            "subagent_export_mode": match subagent_export_mode {
-                                AtifSubagentExportMode::Embedded => "embedded",
-                                AtifSubagentExportMode::FileRef => "file_ref",
-                            },
                         })),
                     }]),
                     extra: Some(event_extra(event)),
@@ -1529,7 +1480,6 @@ fn events_to_trajectory(
     session_id: &str,
     agent_info: AtifAgentInfo,
     events: &[&Event],
-    subagent_export_mode: AtifSubagentExportMode,
 ) -> AtifTrajectory {
     let mut sorted: Vec<&Event> = events.to_vec();
     sorted.sort_by_key(|event| *event.timestamp());
@@ -1544,7 +1494,6 @@ fn events_to_trajectory(
                 &agent_info,
                 &sorted,
                 true,
-                subagent_export_mode,
             );
         }
     }
@@ -1597,32 +1546,27 @@ fn agent_scope_to_trajectory(
     agent_info: &AtifAgentInfo,
     sorted_events: &[&Event],
     is_root: bool,
-    subagent_export_mode: AtifSubagentExportMode,
 ) -> AtifTrajectory {
-    let steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid, subagent_export_mode);
-    let subagent_trajectories = match subagent_export_mode {
-        AtifSubagentExportMode::Embedded => tree
-            .nodes
-            .get(&agent_uuid)
-            .map(|node| {
-                node.children
-                    .iter()
-                    .map(|child_uuid| {
-                        agent_scope_to_trajectory(
-                            tree,
-                            *child_uuid,
-                            session_id,
-                            agent_info,
-                            sorted_events,
-                            false,
-                            subagent_export_mode,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .filter(|children| !children.is_empty()),
-        AtifSubagentExportMode::FileRef => None,
-    };
+    let steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid);
+    let subagent_trajectories = tree
+        .nodes
+        .get(&agent_uuid)
+        .map(|node| {
+            node.children
+                .iter()
+                .map(|child_uuid| {
+                    agent_scope_to_trajectory(
+                        tree,
+                        *child_uuid,
+                        session_id,
+                        agent_info,
+                        sorted_events,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|children| !children.is_empty());
     let trajectory_id = if is_root {
         session_id.to_string()
     } else {
@@ -1673,14 +1617,13 @@ fn events_to_steps_for_agent(
     events: &[&Event],
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
-    subagent_export_mode: AtifSubagentExportMode,
 ) -> Vec<AtifStep> {
     let lookups = EventLookupMaps::from_events(events);
     let mut state = StepConversionState::default();
 
     for event in events {
         if let Some(child) = tree.direct_child_for_start(agent_uuid, event) {
-            state.handle_subagent_start(child, event, subagent_export_mode);
+            state.handle_subagent_start(child, event);
             continue;
         }
 

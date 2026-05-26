@@ -32,7 +32,7 @@ use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{scope_deregister_subscriber, scope_register_subscriber};
-use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifSubagentExportMode};
+use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofExporter, AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode,
 };
@@ -205,9 +205,6 @@ pub struct AtifSectionConfig {
     /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID.
     #[serde(default = "default_atif_filename_template")]
     pub filename_template: String,
-    /// How subagent trajectories are represented in parent ATIF output.
-    #[serde(default)]
-    pub subagent_export_mode: AtifSubagentExportMode,
 }
 
 impl Default for AtifSectionConfig {
@@ -221,7 +218,6 @@ impl Default for AtifSectionConfig {
             extra: None,
             output_directory: None,
             filename_template: default_atif_filename_template(),
-            subagent_export_mode: AtifSubagentExportMode::Embedded,
         }
     }
 }
@@ -342,7 +338,6 @@ crate::editor_config! {
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
-        subagent_export_mode => { label: "subagent_export_mode", kind: Enum, values: ["embedded", "file_ref"] },
     }
 }
 
@@ -674,8 +669,7 @@ impl AtifDispatcher {
         // subscriber is attached after that start event has already been
         // emitted.
         let session_id = event.uuid().to_string();
-        let exporter = AtifExporter::new(session_id.clone(), self.agent_info())
-            .with_subagent_export_mode(self.config.subagent_export_mode);
+        let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
         let path = self.output_path(&session_id);
         self.scope_owners.insert(event.uuid(), event.uuid());
@@ -1086,7 +1080,6 @@ fn validate_observability_plugin_config(
             "extra",
             "output_directory",
             "filename_template",
-            "subagent_export_mode",
         ],
     );
     validate_section_fields(

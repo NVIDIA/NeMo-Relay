@@ -219,7 +219,6 @@ fn schema_contains_every_supported_observability_option() {
         "tool_definitions",
         "extra",
         "filename_template",
-        "subagent_export_mode",
         "transport",
         "endpoint",
         "headers",

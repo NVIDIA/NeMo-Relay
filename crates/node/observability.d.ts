@@ -22,7 +22,6 @@ export interface AtifConfig {
   extra?: Record<string, Json>;
   output_directory?: string;
   filename_template?: string;
-  subagent_export_mode?: 'embedded' | 'file_ref' | string;
 }
 
 export interface OtlpConfig {

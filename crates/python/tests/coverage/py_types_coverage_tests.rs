@@ -315,7 +315,6 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
             Some("typed-model".into()),
             Some(&tool_defs),
             Some(extra.bind(py)),
-            None,
         )
         .unwrap();
 
@@ -1391,7 +1390,6 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
             Some("typed-model".into()),
             Some(&tool_defs),
             Some(extra.bind(py)),
-            None,
         )
         .unwrap();
 
