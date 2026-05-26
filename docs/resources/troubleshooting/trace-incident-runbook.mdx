@@ -65,7 +65,7 @@ Start with the code path that owns the real work.
   guidance.
 - If a framework owns scheduling, retries, callbacks, or provider payloads,
   verify that the integration uses
-  [Integrate into Frameworks](/integrate-into-frameworks/about) guidance.
+  [Integrate into Frameworks](/integrate-frameworks/about) guidance.
 - If a plugin installs runtime behavior, verify that the plugin is activated
   before the request path starts.
 
@@ -105,8 +105,8 @@ areas:
 
 Refer to [Instrument a Tool Call](/instrument-applications/instrument-tool-call),
 [Instrument an LLM Call](/instrument-applications/instrument-llm-call),
-[Wrap Tool Calls](/integrate-into-frameworks/wrap-tool-calls), and
-[Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls).
+[Wrap Tool Calls](/integrate-frameworks/wrap-tool-calls), and
+[Wrap LLM Calls](/integrate-frameworks/wrap-llm-calls).
 
 ## Confirm Subscriber And Exporter Registration
 
@@ -122,8 +122,8 @@ already been emitted. Verify these conditions:
 - Shutdown, teardown, or request completion calls flush owned exporters before
   the process exits or the container stops.
 
-Use [Observability](/observability-plugin/about),
-[Observability Configuration](/observability-plugin/configuration), and
+Use [Observability](/plugins/observability/about),
+[Observability Configuration](/plugins/observability/configuration), and
 [Subscribers](/about-nemo-relay/concepts/subscribers) to verify the registration
 lifecycle.
 
@@ -150,10 +150,10 @@ For OpenTelemetry or OpenInference export, confirm these settings:
 - The application flushes and shuts down the subscriber during graceful
   termination.
 
-Refer to [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof),
-[Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif),
-[OpenTelemetry](/observability-plugin/opentelemetry), and
-[OpenInference](/observability-plugin/openinference).
+Refer to [Agent Trajectory Observability Format (ATOF)](/plugins/observability/atof),
+[Agent Trajectory Interchange Format (ATIF)](/plugins/observability/atif),
+[OpenTelemetry](/plugins/observability/opentelemetry), and
+[OpenInference](/plugins/observability/openinference).
 
 ## Check For Duplicate Event Sources
 

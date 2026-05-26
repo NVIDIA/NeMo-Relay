@@ -201,7 +201,7 @@ Before opening a PR, check the following:
 2. The relevant reference docs are updated for any public API change.
 3. The relevant crate or package README is updated when that surface changed.
 4. Embedded documentation snippets, patch docs, and binding-support notes are updated if examples or supported bindings changed.
-5. For docs site changes, run `./scripts/build-docs.sh`; it regenerates ignored Fern API reference pages before validation.
+5. For docs site changes, run `just docs` (or `./scripts/build-docs.sh html` as a compatibility wrapper) — it regenerates ignored Fern API reference pages before validation.
 
 For documentation-heavy changes, prefer small targeted commits so the history
 shows entry-point changes, reference changes, examples, and maintenance updates

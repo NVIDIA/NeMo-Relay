@@ -67,7 +67,7 @@ repos:
           - --no-progress
           - --include-fragments
           - --root-dir
-          - /
+          - .
           - --scheme
           - http
           - --scheme

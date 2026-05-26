@@ -134,13 +134,13 @@ of the canonical event stream.
 
 ### Agent Trajectory Interchange Format (ATIF) Exporter
 
-The [Agent Trajectory Interchange Format (ATIF) exporter](/observability-plugin/atif)
+The [Agent Trajectory Interchange Format (ATIF) exporter](/plugins/observability/atif)
 collects lifecycle events and emits trajectory artifacts for offline analysis,
 replay, or debugging.
 
 ### Agent Trajectory Observability Format (ATOF) JSONL Exporter
 
-The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/observability-plugin/atof)
+The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/plugins/observability/atof)
 writes the canonical event stream to a native filesystem path as one raw ATOF
 event per line.
 
@@ -155,9 +155,9 @@ The OpenInference subscriber maps runtime events into OTLP traces using
 OpenInference semantics for model-centric observability.
 
 Detailed setup, configuration, and API shape for these subscribers belongs in
-[Observability](/observability-plugin/about).
+[Observability](/plugins/observability/about).
 For configuration-driven setup, use the built-in
-[`observability` plugin](/observability-plugin/configuration)
+[`observability` plugin](/plugins/observability/configuration)
 to install ATOF, ATIF, OpenTelemetry, and OpenInference subscribers from one
 plugin component.
 

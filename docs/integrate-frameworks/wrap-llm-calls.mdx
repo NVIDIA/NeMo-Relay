@@ -17,7 +17,7 @@ You will place a managed NeMo Relay LLM execution wrapper at the provider bounda
 
 You need:
 
-- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](/integrate-into-frameworks/adding-scopes).
+- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](/integrate-frameworks/adding-scopes).
 - A stable model-provider boundary, such as a provider adapter or client dispatch method.
 - A JSON-compatible request projection inside `LLMRequest`.
 - A JSON-compatible response projection for subscribers and exporters.
@@ -32,7 +32,7 @@ Follow this sequence to keep framework work attached to the expected runtime con
 4. Pass a stable provider name and `model_name`.
 5. Keep provider clients, streams, callbacks, and retry state outside emitted JSON payloads.
 
-Use a request or response codec when provider payloads need normalization before middleware or events see them. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for those cases.
+Use a request or response codec when provider payloads need normalization before middleware or events see them. Use [Provider Codecs](/integrate-frameworks/provider-codecs) for those cases.
 
 ## Concrete LLM Example
 
@@ -154,6 +154,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add tool integration with [Wrap Tool Calls](/integrate-into-frameworks/wrap-tool-calls).
-- Normalize provider payloads with [Provider Codecs](/integrate-into-frameworks/provider-codecs).
-- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) for provider clients, streams, and callback objects.
+- Add tool integration with [Wrap Tool Calls](/integrate-frameworks/wrap-tool-calls).
+- Normalize provider payloads with [Provider Codecs](/integrate-frameworks/provider-codecs).
+- Use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) for provider clients, streams, and callback objects.

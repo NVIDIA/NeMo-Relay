@@ -694,6 +694,15 @@ docs:
     cd "$NEMO_RELAY_REPO_ROOT/fern"
     npx fern check --warnings
 
+# validate documentation links and navigation without a full site build
+docs-linkcheck:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    ensure_docs_dependencies
+    generate_docs_api_references
+    cd "$NEMO_RELAY_REPO_ROOT/fern"
+    npx fern check --warnings
+
 # regenerate the ignored Fern API reference pages
 docs-api-reference:
     #!/usr/bin/env bash

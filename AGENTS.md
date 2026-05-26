@@ -154,7 +154,7 @@ Minimum guidance:
 - Node.js binding or wrapper changes: `just test-node`.
 - Go binding or raw FFI changes: `just test-go` and the relevant Rust/FFI checks.
 - WebAssembly binding changes: `just test-wasm`.
-- Documentation site changes, including link or navigation changes: `just docs`. The recipe regenerates the ignored Fern API reference pages before validation.
+- Documentation site changes: `just docs`. Run docs link validation with `just docs-linkcheck` when links change. The recipes regenerate the ignored Fern API reference pages before validation.
 - Cross-language API changes: run the touched binding tests and update docs, package READMEs, and generated surfaces where applicable.
 
 Before review, prefer `uv run pre-commit run --all-files` when the change crosses languages or tooling. The hooks enforce SPDX headers, file hygiene, Ruff, `ty`, Markdown link checks, Cargo formatting/lints/audits, Go formatting/vet, Node formatting, and public docstring checks.

@@ -23,13 +23,13 @@ You will wrap one existing tool callback with the managed tool execution API. Th
 
 Complete one binding Quick Start guide first:
 
-- [Python Quick Start](/getting-started/python)
-- [Node.js Quick Start](/getting-started/nodejs)
-- [Rust Quick Start](/getting-started/rust)
+- [Python Quick Start](/getting-started/quick-start/python)
+- [Node.js Quick Start](/getting-started/quick-start/nodejs)
+- [Rust Quick Start](/getting-started/quick-start/rust)
 
 Create a scope for the active request or agent run before adding tool instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
 
-The tool arguments and result must be JSON-compatible. If your framework passes clients, sockets, streams, callbacks, or other opaque objects, use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) before you instrument the callback.
+The tool arguments and result must be JSON-compatible. If your framework passes clients, sockets, streams, callbacks, or other opaque objects, use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) before you instrument the callback.
 
 ## Integration Pattern
 
@@ -219,5 +219,5 @@ Use these links to continue from this workflow into the next related task.
 
 - Add model-provider instrumentation with [Instrument an LLM Call](/instrument-applications/instrument-llm-call).
 - Add policy or transformation with [Add Middleware](/instrument-applications/advanced-guide).
-- Export events with [Observability](/observability-plugin/about).
+- Export events with [Observability](/plugins/observability/about).
 - Use [Code Examples](/instrument-applications/code-examples) for manual lifecycle, streaming, scope, and partial middleware API examples.

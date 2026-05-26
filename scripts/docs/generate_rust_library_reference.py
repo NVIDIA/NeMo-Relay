@@ -591,7 +591,7 @@ def _positions(pages_by_html: dict[Path, Page], doc_root: Path) -> dict[Path, in
         crate_index = (doc_root / crate_dir_name / "index.html").resolve()
         positions[crate_index] = position
 
-    for html_path, page in pages_by_html.items():
+    for html_path in pages_by_html:
         if html_path.name != "index.html":
             continue
         for target, position in _item_order(html_path, pages_by_html).items():
