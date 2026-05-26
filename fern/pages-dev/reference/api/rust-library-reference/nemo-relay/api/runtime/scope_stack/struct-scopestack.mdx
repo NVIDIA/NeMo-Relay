@@ -1,0 +1,136 @@
+---
+title: "Struct Scope Stack"
+sidebar-title: "ScopeStack"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-scopestack"
+description: "Mutable stack of active scopes plus their scope-local registries."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct ScopeStack { /* private fields */ }
+```
+
+Mutable stack of active scopes plus their scope-local registries.
+
+The stack always contains an implicit root scope. Additional scopes are pushed as the public API opens lifecycle spans and removed when those spans close.
+
+## Implementations
+
+### `impl ScopeStack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-scopestack\">ScopeStack</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Create a new scope stack containing only the implicit root scope.
+
+##### Returns
+
+A [`ScopeStack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-scopestack) initialized with a single root scope and no scope-local registries.
+
+#### `push`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push(&amp;mut self, handle: <a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>)"}} /></pre>
+
+Push a scope handle onto the top of the stack.
+
+##### Parameters
+
+- `handle`: Scope handle to make the new top-most active scope.
+
+#### `top`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn top(&amp;self) -&gt; &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>"}} /></pre>
+
+Return the current top-most scope handle.
+
+##### Returns
+
+A shared reference to the active scope at the top of the stack.
+
+##### Notes
+
+This function never returns `None` because the implicit root scope is always present.
+
+#### `top_mut`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn top_mut(&amp;mut self) -&gt; &amp;mut <a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>"}} /></pre>
+
+Return the current top-most scope handle mutably.
+
+##### Returns
+
+A mutable reference to the active scope at the top of the stack.
+
+#### `root_uuid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn root_uuid(&amp;self) -&gt; <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>"}} /></pre>
+
+Return the UUID of the implicit root scope.
+
+##### Returns
+
+The stable UUID of the root scope stored at the bottom of the stack.
+
+#### `scopes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scopes(&amp;self) -&gt; &amp;[<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>]"}} /></pre>
+
+Return the full ordered stack of scope handles.
+
+##### Returns
+
+A slice of scopes ordered from root to the current top-most scope.
+
+#### `find`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn find(&amp;self, uuid: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>&gt;"}} /></pre>
+
+Find a scope handle by UUID.
+
+##### Parameters
+
+- `uuid`: UUID of the scope to search for.
+
+##### Returns
+
+`Some(&ScopeHandle)` when the scope is active on this stack and `None` otherwise.
+
+#### `remove`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove(&amp;mut self, uuid: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>) -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>&gt;"}} /></pre>
+
+Remove the current top scope if it matches `uuid`.
+
+##### Parameters
+
+- `uuid`: UUID of the scope expected to be at the top of the stack.
+
+##### Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the removed [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle).
+
+##### Errors
+
+Returns [`FlowError::InvalidArgument`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the scope exists but is not the current top of the stack or when the caller attempts to remove the implicit root scope. Returns [`FlowError::NotFound`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the UUID is not present on the stack.
+
+## Trait Implementations
+
+### `impl Debug for ScopeStack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-scopestack\">ScopeStack</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for ScopeStack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-scopestack\">ScopeStack</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

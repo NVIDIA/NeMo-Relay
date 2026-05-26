@@ -1,0 +1,198 @@
+---
+title: "nemo_relay.typed"
+sidebar-title: "typed"
+description: "Typed wrappers around the JSON-based NeMo Relay execution APIs."
+position: 14
+---
+Generated from `python/nemo_relay/typed.py`.
+
+Module `nemo_relay.typed`.
+
+Typed wrappers around the JSON-based NeMo Relay execution APIs.
+
+## Classes
+
+### `Codec(Generic[T])`
+
+Bidirectional conversion protocol between a Python type and JSON.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json(value: T) -> Json
+```
+
+Convert a typed value to a JSON-serializable object.
+
+##### `from_json`
+
+```python
+def from_json(data: Json) -> T
+```
+
+Reconstruct a typed value from a JSON-serializable object.
+
+### `JsonPassthrough(Codec[Json])`
+
+Identity codec for callers already working with JSON values.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json(value: Json) -> Json
+```
+
+Return `value` unchanged.
+
+##### `from_json`
+
+```python
+def from_json(data: Json) -> Json
+```
+
+Return `data` unchanged.
+
+### `PydanticCodec(Codec[T])`
+
+Codec for models exposing `model_dump` and `model_validate`.
+
+#### Methods
+
+##### `PydanticCodec`
+
+```python
+def PydanticCodec(model_cls: type[T]) -> None
+```
+
+Create an instance.
+
+##### `to_json`
+
+```python
+def to_json(value: T) -> Json
+```
+
+Serialize a Pydantic model to a JSON-serializable dict.
+
+##### `from_json`
+
+```python
+def from_json(data: Json) -> T
+```
+
+Deserialize JSON data into a Pydantic model.
+
+### `DataclassCodec(Codec[T])`
+
+Codec for `dataclasses.dataclass` models.
+
+#### Methods
+
+##### `DataclassCodec`
+
+```python
+def DataclassCodec(dc_cls: type[T]) -> None
+```
+
+Create an instance.
+
+##### `to_json`
+
+```python
+def to_json(value: T) -> Json
+```
+
+Serialize a dataclass instance to a JSON-compatible dictionary.
+
+##### `from_json`
+
+```python
+def from_json(data: Json) -> T
+```
+
+Deserialize JSON data into a dataclass instance.
+
+### `BestEffortAnyCodec(Codec[object])`
+
+Best-effort codec for arbitrary Python values.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json(value: object) -> Json
+```
+
+Serialize an arbitrary Python value to a JSON-serializable form.
+
+##### `from_json`
+
+```python
+def from_json(data: Json) -> object
+```
+
+Reconstruct a Python value from its tagged JSON representation.
+
+## Functions
+
+### `tool_execute`
+
+```python
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> TResult
+```
+
+### `tool_execute`
+
+```python
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], TResult], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> TResult
+```
+
+### `tool_execute`
+
+```python
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], TResult] | Callable[[TArgs], Awaitable[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> TResult
+```
+
+Run `nemo_relay.tools.execute` with typed arguments and results.
+
+### `llm_execute`
+
+```python
+async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], Awaitable[TResponse]], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
+```
+
+### `llm_execute`
+
+```python
+async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], TResponse], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
+```
+
+### `llm_execute`
+
+```python
+async def llm_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], TResponse] | Callable[[LLMRequest], Awaitable[TResponse]], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> TResponse
+```
+
+Run `nemo_relay.llm.execute` and decode the returned response type.
+
+### `llm_stream_execute`
+
+```python
+async def llm_stream_execute(name: str, request: LLMRequest, func: Callable[[LLMRequest], AsyncIterator[TResponseChunk]], collector: Callable[[TResponseChunk], None], finalizer: Callable[[], TResponse], chunk_json_codec: Codec[TResponseChunk], response_json_codec: Codec[TResponse], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> LlmStream
+```
+
+Run `nemo_relay.llm.stream_execute` with typed chunks and final output.
+
+## Type Aliases And Constants
+
+- `T`
+- `TArgs`
+- `TResponse`
+- `TResponseChunk`
+- `TResult`
+

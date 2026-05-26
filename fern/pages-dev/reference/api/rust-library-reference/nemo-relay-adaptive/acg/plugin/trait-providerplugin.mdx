@@ -1,0 +1,61 @@
+---
+title: "Trait Provider Plugin"
+sidebar-title: "ProviderPlugin"
+description: "Provider plugin trait for backend-specific translation."
+position: 3
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait ProviderPlugin: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required methods\n    fn plugin_id(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>;\n    fn plugin_name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>;\n    fn translate(&amp;self, input: &amp;<a href=\"struct-plugininput\">PluginInput</a>&lt;'_&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"struct-pluginoutput\">PluginOutput</a>&gt;;\n    fn capabilities(&amp;self) -&gt; <a href=\"../capability/struct-backendcapabilities\">BackendCapabilities</a>;\n&#125;"}} /></pre>
+
+Provider plugin trait for backend-specific translation.
+
+Plugins are stateless on the forward path. They translate provider-agnostic intents into backend-native API parameters.
+
+## Object Safety
+
+This trait is object-safe and can be stored as `Arc<dyn ProviderPlugin>`.
+
+## Thread Safety
+
+The `Send + Sync` bounds allow plugins to be shared across async tasks and threads.
+
+## Required Methods
+
+#### `plugin_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn plugin_id(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+Unique identifier for this plugin (e.g., "anthropic", "openai", "passthrough").
+
+#### `plugin_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn plugin_name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+Human-readable name for this plugin.
+
+#### `translate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn translate(&amp;self, input: &amp;<a href=\"struct-plugininput\">PluginInput</a>&lt;'_&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"struct-pluginoutput\">PluginOutput</a>&gt;"}} /></pre>
+
+Translate intents into backend-native API parameters.
+
+#### `capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn capabilities(&amp;self) -&gt; <a href=\"../capability/struct-backendcapabilities\">BackendCapabilities</a>"}} /></pre>
+
+Report the capabilities of the backend this plugin targets.
+
+## Implementors
+
+### `impl ProviderPlugin for AnthropicCachePlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-providerplugin\">ProviderPlugin</a> for <a href=\"../anthropic_plugin/struct-anthropiccacheplugin\">AnthropicCachePlugin</a>"}} /></pre>
+
+### `impl ProviderPlugin for OpenAICachePlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-providerplugin\">ProviderPlugin</a> for <a href=\"../openai_plugin/struct-openaicacheplugin\">OpenAICachePlugin</a>"}} /></pre>
+
+### `impl ProviderPlugin for PassthroughPlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-providerplugin\">ProviderPlugin</a> for <a href=\"../passthrough/struct-passthroughplugin\">PassthroughPlugin</a>"}} /></pre>

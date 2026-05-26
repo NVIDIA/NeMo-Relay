@@ -1,0 +1,15 @@
+---
+title: "Function nemo_relay_scope_handle_metadata"
+sidebar-title: "nemo_relay_scope_handle_metadata"
+description: "Return the scope metadata as a JSON C string, or null if no metadata is set. Caller must free the result with `nemo_relay_string_free`."
+position: 55
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_scope_handle_metadata(\n    ptr: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"struct-ffiscopehandle\">FfiScopeHandle</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>"}} /></pre>
+
+Return the scope metadata as a JSON C string, or null if no metadata is set. Caller must free the result with `nemo_relay_string_free`.
+
+## Safety
+
+`ptr` must be a valid `FfiScopeHandle` pointer or null.

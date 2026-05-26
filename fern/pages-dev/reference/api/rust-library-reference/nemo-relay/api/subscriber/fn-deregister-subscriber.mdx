@@ -1,0 +1,29 @@
+---
+title: "Function deregister_subscriber"
+sidebar-title: "deregister_subscriber"
+description: "Deregister a global lifecycle event subscriber."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister_subscriber(name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregister a global lifecycle event subscriber.
+
+This removes the named subscriber from the process-wide registry.
+
+## Parameters
+
+- `name`: Global subscriber name to remove.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing `true` when a subscriber was removed and `false` when the name was not registered.
+
+## Errors
+
+Returns an error when the global registry lock cannot be acquired safely.
+
+## Notes
+
+Deregistration affects only future event delivery.

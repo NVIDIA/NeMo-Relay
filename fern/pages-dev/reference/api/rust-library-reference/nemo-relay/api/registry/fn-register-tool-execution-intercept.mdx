@@ -1,0 +1,25 @@
+---
+title: "Function register_tool_execution_intercept"
+sidebar-title: "register_tool_execution_intercept"
+description: "Register a global tool execution intercept. Execution intercepts can wrap or replace the tool callback."
+position: 19
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_execution_intercept(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callable: <a href=\"../runtime/callbacks/type-toolexecutionfn\">ToolExecutionFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register a global tool execution intercept. Execution intercepts can wrap or replace the tool callback.
+
+## Parameters
+
+- `name`: Unique middleware name in the global registry.
+- `priority`: Lower values run earlier in the chain.
+- `callable`: Execution intercept callback stored under `name`.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the intercept was registered.
+
+## Errors
+
+Returns [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the name is already in use or an internal error if the runtime state cannot be updated.

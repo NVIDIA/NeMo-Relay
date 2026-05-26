@@ -1,0 +1,22 @@
+---
+title: "Module response"
+sidebar-title: "response"
+description: "Normalized LLM response types produced by response codecs."
+position: 5
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Normalized LLM response types produced by response codecs.
+
+This module defines [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse) and its supporting types for structured, API-agnostic access to LLM response data.
+
+## Structs
+
+- [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
+- [ResponseToolCall](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-responsetoolcall): A tool call requested by the model in its response.
+- [Usage](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-usage): Token usage statistics from an LLM API response.
+
+## Enums
+
+- [ApiSpecificResponse](/reference/api/rust-library-reference/nemo-relay/codec/response/enum-apispecificresponse): API-specific response data that cannot be normalized across providers.
+- [FinishReason](/reference/api/rust-library-reference/nemo-relay/codec/response/enum-finishreason): Normalized reason why the model stopped generating.

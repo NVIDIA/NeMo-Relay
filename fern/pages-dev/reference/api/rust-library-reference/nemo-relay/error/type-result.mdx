@@ -1,0 +1,29 @@
+---
+title: "Type Alias Result"
+sidebar-title: "Result"
+description: "A specialized `Result` type for NeMo Relay operations."
+position: 2
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type Result&lt;T&gt; = <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;T, <a href=\"enum-flowerror\">FlowError</a>&gt;;"}} /></pre>
+
+A specialized [`Result`](https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html) type for NeMo Relay operations.
+
+## Aliased Type
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Result&lt;T&gt; &#123;\n    Ok(T),\n    Err(<a href=\"enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+
+## Variants
+
+### `Ok(T)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Ok(T)"}} /></pre>
+
+Contains the success value
+
+### `Err(FlowError)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Err(<a href=\"enum-flowerror\">FlowError</a>)"}} /></pre>
+
+Contains the error value

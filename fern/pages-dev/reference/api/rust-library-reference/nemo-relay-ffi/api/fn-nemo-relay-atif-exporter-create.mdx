@@ -1,0 +1,23 @@
+---
+title: "Function nemo_relay_atif_exporter_create"
+sidebar-title: "nemo_relay_atif_exporter_create"
+description: "Creates a new ATIF exporter."
+position: 7
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_atif_exporter_create(\n    session_id: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    agent_name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    agent_version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    model_name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    out: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffiatifexporter\">FfiAtifExporter</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Creates a new ATIF exporter.
+
+## Parameters
+
+- `session_id`: Session identifier string (required, non-null).
+- `agent_name`: Agent name string (required, non-null).
+- `agent_version`: Agent version string (required, non-null).
+- `model_name`: Default model name (nullable).
+- `out`: On success, receives a heap-allocated `FfiAtifExporter`.
+
+## Safety
+
+All non-null string pointers must be valid C strings. `out` must be valid.

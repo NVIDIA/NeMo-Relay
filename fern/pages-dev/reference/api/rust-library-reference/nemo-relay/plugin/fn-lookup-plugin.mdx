@@ -1,0 +1,23 @@
+---
+title: "Function lookup_plugin"
+sidebar-title: "lookup_plugin"
+description: "Looks up a registered plugin by kind."
+position: 18
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn lookup_plugin(plugin_kind: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"trait-plugin\">Plugin</a>&gt;&gt;"}} /></pre>
+
+Looks up a registered plugin by kind.
+
+## Parameters
+
+- `plugin_kind`: Plugin kind to resolve.
+
+## Returns
+
+The registered plugin implementation for `plugin_kind`, or `None` when the kind is unknown.
+
+## Notes
+
+The returned plugin is shared by [`Arc`](https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html), so callers receive a cheap clone.

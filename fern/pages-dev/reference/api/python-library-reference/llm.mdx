@@ -1,0 +1,62 @@
+---
+title: "nemo_relay.llm"
+sidebar-title: "llm"
+description: "LLM lifecycle helpers for non-streaming and streaming calls."
+position: 7
+---
+Generated from `python/nemo_relay/llm.py`.
+
+Module `nemo_relay.llm`.
+
+LLM lifecycle helpers for non-streaming and streaming calls.
+
+## Functions
+
+### `call`
+
+```python
+def call(name: str, request: LLMRequest, *, handle = None, attributes = None, data = None, metadata = None, model_name: str | None = None, timestamp: datetime | None = None)
+```
+
+Start a manual LLM span and return its `LLMHandle`.
+
+### `call_end`
+
+```python
+def call_end(handle, response, *, data = None, metadata = None, annotated_response: AnnotatedLLMResponse | Mapping[str, Json] | None = None, response_codec: LlmResponseCodec | None = None, timestamp: datetime | None = None) -> None
+```
+
+Finish a manual LLM span started by `call()`.
+
+### `execute`
+
+```python
+def execute(name: str, request: LLMRequest, func, *, handle = None, attributes = None, data = None, metadata = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None)
+```
+
+Run an LLM call through the managed middleware pipeline.
+
+### `stream_execute`
+
+```python
+def stream_execute(name: str, request: LLMRequest, func, collector, finalizer, *, handle = None, attributes = None, data = None, metadata = None, model_name: str | None = None, codec: LlmCodec | None = None, response_codec: LlmResponseCodec | None = None) -> LlmStream
+```
+
+Run a streaming LLM call through the managed middleware pipeline.
+
+### `request_intercepts`
+
+```python
+def request_intercepts(name, request)
+```
+
+Apply global LLM request intercepts to `request`.
+
+### `conditional_execution`
+
+```python
+def conditional_execution(request)
+```
+
+Run LLM conditional-execution guardrails for `request`.
+

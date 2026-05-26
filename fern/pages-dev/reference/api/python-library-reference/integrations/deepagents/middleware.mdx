@@ -1,0 +1,44 @@
+---
+title: "nemo_relay.integrations.deepagents.middleware"
+sidebar-title: "middleware"
+description: "Deep Agents middleware for NeMo Relay observability."
+position: 2
+---
+Generated from `python/nemo_relay/integrations/deepagents/middleware.py`.
+
+Module `nemo_relay.integrations.deepagents.middleware`.
+
+Deep Agents middleware for NeMo Relay observability.
+
+## Classes
+
+### `NemoRelayDeepAgentsMiddleware(NemoRelayMiddleware)`
+
+Route Deep Agents model/tool calls through NeMo Relay and emit semantic events.
+
+#### Methods
+
+##### `NemoRelayDeepAgentsMiddleware`
+
+```python
+def NemoRelayDeepAgentsMiddleware(*, name: str = 'NemoRelayDeepAgentsMiddleware', agent_name: str | None = None, skills: Sequence[str] | None = None, subagents: Sequence[Mapping[str, Any]] | None = None, backend_name: str | None = None) -> None
+```
+
+Create an instance.
+
+##### `before_agent`
+
+```python
+def before_agent(state: Any, runtime: Any) -> None
+```
+
+Emit run configuration metadata for sync Deep Agents runs.
+
+##### `abefore_agent`
+
+```python
+async def abefore_agent(state: Any, runtime: Any) -> None
+```
+
+Emit run configuration metadata for async Deep Agents runs.
+

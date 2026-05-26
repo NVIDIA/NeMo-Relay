@@ -1,0 +1,17 @@
+---
+title: "Module passthrough"
+sidebar-title: "passthrough"
+description: "Passthrough plugin that applies no transformations."
+position: 8
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Passthrough plugin that applies no transformations.
+
+Used as a baseline for A/B testing, as the default when no provider-specific plugin is configured, and for backends with no explicit cache control APIs.
+
+[`PassthroughPlugin`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/passthrough/struct-passthroughplugin) implements [`ProviderPlugin`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/trait-providerplugin) by cloning the rewritten request unchanged and generating a [`TranslationReport`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-translationreport) where every intent is marked [`TranslationStatus::Ignored`] with [`ReasonCode::NotRelevant`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-reasoncode).
+
+## Structs
+
+- [PassthroughPlugin](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/passthrough/struct-passthroughplugin): A no-op provider plugin that passes requests through unchanged.

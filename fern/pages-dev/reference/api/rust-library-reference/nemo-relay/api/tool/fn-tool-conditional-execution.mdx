@@ -1,0 +1,30 @@
+---
+title: "Function tool_conditional_execution"
+sidebar-title: "tool_conditional_execution"
+description: "Run only the tool conditional-execution guardrail chain."
+position: 11
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_conditional_execution(name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, args: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Run only the tool conditional-execution guardrail chain.
+
+This evaluates whether a tool call should be allowed to proceed without invoking request intercepts or execution. Each evaluated guardrail emits an automatic guardrail scope start/end pair for observability.
+
+## Parameters
+
+- `name`: Tool name used when resolving the guardrail chain.
+- `args`: Raw tool arguments to validate.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when all guardrails allow execution.
+
+## Errors
+
+Returns [`FlowError::GuardrailRejected`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when a guardrail blocks execution, or any error raised by the guardrail chain itself.
+
+## Notes
+
+This helper is useful for preflight checks when the caller needs the rejection result without starting a tool span. Guardrail scopes are still emitted for the conditional checks themselves.

@@ -1,0 +1,102 @@
+---
+title: "nemo_relay.observability"
+sidebar-title: "observability"
+description: "Observability plugin configuration helpers."
+position: 8
+---
+Generated from `python/nemo_relay/observability.pyi`.
+
+Module `nemo_relay.observability`.
+
+Observability plugin configuration helpers.
+
+## Classes
+
+### `ConfigPolicy`
+
+Policy for unsupported observability configuration.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this policy to the canonical JSON object shape.
+
+### `AtofConfig`
+
+Filesystem-backed raw ATOF JSONL export settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this ATOF config to the canonical JSON object shape.
+
+### `AtifConfig`
+
+Per-top-level-agent ATIF file export settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this ATIF config to the canonical JSON object shape.
+
+### `OtlpConfig`
+
+Shared OpenTelemetry/OpenInference OTLP export settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this OTLP config to the canonical JSON object shape.
+
+### `ObservabilityConfig`
+
+Canonical config document for the top-level observability component.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this observability config to the canonical JSON object shape.
+
+### `ComponentSpec`
+
+Top-level observability component wrapper.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this component to the canonical plugin shape.
+
+## Type Aliases And Constants
+
+- `OBSERVABILITY_PLUGIN_KIND`
+

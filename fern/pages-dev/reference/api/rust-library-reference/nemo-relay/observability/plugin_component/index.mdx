@@ -1,0 +1,31 @@
+---
+title: "Module plugin_component"
+sidebar-title: "plugin_component"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component"
+description: "Built-in observability plugin component."
+position: 5
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Built-in observability plugin component.
+
+This module packages NeMo Relay's first-party observability exporters behind the shared plugin configuration system. Each exporter section is opt-in: omitted sections and sections with `enabled = false` validate but do not register subscribers or construct exporters.
+
+The plugin intentionally infers subscriber names from the component namespace so configuration remains portable across bindings. Agent Trajectory Observability Format (ATOF), OpenTelemetry, and OpenInference each register one global subscriber when enabled. Agent Trajectory Interchange Format (ATIF) uses a global dispatcher that detects top-level agent scopes and creates one scope-local exporter for each trajectory run. Coding-agent turns that need bounded traces are represented as agent scopes with role metadata.
+
+## Structs
+
+- [AtifSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig): Per-trajectory ATIF exporter config.
+- [AtofSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofsectionconfig): Filesystem-backed ATOF JSONL exporter config.
+- [ComponentSpec](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-componentspec): Top-level observability component wrapper.
+- [ObservabilityConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-observabilityconfig): Canonical config document for the observability plugin component.
+- [OtlpSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-otlpsectionconfig): Shared OTLP exporter config for OpenTelemetry and OpenInference.
+
+## Constants
+
+- [OBSERVABILITY_PLUGIN_KIND](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/constant-observability-plugin-kind): The plugin kind registered by the core crate.
+
+## Functions
+
+- [deregister_observability_component](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/fn-deregister-observability-component): Deregisters the observability component kind from the core plugin registry.
+- [register_observability_component](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/fn-register-observability-component): Registers the observability component kind in the core plugin registry.

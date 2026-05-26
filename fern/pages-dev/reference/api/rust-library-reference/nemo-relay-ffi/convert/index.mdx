@@ -1,0 +1,21 @@
+---
+title: "Module convert"
+sidebar-title: "convert"
+description: "Conversion utilities between C strings/JSON and Rust types."
+position: 3
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Conversion utilities between C strings/JSON and Rust types.
+
+All functions in this module handle null pointers gracefully and use thread-local error storage for failure reporting.
+
+## Functions
+
+- [c_str_to_json](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-c-str-to-json): Parse a null-terminated C string as JSON. Returns `None` on error and sets last_error.
+- [c_str_to_opt_json](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-c-str-to-opt-json): Parse a null-terminated C string to an optional JSON value. Returns `Ok(None)` for null pointers, `Ok(Some(v))` for valid JSON.
+- [c_str_to_string](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-c-str-to-string): Parse a C string to a Rust String. Returns Err status on failure.
+- [json_to_c_string](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-json-to-c-string): Convert a JSON value to a library-owned C string. The caller must free with `nemo_relay_string_free`.
+- [nemo_relay_string_free](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-nemo-relay-string-free): Free a C string previously returned by any `nemo_relay_*` accessor function. Passing null is a safe no-op.
+- [str_to_c_string](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-str-to-c-string): Convert a Rust &amp;str to a library-owned C string.
+- [unix_micros_to_opt_timestamp](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-unix-micros-to-opt-timestamp): Parse an optional Unix timestamp in microseconds since epoch to UTC.

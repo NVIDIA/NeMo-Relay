@@ -1,0 +1,151 @@
+---
+title: "Enum Reason Code"
+sidebar-title: "ReasonCode"
+description: "Machine-readable reason for the translation outcome."
+position: 18
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum ReasonCode &#123;\n    FullySupported,\n    UnsupportedByBackend,\n    UnsupportedByModel,\n    BackendLimitReached,\n    InsufficientEvidence,\n    FeatureDisabled,\n    UnsafeForRequest,\n    PluginIncomplete,\n    NotRelevant,\n    Custom &#123;\n        reason: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n&#125;"}} /></pre>
+
+Machine-readable reason for the translation outcome.
+
+Each variant describes WHY an intent received its status. This allows operators to distinguish between plugin limitations, backend limitations, policy decisions, and safety constraints.
+
+## Variants
+
+### `FullySupported`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "FullySupported"}} /></pre>
+
+Intent was fully supported and applied.
+
+### `UnsupportedByBackend`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedByBackend"}} /></pre>
+
+Backend does not support this intent type at all.
+
+### `UnsupportedByModel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedByModel"}} /></pre>
+
+Backend supports the intent but the specific model lacks the feature.
+
+### `BackendLimitReached`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "BackendLimitReached"}} /></pre>
+
+Intent was degraded due to backend-specific limits (e.g., max breakpoints).
+
+### `InsufficientEvidence`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InsufficientEvidence"}} /></pre>
+
+Not enough historical evidence to apply the intent confidently.
+
+### `FeatureDisabled`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "FeatureDisabled"}} /></pre>
+
+The feature is available but administratively disabled.
+
+### `UnsafeForRequest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsafeForRequest"}} /></pre>
+
+Applying this intent would be unsafe for the current request.
+
+### `PluginIncomplete`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "PluginIncomplete"}} /></pre>
+
+The plugin implementation is incomplete for this intent type.
+
+### `NotRelevant`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "NotRelevant"}} /></pre>
+
+Intent was not relevant to the current request context.
+
+### `Custom`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Custom"}} /></pre>
+
+Escape hatch for reason codes not yet in the enum.
+
+#### Fields
+
+### `reason: String`
+
+Human-readable reason string (for debugging, not machine consumption).
+
+## Trait Implementations
+
+### `impl Clone for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl Hash for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html\">Hash</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `hash`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+
+#### `hash_slice`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl PartialEq for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-reasoncode\">ReasonCode</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Eq for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>
+
+### `impl StructuralPartialEq for ReasonCode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-reasoncode\">ReasonCode</a>"}} /></pre>

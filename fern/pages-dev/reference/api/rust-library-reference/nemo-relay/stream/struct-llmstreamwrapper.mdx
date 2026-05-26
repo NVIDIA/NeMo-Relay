@@ -1,0 +1,84 @@
+---
+title: "Struct LlmStream Wrapper"
+sidebar-title: "LlmStreamWrapper"
+description: "Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:"
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct LlmStreamWrapper { /* private fields */ }
+```
+
+Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:
+
+1. Passes each chunk to the user-supplied **collector** closure. If the collector returns `Err`, the stream terminates with that error.
+2. On stream exhaustion, calls the **finalizer** to produce an aggregated [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json) response, runs sanitize response guardrails on it, then emits the LLM END event.
+
+This type is returned by [`crate::api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute) and is usually consumed as an ordinary async stream. The wrapper preserves the originating scope stack so end-of-stream bookkeeping still uses the correct scope-local middleware and subscribers even when polling happens elsewhere.
+
+## Implementations
+
+### `impl LlmStreamWrapper`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    inner: <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn Stream&lt;Item = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;&gt;,\n    handle: <a href=\"../api/llm/struct-llmhandle\">LlmHandle</a>,\n    collector: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(<a href=\"../json/type-json\">Json</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;,\n    finalizer: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"../json/type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;,\n    _data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;,\n    response_codec: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../codec/traits/trait-llmresponsecodec\">LlmResponseCodec</a>&gt;&gt;,\n) -&gt; Self"}} /></pre>
+
+Create a new `LlmStreamWrapper` around the given raw stream.
+
+Captures the current [`ScopeStackHandle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/type-scopestackhandle) at creation time so the correct scope stack is used when the stream is later polled, even if polling happens on a different task or thread.
+
+##### Parameters
+
+- `inner`: Raw stream of JSON chunks from the provider callback.
+- `handle`: [`LlmHandle`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmhandle) identifying the managed LLM span.
+- `collector`: Per-chunk callback used to accumulate stream state or forward chunks elsewhere. Returning `Err` terminates the stream.
+- `finalizer`: One-shot callback invoked when the stream finishes to synthesize the aggregated response payload.
+- `data`: Retained compatibility payload; Agent Trajectory Observability Format (ATOF) end data is the finalized response.
+- `metadata`: Optional event metadata merged into the emitted LLM-end event.
+- `response_codec`: Optional codec used to derive annotated response metadata from the aggregated final payload.
+
+##### Returns
+
+A new [`LlmStreamWrapper`](/reference/api/rust-library-reference/nemo-relay/stream/struct-llmstreamwrapper) ready to be polled.
+
+#### `scope_stack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_stack(&amp;self) -&gt; &amp;<a href=\"../api/runtime/scope_stack/type-scopestackhandle\">ScopeStackHandle</a>"}} /></pre>
+
+Return the captured scope stack handle for this stream.
+
+Callers can use this to bind the correct scope stack when spawning the stream on a different task via `TASK_SCOPE_STACK.scope(...)`.
+
+##### Returns
+
+A shared reference to the [`ScopeStackHandle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/type-scopestackhandle) captured when the stream wrapper was created.
+
+## Trait Implementations
+
+### `impl Drop for LlmStreamWrapper`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+
+### `impl Stream for LlmStreamWrapper`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl Stream for <a href=\"struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>
+
+#### `Item`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Item = <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"../error/enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `poll_next`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_next(\n    self: <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n    cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::Item&gt;&gt;"}} /></pre>
+
+#### `size_hint`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn size_hint(&amp;self) -&gt; (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;)"}} /></pre>

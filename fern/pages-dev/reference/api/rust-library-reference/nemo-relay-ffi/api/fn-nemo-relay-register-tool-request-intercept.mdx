@@ -1,0 +1,26 @@
+---
+title: "Function nemo_relay_register_tool_request_intercept"
+sidebar-title: "nemo_relay_register_tool_request_intercept"
+description: "Register a tool request intercept. The callback can transform tool arguments before execution. Runs after request guardrails in the middleware pipeline."
+position: 80
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_register_tool_request_intercept(\n    name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    cb: <a href=\"../callable/type-nemorelaytoolsanitizecb\">NemoRelayToolSanitizeCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"../callable/type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Register a tool request intercept. The callback can transform tool arguments before execution. Runs after request guardrails in the middleware pipeline.
+
+## Parameters
+
+- `name`: Unique intercept name.
+- `priority`: Execution priority (lower runs first).
+- `break_chain`: If true, stop processing further intercepts after this one.
+- `cb`: Transform callback that receives tool name and args JSON, returns modified args JSON.
+- `user_data`: Opaque pointer passed to `cb`.
+- `free_fn`: Optional destructor for `user_data`.
+
+The callback is fallible. To signal failure, call [`crate::error::nemo_relay_set_last_error_message`](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-nemo-relay-set-last-error-message) from C and return null.
+
+## Safety
+
+`name` must be a valid C string. `cb` must be a valid function pointer.

@@ -1,0 +1,26 @@
+---
+title: "Module redis"
+sidebar-title: "redis"
+description: "Redis-backed `StorageBackend` implementation."
+position: 34
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Redis-backed [`StorageBackend`](/reference/api/rust-library-reference/nemo-relay-adaptive/storage/traits/trait-storagebackend) implementation.
+
+Provides [`RedisBackend`](/reference/api/rust-library-reference/nemo-relay-adaptive/redis/struct-redisbackend) which persists runs, plans, trie envelopes, and accumulator state in Redis using atomic JSON blob operations.
+
+## Key layout
+
+All keys are prefixed with the configurable `key_prefix`:
+
+- Kind | Key pattern | Value
+- Run record | `{prefix}runs:{agent_id}:{run_id}` | JSON RunRecord
+- Run index | `{prefix}runs_index:{agent_id}` | LIST of run UUIDs
+- Execution plan | `{prefix}plan:{agent_id}` | JSON ExecutionPlan
+- Trie envelope | `{prefix}trie:{agent_id}` | JSON TrieEnvelope
+- Accumulators | `{prefix}accumulators:{agent_id}` | JSON AccumulatorState
+
+## Structs
+
+- [RedisBackend](/reference/api/rust-library-reference/nemo-relay-adaptive/redis/struct-redisbackend): A Redis-backed storage backend for cross-process shared state.

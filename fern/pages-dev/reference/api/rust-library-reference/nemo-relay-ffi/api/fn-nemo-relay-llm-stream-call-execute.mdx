@@ -1,0 +1,31 @@
+---
+title: "Function nemo_relay_llm_stream_call_execute"
+sidebar-title: "nemo_relay_llm_stream_call_execute"
+description: "Execute a streaming LLM call end-to-end. Conditional-execution guardrails run first on the raw request. Returns a stream handle that can be polled with `nemo_relay_stream_next`. Blocks until the stream is set up."
+position: 40
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_llm_stream_call_execute(\n    name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    native_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    func: <a href=\"../callable/type-nemorelayllmexeccb\">NemoRelayLlmExecCb</a>,\n    func_user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    func_free: <a href=\"../callable/type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n    collector: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../callable/type-nemorelaycollectorcb\">NemoRelayCollectorCb</a>&gt;,\n    finalizer: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../callable/type-nemorelayfinalizercb\">NemoRelayFinalizerCb</a>&gt;,\n    parent: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    attributes: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    model_name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    codec_decode: <a href=\"../callable/type-nemorelaycodecdecodefn\">NemoRelayCodecDecodeFn</a>,\n    codec_encode: <a href=\"../callable/type-nemorelaycodecencodefn\">NemoRelayCodecEncodeFn</a>,\n    codec_user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    codec_free_fn: <a href=\"../callable/type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n    response_codec: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-fficodechandle\">FfiCodecHandle</a>,\n    out: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"struct-ffistream\">FfiStream</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Execute a streaming LLM call end-to-end. Conditional-execution guardrails run first on the raw request. Returns a stream handle that can be polled with `nemo_relay_stream_next`. Blocks until the stream is set up.
+
+## Parameters
+
+- `name`: Null-terminated LLM provider name.
+- `native_json`: The request payload as a JSON C string representing an `LlmRequest` (`{"headers": {...}, "content": {...}}`).
+- `func`: C callback that performs the actual LLM call.
+- `func_user_data`: Opaque pointer passed to `func`.
+- `func_free`: Optional destructor for `func_user_data`.
+- `collector`: Callback invoked with each intercepted chunk as a JSON string. May be null, in which case chunks are not collected.
+- `finalizer`: Callback invoked once when the stream is exhausted to produce the aggregated response as a JSON C string. May be null, in which case the finalizer returns `Json::Null`.
+- `parent`: Optional parent scope handle, or null.
+- `attributes`: Bitfield of LLM attributes.
+- `data_json`: Optional JSON data, or null.
+- `metadata_json`: Optional JSON metadata, or null.
+- `model_name`: Optional LLM model identifier, or null.
+- `out`: On success, receives a heap-allocated `FfiStream`.
+
+## Safety
+
+`name`, `native_json`, and `out` must be valid, non-null pointers. `collector` and `finalizer` may be null.

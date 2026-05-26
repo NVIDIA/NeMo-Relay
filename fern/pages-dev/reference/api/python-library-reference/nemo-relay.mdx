@@ -1,0 +1,109 @@
+---
+title: "nemo_relay"
+sidebar-title: "nemo_relay"
+description: "Python bindings for the NeMo Relay runtime."
+position: 1
+---
+Generated from `python/nemo_relay/__init__.pyi`.
+
+Module `nemo_relay`.
+
+Python bindings for the NeMo Relay runtime.
+
+## Functions
+
+### `get_scope_stack`
+
+```python
+def get_scope_stack() -> ScopeStack
+```
+
+Return the current task's active scope stack.
+
+### `scope_stack_active`
+
+```python
+def scope_stack_active() -> bool
+```
+
+Report whether the current context already owns a scope stack.
+
+### `propagate_scope_to_thread`
+
+```python
+def propagate_scope_to_thread() -> ScopeStack
+```
+
+Capture the active scope stack for use in another thread.
+
+### `create_scope_stack`
+
+```python
+def create_scope_stack() -> ScopeStack
+```
+
+Create a new isolated scope stack.
+
+### `set_thread_scope_stack`
+
+```python
+def set_thread_scope_stack(stack: ScopeStack) -> None
+```
+
+Install a scope stack into the current thread's native runtime context.
+
+## Type Aliases And Constants
+
+- `Event`
+- `Json`
+- `JsonObject`
+- `JsonPrimitive`
+- `JsonValue`
+- `LlmConditionalExecutionGuardrail`
+- `LlmExecutionIntercept`
+- `LlmRequestIntercept`
+- `LlmSanitizeRequestGuardrail`
+- `LlmSanitizeResponseGuardrail`
+- `LlmStreamExecutionIntercept`
+- `ToolConditionalExecutionGuardrail`
+- `ToolExecutionIntercept`
+- `ToolRequestIntercept`
+- `ToolSanitizeGuardrail`
+- `UnsupportedBehavior`
+
+## Re-exports
+
+- `AnnotatedLLMRequest`
+- `AnnotatedLLMResponse`
+- `AtifExporter`
+- `AtofExporter`
+- `AtofExporterConfig`
+- `AtofExporterMode`
+- `LLMAttributes`
+- `LLMHandle`
+- `LLMRequest`
+- `MarkEvent`
+- `OpenInferenceConfig`
+- `OpenInferenceSubscriber`
+- `OpenTelemetryConfig`
+- `OpenTelemetrySubscriber`
+- `ScopeAttributes`
+- `ScopeEvent`
+- `ScopeHandle`
+- `ScopeStack`
+- `ScopeType`
+- `ToolAttributes`
+- `ToolHandle`
+- `adaptive`
+- `codecs`
+- `guardrails`
+- `intercepts`
+- `llm`
+- `observability`
+- `plugin`
+- `scope`
+- `scope_local`
+- `subscribers`
+- `tools`
+- `typed`
+

@@ -1,0 +1,51 @@
+---
+title: "Struct Anthropic Messages Streaming Codec"
+sidebar-title: "AnthropicMessagesStreamingCodec"
+description: "Streaming counterpart to `AnthropicMessagesCodec`."
+position: 2
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct AnthropicMessagesStreamingCodec { /* private fields */ }
+```
+
+Streaming counterpart to [`AnthropicMessagesCodec`](/reference/api/rust-library-reference/nemo-relay/codec/anthropic/struct-anthropicmessagescodec).
+
+Replays the Anthropic Messages SSE event sequence into the same JSON shape Anthropic returns for a non-streaming request (`{id, type, role, model, content, stop_reason, stop_sequence, usage}`). Once finalized, the assembled JSON can be fed back through [`AnthropicMessagesCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/anthropic/struct-anthropicmessagescodec) to produce an [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse) - meaning streaming and non-streaming Anthropic requests converge on the same observability output.
+
+Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
+
+## Implementations
+
+### `impl AnthropicMessagesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a fresh streaming codec with empty accumulator state.
+
+## Trait Implementations
+
+### `impl Default for AnthropicMessagesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl StreamingCodec for AnthropicMessagesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
+
+#### `collector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
+
+#### `finalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>

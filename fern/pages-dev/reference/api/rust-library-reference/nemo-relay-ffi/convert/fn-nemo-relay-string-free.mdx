@@ -1,0 +1,15 @@
+---
+title: "Function nemo_relay_string_free"
+sidebar-title: "nemo_relay_string_free"
+description: "Free a C string previously returned by any `nemo_relay_*` accessor function. Passing null is a safe no-op."
+position: 5
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_string_free(ptr: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>)"}} /></pre>
+
+Free a C string previously returned by any `nemo_relay_*` accessor function. Passing null is a safe no-op.
+
+## Safety
+
+`ptr` must be a pointer returned by this library, or null. Double-free is undefined behavior.

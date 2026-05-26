@@ -1,0 +1,135 @@
+---
+title: "Enum Nemo Relay Scope Type"
+sidebar-title: "NemoRelayScopeType"
+description: "The type of scope in the agent execution hierarchy."
+position: 14
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+#[repr(i32)]pub enum NemoRelayScopeType {
+    Agent = 0,
+    Function = 1,
+    Tool = 2,
+    Llm = 3,
+    Retriever = 4,
+    Embedder = 5,
+    Reranker = 6,
+    Guardrail = 7,
+    Evaluator = 8,
+    Custom = 9,
+    Unknown = 10,
+}
+```
+
+The type of scope in the agent execution hierarchy.
+
+## Variants
+
+### `Agent = 0`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Agent = 0"}} /></pre>
+
+Top-level agent scope.
+
+### `Function = 1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Function = 1"}} /></pre>
+
+Generic function scope.
+
+### `Tool = 2`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Tool = 2"}} /></pre>
+
+Tool invocation scope.
+
+### `Llm = 3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Llm = 3"}} /></pre>
+
+LLM call scope.
+
+### `Retriever = 4`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retriever = 4"}} /></pre>
+
+Retriever scope (e.g., RAG lookup).
+
+### `Embedder = 5`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Embedder = 5"}} /></pre>
+
+Embedder scope.
+
+### `Reranker = 6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Reranker = 6"}} /></pre>
+
+Reranker scope.
+
+### `Guardrail = 7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Guardrail = 7"}} /></pre>
+
+Guardrail evaluation scope.
+
+### `Evaluator = 8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Evaluator = 8"}} /></pre>
+
+Evaluator scope.
+
+### `Custom = 9`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Custom = 9"}} /></pre>
+
+User-defined custom scope.
+
+### `Unknown = 10`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unknown = 10"}} /></pre>
+
+Unknown or unspecified scope type.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl From<NemoRelayScopeType> for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>&gt; for <a href=\"../../nemo-relay/api/scope/enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(v: <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>) -&gt; Self"}} /></pre>
+
+### `impl From<ScopeType> for NemoRelayScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"../../nemo-relay/api/scope/enum-scopetype\">ScopeType</a>&gt; for <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(v: <a href=\"../../nemo-relay/api/scope/enum-scopetype\">ScopeType</a>) -&gt; Self"}} /></pre>
+
+### `impl Copy for NemoRelayScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>

@@ -1,0 +1,43 @@
+---
+title: "Trait Learner"
+sidebar-title: "Learner"
+description: "Background learner that updates adaptive state from observed runs."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait Learner:\n    <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>\n    + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>\n    + 'static &#123;\n    // Required method\n    fn process_run&lt;'a&gt;(\n        &amp;'a self,\n        run: &amp;'a <a href=\"../../types/records/struct-runrecord\">RunRecord</a>,\n        backend: &amp;'a dyn <a href=\"../../storage/traits/trait-storagebackenddyn\">StorageBackendDyn</a>,\n        hot_cache: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html\">RwLock</a>&lt;<a href=\"../../types/cache/struct-hotcache\">HotCache</a>&gt;&gt;,\n    ) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;;\n&#125;"}} /></pre>
+
+Background learner that updates adaptive state from observed runs.
+
+## Required Methods
+
+#### `process_run`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn process_run&lt;'a&gt;(\n    &amp;'a self,\n    run: &amp;'a <a href=\"../../types/records/struct-runrecord\">RunRecord</a>,\n    backend: &amp;'a dyn <a href=\"../../storage/traits/trait-storagebackenddyn\">StorageBackendDyn</a>,\n    hot_cache: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html\">RwLock</a>&lt;<a href=\"../../types/cache/struct-hotcache\">HotCache</a>&gt;&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+Process one observed run and update backend state plus the hot cache.
+
+##### Parameters
+
+- `run`: Telemetry record to learn from.
+- `backend`: Storage backend used to persist learner state.
+- `hot_cache`: Shared in-memory cache to refresh with the latest results.
+
+##### Returns
+
+A future that resolves when the learner has finished processing the run.
+
+## Implementors
+
+### `impl Learner for AcgLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-learner\">Learner</a> for <a href=\"../../acg_learner/struct-acglearner\">AcgLearner</a>"}} /></pre>
+
+### `impl Learner for ToolParallelismLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-learner\">Learner</a> for <a href=\"../../tool_parallelism_learner/struct-toolparallelismlearner\">ToolParallelismLearner</a>"}} /></pre>
+
+### `impl Learner for LatencySensitivityLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-learner\">Learner</a> for <a href=\"../latency/struct-latencysensitivitylearner\">LatencySensitivityLearner</a>"}} /></pre>

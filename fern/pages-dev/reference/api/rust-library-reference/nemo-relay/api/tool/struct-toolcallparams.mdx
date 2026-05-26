@@ -1,0 +1,57 @@
+---
+title: "Struct Tool Call Params"
+sidebar-title: "ToolCallParams"
+description: "Builder parameters for `tool_call`."
+position: 6
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ToolCallParams&lt;'a&gt; &#123;\n    pub name: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    pub args: <a href=\"../../json/type-json\">Json</a>,\n    pub parent: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;'a <a href=\"../scope/struct-scopehandle\">ScopeHandle</a>&gt;,\n    pub attributes: <a href=\"struct-toolattributes\">ToolAttributes</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub tool_call_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>
+
+Builder parameters for [`tool_call`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call).
+
+## Fields
+
+### `name: &'a str`
+
+Tool name recorded on the emitted lifecycle event.
+
+### `args: Json`
+
+Raw tool arguments associated with the span.
+
+### `parent: Option<&'a ScopeHandle>`
+
+Optional explicit parent scope.
+
+### `attributes: ToolAttributes`
+
+Tool attribute bitflags applied to the span.
+
+### `data: Option<Json>`
+
+Optional application payload stored on the handle but not emitted as Agent Trajectory Observability Format (ATOF) data.
+
+### `metadata: Option<Json>`
+
+Optional JSON metadata recorded on the start event.
+
+### `tool_call_id: Option<String>`
+
+Optional provider-specific correlation identifier.
+
+### `timestamp: Option<DateTime<Utc>>`
+
+Optional timestamp captured as the handle start time and reused by the emitted start event. When omitted, the current UTC time is used.
+
+## Implementations
+
+### `impl<'a> ToolCallParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-toolcallparams\">ToolCallParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `builder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; ToolCallParamsBuilder&lt;'a, (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+
+Create a builder for building `ToolCallParams`. On the builder, call `.name(...)`, `.args(...)`, `.parent(...)`(optional), `.attributes(...)`(optional), `.data(...)`(optional), `.metadata(...)`(optional), `.tool_call_id(...)`(optional), `.timestamp(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `ToolCallParams`.

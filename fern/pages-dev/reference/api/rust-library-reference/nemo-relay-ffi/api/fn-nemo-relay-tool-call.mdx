@@ -1,0 +1,33 @@
+---
+title: "Function nemo_relay_tool_call"
+sidebar-title: "nemo_relay_tool_call"
+description: "Begin a manual tool call lifecycle span."
+position: 114
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_tool_call(\n    name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    args_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    parent: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    attributes: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    tool_call_id: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i64.html\">i64</a>,\n    out: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffitoolhandle\">FfiToolHandle</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Begin a manual tool call lifecycle span.
+
+This emits a tool Start event after applying sanitize-request guardrails to the observability payload. Request and execution intercepts only run through `nemo_relay_tool_call_execute`.
+
+## Parameters
+
+- `name`: Null-terminated tool name.
+- `args_json`: Tool arguments as a null-terminated JSON C string. These arguments become the start-event data after sanitize-request guardrails.
+- `parent`: Optional parent scope handle, or null to use the current top of stack.
+- `attributes`: Bitfield of tool attributes.
+- `data_json`: Optional null-terminated JSON string stored on the tool handle, or null.
+- `metadata_json`: Optional null-terminated JSON metadata string recorded on the start event, or null.
+- `tool_call_id`: Optional null-terminated external correlation ID recorded in the tool event category profile, or null.
+- `timestamp_unix_micros`: Optional Unix microseconds timestamp for the handle start time and start event, or null to use the current UTC time.
+- `out`: On success, receives a heap-allocated `FfiToolHandle` that must be freed with `nemo_relay_tool_handle_free`.
+
+## Errors
+
+Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when `timestamp_unix_micros` is outside the supported timestamp range.
+
+## Safety
+
+`name` and `args_json` must be valid C strings. `out` must be non-null. Optional pointer arguments may be null; when non-null, they must be valid for reads for the duration of the call.

@@ -1,0 +1,19 @@
+---
+title: "Struct FfiPlugin Context"
+sidebar-title: "FfiPluginContext"
+description: "Opaque plugin registration context."
+position: 9
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct FfiPluginContext(pub <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"../../nemo-relay/plugin/struct-pluginregistrationcontext\">PluginRegistrationContext</a>);"}} /></pre>
+
+Opaque plugin registration context.
+
+This wrapper contains a borrowed raw pointer to an `nemo_relay::plugin::PluginRegistrationContext`, not an owned heap allocation. It is only valid for the duration of the plugin registration callback that receives it. C callers must not store the pointer, use it after the callback returns, or attempt to free or drop it.
+
+There is intentionally no `nemo_relay_plugin_context_free` function because this FFI wrapper does not own the underlying registration context.
+
+## Tuple Fields
+
+### `0: *mut PluginRegistrationContext`

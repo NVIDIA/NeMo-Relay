@@ -1,0 +1,33 @@
+---
+title: "Function event"
+sidebar-title: "event"
+description: "Emit a standalone mark event under the current or provided scope."
+position: 10
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn event(params: <a href=\"struct-emitmarkeventparams\">EmitMarkEventParams</a>&lt;'_&gt;) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emit a standalone mark event under the current or provided scope.
+
+This creates a point-in-time lifecycle event without pushing or popping a new scope.
+
+## Parameters
+
+- `name`: Event name to emit.
+- `parent`: Optional explicit parent scope. When `None`, the current top of stack is used.
+- `data`: Optional JSON payload recorded on the emitted event.
+- `metadata`: Optional JSON metadata recorded on the emitted event.
+- `timestamp`: Optional timestamp recorded on the emitted mark event. When `None`, the current UTC time is used.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` after the event has been emitted.
+
+## Errors
+
+Returns an error when the runtime owner check fails or when internal state cannot be read safely.
+
+## Notes
+
+Scope-local subscribers attached to ancestor scopes observe the emitted mark event just like scope, tool, and LLM lifecycle events.

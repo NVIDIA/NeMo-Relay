@@ -1,0 +1,30 @@
+---
+title: "Function set_latency_sensitivity"
+sidebar-title: "set_latency_sensitivity"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers/fn-set-latency-sensitivity"
+description: "Sets latency sensitivity on the current (top) scope using max-merge semantics."
+position: 13
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_latency_sensitivity(value: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Sets latency sensitivity on the current (top) scope using max-merge semantics.
+
+If the current scope already has a latency_sensitivity value, the new value is only applied if it is greater than the existing one.
+
+## Parameters
+
+- `value`: New non-negative latency sensitivity hint (`>= 0`) for the current top scope.
+
+## Returns
+
+`Ok(())` when the current scope metadata has been updated or left unchanged.
+
+## Errors
+
+Returns an error string when the scope stack lock is poisoned.
+
+## Notes
+
+Existing non-negative latency sensitivity values are updated using max-merge semantics.

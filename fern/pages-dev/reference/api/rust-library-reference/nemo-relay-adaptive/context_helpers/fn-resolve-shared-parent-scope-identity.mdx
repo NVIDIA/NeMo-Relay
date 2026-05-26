@@ -1,0 +1,14 @@
+---
+title: "Function resolve_shared_parent_scope_identity"
+sidebar-title: "resolve_shared_parent_scope_identity"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers/fn-resolve-shared-parent-scope-identity"
+description: "Resolves the session-local identity used by warm-first cohort coordination."
+position: 12
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve_shared_parent_scope_identity() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-sharedparentscopeidentity\">SharedParentScopeIdentity</a>&gt;"}} /></pre>
+
+Resolves the session-local identity used by warm-first cohort coordination.
+
+The shared parent must come from the parent scope, not the current scope's own UUID, so siblings under the same fan-out coordinate with one another. Returns `None` if the scope stack cannot be read.

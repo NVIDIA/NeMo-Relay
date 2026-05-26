@@ -1,0 +1,135 @@
+---
+title: "Enum Optimization Intent"
+sidebar-title: "OptimizationIntent"
+description: "A single optimization intent emitted by a behavioral model."
+position: 16
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OptimizationIntent &#123;\n    CacheStability(<a href=\"struct-cachestabilityintent\">CacheStabilityIntent</a>),\n    ContentExtraction(<a href=\"struct-contentextractionintent\">ContentExtractionIntent</a>),\n    Serialization(<a href=\"struct-serializationintent\">SerializationIntent</a>),\n    Priority(<a href=\"struct-priorityintent\">PriorityIntent</a>),\n    ModelRouting(<a href=\"struct-modelroutingintent\">ModelRoutingIntent</a>),\n    Placement(<a href=\"struct-placementintent\">PlacementIntent</a>),\n    Retention(<a href=\"struct-retentionintent\">RetentionIntent</a>),\n    ToolScope(<a href=\"struct-toolscopeintent\">ToolScopeIntent</a>),\n    Compression(<a href=\"struct-compressionintent\">CompressionIntent</a>),\n&#125;"}} /></pre>
+
+A single optimization intent emitted by a behavioral model.
+
+Each variant wraps a dedicated payload struct with fields specific to that intent type. The enum uses internally-tagged JSON representation with the `intent_type` field as the discriminant.
+
+## Variants
+
+### `CacheStability(CacheStabilityIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "CacheStability(<a href=\"struct-cachestabilityintent\">CacheStabilityIntent</a>)"}} /></pre>
+
+Cache stability analysis results.
+
+### `ContentExtraction(ContentExtractionIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ContentExtraction(<a href=\"struct-contentextractionintent\">ContentExtractionIntent</a>)"}} /></pre>
+
+Content extraction and variable detection.
+
+### `Serialization(SerializationIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Serialization(<a href=\"struct-serializationintent\">SerializationIntent</a>)"}} /></pre>
+
+Serialization and fanout optimization.
+
+### `Priority(PriorityIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Priority(<a href=\"struct-priorityintent\">PriorityIntent</a>)"}} /></pre>
+
+Latency and priority routing.
+
+### `ModelRouting(ModelRoutingIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ModelRouting(<a href=\"struct-modelroutingintent\">ModelRoutingIntent</a>)"}} /></pre>
+
+Model routing and selection.
+
+### `Placement(PlacementIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Placement(<a href=\"struct-placementintent\">PlacementIntent</a>)"}} /></pre>
+
+Context placement optimization.
+
+### `Retention(RetentionIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retention(<a href=\"struct-retentionintent\">RetentionIntent</a>)"}} /></pre>
+
+Cache retention policy.
+
+### `ToolScope(ToolScopeIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolScope(<a href=\"struct-toolscopeintent\">ToolScopeIntent</a>)"}} /></pre>
+
+Tool scope and phase management.
+
+### `Compression(CompressionIntent)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Compression(<a href=\"struct-compressionintent\">CompressionIntent</a>)"}} /></pre>
+
+Content compression.
+
+## Implementations
+
+### `impl OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `discriminant`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn discriminant(&amp;self) -&gt; <a href=\"enum-intenttype\">IntentType</a>"}} /></pre>
+
+Returns the intent type discriminant for this intent variant.
+
+## Trait Implementations
+
+### `impl Clone for OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-optimizationintent\">OptimizationIntent</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl StructuralPartialEq for OptimizationIntent`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-optimizationintent\">OptimizationIntent</a>"}} /></pre>

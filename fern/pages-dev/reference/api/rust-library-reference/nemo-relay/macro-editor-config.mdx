@@ -1,0 +1,47 @@
+---
+title: "Macro editor_config"
+sidebar-title: "editor_config"
+description: "Implements `EditorConfig` for a configuration type."
+position: 10
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+macro_rules! editor_config {
+    (
+        impl $ty:ty {
+            $(
+                $field:ident => {
+                    label: $label:literal,
+                    kind: $kind:ident
+                    $(, values: [$($value:literal),* $(,)?])?
+                    $(, optional: $optional:literal)?
+                    $(, nested: $nested:ty)?
+                    $(, default: $default:ty)?
+                    $(,)?
+                }
+            ),* $(,)?
+        }
+    ) => { ... };
+    (@kind Boolean) => { ... };
+    (@kind String) => { ... };
+    (@kind Integer) => { ... };
+    (@kind Float) => { ... };
+    (@kind Enum) => { ... };
+    (@kind StringMap) => { ... };
+    (@kind Json) => { ... };
+    (@kind Section) => { ... };
+    (@values) => { ... };
+    (@values $($value:literal),*) => { ... };
+    (@optional) => { ... };
+    (@optional $optional:literal) => { ... };
+    (@nested) => { ... };
+    (@nested $nested:ty) => { ... };
+    (@default) => { ... };
+    (@default $default:ty) => { ... };
+}
+```
+
+Implements [`EditorConfig`](/reference/api/rust-library-reference/nemo-relay/config_editor/trait-editorconfig) for a configuration type.
+
+This macro intentionally keeps editor metadata next to the Rust config type while avoiding proc-macro reflection. Field order is declaration order inside the macro invocation.

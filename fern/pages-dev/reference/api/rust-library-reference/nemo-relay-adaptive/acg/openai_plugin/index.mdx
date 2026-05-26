@@ -1,0 +1,27 @@
+---
+title: "Module openai_plugin"
+sidebar-title: "openai_plugin"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/openai_plugin"
+description: "OpenAI cache plugin for the Adaptive Cache Governor (ACG) system."
+position: 7
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+OpenAI cache plugin for the Adaptive Cache Governor (ACG) system.
+
+Maximizes automatic prefix cache hits through deterministic JSON serialization. OpenAI uses automatic prefix caching at 1024+ tokens with exact prefix matching - no explicit annotations are needed. The plugin's job is to ensure that semantically identical prefixes produce byte-identical JSON so the cache hits rather than misses.
+
+Implements the [`ProviderPlugin`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/trait-providerplugin) trait with:
+
+- **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`] for deterministic key ordering in function parameter schemas.
+- **Stable message content canonicalization**: Structured JSON content blocks in the stable prefix are canonicalized for byte-identical output.
+- **No annotations injected**: OpenAI handles caching automatically.
+
+## Threat mitigations
+
+- T-08-06: RFC 8785 is a semantic-preserving transform (only reorders keys, normalizes numbers). The plugin canonicalizes tool schemas (structured JSON) but does NOT modify text content in messages.
+- T-08-09: If canonicalization fails for one tool, the plugin reports Degraded (not Applied) and continues with remaining tools.
+
+## Structs
+
+- [OpenAICachePlugin](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/openai_plugin/struct-openaicacheplugin): OpenAI-specific provider plugin for deterministic JSON serialization.

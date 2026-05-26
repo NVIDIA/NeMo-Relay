@@ -1,0 +1,68 @@
+---
+title: "nemo_relay.integrations.langchain.middleware"
+sidebar-title: "middleware"
+description: "LangChain AgentMiddleware implementation for NeMo Relay."
+position: 2
+---
+Generated from `python/nemo_relay/integrations/langchain/middleware.py`.
+
+Module `nemo_relay.integrations.langchain.middleware`.
+
+LangChain AgentMiddleware implementation for NeMo Relay.
+
+## Classes
+
+### `NemoRelayMiddleware(AgentMiddleware)`
+
+Route LangChain agent model and tool calls through NeMo Relay.
+
+#### Methods
+
+##### `NemoRelayMiddleware`
+
+```python
+def NemoRelayMiddleware(*, name: str = 'NemoRelayMiddleware') -> None
+```
+
+Create an instance.
+
+##### `name`
+
+```python
+def name() -> str
+```
+
+Middleware name used by LangChain graph nodes and traces.
+
+##### `wrap_model_call`
+
+```python
+def wrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], ModelResponse[Any]]) -> ModelResponse[Any]
+```
+
+Wrap a sync LangChain agent model call in NeMo Relay LLM execution.
+
+##### `awrap_model_call`
+
+```python
+async def awrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]]) -> ModelResponse[Any]
+```
+
+Wrap an async LangChain agent model call in NeMo Relay LLM execution.
+
+##### `wrap_tool_call`
+
+```python
+def wrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]) -> ToolMessage | Command[Any]
+```
+
+Wrap a sync LangChain agent tool call in NeMo Relay tool execution.
+
+##### `awrap_tool_call`
+
+```python
+async def awrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]) -> ToolMessage | Command[Any]
+```
+
+Wrap an async LangChain agent tool call in NeMo Relay tool execution.
+

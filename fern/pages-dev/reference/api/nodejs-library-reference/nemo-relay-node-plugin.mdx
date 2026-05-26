@@ -1,0 +1,372 @@
+---
+title: "Plugin Helpers"
+description: "Plugin configuration, validation, activation, and registration helpers."
+position: 4
+---
+Generated from `crates/node/plugin.d.ts`.
+
+Import from `nemo-relay-node/plugin`.
+
+Plugin configuration, validation, activation, and registration helpers.
+
+## Interfaces
+
+### `ConfigPolicy`
+
+Plugin-level policy for unknown or unsupported plugin configuration.
+
+```ts
+export interface ConfigPolicy {
+  unknown_component?: UnsupportedBehavior;
+  unknown_field?: UnsupportedBehavior;
+  unsupported_value?: UnsupportedBehavior;
+}
+```
+
+### `ConfigDiagnostic`
+
+One validation or compatibility diagnostic produced by the plugin system.
+
+```ts
+export interface ConfigDiagnostic {
+  level: 'warning' | 'error';
+  code: string;
+  component?: string;
+  field?: string;
+  message: string;
+}
+```
+
+### `ConfigReport`
+
+Validation or activation report for a plugin configuration.
+
+```ts
+export interface ConfigReport {
+  diagnostics: ConfigDiagnostic[];
+}
+```
+
+### `ComponentSpec` interface
+
+One top-level plugin component.
+
+```ts
+export interface ComponentSpec {
+  kind: string;
+  enabled?: boolean;
+  config?: Record<string, Json>;
+}
+```
+
+### `PluginConfig`
+
+Canonical plugin configuration document.
+
+```ts
+export interface PluginConfig {
+  version?: number;
+  components?: Array<{
+    kind: string;
+    enabled?: boolean;
+    config?: Record<string, Json>;
+  }>;
+  policy?: ConfigPolicy;
+}
+```
+
+### `PluginContext`
+
+Component-scoped registration context passed to plugin handlers.
+
+```ts
+export interface PluginContext {
+  /** Register an infallible event subscriber for this component. */
+  registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /** Register a tool sanitize-request guardrail for this component. */
+  registerToolSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => Json,
+  ): void;
+  /** Register a tool sanitize-response guardrail for this component. */
+  registerToolSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, result: Json) => Json,
+  ): void;
+  /** Register a tool conditional-execution guardrail for this component. */
+  registerToolConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => string | null,
+  ): void;
+  /** Register an LLM sanitize-request guardrail for this component. */
+  registerLlmSanitizeRequestGuardrail(name: string, priority: number, callback: (request: Json) => Json): void;
+  /** Register an LLM sanitize-response guardrail for this component. */
+  registerLlmSanitizeResponseGuardrail(name: string, priority: number, callback: (response: Json) => Json): void;
+  /** Register an LLM conditional-execution guardrail for this component. */
+  registerLlmConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: Json) => string | null,
+  ): void;
+  /** Register an LLM request intercept for this component. */
+  registerLlmRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (args: { name: string; request: Json; annotated: Json | null }) => {
+      request: Json;
+      annotated: Json | null;
+    },
+  ): void;
+  /** Register an LLM execution intercept for this component. */
+  registerLlmExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>,
+  ): void;
+  /** Register an LLM streaming execution intercept for this component. */
+  registerLlmStreamExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      request: Json,
+      next: (request: Json) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+  ): void;
+  /** Register a tool request intercept for this component. */
+  registerToolRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (name: string, args: Json) => Json,
+  ): void;
+  /** Register a tool execution intercept for this component. */
+  registerToolExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (args: Json, next: (args: Json) => Json | Promise<Json>) => Json | Promise<Json>,
+  ): void;
+}
+```
+
+### `Plugin`
+
+Plugin callback contract.
+
+```ts
+export interface Plugin {
+  /** Validate one component-local config object. */
+  validate?(pluginConfig: Record<string, Json>): ConfigDiagnostic[] | null | undefined;
+  /**
+   * Install middleware and subscribers for one component instance.
+   *
+   * Throwing aborts the current initialization and triggers rollback.
+   */
+  register(pluginConfig: Record<string, Json>, context: PluginContext): void;
+}
+```
+
+## Functions
+
+### `defaultConfig`
+
+Create an empty plugin configuration.
+
+Returns the canonical top-level config shape with `version = 1` and no configured components so callers can build a document incrementally before validating or activating it.
+
+**Returns**
+
+A new `PluginConfig` object ready for mutation or validation.
+
+**Remarks**
+
+Mutating the returned object does not affect runtime state until it is passed to `initialize`.
+
+```ts
+export declare function defaultConfig(): PluginConfig;
+```
+
+### `ComponentSpec` function
+
+Create a plugin component entry for a plugin config document.
+
+Packages a plugin kind, component-local config, and enablement flag into the object shape expected by `PluginConfig.components`.
+
+**Parameters**
+
+- `kind`: Registered plugin kind to reference.
+- `config`: Component-local config passed to plugin hooks.
+- `options`: Optional component-level flags.
+
+**Returns**
+
+A `ComponentSpec` ready to insert into a plugin config.
+
+**Remarks**
+
+Setting `options.enabled = false` preserves the component for validation while skipping runtime registration during `initialize`.
+
+```ts
+export declare function ComponentSpec(
+  kind: string,
+  config?: Record<string, Json>,
+  options?: {
+    enabled?: boolean;
+```
+
+### `validate`
+
+Validate a plugin configuration without activating it.
+
+Runs the same config validation pipeline used by initialization while leaving the active plugin registry and runtime configuration unchanged.
+
+**Parameters**
+
+- `config`: Candidate plugin configuration document.
+
+**Returns**
+
+A structured validation report with diagnostics.
+
+**Remarks**
+
+Use this to surface warnings or incompatibilities before replacing the active plugin configuration.
+
+```ts
+export declare function validate(config: PluginConfig): ConfigReport;
+```
+
+### `initialize`
+
+Validate and activate a plugin configuration.
+
+Replaces the current active config, invokes each enabled component's registration hooks, and resolves with the final activation report.
+
+**Parameters**
+
+- `config`: Plugin configuration document to activate.
+
+**Returns**
+
+A promise resolving to the activation report.
+
+**Remarks**
+
+Partial plugin registration is rolled back if activation fails, and the promise rejects with the underlying validation or setup error.
+
+```ts
+export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
+```
+
+### `clear`
+
+Clear the active plugin configuration.
+
+Removes the currently active component registrations while leaving plugin kinds in the registry so they can be reused by a later initialization call.
+
+**Returns**
+
+Nothing.
+
+**Remarks**
+
+Registered plugin kinds remain available after the active config is cleared.
+
+```ts
+export declare function clear(): void;
+```
+
+### `report`
+
+Return the last successfully activated plugin report.
+
+Exposes the most recent activation report emitted by the native plugin system without triggering validation or registration work.
+
+**Returns**
+
+The last activation report, if one exists.
+
+**Remarks**
+
+This returns `null` until `initialize` succeeds at least once in the current process.
+
+```ts
+export declare function report(): ConfigReport | null;
+```
+
+### `listKinds`
+
+List registered plugin kinds.
+
+Returns the plugin kind identifiers currently known to the global registry so callers can inspect what can be referenced from plugin configs.
+
+**Returns**
+
+The registered plugin kind names.
+
+**Remarks**
+
+The list reflects registry state only; it does not indicate whether a plugin kind is currently active in the runtime configuration.
+
+```ts
+export declare function listKinds(): string[];
+```
+
+### `register`
+
+Register a plugin kind with JavaScript validation and registration hooks.
+
+Adapts the higher-level `Plugin` object contract to the native callback shape expected by the Node binding.
+
+**Parameters**
+
+- `pluginKind`: Unique plugin kind identifier to register.
+- `plugin`: Plugin implementation with `validate` and `register` hooks.
+
+**Returns**
+
+Nothing.
+
+**Remarks**
+
+Omitting `plugin.validate` makes the plugin permissive during validation; `plugin.register` still runs later during `initialize`.
+
+```ts
+export declare function register(pluginKind: string, plugin: Plugin): void;
+```
+
+### `deregister`
+
+Remove a previously registered plugin kind.
+
+Deletes the plugin kind from the registry so future config validation and initialization calls can no longer reference it.
+
+**Parameters**
+
+- `pluginKind`: Registered plugin kind identifier to remove.
+
+**Returns**
+
+`true` when a plugin kind was removed, otherwise `false`.
+
+**Remarks**
+
+Active runtime registrations remain until `clear()` or the next successful `initialize(...)`.
+
+```ts
+export declare function deregister(pluginKind: string): boolean;
+```
+
+## Type Aliases
+
+### `UnsupportedBehavior`
+
+Policy behavior for unsupported configuration.
+
+```ts
+export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
+```
+

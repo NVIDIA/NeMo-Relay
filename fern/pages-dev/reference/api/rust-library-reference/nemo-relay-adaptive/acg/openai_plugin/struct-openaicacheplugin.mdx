@@ -1,0 +1,45 @@
+---
+title: "Struct OpenAI Cache Plugin"
+sidebar-title: "OpenAICachePlugin"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/openai_plugin/struct-openaicacheplugin"
+description: "OpenAI-specific provider plugin for deterministic JSON serialization."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct OpenAICachePlugin;
+```
+
+OpenAI-specific provider plugin for deterministic JSON serialization.
+
+Ensures that semantically identical request prefixes produce byte-identical JSON output, maximizing OpenAI's automatic prefix cache hit rate. Stateless - no constructor arguments needed.
+
+## Usage
+
+```rust
+let plugin = OpenAICachePlugin;
+let output = plugin.translate(&input)?;
+```
+
+## Trait Implementations
+
+### `impl ProviderPlugin for OpenAICachePlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../plugin/trait-providerplugin\">ProviderPlugin</a> for <a href=\"struct-openaicacheplugin\">OpenAICachePlugin</a>"}} /></pre>
+
+#### `plugin_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">plugin_id</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `plugin_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">plugin_name</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `translate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">translate</a>(&amp;self, input: &amp;<a href=\"../plugin/struct-plugininput\">PluginInput</a>&lt;'_&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../plugin/struct-pluginoutput\">PluginOutput</a>&gt;"}} /></pre>
+
+#### `capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">capabilities</a>(&amp;self) -&gt; <a href=\"../capability/struct-backendcapabilities\">BackendCapabilities</a>"}} /></pre>

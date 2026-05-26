@@ -1,0 +1,15 @@
+---
+title: "Struct FfiCodec Handle"
+sidebar-title: "FfiCodecHandle"
+description: "Opaque handle carrying both request and response codec trait objects."
+position: 3
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct FfiCodecHandle { /* private fields */ }
+```
+
+Opaque handle carrying both request and response codec trait objects.
+
+Created by `nemo_relay_openai_chat_codec_new` (and similar constructors). Freed by `nemo_relay_codec_free`. The handle carries two `Arc`s pointing to the same underlying codec instance: one for the `LlmCodec` trait and one for the `LlmResponseCodec` trait.

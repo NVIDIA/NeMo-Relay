@@ -1,0 +1,24 @@
+---
+title: "Function scope_deregister_llm_request_intercept"
+sidebar-title: "scope_deregister_llm_request_intercept"
+description: "Deregister a scope-local LLM request intercept."
+position: 25
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_deregister_llm_request_intercept(\n    scope_uuid: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregister a scope-local LLM request intercept.
+
+## Parameters
+
+- `scope_uuid`: UUID of the active scope that owns the middleware.
+- `name`: Scope-local middleware name to remove.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing `true` when an intercept was removed and `false` when the name was not registered on that scope.
+
+## Errors
+
+Returns [`FlowError::NotFound`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the scope is not active or an internal error if the runtime owner check fails.

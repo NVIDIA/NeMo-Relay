@@ -1,0 +1,13 @@
+---
+title: "Constant ATIF_SCHEMA_VERSION"
+sidebar-title: "ATIF_SCHEMA_VERSION"
+description: "The ATIF schema version string embedded in all exported trajectories."
+position: 13
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const ATIF_SCHEMA_VERSION: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a> = \"ATIF-v1.6\";"}} /></pre>
+
+The ATIF schema version string embedded in all exported trajectories.
+
+Currently `"ATIF-v1.6"`. This constant is used by [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory) serialization and verified by downstream consumers to ensure compatibility.

@@ -1,0 +1,44 @@
+---
+title: "Struct Tool Parallelism Learner"
+sidebar-title: "ToolParallelismLearner"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/tool_parallelism_learner/struct-toolparallelismlearner"
+description: "Learner that discovers tool fan-out groups from run telemetry."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct ToolParallelismLearner { /* private fields */ }
+```
+
+Learner that discovers tool fan-out groups from run telemetry.
+
+## Implementations
+
+### `impl ToolParallelismLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-toolparallelismlearner\">ToolParallelismLearner</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(agent_id: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Create a new tool-parallelism learner.
+
+##### Parameters
+
+- `agent_id`: Agent identifier whose execution plan should be updated.
+
+##### Returns
+
+A configured [`ToolParallelismLearner`](/reference/api/rust-library-reference/nemo-relay-adaptive/tool_parallelism_learner/struct-toolparallelismlearner).
+
+## Trait Implementations
+
+### `impl Learner for ToolParallelismLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../learner/traits/trait-learner\">Learner</a> for <a href=\"struct-toolparallelismlearner\">ToolParallelismLearner</a>"}} /></pre>
+
+#### `process_run`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../learner/traits/trait-learner\">process_run</a>&lt;'a&gt;(\n    &amp;'a self,\n    run: &amp;'a <a href=\"../types/records/struct-runrecord\">RunRecord</a>,\n    backend: &amp;'a dyn <a href=\"../storage/traits/trait-storagebackenddyn\">StorageBackendDyn</a>,\n    hot_cache: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html\">RwLock</a>&lt;<a href=\"../types/cache/struct-hotcache\">HotCache</a>&gt;&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>

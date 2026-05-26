@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The docs-website branch intentionally tracks only the Fern publish layout and
+# branch-local maintenance files.
+*
+
+!/.gitignore
+!/README.md
+
+!/.github/
+!/.github/workflows/
+!/.github/workflows/publish-fern-docs.yml
+
+!/fern/
+!/fern/**
+
+# Keep local tooling outputs out of the Fern publish tree.
+**/.DS_Store
+**/.fern/
+**/.next/
+**/node_modules/
+**/dist/
+**/build/
+**/.cache/

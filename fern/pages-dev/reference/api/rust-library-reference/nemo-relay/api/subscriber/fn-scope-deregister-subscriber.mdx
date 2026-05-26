@@ -1,0 +1,30 @@
+---
+title: "Function scope_deregister_subscriber"
+sidebar-title: "scope_deregister_subscriber"
+description: "Deregister a scope-local lifecycle event subscriber."
+position: 3
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_deregister_subscriber(\n    scope_uuid: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregister a scope-local lifecycle event subscriber.
+
+This removes the named subscriber from the registry attached to a specific active scope.
+
+## Parameters
+
+- `scope_uuid`: UUID of the owning scope.
+- `name`: Scope-local subscriber name to remove.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing `true` when a subscriber was removed and `false` when the name was not registered on that scope.
+
+## Errors
+
+Returns [`FlowError::NotFound`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the scope does not exist on the active stack.
+
+## Notes
+
+Deregistration affects only future event delivery for that scope.

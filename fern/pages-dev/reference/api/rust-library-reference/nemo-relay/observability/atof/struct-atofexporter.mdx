@@ -1,0 +1,61 @@
+---
+title: "Struct Atof Exporter"
+sidebar-title: "AtofExporter"
+description: "Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct AtofExporter { /* private fields */ }
+```
+
+Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
+
+## Implementations
+
+### `impl AtofExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-atofexporter\">AtofExporter</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(config: <a href=\"struct-atofexporterconfig\">AtofExporterConfig</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Create a new exporter from config and open its output file.
+
+#### `path`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn path(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.Path.html\">Path</a>"}} /></pre>
+
+Return the output JSONL path.
+
+#### `subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>
+
+Return an event subscriber that writes one JSONL record per observed event.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register this exporter globally under the given subscriber name.
+
+#### `deregister`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregister a global subscriber by name.
+
+#### `force_flush`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn force_flush(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Flush the underlying file and report any stored write error.
+
+#### `shutdown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Shut down the exporter by flushing any buffered data.

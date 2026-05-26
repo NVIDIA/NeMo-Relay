@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_llm_request_new"
+sidebar-title: "nemo_relay_llm_request_new"
+description: "Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest` that must be freed with `nemo_relay_llm_request_free`. Returns null on invalid input."
+position: 49
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_llm_request_new(\n    headers_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    content_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"struct-ffillmrequest\">FfiLLMRequest</a>"}} /></pre>
+
+Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest` that must be freed with `nemo_relay_llm_request_free`. Returns null on invalid input.
+
+## Parameters
+
+- `headers_json`: JSON object of headers/metadata, or null.
+- `content_json`: JSON request content payload, or null.
+
+## Safety
+
+All string arguments must be valid null-terminated C strings or null.

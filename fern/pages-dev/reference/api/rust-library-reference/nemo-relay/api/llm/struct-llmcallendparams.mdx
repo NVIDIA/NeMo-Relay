@@ -1,0 +1,53 @@
+---
+title: "Struct LlmCall EndParams"
+sidebar-title: "LlmCallEndParams"
+description: "Builder parameters for `llm_call_end`."
+position: 4
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmCallEndParams&lt;'a&gt; &#123;\n    pub handle: &amp;'a <a href=\"struct-llmhandle\">LlmHandle</a>,\n    pub response: <a href=\"../../json/type-json\">Json</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub annotated_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n    pub response_codec: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../../codec/traits/trait-llmresponsecodec\">LlmResponseCodec</a>&gt;&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>
+
+Builder parameters for [`llm_call_end`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-end).
+
+## Fields
+
+### `handle: &'a LlmHandle`
+
+LLM handle to close.
+
+### `response: Json`
+
+Raw provider response associated with the end event.
+
+### `data: Option<Json>`
+
+Optional application payload retained for compatibility; Agent Trajectory Observability Format (ATOF) data is the response.
+
+### `metadata: Option<Json>`
+
+Optional JSON metadata recorded on the end event.
+
+### `annotated_response: Option<Arc<AnnotatedLlmResponse>>`
+
+Optional normalized response annotation produced by a response codec.
+
+### `response_codec: Option<Arc<dyn LlmResponseCodec>>`
+
+Optional response codec used to produce an annotation from sanitized event data.
+
+### `timestamp: Option<DateTime<Utc>>`
+
+Optional timestamp recorded on the emitted end event. When omitted, the runtime records the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Implementations
+
+### `impl<'a> LlmCallEndParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-llmcallendparams\">LlmCallEndParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `builder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; LlmCallEndParamsBuilder&lt;'a, (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+
+Create a builder for building `LlmCallEndParams`. On the builder, call `.handle(...)`, `.response(...)`, `.data(...)`(optional), `.metadata(...)`(optional), `.annotated_response(...)`(optional), `.response_codec(...)`(optional), `.timestamp(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `LlmCallEndParams`.

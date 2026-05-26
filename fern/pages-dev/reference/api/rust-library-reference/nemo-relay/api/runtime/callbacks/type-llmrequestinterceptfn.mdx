@@ -1,0 +1,33 @@
+---
+title: "Type Alias LlmRequest Intercept Fn"
+sidebar-title: "LlmRequestInterceptFn"
+description: "Rewrite or annotate an LLM request before execution."
+position: 8
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type LlmRequestInterceptFn = <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, <a href=\"../../llm/struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;) -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;(<a href=\"../../llm/struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;)&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;;"}} /></pre>
+
+Rewrite or annotate an LLM request before execution.
+
+Request intercepts can transform the wire request, attach or replace a normalized [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest), or both.
+
+## Parameters
+
+- First argument: Logical provider or model family name.
+- Second argument: LLM request to transform.
+- Third argument: Optional normalized request annotation to carry forward.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the transformed request and optional annotation.
+
+## Errors
+
+The callback can return any [`FlowError`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) to abort the request-intercept chain.
+
+## Aliased Type
+
+```rust
+pub struct LlmRequestInterceptFn { /* private fields */ }
+```

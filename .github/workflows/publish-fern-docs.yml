@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Publish Fern Docs
+
+on:
+  push:
+    branches:
+      - docs-website
+    paths:
+      - 'fern/**'
+      - '.github/workflows/publish-fern-docs.yml'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 24
+
+      - name: Install Fern CLI
+        working-directory: fern
+        run: |
+          set -euo pipefail
+          npm install -g "fern-api@$(node -p 'require("./fern.config.json").version')"
+
+      - name: Publish docs
+        working-directory: fern
+        env:
+          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+        run: fern generate --docs

@@ -1,0 +1,106 @@
+---
+title: "Struct Redis Backend"
+sidebar-title: "RedisBackend"
+description: "A Redis-backed storage backend for cross-process shared state."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct RedisBackend { /* private fields */ }
+```
+
+A Redis-backed storage backend for cross-process shared state.
+
+Uses [`ConnectionManager`] which is `Clone` (internally `Arc`-based) and automatically reconnects on transient failures. Trie persistence uses an atomic single JSON blob `SET` - no partial update is possible.
+
+## Implementations
+
+### `impl RedisBackend`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-redisbackend\">RedisBackend</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn new(url: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, key_prefix: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Connect to Redis and return a new `RedisBackend`.
+
+##### Arguments
+
+- `url` - Redis connection URL (e.g. `redis://127.0.0.1:6379`).
+- `key_prefix` - String prepended to every Redis key (e.g. `"nemo_relay:"`).
+
+##### Errors
+
+Returns [`AdaptiveError::Storage`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/enum-adaptiveerror) if the client cannot be created or the connection cannot be established.
+
+## Trait Implementations
+
+### `impl StorageBackend for RedisBackend`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../storage/traits/trait-storagebackend\">StorageBackend</a> for <a href=\"struct-redisbackend\">RedisBackend</a>"}} /></pre>
+
+#### `store_run`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackend\">store_run</a>(\n    &amp;self,\n    record: &amp;<a href=\"../types/records/struct-runrecord\">RunRecord</a>,\n) -&gt; impl <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>"}} /></pre>
+
+#### `load_plan`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackend\">load_plan</a>(\n    &amp;self,\n    agent_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; impl <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../types/plan/struct-executionplan\">ExecutionPlan</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>"}} /></pre>
+
+#### `list_runs`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackend\">list_runs</a>(\n    &amp;self,\n    agent_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; impl <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../types/records/struct-runrecord\">RunRecord</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>"}} /></pre>
+
+### `impl StorageBackendDyn for RedisBackend`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../storage/traits/trait-storagebackenddyn\">StorageBackendDyn</a> for <a href=\"struct-redisbackend\">RedisBackend</a>"}} /></pre>
+
+#### `store_run_dyn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">store_run_dyn</a>&lt;'a&gt;(\n    &amp;'a self,\n    record: &amp;'a <a href=\"../types/records/struct-runrecord\">RunRecord</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `load_plan_dyn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">load_plan_dyn</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../types/plan/struct-executionplan\">ExecutionPlan</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `list_runs_dyn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">list_runs_dyn</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../types/records/struct-runrecord\">RunRecord</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `store_trie`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">store_trie</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    envelope: &amp;'a <a href=\"../trie/serialization/struct-trieenvelope\">TrieEnvelope</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `load_trie`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">load_trie</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../trie/serialization/struct-trieenvelope\">TrieEnvelope</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `store_accumulators`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">store_accumulators</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    state: &amp;'a <a href=\"../trie/accumulator/struct-accumulatorstate\">AccumulatorState</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `load_accumulators`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">load_accumulators</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../trie/accumulator/struct-accumulatorstate\">AccumulatorState</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `store_plan`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">store_plan</a>(&amp;self, plan: &amp;<a href=\"../types/plan/struct-executionplan\">ExecutionPlan</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+#### `store_observations`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">store_observations</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    observations: &amp;'a [<a href=\"../acg/prompt_ir/struct-promptir\">PromptIR</a>],\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `load_observations`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">load_observations</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../acg/prompt_ir/struct-promptir\">PromptIR</a>&gt;&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `store_stability`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">store_stability</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    result: &amp;'a <a href=\"../acg/stability/struct-stabilityanalysisresult\">StabilityAnalysisResult</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>
+
+#### `load_stability`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../storage/traits/trait-storagebackenddyn\">load_stability</a>&lt;'a&gt;(\n    &amp;'a self,\n    agent_id: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../acg/stability/struct-stabilityanalysisresult\">StabilityAnalysisResult</a>&gt;&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>

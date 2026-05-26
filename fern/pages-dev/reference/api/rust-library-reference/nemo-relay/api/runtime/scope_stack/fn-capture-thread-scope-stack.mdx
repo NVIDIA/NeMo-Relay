@@ -1,0 +1,18 @@
+---
+title: "Function capture_thread_scope_stack"
+sidebar-title: "capture_thread_scope_stack"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-capture-thread-scope-stack"
+description: "Capture the current thread-local scope stack binding."
+position: 4
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn capture_thread_scope_stack() -&gt; <a href=\"struct-threadscopestackbinding\">ThreadScopeStackBinding</a>"}} /></pre>
+
+Capture the current thread-local scope stack binding.
+
+This is intended for foreign runtimes that temporarily bind a scope stack to an OS thread and need to restore the exact previous state before releasing that thread back to their scheduler.
+
+## Returns
+
+A [`ThreadScopeStackBinding`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-threadscopestackbinding) containing the current thread-local stack and explicit-binding flag.

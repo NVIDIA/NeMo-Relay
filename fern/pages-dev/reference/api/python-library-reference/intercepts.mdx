@@ -1,0 +1,94 @@
+---
+title: "nemo_relay.intercepts"
+sidebar-title: "intercepts"
+description: "Global middleware intercept registration for tools and LLMs."
+position: 6
+---
+Generated from `python/nemo_relay/intercepts.py`.
+
+Module `nemo_relay.intercepts`.
+
+Global middleware intercept registration for tools and LLMs.
+
+## Functions
+
+### `register_tool_request`
+
+```python
+def register_tool_request(name: str, priority: int, break_chain: bool, fn: ToolRequestIntercept) -> None
+```
+
+Register an intercept that rewrites tool arguments before execution.
+
+### `deregister_tool_request`
+
+```python
+def deregister_tool_request(name: str) -> bool
+```
+
+Remove a previously registered tool request intercept.
+
+### `register_tool_execution`
+
+```python
+def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept) -> None
+```
+
+Register middleware around tool execution.
+
+### `deregister_tool_execution`
+
+```python
+def deregister_tool_execution(name: str) -> bool
+```
+
+Remove a previously registered tool execution intercept.
+
+### `register_llm_request`
+
+```python
+def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmRequestIntercept) -> None
+```
+
+Register an intercept that rewrites an `LLMRequest` before execution.
+
+### `deregister_llm_request`
+
+```python
+def deregister_llm_request(name: str) -> bool
+```
+
+Remove a previously registered LLM request intercept.
+
+### `register_llm_execution`
+
+```python
+def register_llm_execution(name: str, priority: int, fn: LlmExecutionIntercept) -> None
+```
+
+Register middleware around non-streaming LLM execution.
+
+### `deregister_llm_execution`
+
+```python
+def deregister_llm_execution(name: str) -> bool
+```
+
+Remove a previously registered LLM execution intercept.
+
+### `register_llm_stream_execution`
+
+```python
+def register_llm_stream_execution(name: str, priority: int, fn: LlmStreamExecutionIntercept) -> None
+```
+
+Register middleware around streaming LLM execution.
+
+### `deregister_llm_stream_execution`
+
+```python
+def deregister_llm_stream_execution(name: str) -> bool
+```
+
+Remove a previously registered streaming LLM execution intercept.
+

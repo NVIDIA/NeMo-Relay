@@ -1,0 +1,25 @@
+---
+title: "Module anthropic"
+sidebar-title: "anthropic"
+description: "Built-in codec for the Anthropic Messages API."
+position: 1
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Built-in codec for the Anthropic Messages API.
+
+Implements [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec) (request decode/encode) and [`LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) (response decode) for the Anthropic Messages API format.
+
+## Anthropic-specific patterns handled
+
+- **Content blocks**: Heterogeneous array of `text`, `tool_use`, `thinking`, `redacted_thinking`, `mcp_tool_use`, `server_tool_use` blocks
+- **Top-level system**: System prompt is a top-level field, not inside messages
+- **stop_reason**: Maps to [`FinishReason`](/reference/api/rust-library-reference/nemo-relay/codec/response/enum-finishreason) (not `finish_reason`)
+- **Tool definitions**: Uses `input_schema` instead of `parameters`
+- **Tool choice**: `{"type":"auto"}` / `{"type":"any"}` / `{"type":"tool","name":"..."}`
+- **Cache tokens**: `cache_read_input_tokens` / `cache_creation_input_tokens`
+
+## Structs
+
+- [AnthropicMessagesCodec](/reference/api/rust-library-reference/nemo-relay/codec/anthropic/struct-anthropicmessagescodec): Built-in codec for the Anthropic Messages API.
+- [AnthropicMessagesStreamingCodec](/reference/api/rust-library-reference/nemo-relay/codec/anthropic/struct-anthropicmessagesstreamingcodec): Streaming counterpart to [`AnthropicMessagesCodec`](/reference/api/rust-library-reference/nemo-relay/codec/anthropic/struct-anthropicmessagescodec).

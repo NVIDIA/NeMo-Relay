@@ -1,0 +1,26 @@
+---
+title: "Module variable_extractor"
+sidebar-title: "variable_extractor"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor"
+description: "Variable content detection and extraction from prompt blocks."
+position: 18
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Variable content detection and extraction from prompt blocks.
+
+## Structs
+
+- [ExtractedVariable](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/struct-extractedvariable): One extracted variable occurrence within a prompt block.
+- [ExtractionResult](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/struct-extractionresult): Variable extraction result for one prompt block.
+- [VariablePattern](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/struct-variablepattern): Regex-based pattern used to detect variable content.
+
+## Enums
+
+- [VariableCategory](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/enum-variablecategory): Category assigned to an extracted variable.
+
+## Functions
+
+- [default_variable_patterns](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/fn-default-variable-patterns): Return the default regex patterns used for variable extraction.
+- [extract_variables](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/fn-extract-variables): Extract variables from one content string.
+- [extract_variables_from_blocks](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/fn-extract-variables-from-blocks): Extract variables from a set of prompt blocks.

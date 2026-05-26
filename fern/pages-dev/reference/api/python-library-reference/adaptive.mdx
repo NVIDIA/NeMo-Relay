@@ -1,0 +1,278 @@
+---
+title: "nemo_relay.adaptive"
+sidebar-title: "adaptive"
+description: "Adaptive plugin configuration helpers."
+position: 2
+---
+Generated from `python/nemo_relay/adaptive.pyi`.
+
+Module `nemo_relay.adaptive`.
+
+Adaptive plugin configuration helpers.
+
+## Classes
+
+### `ConfigDiagnostic(TypedDict)`
+
+One adaptive validation diagnostic.
+
+### `ConfigReport(TypedDict)`
+
+Validation report for adaptive configuration.
+
+### `ConfigPolicy`
+
+Policy for unsupported adaptive configuration.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this policy to the canonical JSON object shape.
+
+### `BackendSpec`
+
+Adaptive state backend selection.
+
+#### Methods
+
+##### `in_memory`
+
+```python
+def in_memory() -> 'BackendSpec'
+```
+
+Return an in-memory adaptive backend spec.
+
+##### `redis`
+
+```python
+def redis(url: str, key_prefix: str = ...) -> 'BackendSpec'
+```
+
+Return a Redis adaptive backend spec.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this backend spec to the canonical JSON object shape.
+
+### `StateConfig`
+
+Adaptive state configuration.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this state config to the canonical JSON object shape.
+
+### `TelemetryConfig`
+
+Built-in adaptive telemetry subscriber settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this telemetry config to the canonical JSON object shape.
+
+### `AdaptiveHintsConfig`
+
+Built-in adaptive hints injection settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this adaptive-hints config to the canonical JSON object shape.
+
+### `ToolParallelismConfig`
+
+Built-in adaptive tool scheduling settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this tool-parallelism config to the canonical JSON object shape.
+
+### `AcgStabilityThresholds`
+
+Prompt-stability classification thresholds for ACG.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize these ACG stability thresholds to the canonical JSON object shape.
+
+### `AcgConfig`
+
+Adaptive Cache Governor settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this ACG config to the canonical JSON object shape.
+
+### `AdaptiveConfig`
+
+Canonical config document for the top-level adaptive component.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this adaptive config to the canonical JSON object shape.
+
+### `ComponentSpec`
+
+Top-level adaptive component wrapper.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this component to the canonical plugin shape.
+
+### `AdaptiveRuntime`
+
+Hosted adaptive runtime wrapper used by external framework integrations.
+
+#### Methods
+
+##### `AdaptiveRuntime`
+
+```python
+def AdaptiveRuntime(config: AdaptiveConfig | JsonObject) -> None
+```
+
+Create an instance.
+
+##### `register`
+
+```python
+async def register() -> None
+```
+
+Register the configured adaptive features with NeMo Relay.
+
+##### `deregister`
+
+```python
+def deregister() -> None
+```
+
+Deregister previously registered adaptive features.
+
+##### `shutdown`
+
+```python
+async def shutdown() -> None
+```
+
+Deregister the runtime and release its owned resources.
+
+##### `wait_for_idle`
+
+```python
+def wait_for_idle() -> None
+```
+
+Block until the adaptive telemetry drain has processed pending work.
+
+##### `report`
+
+```python
+def report() -> ConfigReport
+```
+
+Return the validation report associated with this runtime.
+
+##### `bind_scope`
+
+```python
+def bind_scope(scope_handle: ScopeHandle) -> None
+```
+
+Bind this runtime's ACG request rewriting to an active scope.
+
+##### `build_cache_request_facts`
+
+```python
+def build_cache_request_facts(*, provider: str, request_id: str, annotated_request: object, agent_id: str, timestamp: str | None = ...) -> JsonObject | None
+```
+
+Build cache-diagnostics facts for an annotated request.
+
+## Functions
+
+### `validate_config`
+
+```python
+def validate_config(config: AdaptiveConfig | JsonObject) -> ConfigReport
+```
+
+Validate an adaptive config document without constructing a runtime.
+
+### `build_cache_telemetry_event`
+
+```python
+def build_cache_telemetry_event(*, provider: str, request_id: str, usage: JsonObject | None = ..., request_facts: JsonObject | None = ..., agent_id: str, template_version: str, toolset_hash: str, model_family: str, tenant_scope: str, timestamp: str | None = ...) -> JsonObject | None
+```
+
+Build one canonical cache telemetry event from usage plus request facts.
+
+### `set_latency_sensitivity`
+
+```python
+def set_latency_sensitivity(level: int) -> None
+```
+
+Set a request-local latency-sensitivity hint.
+
+## Type Aliases And Constants
+
+- `ADAPTIVE_PLUGIN_KIND`
+

@@ -1,0 +1,21 @@
+---
+title: "Function global_context"
+sidebar-title: "global_context"
+description: "Return the process-global runtime context state handle."
+position: 18
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn global_context() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html\">RwLock</a>&lt;<a href=\"../state/struct-nemorelaycontextstate\">NemoRelayContextState</a>&gt;&gt;"}} /></pre>
+
+Return the process-global runtime context state handle.
+
+This lazily initializes the shared [`NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate) on first use and returns a cloned [`Arc`](https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html) handle to the same underlying [`RwLock`](https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html) on every subsequent call.
+
+## Returns
+
+An [`Arc`](https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html) pointing at the singleton [`RwLock`](https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html) that stores the runtime context state for the current process.
+
+## Notes
+
+All callers share the same underlying state. Mutations made through one handle are visible through every other handle returned by this function.

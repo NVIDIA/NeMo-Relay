@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+- folder: ../pages-dev/about
+  title: About NeMo Relay
+  slug: about-nemo-relay
+  title-source: frontmatter
+- folder: ../pages-dev/getting-started
+  title: Getting Started
+  slug: getting-started
+  title-source: frontmatter
+- folder: ../pages-dev/nemo-relay-cli
+  title: NeMo Relay CLI
+  slug: nemo-relay-cli
+  title-source: frontmatter
+- folder: ../pages-dev/integrations
+  title: Supported Integrations
+  slug: supported-integrations
+  title-source: frontmatter
+- folder: ../pages-dev/instrument-applications
+  title: Instrument Applications
+  slug: instrument-applications
+  title-source: frontmatter
+- folder: ../pages-dev/plugins/observability
+  title: Observability Plugin
+  slug: observability-plugin
+  title-source: frontmatter
+- folder: ../pages-dev/plugins/adaptive
+  title: Adaptive Plugin
+  slug: adaptive-plugin
+  title-source: frontmatter
+- folder: ../pages-dev/integrate-frameworks
+  title: Integrate into Frameworks
+  slug: integrate-into-frameworks
+  title-source: frontmatter
+- folder: ../pages-dev/build-plugins
+  title: Build Plugins
+  slug: build-plugins
+  title-source: frontmatter
+- folder: ../pages-dev/contribute
+  title: Contribute
+  slug: contribute
+  title-source: frontmatter
+- folder: ../pages-dev/reference
+  title: Reference
+  slug: reference
+  title-source: frontmatter
+- folder: ../pages-dev/resources
+  title: Resources
+  slug: resources
+  title-source: frontmatter

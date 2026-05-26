@@ -1,0 +1,19 @@
+---
+title: "Module stability"
+sidebar-title: "stability"
+description: "Stability analysis for prompt blocks across multiple observations."
+position: 15
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Stability analysis for prompt blocks across multiple observations.
+
+## Structs
+
+- [StabilityAnalysisResult](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/stability/struct-stabilityanalysisresult): Result of analyzing prompt stability across a set of observations.
+- [StabilityThresholds](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/stability/struct-stabilitythresholds): Thresholds controlling prompt-block stability classification.
+
+## Functions
+
+- [analyze_stability](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/stability/fn-analyze-stability): Analyze prompt-block stability across multiple observations.
+- [find_stable_prefix_length](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/stability/fn-find-stable-prefix-length): Count the number of leading scores classified as stable.

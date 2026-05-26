@@ -1,0 +1,37 @@
+---
+title: "nemo-relay-ffi"
+sidebar-title: "nemo-relay-ffi"
+description: "C FFI layer for NeMo Relay."
+position: 3
+---
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+C FFI layer for NeMo Relay.
+
+This crate exposes the NeMo Relay core runtime as a C-compatible shared library. It is consumed by the Go bindings via CGo and regenerates the committed `nemo_relay.h` header through `cbindgen` during Cargo builds. All exported symbols use the `nemo_relay_` prefix.
+
+## Middleware Pipeline
+
+When a tool or LLM call is executed end-to-end via the `_execute` functions, the runtime applies the following middleware pipeline in order:
+
+1. **Request intercepts** - transform the request before guardrails.
+2. **Sanitize-request guardrails** - validate/sanitize the request.
+3. **Conditional-execution guardrails** - gate whether the call proceeds.
+4. **Execution intercepts** - optionally replace the call implementation.
+5. **Sanitize-response guardrails** - validate/sanitize the response.
+
+## Error Handling
+
+Every `extern "C"` function returns an [`error::NemoRelayStatus`](/reference/api/rust-library-reference/nemo-relay-ffi/error/enum-nemorelaystatus) code. On failure, call [`error::nemo_relay_last_error`](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-nemo-relay-last-error) on the same thread to retrieve a human-readable error description. The error is stored in thread-local storage and is valid until the next FFI call on that thread.
+
+## Memory Ownership
+
+All opaque handles (`FfiScopeHandle`, `FfiToolHandle`, `FfiLLMHandle`, etc.) are heap-allocated and must be freed through their corresponding `nemo_relay_*_free` functions. C strings returned by accessor functions must be freed with `nemo_relay_string_free`.
+
+## Modules
+
+- [`api`](/reference/api/rust-library-reference/nemo-relay-ffi/api) - Top-level FFI entry points (scope, tool, LLM, guardrail, intercept, subscriber, ATIF exporter). Tool calls accept an optional `tool_call_id` and LLM calls accept an optional `model_name` for ATIF trajectory correlation. ATIF exporter functions (`nemo_relay_atif_exporter_*`) create, register, export, and clear trajectory data.
+- [`types`](/reference/api/rust-library-reference/nemo-relay-ffi/types) - C-compatible struct and enum definitions, plus event accessor functions (`nemo_relay_event_input`, `_output`, `_model_name`, `_tool_call_id`, `_parent_uuid`, `_scope_type`) and the `FfiAtifExporter` opaque handle.
+- [`error`](/reference/api/rust-library-reference/nemo-relay-ffi/error) - Status codes and thread-local error storage.
+- [`callable`](/reference/api/rust-library-reference/nemo-relay-ffi/callable) - C function pointer typedefs and wrapper functions.
+- [`convert`](/reference/api/rust-library-reference/nemo-relay-ffi/convert) - JSON and C-string conversion utilities.
