@@ -1,40 +1,28 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
+#![cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
+
 use std::sync::Arc;
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use std::time::Duration;
 
 use serde_json::{Map, Value as Json, json};
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use tokio::sync::mpsc;
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use tokio_stream::wrappers::ReceiverStream;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::api::llm::LlmRequest;
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::api::runtime::{LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, ToolExecutionFn};
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle, event, get_handle};
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::codec::openai_chat::OpenAIChatCodec;
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::codec::streaming::SseEventDecoder;
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::codec::traits::LlmCodec;
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use crate::error::FlowError;
 use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 use rustls::crypto::ring;
 
 use super::{NeMoGuardrailsConfig, RemoteBackendConfig, RequestDefaultsConfig};
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 #[derive(Clone)]
 struct RemoteBackendRuntime {
     endpoint: String,
@@ -44,14 +32,12 @@ struct RemoteBackendRuntime {
     request_defaults: Option<RequestDefaultsConfig>,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 #[derive(Clone, Copy)]
 enum RemoteCheckKind {
     Input,
     Output,
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 impl RemoteBackendRuntime {
     fn new(config: &NeMoGuardrailsConfig, remote: &RemoteBackendConfig) -> PluginResult<Self> {
         let endpoint = remote.endpoint.clone().ok_or_else(|| {
@@ -710,7 +696,6 @@ impl RemoteBackendRuntime {
     }
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn emit_remote_mark(name: &str, parent: &Option<ScopeHandle>, data: Json) {
     let _ = event(
         EmitMarkEventParams::builder()
@@ -721,7 +706,6 @@ fn emit_remote_mark(name: &str, parent: &Option<ScopeHandle>, data: Json) {
     );
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn tool_input_content(tool_name: &str, args: &Json) -> String {
     serde_json::to_string(&json!({
         "tool_name": tool_name,
@@ -730,7 +714,6 @@ fn tool_input_content(tool_name: &str, args: &Json) -> String {
     .expect("tool input payload should serialize to JSON")
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn redact_remote_error_payload(status: u16, payload: &str) -> String {
     format!(
         "remote request failed with status {status}; error body omitted from marks ({} bytes)",
@@ -738,7 +721,6 @@ fn redact_remote_error_payload(status: u16, payload: &str) -> String {
     )
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn tool_output_content(tool_name: &str, args: &Json, result: &Json) -> String {
     serde_json::to_string(&json!({
         "tool_name": tool_name,
@@ -748,7 +730,6 @@ fn tool_output_content(tool_name: &str, args: &Json, result: &Json) -> String {
     .expect("tool output payload should serialize to JSON")
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn modified_tool_payload(
     content: &str,
     expected_tool_name: &str,
@@ -778,7 +759,6 @@ fn modified_tool_payload(
     })
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn chat_completion_content(response: &Json) -> crate::error::Result<String> {
     response
         .get("choices")
@@ -796,7 +776,6 @@ fn chat_completion_content(response: &Json) -> crate::error::Result<String> {
         })
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn blocking_rail_name(response: &Json) -> Option<String> {
     response
         .get("guardrails")
@@ -814,7 +793,6 @@ fn blocking_rail_name(response: &Json) -> Option<String> {
         })
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn remote_mark_data(
     stream: bool,
     config_id: &Option<String>,
@@ -845,7 +823,6 @@ fn remote_mark_data(
     Json::Object(data)
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 fn tool_remote_mark_data(
     kind: RemoteCheckKind,
     tool_name: &str,
@@ -869,7 +846,6 @@ fn tool_remote_mark_data(
     Json::Object(data)
 }
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
 pub(super) fn register_remote_backend(
     config: NeMoGuardrailsConfig,
     ctx: &mut PluginRegistrationContext,
