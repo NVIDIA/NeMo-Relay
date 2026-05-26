@@ -9,8 +9,26 @@ fn render_frame_settled_contains_figlet_glyphs() {
     // ANSI Shadow figlet uses filled blocks and box-drawing corners.
     assert!(frame.contains('█'), "frame missing figlet block glyph");
     assert!(
+        !frame.contains("_/=|") && !frame.contains("|=\\_") && !frame.contains("╔██╗██╗"),
+        "frame should not include flag columns"
+    );
+    assert!(
         frame.contains('╗') || frame.contains('╔'),
         "frame missing figlet corners"
+    );
+}
+
+#[test]
+fn figlet_rows_are_centered_as_one_block() {
+    let frame = render_frame(false);
+    let rows = frame_grid_rows(&frame);
+    let figlet_rows = &rows[1..=FIGLET_ROWS];
+    let left_edges: Vec<usize> = figlet_rows.iter().map(|row| first_art_col(row)).collect();
+    let expected_left_edge = (frame_inner_width(&frame) - banner_art_width()) / 2;
+
+    assert!(
+        left_edges.iter().all(|edge| *edge == expected_left_edge),
+        "figlet rows should share centered left edge {expected_left_edge}; got {left_edges:?}"
     );
 }
 
@@ -65,4 +83,28 @@ fn docked_frame_includes_version_tag() {
         !frame.contains('●'),
         "docked frame should not include a bullet dot before the version"
     );
+}
+
+fn frame_grid_rows(frame: &str) -> Vec<&str> {
+    frame
+        .lines()
+        .filter(|line| line.starts_with('│') && line.ends_with('│'))
+        .map(|line| line.trim_matches('│'))
+        .collect()
+}
+
+fn frame_inner_width(frame: &str) -> usize {
+    frame
+        .lines()
+        .find(|line| line.starts_with('╭'))
+        .expect("frame should include a top border")
+        .trim_matches(['╭', '╮'])
+        .chars()
+        .count()
+}
+
+fn first_art_col(row: &str) -> usize {
+    row.chars()
+        .position(|ch| !ch.is_whitespace())
+        .expect("figlet row should contain art")
 }
