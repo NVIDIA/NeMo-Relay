@@ -14,8 +14,8 @@ Documentation is authored on `main`:
 
 - `docs/` contains the Markdown and MDX page source.
 - `docs/index.yml` contains the source navigation tree.
-- `fern/` contains local Fern configuration, shared assets, custom components,
-  and site styling.
+- `fern/` contains local Fern configuration, shared assets, and custom
+  components.
 
 The `docs-website` branch is mostly CI-managed. Do not hand-edit generated Fern
 content on that branch. The root `.gitignore`, `README.md`, and

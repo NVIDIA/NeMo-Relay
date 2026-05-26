@@ -33,7 +33,6 @@ FERN_SYNC_ITEMS = (
     "assets",
     "components",
     "fern.config.json",
-    "main.css",
     "README.md",
 )
 YAML_HEADER = (
