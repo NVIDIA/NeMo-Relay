@@ -1,0 +1,178 @@
+---
+title: "Using Codecs"
+description: ""
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when a framework integration needs typed application values at its public boundary while NeMo Relay still records JSON-compatible payloads.
+
+## What You Build
+
+You will choose typed value codecs for framework-facing wrappers so that:
+
+- Application code can pass native objects to framework callbacks
+- NeMo Relay can emit JSON-compatible lifecycle payloads
+- Middleware and subscribers receive predictable serialized values
+- The framework callback still receives the application type it expects
+
+For provider-native LLM payload normalization, use [Provider Codecs](/integrate-frameworks/provider-codecs).
+
+## Before You Start
+
+You need:
+
+- A stable framework callback boundary.
+- Application request and response types that can be projected into JSON.
+- A managed wrapper that accepts codecs, such as the typed tool or typed LLM helpers.
+- A validation path that confirms the returned value still matches framework expectations.
+
+## What Codecs Are
+
+A typed value codec is a pure data translator at the NeMo Relay boundary. It converts application-facing values to JSON before NeMo Relay emits events or runs JSON-based middleware, then converts JSON back into the type expected by the framework callback or caller.
+
+Typed value codecs are different from provider codecs:
+
+| Codec Type | Purpose | Common Use |
+|---|---|---|
+| Typed value codec | Converts application values to and from JSON. | Dataclasses, Pydantic models, TypeScript object shapes, custom framework types. |
+| Provider codec | Converts provider-specific LLM requests and responses to annotated NeMo Relay request or response data. | OpenAI Chat, OpenAI Responses, Anthropic Messages, custom provider payloads. |
+
+Use this page for typed value codecs. Use [Provider Codecs](/integrate-frameworks/provider-codecs) when middleware needs normalized LLM messages, tools, model names, generation parameters, or provider response annotations.
+
+## How Typed Value Codecs Work
+
+When a managed typed wrapper receives a codec:
+
+1. The wrapper converts the application input into JSON before entering the NeMo Relay runtime.
+2. NeMo Relay emits lifecycle events and runs middleware against JSON-compatible payloads.
+3. The wrapper converts JSON back into the callback type before invoking framework-owned code when needed.
+4. The wrapper converts the callback result back through the result codec before returning to the caller.
+
+Keep codecs deterministic and side-effect free. A codec should not open network connections, mutate framework state, or hide provider I/O.
+
+## Typed Value Codecs
+
+Python exposes:
+
+- `JsonPassthrough`
+- `DataclassCodec`
+- `PydanticCodec`
+- `BestEffortAnyCodec`
+
+Node.js exposes `JsonPassthrough` and custom `Codec<T>` implementations.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from dataclasses import dataclass
+
+from pydantic import BaseModel
+
+from nemo_relay.typed import DataclassCodec, JsonPassthrough, PydanticCodec
+
+@dataclass
+class SearchArgs:
+    query: str
+
+class SearchResult(BaseModel):
+    hits: int
+
+args_codec = DataclassCodec(SearchArgs)
+result_codec = PydanticCodec(SearchResult)
+passthrough = JsonPassthrough()
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import { JsonPassthrough, type Codec, type JsonValue } from 'nemo-relay-node/typed';
+
+type SearchArgs = { query: string };
+
+const argsCodec: Codec<SearchArgs, JsonValue> = {
+  toJson: (value) => value,
+  fromJson: (json) => json as SearchArgs,
+};
+
+const passthrough = new JsonPassthrough();
+```
+</Tab>
+
+</Tabs>
+
+Use `BestEffortAnyCodec` only at boundary code where strict schemas are unavailable. Prefer dataclass, Pydantic, or explicit Node.js codecs when the framework owns a stable schema.
+
+## Example: Typed Tool Boundary
+
+Use typed value codecs when the framework wants native objects but NeMo Relay should emit JSON payloads.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from dataclasses import dataclass
+
+import nemo_relay
+from nemo_relay.typed import DataclassCodec, JsonPassthrough, tool_execute
+
+@dataclass
+class SearchArgs:
+    query: str
+
+async def invoke(args: SearchArgs) -> dict[str, str]:
+    return {"echo": args.query}
+
+result = await tool_execute(
+    "search",
+    SearchArgs("weather"),
+    invoke,
+    args_codec=DataclassCodec(SearchArgs),
+    result_codec=JsonPassthrough(),
+)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import { JsonPassthrough, typedToolExecute, type Codec, type JsonValue } from 'nemo-relay-node/typed';
+
+type SearchArgs = { query: string };
+type SearchResult = { echo: string };
+
+const argsCodec: Codec<SearchArgs, JsonValue> = {
+  toJson: (value) => value,
+  fromJson: (json) => json as SearchArgs,
+};
+
+const result = await typedToolExecute<SearchArgs, SearchResult>(
+  'search',
+  { query: 'weather' },
+  async (args) => ({ echo: args.query }),
+  argsCodec,
+  new JsonPassthrough(),
+);
+```
+</Tab>
+
+</Tabs>
+
+## Validation Checklist
+
+Use this checklist to confirm the implementation preserves the expected runtime
+contract.
+
+- Codec output is JSON-compatible.
+- Required fields are preserved by `toJson` and `fromJson`.
+- Middleware sees the expected serialized shape.
+- The framework callback receives the expected application type.
+- Error paths report conversion failures close to the framework boundary.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Use [Provider Codecs](/integrate-frameworks/provider-codecs) when provider payloads need normalized request or response annotations.
+- Use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) when framework objects cannot pass through JSON payloads.
+- Use [Integrate into Frameworks Code Examples](/integrate-frameworks/code-examples) for explicit fallback APIs.

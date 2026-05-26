@@ -52,12 +52,12 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check . --exclude docs/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
+        entry: uv run ty check . --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
         language: system
         types: [python]
         pass_filenames: false
 
-  # Documentation — link validation
+  # Documentation — external link validation
   - repo: https://github.com/lycheeverse/lychee.git
     rev: lychee-v0.23.0
     hooks:
@@ -66,15 +66,25 @@ repos:
         args:
           - --no-progress
           - --include-fragments
+          - --root-dir
+          - .
+          - --scheme
+          - http
+          - --scheme
+          - https
+          - --accept
+          - '200..=299,403,429'
+          - --exclude
+          - '^https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$'
           - --exclude
           - '^https://www\.npmjs\.com/package/nemo-relay-(node|wasm)$'
           - --exclude
           - '^https://github\.com/NVIDIA/NeMo-Relay(?:/.*)?$'
           - --exclude
-          - '^https://nvidia\.github\.io/NeMo-Relay(?:/.*)?$'
+          - '^https://nvidia-nemo-relay\.docs\.buildwithfern\.com/nemo-relay(?:/.*)?$'
           - README.md
           - CONTRIBUTING.md
-          - docs/**/*.md
+          - docs/**/*.mdx
         always_run: true
         pass_filenames: false
 

@@ -25,7 +25,6 @@ COPYRIGHT_TEXT_TEMPLATE = (
     "SPDX-FileCopyrightText: Copyright (c) {year}, NVIDIA CORPORATION & AFFILIATES. All rights reserved."
 )
 
-COPYRIGHT_TEXT = COPYRIGHT_TEXT_TEMPLATE.format(year=CURRENT_YEAR)
 LICENSE_TEXT = "SPDX-License-Identifier: Apache-2.0"
 
 # Pattern to match the full SPDX-FileCopyrightText content (after any comment prefix).
@@ -93,10 +92,22 @@ LINE_COMMENT_STYLES: dict[str, str] = {
 
 BLOCK_COMMENT_STYLES: dict[str, tuple[str, str, str]] = {
     ".md": ("<!--\n", "\n", "\n-->"),
+    ".mdx": ("{/* ", "\n", " */}"),
     ".html": ("<!--\n", "\n", "\n-->"),
     ".h": ("/* ", "\n * ", "\n */"),
     ".c": ("/* ", "\n * ", "\n */"),
 }
+
+MDX_SPDX_HEADER_RE = re.compile(
+    r"(?P<start>\{/\*\s*|<!--\s*)"
+    r"SPDX-FileCopyrightText: Copyright \(c\) (?P<start_year>\d{4})(?:-(?P<end_year>\d{4}))?, "
+    r"NVIDIA CORPORATION & AFFILIATES\. All rights reserved\.\s*"
+    r"SPDX-License-Identifier: Apache-2\.0"
+    r"\s*(?P<end>\*/\}|-->)",
+    re.MULTILINE,
+)
+
+FRONTMATTER_RE = re.compile(r"\A---\r?\n.*?\r?\n---\r?\n", re.DOTALL)
 
 
 def get_comment_style(filepath: str) -> str | None:
@@ -111,14 +122,15 @@ def get_comment_style(filepath: str) -> str | None:
     return None
 
 
-def make_header(style_key: str) -> str:
+def make_header(style_key: str, year: str | None = None) -> str:
     """Build the full SPDX header string for the given comment style."""
+    copyright_text = COPYRIGHT_TEXT_TEMPLATE.format(year=year or CURRENT_YEAR)
     if style_key in LINE_COMMENT_STYLES:
         prefix = LINE_COMMENT_STYLES[style_key]
-        return f"{prefix}{COPYRIGHT_TEXT}\n{prefix}{LICENSE_TEXT}\n"
+        return f"{prefix}{copyright_text}\n{prefix}{LICENSE_TEXT}\n"
     if style_key in BLOCK_COMMENT_STYLES:
         start, mid, end = BLOCK_COMMENT_STYLES[style_key]
-        return f"{start}{COPYRIGHT_TEXT}{mid}{LICENSE_TEXT}{end}\n"
+        return f"{start}{copyright_text}{mid}{LICENSE_TEXT}{end}\n"
     return ""
 
 
@@ -140,6 +152,15 @@ def compute_year_string(start_year: str, end_year: str | None) -> str:
     if end_year is not None:
         return f"{start_year}-{CURRENT_YEAR}"
     return f"{start_year}-{CURRENT_YEAR}"
+
+
+def insertion_index(filepath: str, content: str) -> int:
+    """Return where a missing header should be inserted."""
+    if get_comment_style(filepath) == ".mdx":
+        match = FRONTMATTER_RE.match(content)
+        if match is not None:
+            return match.end()
+    return 0
 
 
 def process_file(filepath: str) -> bool:
@@ -167,6 +188,18 @@ def process_file(filepath: str) -> bool:
     lines = content.split("\n")
     search_lines = lines[:10]
     search_text = "\n".join(search_lines)
+
+    if style_key == ".mdx":
+        match = MDX_SPDX_HEADER_RE.search(search_text)
+        if match:
+            year_str = compute_year_string(match.group("start_year"), match.group("end_year"))
+            header = make_header(style_key, year_str).rstrip("\n")
+            if header == match.group(0):
+                return False
+            new_content = content[: match.start()] + header + content[match.end() :]
+            with open(filepath, "w", encoding="utf-8", newline="") as f:
+                f.write(new_content)
+            return True
 
     match = SPDX_RE.search(search_text)
 
@@ -199,7 +232,8 @@ def process_file(filepath: str) -> bool:
         else:
             new_content = shebang + header + "\n" + rest
     else:
-        new_content = header + "\n" + content
+        index = insertion_index(filepath, content)
+        new_content = content[:index] + header + "\n" + content[index:]
 
     with open(filepath, "w", encoding="utf-8", newline="") as f:
         f.write(new_content)

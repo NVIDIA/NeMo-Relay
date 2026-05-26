@@ -1,0 +1,185 @@
+---
+title: "Adding Scopes"
+description: ""
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when a framework needs a durable NeMo Relay ownership boundary for one request, agent run, workflow, or framework task.
+
+## What You Build
+
+You will map framework start and end hooks to NeMo Relay scope start and end events. Tool and LLM wrappers can then attach child calls to that active scope, subscribers can group events by root scope UUID, and adaptive components can reason about complete request trajectories instead of isolated calls.
+
+## Why You Should Add Scopes
+
+Scopes are the framework integration's trace boundary. Without them, a tool or LLM call can still emit lifecycle events, but subscribers have less context for which request, tenant, agent run, or workflow owned that work.
+
+Scopes help with:
+
+- **Observability**: Scopes group tool calls, LLM calls, marks, middleware decisions, and exporter output under one root scope UUID.
+- **Adaptive tuning**: Adaptive behavior needs request-level context to compare choices, correlate outcomes, and avoid treating unrelated calls as one trajectory.
+- **Middleware isolation**: Scope-local middleware and subscribers can apply to one request, tenant, or experiment and disappear when the scope closes.
+- **Concurrency**: Framework request scopes keep concurrent runs from sharing the wrong parent-child event hierarchy.
+- **Debugging**: Mark events inside a scope make retries, routing decisions, queue waits, and scheduler transitions visible without pretending they are full tool or LLM calls.
+
+## Recommended Patterns With Start and End Hooks
+
+Prefer a wrapper or context manager when the framework gives you control around the whole request. Use explicit push and pop hooks when the framework exposes separate start and finish notifications.
+
+The scope start hook should:
+
+- Create one NeMo Relay scope for the framework request or agent run
+- Store the returned handle in framework request state
+- Include only JSON-compatible request identifiers, tenant identifiers, or safe summary input
+
+The scope end hook should:
+
+- Retrieve the same handle
+- Close the scope in every success, cancellation, and error path
+- Include only safe summary output
+- Clear any framework request state used for handle lookup
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+def on_request_start(request_state, request_id: str) -> None:
+    request_state.nemo_relay_scope = nemo_relay.scope.push(
+        "framework-request",
+        nemo_relay.ScopeType.Agent,
+        input={"request_id": request_id},
+    )
+
+def on_request_end(request_state, status: str) -> None:
+    handle = request_state.nemo_relay_scope
+    try:
+        nemo_relay.scope.pop(handle, output={"status": status})
+    finally:
+        request_state.nemo_relay_scope = None
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import { popScope, pushScope, ScopeType, type ScopeHandle } from 'nemo-relay-node';
+
+type RequestState = {
+  nemoRelayScope?: ScopeHandle;
+};
+
+export function onRequestStart(state: RequestState, requestId: string): void {
+  state.nemoRelayScope = pushScope(
+    'framework-request',
+    ScopeType.Agent,
+    null,
+    null,
+    null,
+    null,
+    { request_id: requestId },
+  );
+}
+
+export function onRequestEnd(state: RequestState, status: string): void {
+  const handle = state.nemoRelayScope;
+  if (!handle) {
+    return;
+  }
+
+  try {
+    popScope(handle, { status });
+  } finally {
+    state.nemoRelayScope = undefined;
+  }
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::scope::{
+    self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
+};
+use serde_json::json;
+
+struct RequestState {
+    nemo_relay_scope: Option<ScopeHandle>,
+}
+
+fn on_request_start(state: &mut RequestState, request_id: &str) -> anyhow::Result<()> {
+    let handle = scope::push_scope(
+        PushScopeParams::builder()
+            .name("framework-request")
+            .scope_type(ScopeType::Agent)
+            .attributes(ScopeAttributes::empty())
+            .input(json!({"request_id": request_id}))
+            .build(),
+    )?;
+    state.nemo_relay_scope = Some(handle);
+    Ok(())
+}
+
+fn on_request_end(state: &mut RequestState, status: &str) -> anyhow::Result<()> {
+    if let Some(handle) = state.nemo_relay_scope.take() {
+        scope::pop_scope(
+            PopScopeParams::builder()
+                .handle_uuid(&handle.uuid)
+                .output(json!({"status": status}))
+                .build(),
+        )?;
+    }
+    Ok(())
+}
+```
+</Tab>
+
+</Tabs>
+
+## Attach Child Calls to the Scope
+
+After the request scope exists, pass its handle to tool and LLM wrappers or run those wrappers while the scope is active. This keeps the framework request, tool calls, model calls, marks, and subscriber output in one event hierarchy.
+
+For frameworks that dispatch work onto worker threads, task queues, or background callbacks, propagate the scope stack or store the scope handle in framework request state and pass it explicitly to the managed execute helpers.
+
+## Emit Marks for Framework Milestones
+
+Marks are useful for framework milestones that are important but are not full nested calls:
+
+- Request accepted
+- Tool selected
+- Provider selected
+- Retry scheduled
+- Queue wait finished
+- Final response assembled
+
+Do not use marks as verbose debug logs. Keep mark names stable enough for filtering and dashboards.
+
+## Validation Checklist
+
+Run one framework request and check:
+
+- Subscribers see one scope start event and one matching scope end event.
+- Tool and LLM events share the same root scope UUID.
+- Scope-local middleware disappears after the scope closes.
+- Concurrent framework requests do not share one active scope by accident.
+- Error, cancellation, and timeout paths still close the scope.
+
+## Common Issues
+
+Check these symptoms first when the workflow does not behave as expected.
+
+- **Only child calls appear**: The framework did not create a request scope before tool or LLM wrappers ran.
+- **Events from different users share one trace**: The integration reused a process-global scope handle instead of request-local state.
+- **Scope-local middleware leaks**: The end hook did not pop the same scope handle that was created by the start hook.
+- **Worker events appear under the root scope**: Propagate the scope stack across worker boundaries or pass the stored handle explicitly.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Wrap tools with [Wrap Tool Calls](/integrate-frameworks/wrap-tool-calls).
+- Wrap model providers with [Wrap LLM Calls](/integrate-frameworks/wrap-llm-calls).
+- Use [Code Examples](/instrument-applications/code-examples#scope-and-context-helpers) for explicit scope-stack propagation helpers.

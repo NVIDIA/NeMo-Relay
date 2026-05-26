@@ -143,7 +143,7 @@ uv run pre-commit install
 The hooks enforce:
 
 - **General**: trailing whitespace removal, end-of-file fixup, YAML/TOML/JSON validity, merge conflict marker detection, large file check (500 KB max)
-- **Docs**: Markdown link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`
+- **Docs**: Fern validation for `docs/` and `fern/`, plus external Markdown/MDX link checking for `README.md`, `CONTRIBUTING.md`, and `docs/` via `lychee`
 - **Python**: Ruff linting and formatting, ty type checking
 - **Rust**: FFI header sync for `crates/ffi/nemo_relay.h` through Cargo/build.rs, `cargo fmt` formatting check, `cargo clippy` lints, `cargo deny` auditing
 - **Go**: `gofmt` formatting, `go vet` static analysis
@@ -201,7 +201,7 @@ Before opening a PR, check the following:
 2. The relevant reference docs are updated for any public API change.
 3. The relevant crate or package README is updated when that surface changed.
 4. Embedded documentation snippets, patch docs, and binding-support notes are updated if examples or supported bindings changed.
-5. For docs site changes, run `./scripts/build-docs.sh`.
+5. For docs site changes, run `just docs` (or `./scripts/build-docs.sh html` as a compatibility wrapper) — it regenerates ignored Fern API reference pages before validation.
 
 For documentation-heavy changes, prefer small targeted commits so the history
 shows entry-point changes, reference changes, examples, and maintenance updates
@@ -325,9 +325,9 @@ The pre-commit hooks do not currently enforce SPDX headers automatically, but re
 Before making significant changes, read through the documentation in
 [`docs/`](docs/), especially:
 
-- [Architecture Overview](docs/about/architecture.md) -- runtime model and data flow
-- [Scopes](docs/about/concepts/scopes.md) -- scopes, handles, events, and runtime ownership
-- [Middleware](docs/about/concepts/middleware.md) -- execution ordering and middleware behavior
-- [API Reference](docs/reference/api/index.md) -- public surfaces across Rust, Python, and Node.js
+- [Architecture Overview](docs/about/architecture.mdx) -- runtime model and data flow
+- [Scopes](docs/about/concepts/scopes.mdx) -- scopes, handles, events, and runtime ownership
+- [Middleware](docs/about/concepts/middleware.mdx) -- execution ordering and middleware behavior
+- [API Reference](docs/reference/api/index.mdx) -- public surfaces across Rust, Python, and Node.js
 
 The codebase follows a layered architecture: **Core (Rust)** provides the runtime, with bindings through **FFI (C, used by Go through CGo)**, **PyO3 (Python)**, **NAPI (Node.js)**, and **wasm-bindgen (WebAssembly)**. Each binding mirrors the full API surface.

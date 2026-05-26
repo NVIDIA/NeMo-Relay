@@ -1,0 +1,374 @@
+---
+title: "Provider Codecs"
+description: ""
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when a framework integration needs NeMo Relay middleware, intercepts, or subscribers to reason about provider-specific LLM payloads through a stable annotated shape.
+
+## What You Build
+
+You will attach request and response codecs to a managed LLM wrapper so that:
+
+- Request intercepts can work with normalized messages, model names, tools, generation parameters, and provider-specific extras
+- The provider callback still receives the provider payload that the framework expects
+- Response subscribers can receive normalized response annotations without changing the caller-visible provider response
+
+## Before You Start
+
+You need:
+
+- A framework LLM boundary that can call `llm.execute`, `llm.stream_execute`, `llmCallExecute`, `typedLlmExecute`, or `llm_call_execute`.
+- A provider payload that is JSON-compatible.
+- A matching built-in provider codec, or a custom codec that can preserve unmodeled provider fields.
+- Request intercepts or subscribers that benefit from normalized request or response data.
+
+## What Provider Codecs Are
+
+A provider codec is a pure data translator at the NeMo Relay LLM boundary.
+
+- An LLM request codec converts a raw provider request into a normalized annotated request, then encodes any annotated edits back into the original provider request.
+- An LLM response codec converts a raw provider response into a normalized response annotation for lifecycle events.
+
+Provider codecs let framework code keep using provider-native payloads while NeMo Relay middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](/integrate-frameworks/using-codecs).
+
+## How Provider Codecs Work
+
+When a managed LLM call has a request codec:
+
+1. NeMo Relay calls `decode` before LLM request intercepts run.
+2. Request intercepts receive both the raw request and the annotated request.
+3. Intercepts may edit the raw request, the annotated request, or both.
+4. NeMo Relay calls `encode` to merge the annotated request back into the original raw request.
+5. Execution intercepts and the provider callback receive the encoded provider request.
+
+When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
+
+Codec implementations should preserve fields they do not understand. Treat `encode` as a merge operation over the original provider payload, not as a full replacement.
+
+## Built-in Provider Codecs
+
+Use the built-in provider codecs when the framework payload already matches a supported provider API:
+
+- `OpenAIChatCodec`: OpenAI Chat Completions-compatible requests and responses.
+- `OpenAIResponsesCodec`: OpenAI Responses-compatible requests and responses.
+- `AnthropicMessagesCodec`: Anthropic Messages-compatible requests and responses.
+
+## Provider Codec Roles
+
+Provider codecs have separate request and response roles:
+
+- `LlmCodec` decodes provider-specific requests into an annotated request form and encodes edits back into the provider request.
+- `LlmResponseCodec` decodes raw provider responses into annotated response data for lifecycle events.
+
+The built-in provider codecs expose the same core methods:
+
+| Codec | Python Import | Node.js Import | Methods |
+|---|---|---|---|
+| OpenAI Chat | `nemo_relay.codecs.OpenAIChatCodec` | `OpenAIChatCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| OpenAI Responses | `nemo_relay.codecs.OpenAIResponsesCodec` | `OpenAIResponsesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| Anthropic Messages | `nemo_relay.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+
+Choose the provider codec that matches the payload shape the framework already sends to the provider. Do not translate to a different provider shape only to make the codec fit.
+
+## Example: Add a System Message with a Provider Codec
+
+This example uses a request intercept to edit the normalized request. The codec writes the edited messages back into the provider payload before the provider callback runs.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+from nemo_relay import LLMRequest
+from nemo_relay.codecs import OpenAIChatCodec
+
+def add_system_message(_name, request, annotated):
+    if annotated is None:
+        return request, annotated
+
+    annotated.messages = [
+        {"role": "system", "content": "Answer with concise technical detail."},
+        *annotated.messages,
+    ]
+    return request, annotated
+
+nemo_relay.intercepts.register_llm_request(
+    "framework.add_system_message",
+    10,
+    False,
+    add_system_message,
+)
+
+async def invoke_provider(request: LLMRequest):
+    return {
+        "id": "chatcmpl-demo",
+        "model": request.content["model"],
+        "choices": [
+            {"message": {"role": "assistant", "content": "Codec-enabled response."}},
+        ],
+    }
+
+codec = OpenAIChatCodec()
+request = LLMRequest(
+    {},
+    {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Explain scopes."}],
+        "temperature": 0.2,
+    },
+)
+
+response = await nemo_relay.llm.execute(
+    "openai-chat",
+    request,
+    invoke_provider,
+    model_name="gpt-4o-mini",
+    codec=codec,
+    response_codec=codec,
+)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import {
+  OpenAIChatCodec,
+  registerLlmRequestIntercept,
+} from 'nemo-relay-node';
+import {
+  JsonPassthrough,
+  typedLlmExecute,
+} from 'nemo-relay-node/typed';
+
+registerLlmRequestIntercept(
+  'framework.add_system_message',
+  10,
+  false,
+  ({ request, annotated }) => {
+    if (!annotated) {
+      return { request, annotated };
+    }
+
+    return {
+      request,
+      annotated: {
+        ...annotated,
+        messages: [
+          { role: 'system', content: 'Answer with concise technical detail.' },
+          ...annotated.messages,
+        ],
+      },
+    };
+  },
+);
+
+const codec = new OpenAIChatCodec();
+const request = {
+  headers: {},
+  content: {
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: 'Explain scopes.' }],
+    temperature: 0.2,
+  },
+};
+
+const response = await typedLlmExecute(
+  'openai-chat',
+  request,
+  async (providerRequest) => ({
+    id: 'chatcmpl-demo',
+    model: providerRequest.content.model,
+    choices: [
+      { message: { role: 'assistant', content: 'Codec-enabled response.' } },
+    ],
+  }),
+  new JsonPassthrough(),
+  {
+    modelName: 'gpt-4o-mini',
+    codec,
+    responseCodec: codec,
+  },
+);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use serde_json::json;
+use std::sync::Arc;
+
+let request = LlmRequest {
+    headers: Default::default(),
+    content: json!({
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "Explain scopes."}],
+        "temperature": 0.2
+    }),
+};
+
+let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIChatCodec);
+let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+let response = llm_call_execute(
+    LlmCallExecuteParams::builder()
+        .name("openai-chat")
+        .request(request)
+        .func(Arc::new(|provider_request| Box::pin(async move {
+            Ok(json!({
+                "id": "chatcmpl-demo",
+                "model": provider_request.content["model"],
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Codec-enabled response."
+                    }
+                }]
+            }))
+        })))
+        .model_name("gpt-4o-mini")
+        .codec(request_codec)
+        .response_codec(response_codec)
+        .build(),
+)
+.await?;
+```
+</Tab>
+
+</Tabs>
+
+## Example: Write a Custom Framework Codec
+
+Use a custom codec when a framework uses a payload shape that does not directly match a built-in provider format. The codec decodes the framework shape into `AnnotatedLLMRequest`, and encodes edits back into the framework shape.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import AnnotatedLLMRequest, LLMRequest
+from nemo_relay.codecs import LlmCodec
+
+class FrameworkChatCodec(LlmCodec):
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        content = request.content
+        params = {}
+        if "temperature" in content:
+            params["temperature"] = content["temperature"]
+
+        return AnnotatedLLMRequest(
+            content.get("turns", []),
+            model=content.get("model_name"),
+            params=params or None,
+            tools=content.get("tool_specs"),
+            extra={"tenant_id": content.get("tenant_id")},
+        )
+
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        content = {
+            **original.content,
+            "turns": annotated.messages,
+        }
+        if annotated.model is not None:
+            content["model_name"] = annotated.model
+        if annotated.params:
+            content.update(annotated.params)
+        if annotated.tools is not None:
+            content["tool_specs"] = annotated.tools
+        return LLMRequest(original.headers, content)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import type { JsonValue, LlmCodec } from 'nemo-relay-node/typed';
+
+type FrameworkRequest = {
+  headers: Record<string, JsonValue>;
+  content: {
+    turns?: JsonValue[];
+    model_name?: string;
+    temperature?: number;
+    tool_specs?: JsonValue;
+    tool_choice?: JsonValue;
+    tenant_id?: string;
+    [key: string]: JsonValue | undefined;
+  };
+};
+
+type AnnotatedRequest = {
+  messages?: JsonValue[];
+  model?: string | null;
+  params?: Record<string, JsonValue> | null;
+  tools?: JsonValue;
+  tool_choice?: JsonValue;
+  extra?: Record<string, JsonValue>;
+};
+
+const frameworkChatCodec: LlmCodec = {
+  decode(requestJson) {
+    const request = requestJson as FrameworkRequest;
+    const content = request.content;
+    return {
+      messages: content.turns ?? [],
+      model: content.model_name ?? null,
+      params: content.temperature === undefined ? null : {
+        temperature: content.temperature,
+      },
+      tools: content.tool_specs ?? null,
+      tool_choice: content.tool_choice ?? null,
+      extra: {
+        tenant_id: content.tenant_id ?? null,
+      },
+    };
+  },
+
+  encode(annotatedJson, originalJson) {
+    const annotated = annotatedJson as AnnotatedRequest;
+    const original = originalJson as FrameworkRequest;
+    const content = {
+      ...original.content,
+      turns: annotated.messages ?? [],
+    };
+    if (annotated.model !== null && annotated.model !== undefined) {
+      content.model_name = annotated.model;
+    }
+    if (annotated.params) {
+      Object.assign(content, annotated.params);
+    }
+    if (annotated.tools) {
+      content.tool_specs = annotated.tools;
+    }
+    return {
+      headers: original.headers,
+      content,
+    };
+  },
+};
+```
+</Tab>
+
+</Tabs>
+
+## Validation Checklist
+
+Use this checklist to confirm the implementation preserves the expected runtime
+contract.
+
+- Intercepts receive `annotated` only when the managed call supplies a request codec.
+- `encode` preserves provider fields that the annotated model does not represent.
+- Response codecs are used only for event annotations, not caller-visible response rewriting.
+- Codec implementations are pure data transforms and do not perform provider I/O.
+- Framework-owned clients, sockets, streams, callbacks, and file handles stay outside codec results.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Use [Using Codecs](/integrate-frameworks/using-codecs) for typed value codecs.
+- Use [Provider Response Codecs](/integrate-frameworks/provider-response-codecs) for response-only annotations and subscriber examples.
+- Use [Add Middleware](/instrument-applications/advanced-guide) before adding request transforms.
+- Use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) when the framework boundary includes SDK objects or streams that cannot pass through JSON payloads.
