@@ -21,7 +21,7 @@ use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResu
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rustls::crypto::ring;
 
-use super::{NeMoGuardrailsConfig, RequestDefaultsConfig};
+use super::{NeMoGuardrailsConfig, RequestDefaultsConfig, RequestRailsConfig};
 
 #[derive(Clone)]
 struct RemoteBackendRuntime {
@@ -88,6 +88,8 @@ impl RemoteBackendRuntime {
                 &remote.config_id,
                 &remote.config_ids,
                 request_defaults,
+                config.input,
+                config.output,
             ),
             tool_input_guardrails: build_tool_check_guardrails_config(
                 RemoteCheckKind::Input,
@@ -862,16 +864,35 @@ fn build_llm_guardrails_config(
     config_id: &Option<String>,
     config_ids: &[String],
     request_defaults: Option<&RequestDefaultsConfig>,
+    input_enabled: bool,
+    output_enabled: bool,
 ) -> Option<Map<String, Json>> {
     let mut guardrails = build_base_guardrails_config(config_id, config_ids, request_defaults);
-    if let Some(request_defaults) = request_defaults {
-        let mut options = Map::new();
-        if let Some(rails) = &request_defaults.rails {
-            options.insert(
-                "rails".to_string(),
-                serde_json::to_value(rails).expect("request rails config should serialize to JSON"),
-            );
+    let mut options = Map::new();
+
+    if let Some(mut rails) = request_defaults
+        .and_then(|defaults| defaults.rails.as_ref())
+        .map(serialize_request_rails)
+    {
+        if !input_enabled {
+            rails.insert("input".to_string(), Json::Bool(false));
         }
+        if !output_enabled {
+            rails.insert("output".to_string(), Json::Bool(false));
+        }
+        options.insert("rails".to_string(), Json::Object(rails));
+    } else if !input_enabled || !output_enabled {
+        let mut rails = Map::new();
+        if !input_enabled {
+            rails.insert("input".to_string(), Json::Bool(false));
+        }
+        if !output_enabled {
+            rails.insert("output".to_string(), Json::Bool(false));
+        }
+        options.insert("rails".to_string(), Json::Object(rails));
+    }
+
+    if let Some(request_defaults) = request_defaults {
         if let Some(llm_params) = &request_defaults.llm_params {
             options.insert("llm_params".to_string(), llm_params.clone());
         }
@@ -884,9 +905,9 @@ fn build_llm_guardrails_config(
         if let Some(log) = &request_defaults.log {
             options.insert("log".to_string(), log.clone());
         }
-        if !options.is_empty() {
-            guardrails.insert("options".to_string(), Json::Object(options));
-        }
+    }
+    if !options.is_empty() {
+        guardrails.insert("options".to_string(), Json::Object(options));
     }
     (!guardrails.is_empty()).then_some(guardrails)
 }
@@ -899,25 +920,31 @@ fn build_tool_check_guardrails_config(
 ) -> Map<String, Json> {
     let mut guardrails = build_base_guardrails_config(config_id, config_ids, request_defaults);
     let mut options = Map::new();
-    let rails = match kind {
-        RemoteCheckKind::Input => json!({
-            "input": false,
-            "output": false,
-            "dialog": false,
-            "retrieval": false,
-            "tool_input": true,
-            "tool_output": false,
-        }),
-        RemoteCheckKind::Output => json!({
-            "input": false,
-            "output": false,
-            "dialog": false,
-            "retrieval": false,
-            "tool_input": false,
-            "tool_output": true,
-        }),
+    let mut rails = Map::from_iter([
+        ("input".to_string(), Json::Bool(false)),
+        ("output".to_string(), Json::Bool(false)),
+        ("dialog".to_string(), Json::Bool(false)),
+        ("retrieval".to_string(), Json::Bool(false)),
+    ]);
+    match kind {
+        RemoteCheckKind::Input => {
+            rails.insert(
+                "tool_input".to_string(),
+                configured_tool_selector(request_defaults, RemoteCheckKind::Input)
+                    .unwrap_or(Json::Bool(true)),
+            );
+            rails.insert("tool_output".to_string(), Json::Bool(false));
+        }
+        RemoteCheckKind::Output => {
+            rails.insert("tool_input".to_string(), Json::Bool(false));
+            rails.insert(
+                "tool_output".to_string(),
+                configured_tool_selector(request_defaults, RemoteCheckKind::Output)
+                    .unwrap_or(Json::Bool(true)),
+            );
+        }
     };
-    options.insert("rails".to_string(), rails);
+    options.insert("rails".to_string(), Json::Object(rails));
     let mut log = request_defaults
         .and_then(|defaults| defaults.log.as_ref())
         .and_then(Json::as_object)
@@ -927,6 +954,28 @@ fn build_tool_check_guardrails_config(
     options.insert("log".to_string(), Json::Object(log));
     guardrails.insert("options".to_string(), Json::Object(options));
     guardrails
+}
+
+fn serialize_request_rails(rails: &RequestRailsConfig) -> Map<String, Json> {
+    serde_json::to_value(rails)
+        .expect("request rails config should serialize to JSON")
+        .as_object()
+        .cloned()
+        .expect("request rails config should serialize to a JSON object")
+}
+
+fn configured_tool_selector(
+    request_defaults: Option<&RequestDefaultsConfig>,
+    kind: RemoteCheckKind,
+) -> Option<Json> {
+    let rails = request_defaults.and_then(|defaults| defaults.rails.as_ref())?;
+    match kind {
+        RemoteCheckKind::Input => rails.tool_input.as_ref(),
+        RemoteCheckKind::Output => rails.tool_output.as_ref(),
+    }
+    .map(|selector| {
+        serde_json::to_value(selector).expect("tool rail selector should serialize to JSON")
+    })
 }
 
 #[cfg(any(target_arch = "wasm32", not(feature = "guardrails-remote")))]

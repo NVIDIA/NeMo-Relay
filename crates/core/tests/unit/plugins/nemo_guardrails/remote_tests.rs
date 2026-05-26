@@ -230,6 +230,170 @@ async fn remote_request_uses_config_ids_when_config_id_is_not_set() {
 }
 
 #[tokio::test]
+async fn remote_llm_request_disables_input_rails_when_surface_is_off() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-remote",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "guarded"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "input": false,
+        "output": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        },
+        "request_defaults": {
+            "rails": {
+                "input": ["self check input"],
+                "output": ["self check output"],
+                "retrieval": ["kb"]
+            }
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+
+    let _ = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = recv_captured_request(&request_rx);
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["input"],
+        json!(false)
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["output"],
+        json!(["self check output"])
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["retrieval"],
+        json!(["kb"])
+    );
+}
+
+#[tokio::test]
+async fn remote_llm_request_disables_output_rails_when_surface_is_off() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-remote",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "guarded"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "input": true,
+        "output": false,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        },
+        "request_defaults": {
+            "rails": {
+                "input": ["self check input"],
+                "output": ["self check output"],
+                "dialog": true
+            }
+        }
+    })))
+    .await
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(move |_req| Box::pin(async move { Ok(json!({"response": "original"})) }));
+
+    let _ = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_chat_request(false))
+            .func(func)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = recv_captured_request(&request_rx);
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["input"],
+        json!(["self check input"])
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["output"],
+        json!(false)
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["dialog"],
+        json!(true)
+    );
+}
+
+#[tokio::test]
 async fn remote_initialization_installs_stream_execution_intercept() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
@@ -1107,6 +1271,170 @@ async fn remote_tool_output_can_rewrite_tool_result() {
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_output"],
         json!(true)
+    );
+}
+
+#[tokio::test]
+async fn remote_tool_input_preserves_named_rail_selectors() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-modified",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        },
+        "request_defaults": {
+            "rails": {
+                "tool_input": ["validate_tool_input"]
+            }
+        }
+    })))
+    .await
+    .unwrap();
+
+    let _ = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = recv_captured_request(&request_rx);
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["tool_input"],
+        json!(["validate_tool_input"])
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["tool_output"],
+        json!(false)
+    );
+}
+
+#[tokio::test]
+async fn remote_tool_output_preserves_named_rail_selectors() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-output-modified",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"},\"result\":{\"forecast\":\"cloudy\"}}"
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        },
+        "request_defaults": {
+            "rails": {
+                "tool_output": ["validate_tool_output"]
+            }
+        }
+    })))
+    .await
+    .unwrap();
+
+    let _ = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = recv_captured_request(&request_rx);
+    let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["tool_input"],
+        json!(false)
+    );
+    assert_eq!(
+        request_json["guardrails"]["options"]["rails"]["tool_output"],
+        json!(["validate_tool_output"])
     );
 }
 
