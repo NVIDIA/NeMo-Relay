@@ -1,0 +1,192 @@
+---
+title: "Validate Plugin Configuration"
+description: ""
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when you have a plugin kind and need predictable diagnostics before the plugin installs runtime behavior.
+
+## What You Build
+
+You will define a JSON-compatible component config, validate required fields and supported values, return structured diagnostics, and confirm that disabled components still report config problems before rollout.
+
+## Configuration Shape
+
+The canonical plugin configuration is a top-level document with `version`, `components`, and `policy`.
+
+Each component has:
+
+- `kind`: the plugin kind to activate.
+- `enabled`: whether the component should initialize.
+- `config`: the component-local JSON object passed to validation and registration.
+
+Disabled components are still validated. This lets operators detect config problems before enabling a component in a later rollout.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay.plugin import ComponentSpec, ConfigPolicy, PluginConfig
+
+config = PluginConfig(
+    version=1,
+    components=[
+        ComponentSpec(
+            kind="header-plugin",
+            enabled=True,
+            config={"header_name": "x-tenant", "value": "tenant-a"},
+        )
+    ],
+    policy=ConfigPolicy(
+        unknown_component="warn",
+        unknown_field="warn",
+        unsupported_value="error",
+    ),
+)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import type { PluginConfig } from 'nemo-relay-node/plugin';
+
+const config: PluginConfig = {
+  version: 1,
+  components: [
+    {
+      kind: 'header-plugin',
+      enabled: true,
+      config: { header_name: 'x-tenant', value: 'tenant-a' },
+    },
+  ],
+  policy: {
+    unknown_component: 'warn',
+    unknown_field: 'warn',
+    unsupported_value: 'error',
+  },
+};
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+
+let mut component = PluginComponentSpec::new("header-plugin");
+component.enabled = true;
+component.config.insert("header_name".into(), "x-tenant".into());
+component.config.insert("value".into(), "tenant-a".into());
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component],
+    policy: ConfigPolicy::default(),
+};
+```
+</Tab>
+
+</Tabs>
+
+## Validation Rules
+
+Validation should be deterministic and side-effect free. It should inspect config and return diagnostics; it should not register middleware, open network connections, create clients, or mutate process state.
+
+Validate these areas first:
+
+- Required fields are present.
+- Field types match the supported shape.
+- Unknown fields follow the configured policy.
+- Known fields have supported values.
+- Cross-field combinations make sense.
+- Sensitive values are references or secret names, not raw credentials.
+
+Use warnings when a config can still activate but deserves operator attention. Use errors when initialization should not proceed.
+
+## Diagnostic Shape
+
+Diagnostics should be actionable and stable enough for tests or deployment automation:
+
+```json
+[
+  {
+    "level": "error",
+    "code": "header-plugin.missing_header_name",
+    "component": "header-plugin",
+    "field": "header_name",
+    "message": "config.header_name is required"
+  }
+]
+```
+
+Prefer stable diagnostic codes over prose-only messages. The message can improve over time; the code should remain testable.
+
+## Validate Before Initialization
+
+Use the validation API before initialization and fail deployment if the report contains errors.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+report = nemo_relay.plugin.validate(config)
+has_errors = any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"])
+if has_errors:
+    raise RuntimeError(report["diagnostics"])
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import * as plugin from 'nemo-relay-node/plugin';
+
+const report = plugin.validate(config);
+const hasErrors = report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
+if (hasErrors) {
+  throw new Error(JSON.stringify(report.diagnostics));
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::plugin::validate_plugin_config;
+
+let report = validate_plugin_config(&config);
+if report.has_errors() {
+    anyhow::bail!("{:?}", report.diagnostics);
+}
+```
+</Tab>
+
+</Tabs>
+
+## Validation Checklist
+
+Before sharing a plugin config contract:
+
+1. Validate the smallest correct config.
+2. Validate a config with each required field missing.
+3. Validate unsupported enum or mode values.
+4. Validate unknown fields under each supported policy.
+5. Validate disabled components with invalid config.
+6. Confirm diagnostics identify the component and field that needs action.
+
+## Common Issues
+
+Check these symptoms first when the workflow does not behave as expected.
+
+- **Config contains callables or client objects**: Keep config JSON-compatible and instantiate objects inside plugin code.
+- **Disabled components skip validation**: Disabled components should still report config problems.
+- **Diagnostics are hard to automate**: Add stable codes and field names.
+- **Validation opens network connections**: Move runtime setup into plugin registration.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Register runtime behavior with [Register Plugin Behavior](/build-plugins/register-behavior).
+- Add rollout controls with [Design Plugin Configuration](/build-plugins/advanced-configuration).
+- Review concrete validation patterns in [Code Examples](/build-plugins/code-examples).

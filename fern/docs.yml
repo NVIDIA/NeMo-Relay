@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+instances:
+- url: nvidia-nemo-relay.docs.buildwithfern.com/nemo/relay
+  custom-domain: docs.nvidia.com/nemo/relay
+  multi-source: true
+
+title: NVIDIA NeMo Relay
+
+global-theme: nvidia
+
+experimental:
+  mdx-components:
+  - ./components
+products:
+- display-name: "NeMo Relay"
+  slug: /
+  path: ../docs/index.yml
+  versions:
+  - display-name: dev
+    path: ../docs/index.yml

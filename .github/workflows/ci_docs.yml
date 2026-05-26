@@ -5,29 +5,15 @@ name: Documentation
 
 on:
   workflow_call:
-    inputs:
-      ref_type:
-        description: 'The ref type from the triggering workflow'
-        required: true
-        type: string
-      ref_name:
-        description: 'The ref name from the triggering workflow'
-        required: true
-        type: string
-      publish_docs:
-        description: 'Whether to upload a GitHub Pages artifact for deployment'
+    secrets:
+      DOCS_FERN_TOKEN:
         required: false
-        default: false
-        type: boolean
 defaults:
   run:
     shell: bash
 
 env:
-  GH_TOKEN: "${{ github.token }}"
-  GIT_COMMIT: "${{ github.sha }}"
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
-  NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
@@ -41,8 +27,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          fetch-depth: 0
 
       - name: Load CI tool versions
         id: ci-config
@@ -66,7 +50,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -79,43 +63,17 @@ jobs:
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
-          tool: just@${{ steps.ci-config.outputs.just_version }},sphinx-rustdocgen@1.0.1
+          tool: just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Install Documentation Dependencies
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv sync --no-default-groups --group docs --no-install-project
+        run: |
+          uv sync --no-default-groups --group dev --no-install-project
+          npm ci --ignore-scripts
 
-      - name: Install Node.js Documentation Dependencies
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: npm ci --ignore-scripts
-
-      - name: Materialize Main Branch For Versioned Docs
-        if: ${{ inputs.ref_type == 'tag' }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: git fetch --force origin +refs/heads/main:refs/heads/main
-
-      - name: Check Documentation Links
+      - name: Check Documentation
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
           NEMO_RELAY_DOCS_DEPS_READY: "1"
-        run: just docs-linkcheck
-
-      - name: Build Documentation Site
-        if: ${{ startsWith(inputs.ref_name, 'pull-request/') || inputs.ref_name == 'main' }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        env:
-          NEMO_RELAY_DOCS_DEPS_READY: "1"
+          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
         run: just docs
-
-      - name: Build Versioned Documentation Site
-        if: ${{ inputs.publish_docs }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        env:
-          NEMO_RELAY_DOCS_DEPS_READY: "1"
-        run: just docs-github-pages
-
-      - name: Upload GitHub Pages Artifact
-        if: ${{ inputs.publish_docs }}
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
-        with:
-          path: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/docs/_build/pages

@@ -1,0 +1,282 @@
+---
+title: "OpenTelemetry"
+description: ""
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `opentelemetry` section when you want NeMo Relay lifecycle events
+exported as generic OpenTelemetry Protocol (OTLP) trace spans.
+
+OpenTelemetry export is a good fit when your tracing backend already expects
+OTLP spans and you want NeMo Relay scopes, tool calls, LLM calls, and marks to
+appear in the same tracing pipeline as the rest of the application.
+
+## `plugins.toml` Example
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.opentelemetry]
+enabled = true
+transport = "http_binary"
+endpoint = "http://localhost:4318/v1/traces"
+service_name = "agent-service"
+service_namespace = "nemo"
+service_version = "1.0.0"
+instrumentation_scope = "nemo-relay-otel"
+timeout_millis = 3000
+
+[components.config.opentelemetry.headers]
+authorization = "Bearer <token>"
+
+[components.config.opentelemetry.resource_attributes]
+"deployment.environment" = "dev"
+```
+
+This configuration registers a plugin-owned OpenTelemetry subscriber and sends
+NeMo Relay trace spans to the configured OTLP endpoint.
+
+## Fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | Must be `true` to construct and register the subscriber. |
+| `transport` | `http_binary` | `http_binary` or `grpc`. |
+| `endpoint` | Exporter default | OTLP endpoint. |
+| `headers` | `{}` | String-to-string exporter headers. |
+| `resource_attributes` | `{}` | String-to-string OTLP resource attributes. |
+| `service_name` | `nemo-relay` | `service.name` resource attribute. |
+| `service_namespace` | Omitted | Optional `service.namespace`. |
+| `service_version` | Omitted | Optional `service.version`. |
+| `instrumentation_scope` | Omitted | Optional instrumentation scope name. |
+| `timeout_millis` | `3000` | Export timeout. |
+
+## Expected Output
+
+The collector should receive OTLP trace export requests. The tracing backend
+should show spans for NeMo Relay scopes, tools, LLM calls, and marks grouped by
+root scope.
+
+Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
+attributes. These values match ATIF `step.extra.ancestry.function_id` and
+`step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
+the root agent span's `nemo_relay.uuid` also matches the ATIF `session_id`.
+Backend-native `trace_id` and `span_id` values are not written into ATIF.
+
+Register the plugin before the first instrumented request, use stable service
+identity fields, keep credentials outside source code, and flush during
+graceful shutdown.
+
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Relay own the
+OpenTelemetry subscriber lifecycle.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import plugin
+from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                opentelemetry=OtlpConfig(
+                    enabled=True,
+                    transport="http_binary",
+                    endpoint="http://localhost:4318/v1/traces",
+                    service_name="agent-service",
+                    service_namespace="nemo",
+                    service_version="1.0.0",
+                    instrumentation_scope="nemo-relay-otel",
+                    resource_attributes={"deployment.environment": "dev"},
+                    headers={"authorization": "Bearer <token>"},
+                )
+            )
+        )
+    ]
+)
+
+report = plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await plugin.initialize(config)
+try:
+    # Run instrumented application work here.
+    pass
+finally:
+    plugin.clear()
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
+
+await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 1,
+      opentelemetry: observability.otlpConfig({
+        enabled: true,
+        transport: "http_binary",
+        endpoint: "http://localhost:4318/v1/traces",
+        service_name: "agent-service",
+        service_namespace: "nemo",
+        service_version: "1.0.0",
+        instrumentation_scope: "nemo-relay-otel",
+        resource_attributes: {
+          "deployment.environment": "dev",
+        },
+        headers: {
+          authorization: "Bearer <token>",
+        },
+      }),
+    }),
+  ],
+});
+
+try {
+  // Run instrumented application work here.
+} finally {
+  plugin.clear();
+}
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::plugin_component::{
+    ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
+};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    opentelemetry: Some(OtlpSectionConfig {
+        enabled: true,
+        transport: "http_binary".into(),
+        endpoint: Some("http://localhost:4318/v1/traces".into()),
+        service_name: "agent-service".into(),
+        service_namespace: Some("nemo".into()),
+        service_version: Some("1.0.0".into()),
+        instrumentation_scope: Some("nemo-relay-otel".into()),
+        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+        headers: [("authorization".into(), "Bearer <token>".into())].into(),
+        ..OtlpSectionConfig::default()
+    }),
+    ..ObservabilityConfig::default()
+});
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+};
+
+let report = validate_plugin_config(&config);
+assert!(!report.has_errors());
+
+let active = initialize_plugins(config).await?;
+```
+
+</Tab>
+
+</Tabs>
+
+## Manual API
+
+Use the manual subscriber API when you need an explicit subscriber name or
+direct `force_flush` control.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import OpenTelemetryConfig, OpenTelemetrySubscriber
+
+config = OpenTelemetryConfig()
+config.transport = "http_binary"
+config.endpoint = "http://localhost:4318/v1/traces"
+config.service_name = "agent-service"
+config.set_resource_attribute("deployment.environment", "dev")
+
+subscriber = OpenTelemetrySubscriber(config)
+subscriber.register("otel-exporter")
+
+# Run instrumented application work here.
+
+subscriber.force_flush()
+subscriber.deregister("otel-exporter")
+subscriber.shutdown()
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const { OpenTelemetrySubscriber } = require("nemo-relay-node");
+
+const subscriber = new OpenTelemetrySubscriber({
+  transport: "http_binary",
+  endpoint: "http://localhost:4318/v1/traces",
+  serviceName: "agent-service",
+  resourceAttributes: {
+    "deployment.environment": "dev",
+  },
+});
+subscriber.register("otel-exporter");
+
+try {
+  // Run instrumented application work here.
+
+  subscriber.forceFlush();
+} finally {
+  subscriber.deregister("otel-exporter");
+  subscriber.shutdown();
+}
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+
+let config = OpenTelemetryConfig::http_binary("agent-service")
+    .with_endpoint("http://localhost:4318/v1/traces")
+    .with_resource_attribute("deployment.environment", "dev");
+let subscriber = OpenTelemetrySubscriber::new(config)?;
+subscriber.register("otel-exporter")?;
+
+// Run instrumented application work here.
+
+subscriber.force_flush()?;
+let _ = subscriber.deregister("otel-exporter")?;
+subscriber.shutdown()?;
+```
+
+</Tab>
+
+</Tabs>
+
+## Common Validation Failures
+
+- `transport` is not `http_binary` or `grpc`.
+- Headers or resource attributes are not string-to-string maps.
+- The exporter feature is unavailable in the current build or target.
+- The endpoint is unreachable at runtime.
