@@ -53,6 +53,7 @@ jobs:
         && startsWith(github.ref_name, 'pull-request/')
       }}
     runs-on: ubuntu-latest
+    environment: fern
     timeout-minutes: 60
     permissions:
       contents: read
@@ -121,7 +122,7 @@ jobs:
         working-directory: source-checkout
         env:
           NEMO_RELAY_DOCS_DEPS_READY: "1"
-          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
         run: just docs
 
       - name: Checkout docs website branch
@@ -143,7 +144,7 @@ jobs:
         id: preview
         working-directory: docs-checkout/fern
         env:
-          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
         run: |
           set -euo pipefail
           if OUTPUT="$("$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs --preview 2>&1)"; then
