@@ -14,16 +14,15 @@
 
 use std::io::IsTerminal;
 
-/// Filled-block NeMo Relay figlet with a per-row right shift so the letters lean italic. Six
-/// content rows; the renderer prepends one blank row above and appends one below for spacing
-/// and the docked version tag.
+/// Filled-block NeMo Relay figlet generated with ANSI Shadow. Six content rows; the renderer
+/// prepends one blank row above and appends one below for spacing and the docked version tag.
 const BANNER_LINES: &[&str] = &[
-    "             ███╗   ██╗███████╗███╗   ███╗ ██████╗      ███████╗██╗      ██████╗ ██╗   ██╗",
-    "            ████╗  ██║██╔════╝████╗ ████║██╔═══██╗     ██╔════╝██║     ██╔═══██╗██║   ██║",
-    "           ██╔██╗ ██║█████╗  ██╔████╔██║██║   ██║     █████╗  ██║     ██║   ██║██║ █╗██║",
-    "          ██║╚██╗██║██╔══╝  ██║╚██╔╝██║██║   ██║     ██╔══╝  ██║     ██║   ██║██║██║██║",
-    "         ██║ ╚████║███████╗██║ ╚═╝ ██║╚██████╔╝     ██║     ███████╗╚██████╔╝╚███╔███╔╝",
-    "        ╚═╝  ╚═══╝╚══════╝╚═╝     ╚═╝ ╚═════╝      ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝",
+    "███╗   ██╗███████╗███╗   ███╗ ██████╗     ██████╗ ███████╗██╗      █████╗ ██╗   ██╗",
+    "████╗  ██║██╔════╝████╗ ████║██╔═══██╗    ██╔══██╗██╔════╝██║     ██╔══██╗╚██╗ ██╔╝",
+    "██╔██╗ ██║█████╗  ██╔████╔██║██║   ██║    ██████╔╝█████╗  ██║     ███████║ ╚████╔╝",
+    "██║╚██╗██║██╔══╝  ██║╚██╔╝██║██║   ██║    ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝",
+    "██║ ╚████║███████╗██║ ╚═╝ ██║╚██████╔╝    ██║  ██║███████╗███████╗██║  ██║   ██║",
+    "╚═╝  ╚═══╝╚══════╝╚═╝     ╚═╝ ╚═════╝     ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝",
 ];
 
 /// Banner geometry (visual rows including the top and bottom spacing rails).
@@ -32,7 +31,7 @@ const BOTTOM_RAIL: usize = FIGLET_ROWS + 1; // row index of the row below the fi
 const TOTAL_ROWS: usize = FIGLET_ROWS + 2; // top rail + 6 figlet rows + bottom rail
 
 /// Version tag position, measured in columns.
-const COL_END: usize = 92; // right edge below "Flow"
+const COL_END: usize = 92; // version tag dock
 
 const MIN_WIDTH: usize = 105;
 
@@ -141,15 +140,35 @@ fn build_grid(width: usize) -> Vec<Vec<char>> {
     // Empty top rail, the 6 figlet rows, and an empty bottom rail. Each cell is a single char
     // because the figlet's block and box glyphs render as one display column in target terminals.
     let mut grid = Vec::with_capacity(TOTAL_ROWS);
+    let art_width = banner_art_width();
+    let start_col = width.saturating_sub(art_width) / 2;
     grid.push(vec![' '; width]);
-    grid.extend(BANNER_LINES.iter().map(|line| padded_row(line, width)));
+    grid.extend(
+        BANNER_LINES
+            .iter()
+            .map(|line| padded_row(line, width, start_col)),
+    );
     grid.push(vec![' '; width]);
     grid
 }
 
-fn padded_row(line: &str, width: usize) -> Vec<char> {
-    let mut row: Vec<char> = line.chars().collect();
-    row.resize(width, ' ');
+fn banner_art_width() -> usize {
+    BANNER_LINES
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+fn padded_row(line: &str, width: usize, start_col: usize) -> Vec<char> {
+    let mut row = vec![' '; width];
+
+    for (index, ch) in line.chars().enumerate() {
+        if let Some(cell) = row.get_mut(start_col + index) {
+            *cell = ch;
+        }
+    }
+
     row
 }
 
