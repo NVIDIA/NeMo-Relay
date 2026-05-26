@@ -16,7 +16,7 @@
 //! creates one scope-local exporter for each trajectory run. Coding-agent turns
 //! that need bounded traces are represented as agent scopes with role metadata.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -32,7 +32,7 @@ use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{scope_deregister_subscriber, scope_register_subscriber};
-use crate::observability::atif::{AtifAgentInfo, AtifExporter};
+use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifSubagentExportMode};
 use crate::observability::atof::{
     AtofExporter, AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode,
 };
@@ -205,6 +205,9 @@ pub struct AtifSectionConfig {
     /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID.
     #[serde(default = "default_atif_filename_template")]
     pub filename_template: String,
+    /// How subagent trajectories are represented in parent ATIF output.
+    #[serde(default)]
+    pub subagent_export_mode: AtifSubagentExportMode,
 }
 
 impl Default for AtifSectionConfig {
@@ -218,6 +221,7 @@ impl Default for AtifSectionConfig {
             extra: None,
             output_directory: None,
             filename_template: default_atif_filename_template(),
+            subagent_export_mode: AtifSubagentExportMode::Embedded,
         }
     }
 }
@@ -338,6 +342,7 @@ crate::editor_config! {
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
+        subagent_export_mode => { label: "subagent_export_mode", kind: Enum, values: ["embedded", "file_ref"] },
     }
 }
 
@@ -611,6 +616,7 @@ fn register_openinference(
 struct AtifDispatcher {
     config: AtifSectionConfig,
     agents: HashMap<Uuid, ManagedAtifExporter>,
+    scope_owners: HashMap<Uuid, Uuid>,
     scope_subscribers: HashMap<Uuid, String>,
     last_error: Option<String>,
 }
@@ -619,6 +625,7 @@ struct ManagedAtifExporter {
     exporter: AtifExporter,
     path: PathBuf,
     observed_events: Vec<Event>,
+    observed_event_keys: HashSet<String>,
     written: bool,
 }
 
@@ -638,14 +645,28 @@ impl AtifDispatcher {
         Self {
             config,
             agents: HashMap::new(),
+            scope_owners: HashMap::new(),
             scope_subscribers: HashMap::new(),
             last_error: None,
         }
     }
 
-    fn observe_global(&mut self, event: &Event, subscriber_prefix: &str, state: Arc<Mutex<Self>>) {
-        if self.last_error.is_some() || !is_top_level_trajectory_start(event) {
-            return;
+    fn observe_global(
+        &mut self,
+        event: &Event,
+        subscriber_prefix: &str,
+        state: Arc<Mutex<Self>>,
+    ) -> Option<PendingAtifWrite> {
+        if self.last_error.is_some() {
+            return None;
+        }
+
+        if !is_top_level_trajectory_start(event) {
+            return self.observe_descendant_from_global(event);
+        }
+
+        if self.agents.contains_key(&event.uuid()) {
+            return None;
         }
 
         // The top-level trajectory scope UUID is the ATIF session ID. The global
@@ -653,15 +674,18 @@ impl AtifDispatcher {
         // subscriber is attached after that start event has already been
         // emitted.
         let session_id = event.uuid().to_string();
-        let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
+        let exporter = AtifExporter::new(session_id.clone(), self.agent_info())
+            .with_subagent_export_mode(self.config.subagent_export_mode);
         (exporter.subscriber())(event);
         let path = self.output_path(&session_id);
+        self.scope_owners.insert(event.uuid(), event.uuid());
         self.agents.insert(
             event.uuid(),
             ManagedAtifExporter {
                 exporter,
                 path,
                 observed_events: vec![event.clone()],
+                observed_event_keys: HashSet::from([event_observation_key(event)]),
                 written: false,
             },
         );
@@ -676,6 +700,27 @@ impl AtifDispatcher {
         } else {
             self.scope_subscribers.insert(agent_uuid, name);
         }
+        None
+    }
+
+    fn observe_descendant_from_global(&mut self, event: &Event) -> Option<PendingAtifWrite> {
+        let owner = self.scope_owners.get(&event.uuid()).copied().or_else(|| {
+            event
+                .parent_uuid()
+                .and_then(|uuid| self.scope_owners.get(&uuid).copied())
+        })?;
+
+        if event.scope_category() == Some(ScopeCategory::Start) {
+            self.scope_owners.insert(event.uuid(), owner);
+        }
+
+        let pending_write = self.observe_scope(event, owner);
+
+        if event.scope_category() == Some(ScopeCategory::End) && event.uuid() != owner {
+            self.scope_owners.remove(&event.uuid());
+        }
+
+        pending_write
     }
 
     fn observe_scope(&mut self, event: &Event, agent_uuid: Uuid) -> Option<PendingAtifWrite> {
@@ -685,6 +730,12 @@ impl AtifDispatcher {
         let should_finalize =
             event.uuid() == agent_uuid && event.scope_category() == Some(ScopeCategory::End);
         let agent = self.agents.get_mut(&agent_uuid)?;
+        if !agent
+            .observed_event_keys
+            .insert(event_observation_key(event))
+        {
+            return None;
+        }
         (agent.exporter.subscriber())(event);
         agent.observed_events.push(event.clone());
         if !should_finalize || agent.written {
@@ -708,6 +759,7 @@ impl AtifDispatcher {
             return None;
         }
         self.agents.remove(&agent_uuid);
+        self.scope_owners.retain(|_, owner| *owner != agent_uuid);
         self.scope_subscribers
             .remove(&agent_uuid)
             .map(|name| (agent_uuid, name))
@@ -795,10 +847,25 @@ fn atif_dispatcher_subscriber(
     subscriber_prefix: String,
 ) -> EventSubscriberFn {
     Arc::new(move |event: &Event| {
-        let Ok(mut guard) = manager.lock() else {
+        let pending_write = {
+            let Ok(mut guard) = manager.lock() else {
+                return;
+            };
+            guard.observe_global(event, &subscriber_prefix, Arc::clone(&manager))
+        };
+        let Some(write) = pending_write else {
             return;
         };
-        guard.observe_global(event, &subscriber_prefix, Arc::clone(&manager));
+        let result = write_atif_file(&write);
+        let scope_subscriber = {
+            let Ok(mut guard) = manager.lock() else {
+                return;
+            };
+            guard.complete_scope_write(write.agent_uuid, result)
+        };
+        if let Some((scope_uuid, name)) = scope_subscriber {
+            let _ = scope_deregister_subscriber(&scope_uuid, &name);
+        }
     })
 }
 
@@ -858,6 +925,15 @@ fn write_atif_file(write: &PendingAtifWrite) -> std::io::Result<()> {
     }
     std::fs::write(&write.path, &write.payload)?;
     Ok(())
+}
+
+fn event_observation_key(event: &Event) -> String {
+    format!(
+        "{}:{}:{:?}",
+        event.kind(),
+        event.uuid(),
+        event.scope_category()
+    )
 }
 
 fn is_top_level_trajectory_start(event: &Event) -> bool {
@@ -1010,6 +1086,7 @@ fn validate_observability_plugin_config(
             "extra",
             "output_directory",
             "filename_template",
+            "subagent_export_mode",
         ],
     );
     validate_section_fields(

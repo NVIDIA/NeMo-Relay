@@ -50,7 +50,7 @@ Adaptive Telemetry
 Agent Trajectory Interchange Format (ATIF)
   **Agent Trajectory Interchange Format (ATIF)** is an external trajectory
   format used for offline analysis, replay, or evaluation. The NeMo Relay ATIF
-  exporter collects lifecycle events and exports ATIF v1.6 trajectory data.
+  exporter collects lifecycle events and exports ATIF v1.7 trajectory data.
 
 Agent Trajectory Observability Format (ATOF)
   **Agent Trajectory Observability Format (ATOF)** is the canonical event format

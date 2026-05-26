@@ -36,10 +36,26 @@ pub struct PyAtifExporter {
     inner: nemo_relay::observability::atif::AtifExporter,
 }
 
+#[pyclass(name = "AtifSubagentExportMode", eq, eq_int, from_py_object)]
+#[derive(Clone, PartialEq)]
+pub enum PyAtifSubagentExportMode {
+    Embedded = 0,
+    FileRef = 1,
+}
+
+impl From<PyAtifSubagentExportMode> for nemo_relay::observability::atif::AtifSubagentExportMode {
+    fn from(value: PyAtifSubagentExportMode) -> Self {
+        match value {
+            PyAtifSubagentExportMode::Embedded => Self::Embedded,
+            PyAtifSubagentExportMode::FileRef => Self::FileRef,
+        }
+    }
+}
+
 #[pymethods]
 impl PyAtifExporter {
     #[new]
-    #[pyo3(signature = (session_id, agent_name, agent_version, *, model_name=None, tool_definitions=None, extra=None))]
+    #[pyo3(signature = (session_id, agent_name, agent_version, *, model_name=None, tool_definitions=None, extra=None, subagent_export_mode=None))]
     pub(crate) fn new(
         session_id: String,
         agent_name: String,
@@ -47,6 +63,7 @@ impl PyAtifExporter {
         model_name: Option<String>,
         tool_definitions: Option<&Bound<'_, pyo3::types::PyList>>,
         extra: Option<&Bound<'_, PyAny>>,
+        subagent_export_mode: Option<PyAtifSubagentExportMode>,
     ) -> PyResult<Self> {
         let tool_defs = match tool_definitions {
             Some(list) => {
@@ -69,9 +86,11 @@ impl PyAtifExporter {
             tool_definitions: tool_defs,
             extra: extra_json,
         };
-        Ok(Self {
-            inner: nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info),
-        })
+        let exporter = nemo_relay::observability::atif::AtifExporter::new(session_id, agent_info);
+        if let Some(mode) = subagent_export_mode {
+            exporter.set_subagent_export_mode(mode.into());
+        }
+        Ok(Self { inner: exporter })
     }
 
     /// Register this exporter as an event subscriber with the given name.

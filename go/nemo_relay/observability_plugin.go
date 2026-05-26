@@ -26,14 +26,15 @@ type ObservabilityAtofConfig struct {
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
 type ObservabilityAtifConfig struct {
-	Enabled          bool             `json:"enabled,omitempty"`
-	AgentName        string           `json:"agent_name,omitempty"`
-	AgentVersion     string           `json:"agent_version,omitempty"`
-	ModelName        string           `json:"model_name,omitempty"`
-	ToolDefinitions  []map[string]any `json:"tool_definitions,omitempty"`
-	Extra            map[string]any   `json:"extra,omitempty"`
-	OutputDirectory  string           `json:"output_directory,omitempty"`
-	FilenameTemplate string           `json:"filename_template,omitempty"`
+	Enabled            bool             `json:"enabled,omitempty"`
+	AgentName          string           `json:"agent_name,omitempty"`
+	AgentVersion       string           `json:"agent_version,omitempty"`
+	ModelName          string           `json:"model_name,omitempty"`
+	ToolDefinitions    []map[string]any `json:"tool_definitions,omitempty"`
+	Extra              map[string]any   `json:"extra,omitempty"`
+	OutputDirectory    string           `json:"output_directory,omitempty"`
+	FilenameTemplate   string           `json:"filename_template,omitempty"`
+	SubagentExportMode string           `json:"subagent_export_mode,omitempty"`
 }
 
 // ObservabilityOtlpConfig configures OpenTelemetry or OpenInference OTLP export.
@@ -71,9 +72,10 @@ func NewObservabilityAtofConfig() ObservabilityAtofConfig {
 // NewObservabilityAtifConfig returns disabled ATIF settings with core defaults.
 func NewObservabilityAtifConfig() ObservabilityAtifConfig {
 	return ObservabilityAtifConfig{
-		AgentName:        "NeMo Relay",
-		ModelName:        "unknown",
-		FilenameTemplate: "nemo-relay-atif-{session_id}.json",
+		AgentName:          "NeMo Relay",
+		ModelName:          "unknown",
+		FilenameTemplate:   "nemo-relay-atif-{session_id}.json",
+		SubagentExportMode: "embedded",
 	}
 }
 

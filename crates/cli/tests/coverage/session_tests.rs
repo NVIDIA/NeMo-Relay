@@ -1503,12 +1503,27 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
-    let steps = atif["steps"].as_array().unwrap();
+    let root_steps = atif["steps"].as_array().unwrap();
+    assert_eq!(root_steps.len(), 1);
+    assert_eq!(root_steps[0]["source"], json!("system"));
+    assert_eq!(
+        root_steps[0]["observation"]["results"][0]["subagent_trajectory_ref"][0]["extra"]["name"],
+        json!("hermes-turn")
+    );
+
+    let turn = &atif["subagent_trajectories"][0];
+    assert_eq!(turn["session_id"], json!("hermes-orphan"));
+    let steps = turn["steps"].as_array().unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0]["source"], json!("system"));
+    assert_eq!(steps[0]["message"], json!("subagent_stop"));
     assert_eq!(
-        steps[0]["message"]["hook_event_name"],
+        steps[0]["extra"]["event_payload"]["hook_event_name"],
         json!("subagent_stop")
+    );
+    assert_eq!(
+        steps[0]["extra"]["event_payload"]["extra"]["subagent_id"],
+        json!("worker-1")
     );
     assert_eq!(
         steps[0]["extra"]["ancestry"]["function_name"],
@@ -1517,6 +1532,119 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     assert_eq!(
         steps[0]["extra"]["ancestry"]["parent_name"],
         json!("hermes-turn")
+    );
+}
+
+#[tokio::test]
+async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "parent-session"
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "child_goal": "read plugin yaml",
+                "child_role": "leaf",
+                "child_session_id": "child-session",
+                "child_subagent_id": "sa-1",
+                "parent_turn_id": "parent-turn-1",
+                "telemetry_schema_version": "hermes.observer.v1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "child-session"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "child-session",
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read plugin yaml" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "child-session",
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "name: nemo_flow"
+                    },
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": "child-session"
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": "parent-session",
+            "extra": {
+                "child_session_id": "child-session",
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "parent-session"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "parent-session");
+    let turn = &atif["subagent_trajectories"][0];
+    let child = &turn["subagent_trajectories"][0];
+    assert_eq!(child["session_id"], json!("child-session"));
+    assert!(
+        !child["steps"].as_array().unwrap().is_empty(),
+        "embedded Hermes child trajectory must contain the child session work: {}",
+        serde_json::to_string_pretty(child).unwrap()
+    );
+    assert_eq!(child["steps"][0]["source"], json!("user"));
+    assert_eq!(child["steps"][1]["source"], json!("agent"));
+    assert!(child["subagent_trajectories"].is_null());
+    assert!(
+        !serde_json::to_string(&atif)
+            .unwrap()
+            .contains("subagent_end_without_start")
     );
 }
 

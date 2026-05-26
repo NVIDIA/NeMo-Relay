@@ -1627,7 +1627,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
             NemoRelayStatus::Ok
         );
         let trajectory = returned_json(exported);
-        assert_eq!(trajectory["schema_version"], json!("ATIF-v1.6"));
+        assert_eq!(trajectory["schema_version"], json!("ATIF-v1.7"));
         assert!(trajectory["steps"].as_array().unwrap().len() >= 4);
 
         assert_eq!(

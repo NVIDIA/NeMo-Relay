@@ -20,6 +20,7 @@ test('WebAssembly observability wrappers expose helper defaults', () => {
     agent_name: 'NeMo Relay',
     model_name: 'unknown',
     filename_template: 'nemo-relay-atif-{session_id}.json',
+    subagent_export_mode: 'embedded',
   });
   assert.deepEqual(observability.otlpConfig(), {
     enabled: false,
@@ -54,6 +55,7 @@ test('WebAssembly observability wrappers build component specs and validate file
         agent_name: 'NeMo Relay',
         model_name: 'unknown',
         filename_template: 'nemo-relay-atif-{session_id}.json',
+        subagent_export_mode: 'embedded',
       },
     },
   });

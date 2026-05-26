@@ -49,12 +49,17 @@ This configuration writes a trajectory file such as
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. |
+| `subagent_export_mode` | `embedded` | `embedded` writes child trajectories in `subagent_trajectories`; `file_ref` writes parent references without child bodies. |
 
 ## Expected Output
 
-The exporter translates NeMo Relay lifecycle events into ATIF v1.6 trajectory
+The exporter translates NeMo Relay lifecycle events into ATIF v1.7 trajectory
 data. LLM start and end events become model steps, tool events become tool
 calls and observations, and scope nesting contributes lineage metadata.
+Nested agent scopes are embedded in the parent file as `subagent_trajectories`
+and referenced from parent observation results with `trajectory_id`.
+Set `subagent_export_mode = "file_ref"` when the host writes child trajectories
+as separate artifacts and wants the parent to reference them by path instead.
 
 The plugin writes each trajectory when the top-level agent scope closes. If the
 plugin is cleared while an agent is still open, teardown flushes the partial

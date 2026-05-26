@@ -5,7 +5,7 @@
 //!
 //! This module provides types and an exporter that collects lifecycle events
 //! from the NeMo Relay runtime and converts them into ATIF trajectories conforming
-//! to the ATIF v1.6 schema.
+//! to the ATIF v1.7 schema.
 //!
 //! # Overview
 //!
@@ -21,13 +21,14 @@
 //! | LLM Start       | `user` step             | Messages extracted from LlmRequest   |
 //! | LLM End         | `agent` step            | Response content, tool_calls promoted|
 //! | Tool Start      | *(skipped)*             | tool_calls come from LLM End instead |
-//! | Tool End        | `system` observation     | Consecutive tool ends merged         |
+//! | Tool End        | agent observation         | Correlated by `source_call_id`       |
 //! | Mark (with data)| `system` step           | Custom event data preserved          |
 //! | Scope Start/End | *(skipped)*             | Structural events, not trajectory    |
 //!
 //! The exporter serializes the full collected event stream into a single ATIF
 //! trajectory.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -40,9 +41,9 @@ use crate::json::Json;
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
-/// Currently `"ATIF-v1.6"`. This constant is used by [`AtifTrajectory`]
+/// Currently `"ATIF-v1.7"`. This constant is used by [`AtifTrajectory`]
 /// serialization and verified by downstream consumers to ensure compatibility.
-pub const ATIF_SCHEMA_VERSION: &str = "ATIF-v1.6";
+pub const ATIF_SCHEMA_VERSION: &str = "ATIF-v1.7";
 
 // ---------------------------------------------------------------------------
 // ATIF types
@@ -96,6 +97,9 @@ pub struct AtifStep {
     /// Token usage and cost metrics.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metrics: Option<AtifMetrics>,
+    /// Number of LLM calls represented by this step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_call_count: Option<u64>,
     /// Whether this step was copied from a previous trajectory for context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_copied_context: Option<bool>,
@@ -133,7 +137,7 @@ pub struct AtifMetrics {
     pub extra: Option<Json>,
 }
 
-/// Aggregate statistics for the entire trajectory (ATIF v1.6 final_metrics).
+/// Aggregate statistics for the entire trajectory (ATIF final_metrics).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AtifFinalMetrics {
     /// Sum of all prompt tokens across all steps, including cached tokens.
@@ -165,6 +169,9 @@ pub struct AtifToolCall {
     pub function_name: String,
     /// Arguments passed to the tool.
     pub arguments: Json,
+    /// Provider or host-specific metadata for this tool call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<Json>,
 }
 
 /// Observation results from tool execution.
@@ -181,7 +188,31 @@ pub struct AtifObservationResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_call_id: Option<String>,
     /// The tool's output content.
-    pub content: Json,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Json>,
+    /// References to delegated subagent trajectories.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_trajectory_ref: Option<Vec<AtifSubagentTrajectoryRef>>,
+    /// Provider or host-specific metadata for this observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<Json>,
+}
+
+/// Reference to a delegated subagent trajectory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtifSubagentTrajectoryRef {
+    /// Embedded trajectory identifier, resolved against `subagent_trajectories`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trajectory_id: Option<String>,
+    /// External trajectory location when using multi-file references.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trajectory_path: Option<String>,
+    /// Run identity for debug/search/display correlation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Extra metadata about the subagent execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra: Option<Json>,
 }
 
 /// Lineage node identifying a callable within an ATIF step.
@@ -236,6 +267,12 @@ pub struct AtifStepExtra {
     /// Full unwrapped LLM request payload for request-level fidelity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_request: Option<Json>,
+    /// Full raw LLM response payload for response-level fidelity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_response: Option<Json>,
+    /// Full raw point-in-time event payload for mark/system steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_payload: Option<Json>,
     /// Per-tool callable lineage, aligned with `tool_calls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_ancestry: Vec<AtifAncestry>,
@@ -247,10 +284,13 @@ pub struct AtifStepExtra {
 /// A complete ATIF trajectory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtifTrajectory {
-    /// Schema version (e.g., `"ATIF-v1.6"`).
+    /// Schema version (e.g., `"ATIF-v1.7"`).
     pub schema_version: String,
     /// Unique session identifier.
     pub session_id: String,
+    /// Canonical per-trajectory-document identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trajectory_id: Option<String>,
     /// Information about the agent.
     pub agent: AtifAgentInfo,
     /// Ordered list of trajectory steps.
@@ -264,9 +304,24 @@ pub struct AtifTrajectory {
     /// Reference to the continuation trajectory file if continued elsewhere.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continued_trajectory_ref: Option<String>,
+    /// Embedded subagent trajectories.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_trajectories: Option<Vec<AtifTrajectory>>,
     /// Extra metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<Json>,
+}
+
+/// How delegated subagent trajectories should be represented in ATIF output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AtifSubagentExportMode {
+    /// Embed child trajectories under `subagent_trajectories`.
+    #[default]
+    Embedded,
+    /// Emit `subagent_trajectory_ref` entries without embedding child bodies.
+    FileRef,
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +332,7 @@ struct AtifExporterState {
     session_id: String,
     agent_info: AtifAgentInfo,
     events: Vec<Event>,
+    subagent_export_mode: AtifSubagentExportMode,
 }
 
 /// Collects lifecycle events and exports them as ATIF trajectories.
@@ -302,8 +358,27 @@ impl AtifExporter {
                 session_id,
                 agent_info,
                 events: Vec::new(),
+                subagent_export_mode: AtifSubagentExportMode::Embedded,
             })),
         }
+    }
+
+    /// Set how delegated subagent trajectories should be represented.
+    ///
+    /// The default is [`AtifSubagentExportMode::Embedded`], which matches the
+    /// ATIF v1.7 single-document shape. Use
+    /// [`AtifSubagentExportMode::FileRef`] when a host writes child
+    /// trajectories as separate artifacts and wants parent trajectories to
+    /// contain references only.
+    pub fn set_subagent_export_mode(&self, mode: AtifSubagentExportMode) {
+        let mut state = self.state.lock().unwrap();
+        state.subagent_export_mode = mode;
+    }
+
+    /// Builder-style variant of [`set_subagent_export_mode`].
+    pub fn with_subagent_export_mode(self, mode: AtifSubagentExportMode) -> Self {
+        self.set_subagent_export_mode(mode);
+        self
     }
 
     /// Return an event subscriber function that records NeMo Relay events.
@@ -334,19 +409,12 @@ impl AtifExporter {
     pub fn export(&self) -> AtifTrajectory {
         let state = self.state.lock().unwrap();
         let collected_events: Vec<&Event> = state.events.iter().collect();
-        let steps = events_to_steps(&collected_events);
-        let final_metrics = compute_final_metrics(&steps);
-
-        AtifTrajectory {
-            schema_version: ATIF_SCHEMA_VERSION.to_string(),
-            session_id: state.session_id.clone(),
-            agent: state.agent_info.clone(),
-            steps,
-            notes: None,
-            final_metrics,
-            continued_trajectory_ref: None,
-            extra: None,
-        }
+        events_to_trajectory(
+            &state.session_id,
+            state.agent_info.clone(),
+            &collected_events,
+            state.subagent_export_mode,
+        )
     }
 
     /// Clear all collected events from the internal buffer.
@@ -379,42 +447,96 @@ fn unwrap_llm_request(input: &Json) -> Json {
 
 /// Extract the user-facing message content from a raw LLM response.
 ///
-/// Looks for a `"content"` field (string or structured) on the response object.
-/// Falls back to the full response if the field is absent or not an object.
+/// Looks for OpenAI-compatible and Hermes-compatible response content fields.
+/// Tool-call-only responses use an empty string message and keep the full
+/// response under `Step.extra.llm_response`.
 fn extract_llm_response_message(output: &Json) -> Json {
     if let Some(obj) = output.as_object() {
         if let Some(content) = non_null_object_field(obj, "content") {
-            return content;
+            return atif_content_value(&content);
         }
-        if let Some(summary) = llm_response_summary(obj) {
-            return summary;
+        if let Some(content) = obj
+            .get("assistant_message")
+            .and_then(Json::as_object)
+            .and_then(|assistant| non_null_object_field(assistant, "content"))
+        {
+            return atif_content_value(&content);
+        }
+        if let Some(content) = raw_response_message_field(output, "content")
+            && !content.is_null()
+        {
+            return atif_content_value(content);
+        }
+        if let Some(answer) = non_null_object_field(obj, "answer") {
+            return atif_content_value(&answer);
+        }
+        if tool_call_array(output).is_some() {
+            return empty_message();
         }
     }
-    // Not a recognized object structure — return as-is.
-    output.clone()
+    atif_content_value(output)
 }
 
 fn non_null_object_field(obj: &serde_json::Map<String, Json>, key: &str) -> Option<Json> {
     obj.get(key).filter(|value| !value.is_null()).cloned()
 }
 
-fn llm_response_summary(obj: &serde_json::Map<String, Json>) -> Option<Json> {
-    if !obj.contains_key("tool_calls") && !obj.contains_key("role") {
-        return None;
-    }
+fn empty_message() -> Json {
+    Json::String(String::new())
+}
 
-    let mut summary = serde_json::Map::new();
-    if let Some(role) = obj.get("role") {
-        summary.insert("role".to_string(), role.clone());
+fn atif_content_value(value: &Json) -> Json {
+    match value {
+        Json::String(_) => value.clone(),
+        Json::Array(_) if is_atif_content_parts(value) => value.clone(),
+        Json::Null => empty_message(),
+        _ => Json::String(json_to_string(value)),
     }
-    if let Some(tool_calls) = obj.get("tool_calls") {
-        summary.insert("tool_calls".to_string(), tool_calls.clone());
-    }
-    if let Some(reasoning) = non_null_object_field(obj, "reasoning") {
-        summary.insert("reasoning".to_string(), reasoning);
-    }
+}
 
-    (!summary.is_empty()).then_some(Json::Object(summary))
+fn is_atif_content_parts(value: &Json) -> bool {
+    let Some(parts) = value.as_array() else {
+        return false;
+    };
+    parts.iter().all(|part| {
+        let Some(object) = part.as_object() else {
+            return false;
+        };
+        match object.get("type").and_then(Json::as_str) {
+            Some("text") => object.get("text").and_then(Json::as_str).is_some(),
+            Some("image") => is_atif_image_source(object.get("source")),
+            _ => false,
+        }
+    })
+}
+
+fn is_atif_image_source(value: Option<&Json>) -> bool {
+    let Some(source) = value.and_then(Json::as_object) else {
+        return false;
+    };
+    matches!(
+        source.get("media_type").and_then(Json::as_str),
+        Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
+    ) && source.get("path").and_then(Json::as_str).is_some()
+}
+
+fn json_to_string(value: &Json) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a Json> {
+    let object = output.as_object()?;
+    object
+        .get("raw_response")
+        .or(Some(output))
+        .and_then(|raw_response| raw_response.as_object())
+        .and_then(|raw_response| raw_response.get("choices"))
+        .and_then(Json::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(Json::as_object)
+        .and_then(|choice| choice.get("message"))
+        .and_then(Json::as_object)
+        .and_then(|message| message.get(field))
 }
 
 /// Known keys in token_usage that we extract to dedicated fields.
@@ -544,20 +666,38 @@ fn extract_reasoning_content(output: &Json) -> Option<String> {
     None
 }
 
-/// Extract just the `messages` array from an LLM request payload.
+/// Extract the latest user-facing message from an LLM request payload.
 ///
 /// LLM start inputs typically contain `{ "messages": [...], "model": "...",
-/// "max_tokens": ..., "tools": [...], "stream": ... }`. For the user step we
-/// only want the `messages` array — the rest is LLM configuration noise.
+/// "max_tokens": ..., "tools": [...], "stream": ... }`. For the ATIF user step
+/// we emit a schema-compatible message value (string or content-part array)
+/// and preserve the full LLM request in `Step.extra.llm_request`.
 ///
-/// Returns the `messages` value if present, otherwise the full input.
+/// Returns the latest user message content if present, a prompt if present, or
+/// a stringified representation of the input as a last resort.
 fn extract_user_messages(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
-        && let Some(messages) = obj.get("messages")
+        && let Some(messages) = obj.get("messages").and_then(Json::as_array)
     {
-        return messages.clone();
+        if let Some(message) = messages
+            .iter()
+            .rev()
+            .filter_map(Json::as_object)
+            .find(|message| match message.get("role").and_then(Json::as_str) {
+                Some(role) => role == "user",
+                None => true,
+            })
+            .and_then(|message| message.get("content"))
+        {
+            return atif_content_value(message);
+        }
     }
-    input.clone()
+    if let Some(obj) = input.as_object()
+        && let Some(prompt) = obj.get("prompt")
+    {
+        return atif_content_value(prompt);
+    }
+    atif_content_value(input)
 }
 
 /// Try to promote `tool_calls` from the raw LLM response into `AtifToolCall` entries.
@@ -572,15 +712,17 @@ fn extract_user_messages(input: &Json) -> Json {
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
 fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
-    let arr = output.as_object()?.get("tool_calls")?.as_array()?;
+    let arr = tool_call_array(output)?;
     if arr.is_empty() {
         return None;
     }
     let mut calls = Vec::with_capacity(arr.len());
-    for tc in arr {
+    for (index, tc) in arr.iter().enumerate() {
         let tc_obj = tc.as_object()?;
-        let id = tc_obj
+        let mut id = tc_obj
             .get("id")
+            .or_else(|| tc_obj.get("tool_call_id"))
+            .or_else(|| tc_obj.get("call_id"))
             .and_then(Json::as_str)
             .unwrap_or("")
             .to_string();
@@ -588,19 +730,19 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         let func = tc_obj.get("function").and_then(Json::as_object);
         let name = func
             .and_then(|f| f.get("name"))
+            .or_else(|| tc_obj.get("name"))
+            .or_else(|| tc_obj.get("function_name"))
             .and_then(Json::as_str)
             .unwrap_or("")
             .to_string();
+        if id.is_empty() && !name.is_empty() {
+            id = format!("{name}:{}", index + 1);
+        }
         let raw_arguments = func
             .and_then(|f| f.get("arguments"))
-            .cloned()
-            .unwrap_or(Json::Null);
-        // Parse string arguments as JSON for consistency.
-        let arguments = if let Some(s) = raw_arguments.as_str() {
-            serde_json::from_str(s).unwrap_or(raw_arguments)
-        } else {
-            raw_arguments
-        };
+            .or_else(|| tc_obj.get("arguments"))
+            .or_else(|| tc_obj.get("args"));
+        let arguments = normalize_tool_arguments(raw_arguments);
         // Skip entries with no id and no name — they are not meaningful.
         if id.is_empty() && name.is_empty() {
             continue;
@@ -609,9 +751,101 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
             tool_call_id: id,
             function_name: name,
             arguments,
+            extra: tool_call_extra(tc),
         });
     }
     if calls.is_empty() { None } else { Some(calls) }
+}
+
+fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
+    output
+        .as_object()
+        .and_then(|object| object.get("tool_calls"))
+        .and_then(Json::as_array)
+        .or_else(|| {
+            output
+                .as_object()
+                .and_then(|object| object.get("assistant_message"))
+                .and_then(Json::as_object)
+                .and_then(|assistant| assistant.get("tool_calls"))
+                .and_then(Json::as_array)
+        })
+        .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
+}
+
+fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
+    let Some(raw_arguments) = raw_arguments else {
+        return serde_json::json!({});
+    };
+    match raw_arguments {
+        Json::Object(_) => raw_arguments.clone(),
+        Json::String(arguments) => match serde_json::from_str::<Json>(arguments) {
+            Ok(Json::Object(object)) => Json::Object(object),
+            Ok(value) => serde_json::json!({ "value": value }),
+            Err(_) => serde_json::json!({ "raw": arguments }),
+        },
+        Json::Null => serde_json::json!({}),
+        value => serde_json::json!({ "value": value }),
+    }
+}
+
+fn tool_call_extra(tool_call: &Json) -> Option<Json> {
+    let object = tool_call.as_object()?;
+    let mut extra = serde_json::Map::new();
+
+    for (key, value) in object {
+        if !matches!(
+            key.as_str(),
+            "id" | "tool_call_id"
+                | "call_id"
+                | "type"
+                | "function"
+                | "name"
+                | "function_name"
+                | "arguments"
+                | "args"
+        ) {
+            extra.insert(key.clone(), value.clone());
+        }
+    }
+
+    if let Some(function) = object.get("function").and_then(Json::as_object) {
+        let mut function_extra = serde_json::Map::new();
+        for (key, value) in function {
+            if key != "name" && key != "arguments" {
+                function_extra.insert(key.clone(), value.clone());
+            }
+        }
+        if !function_extra.is_empty() {
+            extra.insert("function".to_string(), Json::Object(function_extra));
+        }
+    }
+
+    (!extra.is_empty()).then_some(Json::Object(extra))
+}
+
+fn event_extra(event: &Event) -> Json {
+    let mut extra = serde_json::Map::new();
+    extra.insert(
+        "event_uuid".to_string(),
+        Json::String(event.uuid().to_string()),
+    );
+    extra.insert(
+        "event_name".to_string(),
+        Json::String(event.name().to_string()),
+    );
+    if let Some(parent_uuid) = event.parent_uuid() {
+        extra.insert(
+            "parent_event_uuid".to_string(),
+            Json::String(parent_uuid.to_string()),
+        );
+    }
+    if let Some(metadata) = event.metadata()
+        && !metadata.is_null()
+    {
+        extra.insert("metadata".to_string(), metadata.clone());
+    }
+    Json::Object(extra)
 }
 
 /// Compute aggregate `final_metrics` by summing token counts across all steps.
@@ -722,6 +956,7 @@ struct PendingAgentStep {
     step_idx: Option<usize>,
     ancestry: Option<AtifAncestry>,
     invocation: Option<AtifInvocationInfo>,
+    llm_response: Option<Json>,
     tool_ancestry: Vec<AtifAncestry>,
     tool_invocations: Vec<AtifInvocationInfo>,
     tool_call_order: Vec<String>,
@@ -741,6 +976,8 @@ impl PendingAgentStep {
             ancestry,
             invocation: self.invocation.take(),
             llm_request: None,
+            llm_response: self.llm_response.take(),
+            event_payload: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
             tool_invocations: if self.tool_invocations.is_empty() {
                 None
@@ -757,10 +994,12 @@ impl PendingAgentStep {
         ancestry: AtifAncestry,
         invocation: AtifInvocationInfo,
         tool_call_order: Vec<String>,
+        llm_response: Json,
     ) {
         self.step_idx = Some(step_idx);
         self.ancestry = Some(ancestry);
         self.invocation = Some(invocation);
+        self.llm_response = Some(llm_response);
         self.tool_ancestry.clear();
         self.tool_invocations.clear();
         self.tool_call_order = tool_call_order;
@@ -773,6 +1012,12 @@ impl PendingAgentStep {
 
     fn has_active_step(&self) -> bool {
         self.step_idx.is_some()
+    }
+
+    fn has_tool_call_id(&self, tool_call_id: &str) -> bool {
+        self.tool_call_order
+            .iter()
+            .any(|known_id| known_id == tool_call_id)
     }
 
     fn sort_tool_metadata(&mut self) {
@@ -809,24 +1054,87 @@ struct StepConversionState {
 }
 
 impl StepConversionState {
+    fn handle_event(&mut self, event: &Event, lookups: &EventLookupMaps) {
+        match (
+            event.kind(),
+            event.scope_category(),
+            event.category().map(|category| category.as_str()),
+        ) {
+            ("scope", Some(crate::api::event::ScopeCategory::Start), Some("llm")) => {
+                self.handle_llm_start(event, lookups)
+            }
+            ("scope", Some(crate::api::event::ScopeCategory::End), Some("llm")) => {
+                self.handle_llm_end(event, lookups)
+            }
+            ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
+                self.handle_tool_end(event, lookups)
+            }
+            ("mark", _, _) => self.handle_mark(event, lookups),
+            _ => {}
+        }
+    }
+
     fn flush_observations(&mut self) {
         if self.pending_observations.is_empty() {
             return;
         }
 
+        let timestamp = self.pending_obs_timestamp.take();
+        let mut observations = std::mem::take(&mut self.pending_observations);
+
+        if let Some(step_idx) = self.current_agent.step_idx
+            && let Some(step) = self.steps.get_mut(step_idx)
+        {
+            let mut attached = Vec::new();
+            let mut standalone = Vec::new();
+            for mut result in observations {
+                let matches_current_tool_call =
+                    result.source_call_id.as_deref().is_some_and(|id| {
+                        step.tool_calls
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .any(|tool_call| tool_call.tool_call_id == id)
+                    });
+                if matches_current_tool_call {
+                    attached.push(result);
+                } else {
+                    result.source_call_id = None;
+                    standalone.push(result);
+                }
+            }
+            if !attached.is_empty() {
+                if let Some(observation) = &mut step.observation {
+                    observation.results.extend(attached);
+                } else {
+                    step.observation = Some(AtifObservation { results: attached });
+                }
+            }
+            observations = standalone;
+        }
+
+        if observations.is_empty() {
+            return;
+        }
+
+        for result in &mut observations {
+            result.source_call_id = None;
+        }
+
         self.steps.push(AtifStep {
             step_id: 0,
             source: "system".to_string(),
-            message: Json::Null,
-            timestamp: self.pending_obs_timestamp.take(),
+            message: empty_message(),
+            timestamp,
             model_name: None,
             reasoning_effort: None,
             reasoning_content: None,
             tool_calls: None,
             observation: Some(AtifObservation {
-                results: std::mem::take(&mut self.pending_observations),
+                results: observations,
             }),
             metrics: None,
+            llm_call_count: None,
             is_copied_context: None,
             extra: None,
         });
@@ -849,6 +1157,8 @@ impl StepConversionState {
             ancestry: build_ancestry(event, &lookups.name_map),
             invocation: None,
             llm_request: Some(content.clone()),
+            llm_response: None,
+            event_payload: None,
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
@@ -863,6 +1173,7 @@ impl StepConversionState {
             tool_calls: None,
             observation: None,
             metrics: None,
+            llm_call_count: None,
             is_copied_context: None,
             extra: serde_json::to_value(&extra).ok(),
         });
@@ -898,6 +1209,7 @@ impl StepConversionState {
             tool_calls,
             observation: None,
             metrics: extract_metrics(output),
+            llm_call_count: Some(1),
             is_copied_context: None,
             extra: None,
         });
@@ -906,36 +1218,48 @@ impl StepConversionState {
             ancestry,
             invocation,
             tool_call_order,
+            output.clone(),
         );
     }
 
+    fn resolve_source_call_id(&self, event: &Event) -> Option<String> {
+        let candidate = event
+            .tool_call_id()
+            .map(ToOwned::to_owned)
+            .or_else(|| self.last_tool_call_map.get(event.name()).cloned())?;
+
+        if self.current_agent.has_tool_call_id(&candidate)
+            || self
+                .last_tool_call_map
+                .values()
+                .any(|known_id| known_id == &candidate)
+        {
+            Some(candidate)
+        } else {
+            None
+        }
+    }
+
     fn handle_tool_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
+        let source_call_id = self.resolve_source_call_id(event);
         if let Some(output) = event.data() {
             if self.pending_obs_timestamp.is_none() {
                 self.pending_obs_timestamp = Some(event.timestamp().to_rfc3339());
             }
             self.pending_observations.push(AtifObservationResult {
-                source_call_id: event
-                    .tool_call_id()
-                    .map(ToOwned::to_owned)
-                    .or_else(|| self.last_tool_call_map.get(event.name()).cloned()),
-                content: output.clone(),
+                source_call_id: source_call_id.clone(),
+                content: Some(atif_content_value(output)),
+                subagent_trajectory_ref: None,
+                extra: Some(event_extra(event)),
             });
         }
 
-        if !self.current_agent.has_active_step() {
+        if !self.current_agent.has_active_step() || source_call_id.is_none() {
             return;
         }
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();
-        let invocation = build_invocation_info(
-            start_ts,
-            *event.timestamp(),
-            event
-                .tool_call_id()
-                .map(ToOwned::to_owned)
-                .or_else(|| Some(event.uuid().to_string())),
-            "nemo_relay",
-        );
+        let invocation =
+            build_invocation_info(start_ts, *event.timestamp(), source_call_id, "nemo_relay");
         self.current_agent
             .push_tool_metadata(build_ancestry(event, &lookups.name_map), invocation);
     }
@@ -958,6 +1282,8 @@ impl StepConversionState {
                 framework: Some("nemo_relay".to_string()),
             }),
             llm_request: None,
+            llm_response: None,
+            event_payload: Some(data.clone()),
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
@@ -972,14 +1298,63 @@ impl StepConversionState {
             tool_calls: None,
             observation: None,
             metrics: None,
+            llm_call_count: None,
             is_copied_context: None,
             extra: serde_json::to_value(&extra).ok(),
         });
     }
 
-    fn finish(mut self) -> Vec<AtifStep> {
-        self.finalize_agent_extra();
+    fn handle_subagent_start(
+        &mut self,
+        child: &AgentScopeNode,
+        event: &Event,
+        subagent_export_mode: AtifSubagentExportMode,
+    ) {
         self.flush_observations();
+        self.finalize_agent_extra();
+
+        self.steps.push(AtifStep {
+            step_id: 0,
+            source: "system".to_string(),
+            message: empty_message(),
+            timestamp: Some(event.timestamp().to_rfc3339()),
+            model_name: None,
+            reasoning_effort: None,
+            reasoning_content: None,
+            tool_calls: None,
+            observation: Some(AtifObservation {
+                results: vec![AtifObservationResult {
+                    source_call_id: None,
+                    content: None,
+                    subagent_trajectory_ref: Some(vec![AtifSubagentTrajectoryRef {
+                        trajectory_id: Some(child.uuid.to_string()),
+                        trajectory_path: match subagent_export_mode {
+                            AtifSubagentExportMode::Embedded => None,
+                            AtifSubagentExportMode::FileRef => Some(format!("{}.json", child.uuid)),
+                        },
+                        session_id: child.session_id.clone(),
+                        extra: Some(serde_json::json!({
+                            "name": child.name.clone(),
+                            "scope_uuid": child.uuid.to_string(),
+                            "subagent_export_mode": match subagent_export_mode {
+                                AtifSubagentExportMode::Embedded => "embedded",
+                                AtifSubagentExportMode::FileRef => "file_ref",
+                            },
+                        })),
+                    }]),
+                    extra: Some(event_extra(event)),
+                }],
+            }),
+            metrics: None,
+            llm_call_count: None,
+            is_copied_context: None,
+            extra: None,
+        });
+    }
+
+    fn finish(mut self) -> Vec<AtifStep> {
+        self.flush_observations();
+        self.finalize_agent_extra();
         for (index, step) in self.steps.iter_mut().enumerate() {
             step.step_id = index + 1;
         }
@@ -1007,9 +1382,317 @@ fn refresh_tool_call_lookup(
     tool_call_order
 }
 
+#[derive(Debug, Clone)]
+struct AgentScopeNode {
+    uuid: Uuid,
+    name: String,
+    session_id: Option<String>,
+    parent_agent: Option<Uuid>,
+    children: Vec<Uuid>,
+    start_timestamp: DateTime<Utc>,
+}
+
+struct AgentScopeTree {
+    nodes: HashMap<Uuid, AgentScopeNode>,
+    roots: Vec<Uuid>,
+    scope_parent_map: HashMap<Uuid, Uuid>,
+    agent_uuids: HashSet<Uuid>,
+}
+
+impl AgentScopeTree {
+    fn from_events(events: &[&Event]) -> Self {
+        let mut scope_parent_map = HashMap::new();
+        let mut agent_uuids = HashSet::new();
+
+        for event in events {
+            if is_start_event(event) {
+                if let Some(parent_uuid) = event.parent_uuid() {
+                    scope_parent_map.insert(event.uuid(), parent_uuid);
+                }
+                if event.scope_type() == Some(crate::api::scope::ScopeType::Agent) {
+                    agent_uuids.insert(event.uuid());
+                }
+            }
+        }
+
+        let mut nodes = HashMap::new();
+        for event in events {
+            if !is_start_event(event)
+                || event.scope_type() != Some(crate::api::scope::ScopeType::Agent)
+            {
+                continue;
+            }
+            let parent_agent = nearest_agent_parent(
+                event.parent_uuid(),
+                &scope_parent_map,
+                &agent_uuids,
+                Some(event.uuid()),
+            );
+            nodes.insert(
+                event.uuid(),
+                AgentScopeNode {
+                    uuid: event.uuid(),
+                    name: event.name().to_string(),
+                    session_id: event
+                        .metadata()
+                        .and_then(|metadata| metadata.get("session_id"))
+                        .and_then(Json::as_str)
+                        .map(ToString::to_string),
+                    parent_agent,
+                    children: Vec::new(),
+                    start_timestamp: *event.timestamp(),
+                },
+            );
+        }
+
+        let mut child_links = Vec::new();
+        let mut roots = Vec::new();
+        for node in nodes.values() {
+            if let Some(parent_agent) = node.parent_agent {
+                child_links.push((parent_agent, node.uuid));
+            } else {
+                roots.push(node.uuid);
+            }
+        }
+        for (parent_agent, child) in child_links {
+            if let Some(parent) = nodes.get_mut(&parent_agent) {
+                parent.children.push(child);
+            }
+        }
+        let start_timestamps = nodes
+            .iter()
+            .map(|(uuid, node)| (*uuid, node.start_timestamp))
+            .collect::<HashMap<_, _>>();
+        roots.sort_by_key(|uuid| start_timestamps.get(uuid).copied());
+        for node in nodes.values_mut() {
+            node.children
+                .sort_by_key(|uuid| start_timestamps.get(uuid).copied());
+        }
+
+        Self {
+            nodes,
+            roots,
+            scope_parent_map,
+            agent_uuids,
+        }
+    }
+
+    fn choose_root(&self, session_id: &str) -> Option<Uuid> {
+        Uuid::parse_str(session_id)
+            .ok()
+            .filter(|uuid| self.nodes.contains_key(uuid))
+            .or_else(|| (self.roots.len() == 1).then(|| self.roots[0]))
+    }
+
+    fn owner_agent(&self, event: &Event) -> Option<Uuid> {
+        if event.scope_type() == Some(crate::api::scope::ScopeType::Agent) {
+            return Some(event.uuid()).filter(|uuid| self.agent_uuids.contains(uuid));
+        }
+        nearest_agent_parent(
+            event.parent_uuid(),
+            &self.scope_parent_map,
+            &self.agent_uuids,
+            None,
+        )
+    }
+
+    fn direct_child_for_start(&self, parent: Uuid, event: &Event) -> Option<&AgentScopeNode> {
+        if !is_start_event(event) || event.scope_type() != Some(crate::api::scope::ScopeType::Agent)
+        {
+            return None;
+        }
+        let child = self.nodes.get(&event.uuid())?;
+        (child.parent_agent == Some(parent)).then_some(child)
+    }
+}
+
+fn nearest_agent_parent(
+    mut current: Option<Uuid>,
+    scope_parent_map: &HashMap<Uuid, Uuid>,
+    agent_uuids: &HashSet<Uuid>,
+    excluded_uuid: Option<Uuid>,
+) -> Option<Uuid> {
+    while let Some(uuid) = current {
+        if Some(uuid) != excluded_uuid && agent_uuids.contains(&uuid) {
+            return Some(uuid);
+        }
+        current = scope_parent_map.get(&uuid).copied();
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Event-to-step mapping
 // ---------------------------------------------------------------------------
+
+fn events_to_trajectory(
+    session_id: &str,
+    agent_info: AtifAgentInfo,
+    events: &[&Event],
+    subagent_export_mode: AtifSubagentExportMode,
+) -> AtifTrajectory {
+    let mut sorted: Vec<&Event> = events.to_vec();
+    sorted.sort_by_key(|event| *event.timestamp());
+    let tree = AgentScopeTree::from_events(&sorted);
+
+    if let Some(root_uuid) = tree.choose_root(session_id) {
+        if can_use_agent_scope_tree(&tree, &sorted) {
+            return agent_scope_to_trajectory(
+                &tree,
+                root_uuid,
+                session_id,
+                &agent_info,
+                &sorted,
+                true,
+                subagent_export_mode,
+            );
+        }
+    }
+
+    let steps = events_to_steps(&sorted);
+    trajectory_from_parts(
+        session_id.to_string(),
+        Some(session_id.to_string()),
+        agent_info,
+        steps,
+        None,
+    )
+}
+
+fn can_use_agent_scope_tree(tree: &AgentScopeTree, events: &[&Event]) -> bool {
+    events.iter().all(|event| {
+        event.scope_type() == Some(crate::api::scope::ScopeType::Agent)
+            || !is_step_event(event)
+            || tree.owner_agent(event).is_some()
+    })
+}
+
+fn is_step_event(event: &Event) -> bool {
+    matches!(
+        (
+            event.kind(),
+            event.scope_category(),
+            event.category().map(|category| category.as_str()),
+        ),
+        (
+            "scope",
+            Some(crate::api::event::ScopeCategory::Start),
+            Some("llm")
+        ) | (
+            "scope",
+            Some(crate::api::event::ScopeCategory::End),
+            Some("llm")
+        ) | (
+            "scope",
+            Some(crate::api::event::ScopeCategory::End),
+            Some("tool")
+        ) | ("mark", _, _)
+    )
+}
+
+fn agent_scope_to_trajectory(
+    tree: &AgentScopeTree,
+    agent_uuid: Uuid,
+    session_id: &str,
+    agent_info: &AtifAgentInfo,
+    sorted_events: &[&Event],
+    is_root: bool,
+    subagent_export_mode: AtifSubagentExportMode,
+) -> AtifTrajectory {
+    let steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid, subagent_export_mode);
+    let subagent_trajectories = match subagent_export_mode {
+        AtifSubagentExportMode::Embedded => tree
+            .nodes
+            .get(&agent_uuid)
+            .map(|node| {
+                node.children
+                    .iter()
+                    .map(|child_uuid| {
+                        agent_scope_to_trajectory(
+                            tree,
+                            *child_uuid,
+                            session_id,
+                            agent_info,
+                            sorted_events,
+                            false,
+                            subagent_export_mode,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|children| !children.is_empty()),
+        AtifSubagentExportMode::FileRef => None,
+    };
+    let trajectory_id = if is_root {
+        session_id.to_string()
+    } else {
+        agent_uuid.to_string()
+    };
+    let trajectory_session_id = if is_root {
+        session_id.to_string()
+    } else {
+        tree.nodes
+            .get(&agent_uuid)
+            .and_then(|node| node.session_id.clone())
+            .unwrap_or_else(|| session_id.to_string())
+    };
+
+    trajectory_from_parts(
+        trajectory_session_id,
+        Some(trajectory_id),
+        agent_info.clone(),
+        steps,
+        subagent_trajectories,
+    )
+}
+
+fn trajectory_from_parts(
+    session_id: String,
+    trajectory_id: Option<String>,
+    agent: AtifAgentInfo,
+    steps: Vec<AtifStep>,
+    subagent_trajectories: Option<Vec<AtifTrajectory>>,
+) -> AtifTrajectory {
+    let final_metrics = compute_final_metrics(&steps);
+
+    AtifTrajectory {
+        schema_version: ATIF_SCHEMA_VERSION.to_string(),
+        session_id,
+        trajectory_id,
+        agent,
+        steps,
+        notes: None,
+        final_metrics,
+        continued_trajectory_ref: None,
+        subagent_trajectories,
+        extra: None,
+    }
+}
+
+fn events_to_steps_for_agent(
+    events: &[&Event],
+    tree: &AgentScopeTree,
+    agent_uuid: Uuid,
+    subagent_export_mode: AtifSubagentExportMode,
+) -> Vec<AtifStep> {
+    let lookups = EventLookupMaps::from_events(events);
+    let mut state = StepConversionState::default();
+
+    for event in events {
+        if let Some(child) = tree.direct_child_for_start(agent_uuid, event) {
+            state.handle_subagent_start(child, event, subagent_export_mode);
+            continue;
+        }
+
+        if tree.owner_agent(event) != Some(agent_uuid) {
+            continue;
+        }
+
+        state.handle_event(event, &lookups);
+    }
+
+    state.finish()
+}
 
 /// Converts a slice of events into ATIF steps.
 ///
@@ -1023,7 +1706,7 @@ fn refresh_tool_call_lookup(
 ///      JSON arguments)
 /// 3. For Tool events:
 ///    - Start events are **skipped** (tool_calls come from LLM End promotion)
-///    - Consecutive End events are **merged** into a single system observation
+///    - Consecutive End events are attached to the matching agent step
 ///      step with multiple results
 /// 4. Tool End observation results are correlated with the preceding LLM End's
 ///    promoted tool_calls by function name → `source_call_id`.
@@ -1036,23 +1719,7 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     let mut state = StepConversionState::default();
 
     for event in &sorted {
-        match (
-            event.kind(),
-            event.scope_category(),
-            event.category().map(|category| category.as_str()),
-        ) {
-            ("scope", Some(crate::api::event::ScopeCategory::Start), Some("llm")) => {
-                state.handle_llm_start(event, &lookups)
-            }
-            ("scope", Some(crate::api::event::ScopeCategory::End), Some("llm")) => {
-                state.handle_llm_end(event, &lookups)
-            }
-            ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
-                state.handle_tool_end(event, &lookups)
-            }
-            ("mark", _, _) => state.handle_mark(event, &lookups),
-            _ => {}
-        }
+        state.handle_event(event, &lookups);
     }
 
     state.finish()
@@ -1064,20 +1731,10 @@ fn is_empty_mark_payload(data: &Json) -> bool {
 
 // A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent
 // hook adapters use marks for lifecycle notifications that do not map to first-class ATIF step
-// types, for example hook-only status updates or synthetic fallback events. Preserve the original
-// mark payload, but surface the hook name in a stable `hook_event_name` field so trajectory readers
-// can label system steps without knowing adapter-specific metadata conventions.
-fn mark_message(mark: &Event, data: &Json) -> Json {
-    let Some(object) = data.as_object() else {
-        return data.clone();
-    };
-    let mut message = object.clone();
-    if !message.contains_key("hook_event_name")
-        && let Some(hook_event_name) = mark_hook_event_name(mark)
-    {
-        message.insert("hook_event_name".to_string(), Json::String(hook_event_name));
-    }
-    Json::Object(message)
+// types, for example hook-only status updates or synthetic fallback events. The ATIF step message
+// stays schema-compatible while the original payload is preserved in `Step.extra.event_payload`.
+fn mark_message(mark: &Event, _data: &Json) -> Json {
+    Json::String(mark_hook_event_name(mark).unwrap_or_default())
 }
 
 // Prefer the adapter-provided hook name because the runtime mark name may be a generic bucket such

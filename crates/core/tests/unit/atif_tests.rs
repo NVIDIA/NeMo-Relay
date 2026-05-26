@@ -12,6 +12,7 @@ use crate::api::llm::LlmAttributes;
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
 use serde_json::json;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy)]
 enum EventType {
@@ -235,6 +236,12 @@ fn set_event_timestamp(event: &mut Event, timestamp: chrono::DateTime<chrono::Ut
     }
 }
 
+fn base_timestamp() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+
 fn make_agent_info() -> AtifAgentInfo {
     AtifAgentInfo {
         name: "test-agent".to_string(),
@@ -243,6 +250,118 @@ fn make_agent_info() -> AtifAgentInfo {
         tool_definitions: None,
         extra: None,
     }
+}
+
+fn assert_atif_v17_shape(trajectory: &AtifTrajectory) {
+    assert_eq!(trajectory.schema_version, ATIF_SCHEMA_VERSION);
+    assert!(!trajectory.session_id.is_empty());
+    let embedded_child_ids: HashSet<&str> = trajectory
+        .subagent_trajectories
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|child| child.trajectory_id.as_deref())
+        .collect();
+
+    for (index, step) in trajectory.steps.iter().enumerate() {
+        assert_eq!(step.step_id, index + 1);
+        assert!(
+            matches!(step.source.as_str(), "system" | "user" | "agent"),
+            "invalid source {}",
+            step.source
+        );
+        assert_atif_message_value(&step.message);
+        if let Some(llm_call_count) = step.llm_call_count {
+            assert_eq!(step.source, "agent");
+            assert!(llm_call_count > 0);
+        }
+        let step_tool_call_ids: HashSet<&str> = step
+            .tool_calls
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|tool_call| {
+                assert!(!tool_call.tool_call_id.is_empty());
+                assert!(!tool_call.function_name.is_empty());
+                assert!(tool_call.arguments.is_object());
+                tool_call.tool_call_id.as_str()
+            })
+            .collect();
+        if let Some(observation) = &step.observation {
+            for result in &observation.results {
+                if let Some(content) = &result.content {
+                    assert_atif_message_value(content);
+                }
+                if let Some(source_call_id) = result.source_call_id.as_deref() {
+                    assert!(
+                        step_tool_call_ids.contains(source_call_id),
+                        "unmatched source_call_id {source_call_id}"
+                    );
+                }
+                for reference in result
+                    .subagent_trajectory_ref
+                    .as_deref()
+                    .unwrap_or_default()
+                {
+                    if let Some(trajectory_id) = reference.trajectory_id.as_deref()
+                        && trajectory.subagent_trajectories.is_some()
+                    {
+                        assert!(
+                            embedded_child_ids.contains(trajectory_id),
+                            "unresolved embedded subagent reference {trajectory_id}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for child in trajectory
+        .subagent_trajectories
+        .as_deref()
+        .unwrap_or_default()
+    {
+        assert_atif_v17_shape(child);
+    }
+}
+
+fn assert_atif_message_value(value: &serde_json::Value) {
+    if value.is_string() {
+        return;
+    }
+    if let Some(parts) = value.as_array()
+        && parts.iter().all(is_atif_content_part)
+    {
+        return;
+    }
+    panic!("ATIF message/content must be a string or content-part array: {value}");
+}
+
+fn is_atif_content_part(part: &serde_json::Value) -> bool {
+    let Some(object) = part.as_object() else {
+        return false;
+    };
+    match object.get("type").and_then(serde_json::Value::as_str) {
+        Some("text") => object
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        Some("image") => is_atif_image_source(object.get("source")),
+        _ => false,
+    }
+}
+
+fn is_atif_image_source(value: Option<&serde_json::Value>) -> bool {
+    let Some(source) = value.and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    matches!(
+        source.get("media_type").and_then(serde_json::Value::as_str),
+        Some("image/jpeg" | "image/png" | "image/gif" | "image/webp")
+    ) && source
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
 }
 
 #[test]
@@ -262,7 +381,7 @@ fn test_exporter_empty() {
 
 #[test]
 fn test_exporter_schema_version() {
-    assert_eq!(ATIF_SCHEMA_VERSION, "ATIF-v1.6");
+    assert_eq!(ATIF_SCHEMA_VERSION, "ATIF-v1.7");
 }
 
 #[test]
@@ -301,8 +420,16 @@ fn test_exporter_tool_lifecycle() {
     assert_eq!(step1.source, "system");
     let obs = step1.observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 1);
-    assert_eq!(obs.results[0].source_call_id, Some("call_123".to_string()));
-    assert_eq!(obs.results[0].content, json!({"results": ["result1"]}));
+    assert_eq!(obs.results[0].source_call_id, None);
+    let content = obs.results[0].content.as_ref().unwrap().as_str().unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(content).unwrap(),
+        json!({"results": ["result1"]})
+    );
+    assert_eq!(
+        obs.results[0].extra.as_ref().unwrap()["event_name"],
+        json!("web_search")
+    );
 }
 
 #[test]
@@ -366,8 +493,7 @@ fn test_exporter_llm_lifecycle() {
     let step1 = &trajectory.steps[0];
     assert_eq!(step1.step_id, 1);
     assert_eq!(step1.source, "user");
-    // extract_user_messages pulls out just the messages array
-    assert_eq!(step1.message, json!([{"role": "user", "content": "hello"}]));
+    assert_eq!(step1.message, json!("hello"));
     assert_eq!(step1.model_name, None);
     let extra: AtifStepExtra = serde_json::from_value(step1.extra.clone().unwrap()).unwrap();
     let llm_request = extra.llm_request.unwrap();
@@ -383,6 +509,7 @@ fn test_exporter_llm_lifecycle() {
     assert_eq!(step2.source, "agent");
     assert_eq!(step2.message, json!("Hi there!"));
     assert_eq!(step2.model_name, Some("gpt-4".to_string()));
+    assert_eq!(step2.llm_call_count, Some(1));
     // Metrics extracted from token_usage
     let metrics = step2.metrics.as_ref().unwrap();
     assert_eq!(metrics.prompt_tokens, Some(10));
@@ -461,11 +588,7 @@ fn test_exporter_llm_lifecycle_plain_input() {
     let trajectory = exporter.export();
     assert_eq!(trajectory.steps.len(), 2);
 
-    // Input without headers key — messages array is still extracted
-    assert_eq!(
-        trajectory.steps[0].message,
-        json!([{"role": "user", "content": "hello"}])
-    );
+    assert_eq!(trajectory.steps[0].message, json!("hello"));
     // Non-object output is passed through as-is
     assert_eq!(trajectory.steps[1].message, json!("simple string response"));
     assert!(trajectory.steps[1].metrics.is_none());
@@ -490,9 +613,11 @@ fn test_exporter_llm_tool_calls_promoted() {
                 {
                     "id": "call_abc",
                     "type": "function",
+                    "provider_data": {"trace_id": "provider-trace-1"},
                     "function": {
                         "name": "search",
-                        "arguments": "{\"q\": \"test\"}"
+                        "arguments": "{\"q\": \"test\"}",
+                        "schema_version": "v1"
                     }
                 }
             ]
@@ -514,11 +639,132 @@ fn test_exporter_llm_tool_calls_promoted() {
     assert_eq!(tc[0].tool_call_id, "call_abc");
     assert_eq!(tc[0].function_name, "search");
     assert_eq!(tc[0].arguments, json!({"q": "test"}));
-
-    // message should be a summary (content was null)
     assert_eq!(
-        step.message,
-        json!({"role": "assistant", "tool_calls": [{"id": "call_abc", "type": "function", "function": {"name": "search", "arguments": "{\"q\": \"test\"}"}}]})
+        tc[0].extra.as_ref().unwrap()["provider_data"]["trace_id"],
+        json!("provider-trace-1")
+    );
+    assert_eq!(
+        tc[0].extra.as_ref().unwrap()["function"]["schema_version"],
+        json!("v1")
+    );
+
+    assert_eq!(step.message, json!(""));
+    assert_eq!(step.llm_call_count, Some(1));
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.llm_response.unwrap()["role"], json!("assistant"));
+}
+
+#[test]
+fn test_exporter_hermes_wrapper_payload_is_atif_v17_compatible() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    let tool_uuid = Uuid::now_v7();
+
+    let llm_start = event_builder(llm_uuid, EventType::Start)
+        .name("qwen3.6:35b")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "messages": [{"role": "user", "content": "Run a terminal command"}],
+            "model": "qwen3.6:35b"
+        }))
+        .model_name("qwen3.6:35b")
+        .build();
+
+    let llm_end = event_builder(llm_uuid, EventType::End)
+        .name("qwen3.6:35b")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "assistant_message": {
+                "content": null,
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_terminal_1",
+                        "name": "terminal",
+                        "arguments": "{\"command\":\"printf hi\"}",
+                        "provider_data": {"trace_id": "provider-trace"}
+                    }
+                ]
+            },
+            "raw_response": {
+                "choices": [
+                    {
+                        "message": {
+                            "content": null,
+                            "tool_calls": [
+                                {
+                                    "id": "call_terminal_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "terminal",
+                                        "arguments": "{\"command\":\"printf hi\"}"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            "usage": {
+                "prompt_tokens": 14,
+                "completion_tokens": 5
+            }
+        }))
+        .model_name("qwen3.6:35b")
+        .build();
+
+    let tool_end = event_builder(tool_uuid, EventType::End)
+        .name("terminal")
+        .scope_type(ScopeType::Tool)
+        .output(json!({
+            "stdout": "hi",
+            "exit_code": 0
+        }))
+        .tool_call_id("call_terminal_1")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([llm_start, llm_end, tool_end]);
+    }
+
+    let trajectory = exporter.export();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+    assert_eq!(trajectory.steps[0].message, json!("Run a terminal command"));
+
+    let agent_step = &trajectory.steps[1];
+    assert_eq!(agent_step.message, json!(""));
+    assert_eq!(agent_step.llm_call_count, Some(1));
+    let tool_call = &agent_step.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tool_call.tool_call_id, "call_terminal_1");
+    assert_eq!(tool_call.function_name, "terminal");
+    assert_eq!(tool_call.arguments, json!({"command": "printf hi"}));
+    assert_eq!(
+        tool_call.extra.as_ref().unwrap()["provider_data"]["trace_id"],
+        json!("provider-trace")
+    );
+
+    let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        extra.llm_response.unwrap()["assistant_message"]["tool_calls"][0]["id"],
+        json!("call_terminal_1")
+    );
+
+    let observation = agent_step.observation.as_ref().unwrap();
+    assert_eq!(
+        observation.results[0].source_call_id,
+        Some("call_terminal_1".to_string())
+    );
+    let content = observation.results[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(content).unwrap(),
+        json!({"stdout": "hi", "exit_code": 0})
     );
 }
 
@@ -620,7 +866,7 @@ fn test_exporter_tool_call_id_linking() {
     // Only observation step (Tool Start is skipped)
     assert_eq!(trajectory.steps.len(), 1);
     let obs_result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
-    assert_eq!(obs_result.source_call_id, Some("call_abc".to_string()));
+    assert_eq!(obs_result.source_call_id, None);
 }
 
 #[test]
@@ -658,10 +904,13 @@ fn test_exporter_mark_steps_include_hook_name_and_ancestry() {
 
     let step = &trajectory.steps[0];
     assert_eq!(step.source, "system");
-    assert_eq!(step.message["hook_event_name"], json!("subagent_stop"));
-    assert_eq!(step.message["extra"]["subagent_id"], json!("worker-1"));
+    assert_eq!(step.message, json!("subagent_stop"));
 
     let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        extra.event_payload.as_ref().unwrap()["extra"]["subagent_id"],
+        json!("worker-1")
+    );
     assert_eq!(extra.ancestry.function_id, mark_uuid.to_string());
     assert_eq!(extra.ancestry.function_name, "subagent_end_without_start");
     assert_eq!(extra.ancestry.parent_id, Some(agent_uuid.to_string()));
@@ -670,6 +919,262 @@ fn test_exporter_mark_steps_include_hook_name_and_ancestry() {
         extra.invocation.as_ref().unwrap().invocation_id,
         Some(mark_uuid.to_string())
     );
+}
+
+#[test]
+fn test_exporter_embeds_nested_subagent_trajectory() {
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info());
+    let base = base_timestamp();
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut child_start = event_builder(child_uuid, EventType::Start)
+        .name("worker-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .metadata(json!({"session_id": "child-session"}))
+        .build();
+    let mut llm_start = event_builder(llm_uuid, EventType::Start)
+        .name("worker-llm")
+        .scope_type(ScopeType::Llm)
+        .parent_uuid(child_uuid)
+        .input(json!({"messages": [{"role": "user", "content": "subtask"}]}))
+        .build();
+    let mut llm_end = event_builder(llm_uuid, EventType::End)
+        .name("worker-llm")
+        .scope_type(ScopeType::Llm)
+        .parent_uuid(child_uuid)
+        .output(json!({"content": "done"}))
+        .build();
+    let mut child_end = event_builder(child_uuid, EventType::End)
+        .name("worker-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .build();
+    let mut root_end = event_builder(root_uuid, EventType::End)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+
+    for (offset, event) in [
+        &mut root_start,
+        &mut child_start,
+        &mut llm_start,
+        &mut llm_end,
+        &mut child_end,
+        &mut root_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::seconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            root_start,
+            child_start,
+            llm_start,
+            llm_end,
+            child_end,
+            root_end,
+        ]);
+    }
+
+    let trajectory = exporter.export();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.schema_version, "ATIF-v1.7");
+    assert_eq!(trajectory.session_id, root_uuid.to_string());
+    assert_eq!(trajectory.trajectory_id, Some(root_uuid.to_string()));
+    assert_eq!(trajectory.steps.len(), 1);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert!(result.content.is_none());
+    let refs = result.subagent_trajectory_ref.as_ref().unwrap();
+    assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
+    assert_eq!(refs[0].trajectory_path, None);
+    assert_eq!(refs[0].session_id, Some("child-session".to_string()));
+
+    let subagents = trajectory.subagent_trajectories.as_ref().unwrap();
+    assert_eq!(subagents.len(), 1);
+    let child = &subagents[0];
+    assert_eq!(child.trajectory_id, Some(child_uuid.to_string()));
+    assert_eq!(child.session_id, "child-session");
+    assert_eq!(child.steps.len(), 2);
+    assert_eq!(child.steps[0].source, "user");
+    assert_eq!(child.steps[1].source, "agent");
+
+    let serialized = serde_json::to_value(&trajectory).unwrap();
+    assert!(serialized["steps"][0]["observation"]["results"][0]["content"].is_null());
+}
+
+#[test]
+fn test_exporter_file_ref_subagent_mode_omits_embedded_child_body() {
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info())
+        .with_subagent_export_mode(AtifSubagentExportMode::FileRef);
+    let base = base_timestamp();
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut child_start = event_builder(child_uuid, EventType::Start)
+        .name("worker-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .metadata(json!({"session_id": "child-session"}))
+        .build();
+    let mut child_end = event_builder(child_uuid, EventType::End)
+        .name("worker-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .build();
+    let mut root_end = event_builder(root_uuid, EventType::End)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+
+    for (offset, event) in [
+        &mut root_start,
+        &mut child_start,
+        &mut child_end,
+        &mut root_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::seconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([root_start, child_start, child_end, root_end]);
+    }
+
+    let trajectory = exporter.export();
+    assert!(trajectory.subagent_trajectories.is_none());
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    let refs = result.subagent_trajectory_ref.as_ref().unwrap();
+    assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
+    assert_eq!(
+        refs[0].trajectory_path,
+        Some(format!("{}.json", child_uuid))
+    );
+    assert_eq!(refs[0].session_id, Some("child-session".to_string()));
+    assert_eq!(
+        refs[0].extra.as_ref().unwrap()["subagent_export_mode"],
+        json!("file_ref")
+    );
+    assert_eq!(
+        result.extra.as_ref().unwrap()["event_uuid"],
+        json!(child_uuid.to_string())
+    );
+}
+
+#[test]
+fn test_exporter_embeds_recursive_subagent_trajectories() {
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let grandchild_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info());
+    let base = base_timestamp();
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut child_start = event_builder(child_uuid, EventType::Start)
+        .name("worker-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .metadata(json!({"session_id": "child-session"}))
+        .build();
+    let mut grandchild_start = event_builder(grandchild_uuid, EventType::Start)
+        .name("deep-worker")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(child_uuid)
+        .metadata(json!({"session_id": "grandchild-session"}))
+        .build();
+    let mut grandchild_mark = event_builder(Uuid::now_v7(), EventType::Mark)
+        .name("deep-note")
+        .parent_uuid(grandchild_uuid)
+        .data(json!({"status": "ok"}))
+        .build();
+    let mut grandchild_end = event_builder(grandchild_uuid, EventType::End)
+        .name("deep-worker")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(child_uuid)
+        .build();
+    let mut child_end = event_builder(child_uuid, EventType::End)
+        .name("worker-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .build();
+    let mut root_end = event_builder(root_uuid, EventType::End)
+        .name("root-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+
+    for (offset, event) in [
+        &mut root_start,
+        &mut child_start,
+        &mut grandchild_start,
+        &mut grandchild_mark,
+        &mut grandchild_end,
+        &mut child_end,
+        &mut root_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::seconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            root_start,
+            child_start,
+            grandchild_start,
+            grandchild_mark,
+            grandchild_end,
+            child_end,
+            root_end,
+        ]);
+    }
+
+    let trajectory = exporter.export();
+    assert_atif_v17_shape(&trajectory);
+    let child = &trajectory.subagent_trajectories.as_ref().unwrap()[0];
+    assert_eq!(child.session_id, "child-session");
+    assert_eq!(child.steps.len(), 1);
+    let child_ref = &child.steps[0].observation.as_ref().unwrap().results[0]
+        .subagent_trajectory_ref
+        .as_ref()
+        .unwrap()[0];
+    assert_eq!(child_ref.trajectory_id, Some(grandchild_uuid.to_string()));
+    assert_eq!(child_ref.session_id, Some("grandchild-session".to_string()));
+
+    let grandchild = &child.subagent_trajectories.as_ref().unwrap()[0];
+    assert_eq!(grandchild.trajectory_id, Some(grandchild_uuid.to_string()));
+    assert_eq!(grandchild.session_id, "grandchild-session");
+    assert_eq!(grandchild.steps.len(), 1);
+    assert_eq!(grandchild.steps[0].step_id, 1);
+    assert_eq!(grandchild.steps[0].message, json!("deep-note"));
+    let extra: AtifStepExtra =
+        serde_json::from_value(grandchild.steps[0].extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.event_payload.as_ref().unwrap()["status"], json!("ok"));
 }
 
 #[test]
@@ -705,6 +1210,7 @@ fn test_trajectory_serde_roundtrip() {
     let trajectory = AtifTrajectory {
         schema_version: ATIF_SCHEMA_VERSION.to_string(),
         session_id: "test-session".to_string(),
+        trajectory_id: Some("test-session".to_string()),
         agent: AtifAgentInfo {
             name: "test".to_string(),
             version: "1.0".to_string(),
@@ -732,6 +1238,7 @@ fn test_trajectory_serde_roundtrip() {
                 logprobs: None,
                 extra: None,
             }),
+            llm_call_count: None,
             is_copied_context: None,
             extra: None,
         }],
@@ -745,6 +1252,7 @@ fn test_trajectory_serde_roundtrip() {
             extra: None,
         }),
         continued_trajectory_ref: None,
+        subagent_trajectories: None,
         extra: None,
     };
 
@@ -881,8 +1389,8 @@ fn test_exporter_merged_tool_observations() {
     }
 
     let trajectory = exporter.export();
-    // agent step + single merged observation step
-    assert_eq!(trajectory.steps.len(), 2);
+    // agent step with attached tool observations
+    assert_eq!(trajectory.steps.len(), 1);
 
     // Agent step with promoted tool_calls
     let agent = &trajectory.steps[0];
@@ -893,15 +1401,12 @@ fn test_exporter_merged_tool_observations() {
     assert_eq!(tcs[0].arguments, json!({"city": "SF"}));
     assert_eq!(tcs[1].arguments, json!({"city": "SF"}));
 
-    // Merged observation step
-    let obs_step = &trajectory.steps[1];
-    assert_eq!(obs_step.source, "system");
-    let obs = obs_step.observation.as_ref().unwrap();
+    let obs = agent.observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 2);
     assert_eq!(obs.results[0].source_call_id, Some("call_1".to_string()));
-    assert_eq!(obs.results[0].content, json!("62°F, foggy"));
+    assert_eq!(obs.results[0].content, Some(json!("62°F, foggy")));
     assert_eq!(obs.results[1].source_call_id, Some("call_2".to_string()));
-    assert_eq!(obs.results[1].content, json!("873,965"));
+    assert_eq!(obs.results[1].content, Some(json!("873,965")));
 }
 
 #[test]
@@ -937,9 +1442,9 @@ fn test_exporter_source_call_id_correlation_by_name() {
     }
 
     let trajectory = exporter.export();
-    assert_eq!(trajectory.steps.len(), 2);
+    assert_eq!(trajectory.steps.len(), 1);
 
-    let obs = trajectory.steps[1].observation.as_ref().unwrap();
+    let obs = trajectory.steps[0].observation.as_ref().unwrap();
     // Correlated by function name "search" → "call_xyz"
     assert_eq!(obs.results[0].source_call_id, Some("call_xyz".to_string()));
 }
@@ -976,11 +1481,7 @@ fn test_exporter_user_message_extraction() {
     }
 
     let trajectory = exporter.export();
-    // User step should contain just the messages array
-    assert_eq!(
-        trajectory.steps[0].message,
-        json!([{"role": "user", "content": "hello"}])
-    );
+    assert_eq!(trajectory.steps[0].message, json!("hello"));
 }
 
 #[test]
@@ -1079,8 +1580,9 @@ fn test_exporter_full_agent_loop() {
     }
 
     let trajectory = exporter.export();
-    // Expected: user, agent+tool_calls, merged_obs, user, agent
-    assert_eq!(trajectory.steps.len(), 5);
+    assert_atif_v17_shape(&trajectory);
+    // Expected: user, agent+tool_calls+observations, user, agent
+    assert_eq!(trajectory.steps.len(), 4);
 
     assert_eq!(trajectory.steps[0].source, "user");
     assert_eq!(trajectory.steps[0].step_id, 1);
@@ -1092,18 +1594,15 @@ fn test_exporter_full_agent_loop() {
     assert_eq!(tcs[0].function_name, "get_weather");
     assert_eq!(tcs[1].function_name, "get_population");
 
-    assert_eq!(trajectory.steps[2].source, "system");
+    assert_eq!(trajectory.steps[2].source, "user");
     assert_eq!(trajectory.steps[2].step_id, 3);
-    let obs = trajectory.steps[2].observation.as_ref().unwrap();
+    let obs = trajectory.steps[1].observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 2);
 
-    assert_eq!(trajectory.steps[3].source, "user");
+    assert_eq!(trajectory.steps[3].source, "agent");
     assert_eq!(trajectory.steps[3].step_id, 4);
-
-    assert_eq!(trajectory.steps[4].source, "agent");
-    assert_eq!(trajectory.steps[4].step_id, 5);
     assert_eq!(
-        trajectory.steps[4].message,
+        trajectory.steps[3].message,
         json!("The weather in SF is 62°F and foggy. Population is 873,965.")
     );
 
@@ -1512,7 +2011,7 @@ fn test_step_extra_tool_ancestry_does_not_bleed_across_turns() {
     }
 
     let trajectory = exporter.export();
-    // steps: agent(turn1), system(obs1), user(turn2), agent(turn2), system(obs2)
+    // steps: agent(turn1+obs1), user(turn2), agent(turn2+obs2)
     let agent1 = trajectory
         .steps
         .iter()
@@ -1521,7 +2020,7 @@ fn test_step_extra_tool_ancestry_does_not_bleed_across_turns() {
     let agent2 = trajectory
         .steps
         .iter()
-        .find(|s| s.source == "agent" && s.step_id == 4)
+        .find(|s| s.source == "agent" && s.step_id == 3)
         .unwrap();
 
     let extra1: AtifStepExtra = serde_json::from_value(agent1.extra.clone().unwrap()).unwrap();
