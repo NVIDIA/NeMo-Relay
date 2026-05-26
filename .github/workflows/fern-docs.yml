@@ -276,7 +276,7 @@ jobs:
         working-directory: docs-checkout
         run: |
           set -euo pipefail
-          if git diff --quiet && git diff --cached --quiet; then
+          if [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
@@ -321,10 +321,13 @@ jobs:
     steps:
       - name: Determine version tag
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
           else
             tag="${GITHUB_REF_NAME}"
           fi

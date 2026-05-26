@@ -164,7 +164,7 @@ Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- [`fern/versions/dev/pages/getting-started/installation.mdx`](fern/versions/dev/pages/getting-started/installation.mdx)
+- [`docs/getting-started/installation.mdx`](docs/getting-started/installation.mdx)
 - Any binding README or example that pins a release number
 
 Do not commit a static Python package version into `pyproject.toml` just to cut

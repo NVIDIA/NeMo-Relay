@@ -151,6 +151,8 @@ jobs:
       }}
     permissions:
       contents: read
+    secrets:
+      DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
 
   ci_rust:
     name: Rust

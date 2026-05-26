@@ -4,7 +4,10 @@
 name: Documentation
 
 on:
-  workflow_call: {}
+  workflow_call:
+    secrets:
+      DOCS_FERN_TOKEN:
+        required: false
 defaults:
   run:
     shell: bash

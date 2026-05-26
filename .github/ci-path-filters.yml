@@ -111,6 +111,7 @@ dependencies:
 docs:
   - 'CONTRIBUTING.md'
   - 'README.md'
+  - 'docs/**'
   - 'Cargo.lock'
   - 'Cargo.toml'
   - 'crates/adaptive/src/**'

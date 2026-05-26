@@ -11,6 +11,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 TextNormalizer = Callable[[str], str]
+MDX_SPDX_COMMENT = (
+    "{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n"
+    "SPDX-License-Identifier: Apache-2.0 */}\n"
+)
 
 
 def identity(value: str) -> str:
@@ -56,7 +60,7 @@ def frontmatter(
             "---",
         ]
     )
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" + MDX_SPDX_COMMENT + "\n"
 
 
 def display_path(path: Path, *, cwd: Path | None = None, resolve: bool = False) -> str:

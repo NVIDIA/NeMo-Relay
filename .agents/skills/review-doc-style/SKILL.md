@@ -47,6 +47,8 @@ Treat these as blocking issues:
 - A doc claims support for a binding, feature, or workflow that the repo no longer provides
 - Examples or procedures are likely to fail as written
 - User-facing naming is inconsistent with current repo terminology
+- MDX top-of-file SPDX comments use HTML comment delimiters instead of
+  `{/* ... */}`
 - NVIDIA is not capitalized correctly
 - Code, commands, paths, or filenames are not formatted as inline code where needed
 
@@ -71,6 +73,7 @@ Flag these when they materially improve clarity or consistency:
 - **Voice**: Prefer active voice, present tense, short sentences, and plain English.
 - **Links**: Use descriptive anchor text, not bare URLs or weak labels.
 - **Formatting**: Commands, code elements, expressions, file names, and paths are monospace.
+- **MDX headers**: Top-of-file MDX SPDX comments use `{/*` and `*/}` delimiters.
 - **Procedures**: Steps are easy to scan, imperative, and split into smaller tasks when long.
 - **Examples**: Code blocks are introduced by full sentences and match current APIs and build commands.
 - **Terminology**: Use consistent terms throughout the document.
