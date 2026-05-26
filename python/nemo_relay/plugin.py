@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import TYPE_CHECKING, Callable, Iterator, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, TypedDict, cast
 
 from nemo_relay import (
     Json,
@@ -332,7 +332,7 @@ def clear() -> None:
 
 
 @asynccontextmanager
-async def plugin(config: PluginConfig | JsonObject) -> Iterator[ConfigReport]:
+async def plugin(config: PluginConfig | JsonObject) -> AsyncIterator[ConfigReport]:
     """Context manager for plugin initialization and cleanup.
 
     Args:
