@@ -122,6 +122,8 @@ disable an inherited section.
 :sync: python
 
 ```python
+import asyncio
+
 from nemo_relay import plugin, scope, ScopeType
 from nemo_relay.observability import (
     AtifConfig,
@@ -173,12 +175,12 @@ report = plugin.validate(config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-await plugin.initialize(config)
-try:
-    with scope.scope("agent", ScopeType.Agent):
-        pass
-finally:
-    plugin.clear()
+async def arun():
+    async with plugin.plugin(config):
+        with scope.scope("agent", ScopeType.Agent):
+            pass
+
+asyncio.run(arun())
 ```
 
 ::::

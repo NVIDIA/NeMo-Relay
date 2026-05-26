@@ -117,12 +117,9 @@ report = plugin.validate(config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-await plugin.initialize(config)
-try:
+async with plugin.plugin(config):
     # Run instrumented application work here.
     pass
-finally:
-    plugin.clear()
 ```
 
 ::::
