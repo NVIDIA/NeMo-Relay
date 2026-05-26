@@ -330,6 +330,7 @@ def clear() -> None:
     """
     _clear_plugin_configuration()
 
+
 @asynccontextmanager
 async def plugin(config: PluginConfig | JsonObject) -> Iterator[ConfigReport]:
     """Context manager for plugin initialization and cleanup.

@@ -23,6 +23,7 @@ from nemo_relay.observability import (
 if typing.TYPE_CHECKING:
     from pathlib import Path
 
+
 class TestObservabilityConfigHelpers:
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False, "mode": "append"}
