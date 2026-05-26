@@ -411,8 +411,7 @@ impl RemoteBackendRuntime {
     }
 
     async fn check_tool_input(&self, tool_name: &str, args: &Json) -> crate::error::Result<Json> {
-        let original_content = tool_input_content(tool_name, args);
-        let messages = vec![json!({"role": "user", "content": original_content.clone()})];
+        let messages = tool_input_messages(tool_name, args);
         let response = self
             .execute_remote_check(messages, RemoteCheckKind::Input, tool_name)
             .await?;
@@ -422,12 +421,10 @@ impl RemoteBackendRuntime {
             )));
         }
 
-        let result_content = chat_completion_content(&response)?;
-        if result_content == original_content {
-            return Ok(args.clone());
+        if let Some(modified_args) = modified_tool_arguments(&response, tool_name)? {
+            return Ok(modified_args);
         }
-
-        modified_tool_payload(&result_content, tool_name, "arguments")
+        Ok(args.clone())
     }
 
     async fn check_tool_output(
@@ -436,12 +433,7 @@ impl RemoteBackendRuntime {
         args: &Json,
         result: &Json,
     ) -> crate::error::Result<Json> {
-        let input_content = tool_input_content(tool_name, args);
-        let original_content = tool_output_content(tool_name, args, result);
-        let messages = vec![
-            json!({"role": "user", "content": input_content}),
-            json!({"role": "assistant", "content": original_content.clone()}),
-        ];
+        let messages = tool_output_messages(tool_name, args, result);
         let response = self
             .execute_remote_check(messages, RemoteCheckKind::Output, tool_name)
             .await?;
@@ -451,12 +443,10 @@ impl RemoteBackendRuntime {
             )));
         }
 
-        let result_content = chat_completion_content(&response)?;
-        if result_content == original_content {
-            return Ok(result.clone());
+        if let Some(modified_result) = modified_tool_result(&response, tool_name)? {
+            return Ok(modified_result);
         }
-
-        modified_tool_payload(&result_content, tool_name, "result")
+        Ok(result.clone())
     }
 
     fn build_request_body(&self, request: &LlmRequest, stream: bool) -> crate::error::Result<Json> {
@@ -631,12 +621,8 @@ fn emit_remote_mark(name: &str, parent: &Option<ScopeHandle>, data: Json) {
     );
 }
 
-fn tool_input_content(tool_name: &str, args: &Json) -> String {
-    serde_json::to_string(&json!({
-        "tool_name": tool_name,
-        "arguments": args,
-    }))
-    .expect("tool input payload should serialize to JSON")
+fn tool_call_id(tool_name: &str) -> String {
+    format!("nemo_guardrails_{tool_name}_call")
 }
 
 fn redact_remote_error_payload(status: u16, payload: &str) -> String {
@@ -646,29 +632,186 @@ fn redact_remote_error_payload(status: u16, payload: &str) -> String {
     )
 }
 
-fn tool_output_content(tool_name: &str, args: &Json, result: &Json) -> String {
-    serde_json::to_string(&json!({
-        "tool_name": tool_name,
-        "arguments": args,
-        "result": result,
-    }))
-    .expect("tool output payload should serialize to JSON")
+fn tool_arguments_string(args: &Json) -> String {
+    serde_json::to_string(args).expect("tool arguments should serialize to JSON")
 }
 
-fn modified_tool_payload(
-    content: &str,
+fn tool_result_string(result: &Json) -> String {
+    serde_json::to_string(result).expect("tool result should serialize to JSON")
+}
+
+fn tool_user_message(tool_name: &str) -> Json {
+    json!({
+        "role": "user",
+        "content": format!("Run the tool '{tool_name}' and validate the result."),
+    })
+}
+
+fn tool_input_messages(tool_name: &str, args: &Json) -> Vec<Json> {
+    vec![
+        tool_user_message(tool_name),
+        json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": tool_call_id(tool_name),
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": tool_arguments_string(args),
+                }
+            }]
+        }),
+    ]
+}
+
+fn tool_output_messages(tool_name: &str, args: &Json, result: &Json) -> Vec<Json> {
+    let call_id = tool_call_id(tool_name);
+    vec![
+        tool_user_message(tool_name),
+        json!({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": tool_arguments_string(args),
+                }
+            }]
+        }),
+        json!({
+            "role": "tool",
+            "name": tool_name,
+            "tool_call_id": call_id,
+            "content": tool_result_string(result),
+        }),
+    ]
+}
+
+fn first_choice_message(response: &Json) -> crate::error::Result<&Map<String, Json>> {
+    response
+        .get("choices")
+        .and_then(Json::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(Json::as_object)
+        .ok_or_else(|| {
+            FlowError::Internal(
+                "nemo_guardrails remote response did not contain choices[0].message".to_string(),
+            )
+        })
+}
+
+fn first_tool_call_message(message: &Map<String, Json>) -> Option<&Map<String, Json>> {
+    message
+        .get("tool_calls")
+        .and_then(Json::as_array)
+        .and_then(|tool_calls| tool_calls.first())
+        .and_then(Json::as_object)
+}
+
+fn modified_tool_arguments(
+    response: &Json,
+    expected_tool_name: &str,
+) -> crate::error::Result<Option<Json>> {
+    let message = first_choice_message(response)?;
+    if let Some(tool_call) = first_tool_call_message(message) {
+        let function = tool_call
+            .get("function")
+            .and_then(Json::as_object)
+            .ok_or_else(|| {
+                FlowError::Internal(
+                    "nemo_guardrails returned modified tool arguments without a function payload"
+                        .to_string(),
+                )
+            })?;
+        let tool_name = function.get("name").and_then(Json::as_str).ok_or_else(|| {
+            FlowError::Internal(
+                "nemo_guardrails returned modified tool arguments without a function name"
+                    .to_string(),
+            )
+        })?;
+        if tool_name != expected_tool_name {
+            return Err(FlowError::Internal(format!(
+                "nemo_guardrails returned modified tool arguments for unexpected tool '{tool_name}'"
+            )));
+        }
+        let arguments = function
+            .get("arguments")
+            .and_then(Json::as_str)
+            .ok_or_else(|| {
+                FlowError::Internal(
+                    "nemo_guardrails returned modified tool arguments without function.arguments"
+                        .to_string(),
+                )
+            })?;
+        let parsed = serde_json::from_str(arguments).map_err(|err| {
+            FlowError::Internal(format!(
+                "nemo_guardrails returned modified tool arguments that are not valid JSON: {err}"
+            ))
+        })?;
+        return Ok(Some(parsed));
+    }
+
+    let content = message
+        .get("content")
+        .and_then(Json::as_str)
+        .filter(|content| !content.is_empty());
+    legacy_modified_tool_payload(content, expected_tool_name, "arguments")
+}
+
+fn modified_tool_result(
+    response: &Json,
+    expected_tool_name: &str,
+) -> crate::error::Result<Option<Json>> {
+    let message = first_choice_message(response)?;
+    if message.get("role").and_then(Json::as_str) == Some("tool") {
+        if let Some(tool_name) = message.get("name").and_then(Json::as_str)
+            && tool_name != expected_tool_name
+        {
+            return Err(FlowError::Internal(format!(
+                "nemo_guardrails returned modified tool result for unexpected tool '{tool_name}'"
+            )));
+        }
+        let content = message
+            .get("content")
+            .and_then(Json::as_str)
+            .ok_or_else(|| {
+                FlowError::Internal(
+                    "nemo_guardrails returned modified tool result without message.content"
+                        .to_string(),
+                )
+            })?;
+        let parsed = serde_json::from_str(content).map_err(|err| {
+            FlowError::Internal(format!(
+                "nemo_guardrails returned modified tool result that is not valid JSON: {err}"
+            ))
+        })?;
+        return Ok(Some(parsed));
+    }
+
+    let content = message
+        .get("content")
+        .and_then(Json::as_str)
+        .filter(|content| !content.is_empty());
+    legacy_modified_tool_payload(content, expected_tool_name, "result")
+}
+
+fn legacy_modified_tool_payload(
+    content: Option<&str>,
     expected_tool_name: &str,
     field: &str,
-) -> crate::error::Result<Json> {
-    let value: Json = serde_json::from_str(content).map_err(|err| {
-        FlowError::Internal(format!(
-            "nemo_guardrails returned modified tool {field} content that is not valid JSON: {err}"
-        ))
-    })?;
+) -> crate::error::Result<Option<Json>> {
+    let Some(content) = content else {
+        return Ok(None);
+    };
+    let Ok(value) = serde_json::from_str(content) else {
+        return Ok(None);
+    };
     let Json::Object(object) = value else {
-        return Err(FlowError::Internal(format!(
-            "nemo_guardrails returned modified tool {field} content without a '{field}' field"
-        )));
+        return Ok(None);
     };
     if let Some(tool_name) = object.get("tool_name").and_then(Json::as_str)
         && tool_name != expected_tool_name
@@ -677,28 +820,7 @@ fn modified_tool_payload(
             "nemo_guardrails returned modified tool {field} content for unexpected tool '{tool_name}'"
         )));
     }
-    object.get(field).cloned().ok_or_else(|| {
-        FlowError::Internal(format!(
-            "nemo_guardrails returned modified tool {field} content without a '{field}' field"
-        ))
-    })
-}
-
-fn chat_completion_content(response: &Json) -> crate::error::Result<String> {
-    response
-        .get("choices")
-        .and_then(Json::as_array)
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(Json::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| {
-            FlowError::Internal(
-                "nemo_guardrails remote response did not contain choices[0].message.content"
-                    .to_string(),
-            )
-        })
+    Ok(object.get(field).cloned())
 }
 
 fn blocking_rail_name(response: &Json) -> Option<String> {
@@ -709,7 +831,18 @@ fn blocking_rail_name(response: &Json) -> Option<String> {
         .and_then(Json::as_array)
         .and_then(|activated| {
             activated.iter().find_map(|rail| {
-                if rail.get("stop").and_then(Json::as_bool) == Some(true) {
+                let stopped = rail.get("stop").and_then(Json::as_bool) == Some(true);
+                let refused =
+                    rail.get("decisions")
+                        .and_then(Json::as_array)
+                        .is_some_and(|decisions| {
+                            decisions.iter().any(|decision| {
+                                decision
+                                    .as_str()
+                                    .is_some_and(|decision| decision.starts_with("refuse "))
+                            })
+                        });
+                if stopped || refused {
                     rail.get("name").and_then(Json::as_str).map(str::to_string)
                 } else {
                     None
@@ -928,20 +1061,20 @@ fn build_tool_check_guardrails_config(
     ]);
     match kind {
         RemoteCheckKind::Input => {
-            rails.insert(
-                "tool_input".to_string(),
-                configured_tool_selector(request_defaults, RemoteCheckKind::Input)
-                    .unwrap_or(Json::Bool(true)),
-            );
-            rails.insert("tool_output".to_string(), Json::Bool(false));
-        }
-        RemoteCheckKind::Output => {
             rails.insert("tool_input".to_string(), Json::Bool(false));
             rails.insert(
                 "tool_output".to_string(),
+                configured_tool_selector(request_defaults, RemoteCheckKind::Input)
+                    .unwrap_or(Json::Bool(true)),
+            );
+        }
+        RemoteCheckKind::Output => {
+            rails.insert(
+                "tool_input".to_string(),
                 configured_tool_selector(request_defaults, RemoteCheckKind::Output)
                     .unwrap_or(Json::Bool(true)),
             );
+            rails.insert("tool_output".to_string(), Json::Bool(false));
         }
     };
     options.insert("rails".to_string(), Json::Object(rails));

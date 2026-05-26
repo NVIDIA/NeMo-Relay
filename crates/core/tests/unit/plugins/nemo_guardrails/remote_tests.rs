@@ -1091,13 +1091,16 @@ async fn remote_tool_input_block_rejects_before_tool_execution() {
 
     let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
+    assert_eq!(request_json["messages"][0]["role"], json!("user"));
+    assert_eq!(request_json["messages"][1]["role"], json!("assistant"));
+    assert!(request_json["messages"][1]["tool_calls"].is_array());
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_input"],
-        json!(true)
+        json!(false)
     );
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_output"],
-        json!(false)
+        json!(true)
     );
 
     let captured_events = events.lock().unwrap().clone();
@@ -1139,7 +1142,15 @@ async fn remote_tool_input_can_rewrite_tool_arguments() {
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_weather_lookup_1",
+                    "type": "function",
+                    "function": {
+                        "name": "weather_lookup",
+                        "arguments": "{\"city\":\"Boston\"}"
+                    }
+                }]
             },
             "finish_reason": "stop"
         }],
@@ -1193,6 +1204,8 @@ async fn remote_tool_input_can_rewrite_tool_arguments() {
     let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(request_json["messages"][0]["role"], json!("user"));
+    assert_eq!(request_json["messages"][1]["role"], json!("assistant"));
+    assert!(request_json["messages"][1]["tool_calls"].is_array());
 }
 
 #[tokio::test]
@@ -1214,8 +1227,10 @@ async fn remote_tool_output_can_rewrite_tool_result() {
         "choices": [{
             "index": 0,
             "message": {
-                "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"},\"result\":{\"forecast\":\"cloudy\"}}"
+                "role": "tool",
+                "name": "weather_lookup",
+                "tool_call_id": "call_weather_lookup_1",
+                "content": "{\"forecast\":\"cloudy\"}"
             },
             "finish_reason": "stop"
         }],
@@ -1266,11 +1281,91 @@ async fn remote_tool_output_can_rewrite_tool_result() {
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_input"],
-        json!(false)
+        json!(true)
     );
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_output"],
-        json!(true)
+        json!(false)
+    );
+    assert_eq!(request_json["messages"][0]["role"], json!("user"));
+    assert_eq!(request_json["messages"][1]["role"], json!("assistant"));
+    assert_eq!(request_json["messages"][2]["role"], json!("tool"));
+}
+
+#[tokio::test]
+async fn remote_tool_output_rejects_when_remote_rail_refuses_without_stop_flag() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-output-blocked",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Tool result blocked by validation."
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": [{
+                    "type": "dialog",
+                    "name": "validate tool result content",
+                    "decisions": ["execute validate_tool_result_content", "refuse tool input"],
+                    "stop": false
+                }]
+            }
+        }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_output": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |_args| {
+                Box::pin(async move { Ok(json!({"secret": "ZXCVSECRET42"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("tool_output rail blocked tool call by rail 'validate tool result content'")
     );
 }
 
@@ -1294,7 +1389,15 @@ async fn remote_tool_input_preserves_named_rail_selectors() {
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_weather_lookup_1",
+                    "type": "function",
+                    "function": {
+                        "name": "weather_lookup",
+                        "arguments": "{\"city\":\"Boston\"}"
+                    }
+                }]
             },
             "finish_reason": "stop"
         }],
@@ -1348,11 +1451,11 @@ async fn remote_tool_input_preserves_named_rail_selectors() {
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_input"],
-        json!(["validate_tool_input"])
+        json!(false)
     );
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_output"],
-        json!(false)
+        json!(["validate_tool_input"])
     );
 }
 
@@ -1375,8 +1478,10 @@ async fn remote_tool_output_preserves_named_rail_selectors() {
         "choices": [{
             "index": 0,
             "message": {
-                "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"},\"result\":{\"forecast\":\"cloudy\"}}"
+                "role": "tool",
+                "name": "weather_lookup",
+                "tool_call_id": "call_weather_lookup_1",
+                "content": "{\"forecast\":\"cloudy\"}"
             },
             "finish_reason": "stop"
         }],
@@ -1430,11 +1535,11 @@ async fn remote_tool_output_preserves_named_rail_selectors() {
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_input"],
-        json!(false)
+        json!(["validate_tool_output"])
     );
     assert_eq!(
         request_json["guardrails"]["options"]["rails"]["tool_output"],
-        json!(["validate_tool_output"])
+        json!(false)
     );
 }
 
@@ -1458,7 +1563,15 @@ async fn remote_tool_input_invalid_modified_arguments_are_reported() {
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "{not-json}"
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_weather_lookup_1",
+                    "type": "function",
+                    "function": {
+                        "name": "weather_lookup",
+                        "arguments": "{not-json}"
+                    }
+                }]
             },
             "finish_reason": "stop"
         }],
@@ -1505,14 +1618,14 @@ async fn remote_tool_input_invalid_modified_arguments_are_reported() {
 
     match error {
         crate::error::FlowError::Internal(message) => {
-            assert!(message.contains("modified tool arguments content that is not valid JSON"));
+            assert!(message.contains("modified tool arguments that are not valid JSON"));
         }
         other => panic!("unexpected error: {other}"),
     }
 }
 
 #[tokio::test]
-async fn remote_tool_output_missing_result_field_is_reported() {
+async fn remote_tool_output_unrecognized_non_blocking_response_falls_back_to_original_result() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
@@ -1564,7 +1677,7 @@ async fn remote_tool_output_missing_result_field_is_reported() {
     .await
     .unwrap();
 
-    let error = tool_call_execute(
+    let result = tool_call_execute(
         ToolCallExecuteParams::builder()
             .name("weather_lookup")
             .args(json!({"city": "Phoenix"}))
@@ -1574,14 +1687,81 @@ async fn remote_tool_output_missing_result_field_is_reported() {
             .build(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
 
-    match error {
-        crate::error::FlowError::Internal(message) => {
-            assert!(message.contains("without a 'result' field"));
+    assert_eq!(result, json!({"forecast": "sunny"}));
+}
+
+#[tokio::test]
+async fn remote_tool_input_plain_text_non_blocking_response_falls_back_to_original_args() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+    setup_isolated_thread();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, _request_rx) = mpsc::channel();
+    let response_body = json!({
+        "id": "chatcmpl-tool-input-plain-text",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Run the tool 'weather_lookup' and validate the result."
+            },
+            "finish_reason": "stop"
+        }],
+        "guardrails": {
+            "config_id": "safety-default",
+            "log": {
+                "activated_rails": []
+            }
         }
-        other => panic!("unexpected error: {other}"),
-    }
+    })
+    .to_string();
+    let http_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    )
+    .into_bytes();
+    spawn_http_responder(listener, http_response, request_tx);
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "remote",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "remote": {
+            "endpoint": format!("http://{address}"),
+            "config_id": "safety-default"
+        }
+    })))
+    .await
+    .unwrap();
+
+    let seen_args = Arc::new(Mutex::new(None::<Json>));
+    let seen_args_for_call = Arc::clone(&seen_args);
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("weather_lookup")
+            .args(json!({"city": "Phoenix"}))
+            .func(Arc::new(move |args| {
+                *seen_args_for_call.lock().unwrap() = Some(args.clone());
+                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result, json!({"forecast": "sunny"}));
+    assert_eq!(*seen_args.lock().unwrap(), Some(json!({"city": "Phoenix"})));
 }
 
 #[tokio::test]
@@ -1649,7 +1829,15 @@ async fn remote_tool_input_rewrite_with_mismatched_tool_name_is_rejected() {
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "{\"tool_name\":\"different_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_weather_lookup_1",
+                    "type": "function",
+                    "function": {
+                        "name": "different_lookup",
+                        "arguments": "{\"city\":\"Boston\"}"
+                    }
+                }]
             },
             "finish_reason": "stop"
         }],
@@ -1722,7 +1910,15 @@ async fn remote_tool_input_and_output_run_in_order() {
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"}}"
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_weather_lookup_1",
+                    "type": "function",
+                    "function": {
+                        "name": "weather_lookup",
+                        "arguments": "{\"city\":\"Boston\"}"
+                    }
+                }]
             },
             "finish_reason": "stop"
         }],
@@ -1742,8 +1938,10 @@ async fn remote_tool_input_and_output_run_in_order() {
         "choices": [{
             "index": 0,
             "message": {
-                "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Boston\"},\"result\":{\"forecast\":\"cloudy\"}}"
+                "role": "tool",
+                "name": "weather_lookup",
+                "tool_call_id": "call_weather_lookup_1",
+                "content": "{\"forecast\":\"cloudy\"}"
             },
             "finish_reason": "stop"
         }],
@@ -1805,12 +2003,16 @@ async fn remote_tool_input_and_output_run_in_order() {
     let first_request_json: Json = serde_json::from_slice(&first_request.body).unwrap();
     assert_eq!(first_request_json["messages"][0]["role"], json!("user"));
     assert_eq!(
+        first_request_json["messages"][1]["role"],
+        json!("assistant")
+    );
+    assert_eq!(
         first_request_json["guardrails"]["options"]["rails"]["tool_input"],
-        json!(true)
+        json!(false)
     );
     assert_eq!(
         first_request_json["guardrails"]["options"]["rails"]["tool_output"],
-        json!(false)
+        json!(true)
     );
 
     let second_request = recv_captured_request(&request_rx);
@@ -1820,13 +2022,14 @@ async fn remote_tool_input_and_output_run_in_order() {
         second_request_json["messages"][1]["role"],
         json!("assistant")
     );
+    assert_eq!(second_request_json["messages"][2]["role"], json!("tool"));
     assert_eq!(
         second_request_json["guardrails"]["options"]["rails"]["tool_input"],
-        json!(false)
+        json!(true)
     );
     assert_eq!(
         second_request_json["guardrails"]["options"]["rails"]["tool_output"],
-        json!(true)
+        json!(false)
     );
 }
 
@@ -1850,7 +2053,15 @@ async fn remote_tool_checks_forward_context_state_and_thread_id() {
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": "{\"tool_name\":\"weather_lookup\",\"arguments\":{\"city\":\"Phoenix\"}}"
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_weather_lookup_1",
+                    "type": "function",
+                    "function": {
+                        "name": "weather_lookup",
+                        "arguments": "{\"city\":\"Phoenix\"}"
+                    }
+                }]
             },
             "finish_reason": "stop"
         }],
