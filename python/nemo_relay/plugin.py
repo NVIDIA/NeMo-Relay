@@ -10,8 +10,9 @@ per component by the runtime, so end users do not provide instance ids.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import TYPE_CHECKING, Callable, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Callable, Iterator, Literal, Protocol, TypedDict, cast
 
 from nemo_relay import (
     Json,
@@ -328,6 +329,25 @@ def clear() -> None:
         registry intact for future validation or initialization.
     """
     _clear_plugin_configuration()
+
+@asynccontextmanager
+async def plugin(config: PluginConfig | JsonObject) -> Iterator[ConfigReport]:
+    """Context manager for plugin initialization and cleanup.
+
+    Args:
+        config: `PluginConfig` or an equivalent JSON object.
+
+    Yields:
+        The `ConfigReport` for the initialized configuration.
+
+    Behavior:
+        This context manager initializes the plugin configuration on entry and clears it on exit.
+    """
+    report = await initialize(config)
+    try:
+        yield report
+    finally:
+        clear()
 
 
 def report() -> ConfigReport | None:
