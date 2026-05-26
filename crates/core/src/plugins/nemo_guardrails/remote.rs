@@ -21,7 +21,7 @@ use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResu
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rustls::crypto::ring;
 
-use super::{NeMoGuardrailsConfig, RemoteBackendConfig, RequestDefaultsConfig};
+use super::{NeMoGuardrailsConfig, RequestDefaultsConfig};
 
 #[derive(Clone)]
 struct RemoteBackendRuntime {
@@ -29,7 +29,9 @@ struct RemoteBackendRuntime {
     client: reqwest::Client,
     config_id: Option<String>,
     config_ids: Vec<String>,
-    request_defaults: Option<RequestDefaultsConfig>,
+    llm_guardrails: Option<Map<String, Json>>,
+    tool_input_guardrails: Map<String, Json>,
+    tool_output_guardrails: Map<String, Json>,
 }
 
 #[derive(Clone, Copy)]
@@ -39,7 +41,12 @@ enum RemoteCheckKind {
 }
 
 impl RemoteBackendRuntime {
-    fn new(config: &NeMoGuardrailsConfig, remote: &RemoteBackendConfig) -> PluginResult<Self> {
+    fn new(config: &NeMoGuardrailsConfig) -> PluginResult<Self> {
+        let remote = config.remote.as_ref().ok_or_else(|| {
+            PluginError::InvalidConfig(
+                "remote config is required when mode is 'remote'".to_string(),
+            )
+        })?;
         let endpoint = remote.endpoint.clone().ok_or_else(|| {
             PluginError::InvalidConfig("remote.endpoint is required in remote mode".to_string())
         })?;
@@ -70,12 +77,30 @@ impl RemoteBackendRuntime {
                 ))
             })?;
 
+        let request_defaults = config.request_defaults.as_ref();
+
         Ok(Self {
             endpoint: endpoint.trim_end_matches('/').to_string(),
             client,
             config_id: remote.config_id.clone(),
             config_ids: remote.config_ids.clone(),
-            request_defaults: config.request_defaults.clone(),
+            llm_guardrails: build_llm_guardrails_config(
+                &remote.config_id,
+                &remote.config_ids,
+                request_defaults,
+            ),
+            tool_input_guardrails: build_tool_check_guardrails_config(
+                RemoteCheckKind::Input,
+                &remote.config_id,
+                &remote.config_ids,
+                request_defaults,
+            ),
+            tool_output_guardrails: build_tool_check_guardrails_config(
+                RemoteCheckKind::Output,
+                &remote.config_id,
+                &remote.config_ids,
+                request_defaults,
+            ),
         })
     }
 
@@ -445,59 +470,10 @@ impl RemoteBackendRuntime {
             FlowError::Internal("LLM request content is not a JSON object".to_string())
         })?;
         body.insert("stream".to_string(), Json::Bool(stream));
-        if let Some(guardrails) = self.build_guardrails_config() {
-            body.insert("guardrails".to_string(), Json::Object(guardrails));
+        if let Some(guardrails) = &self.llm_guardrails {
+            body.insert("guardrails".to_string(), Json::Object(guardrails.clone()));
         }
         Ok(Json::Object(body))
-    }
-
-    fn build_guardrails_config(&self) -> Option<Map<String, Json>> {
-        let mut guardrails = Map::new();
-        if let Some(config_id) = &self.config_id {
-            guardrails.insert("config_id".to_string(), Json::String(config_id.clone()));
-        }
-        if !self.config_ids.is_empty() {
-            guardrails.insert(
-                "config_ids".to_string(),
-                Json::Array(self.config_ids.iter().cloned().map(Json::String).collect()),
-            );
-        }
-        if let Some(request_defaults) = &self.request_defaults {
-            if let Some(context) = &request_defaults.context {
-                guardrails.insert("context".to_string(), context.clone());
-            }
-            if let Some(thread_id) = &request_defaults.thread_id {
-                guardrails.insert("thread_id".to_string(), Json::String(thread_id.clone()));
-            }
-            if let Some(state) = &request_defaults.state {
-                guardrails.insert("state".to_string(), state.clone());
-            }
-            let mut options = Map::new();
-            if let Some(rails) = &request_defaults.rails {
-                options.insert(
-                    "rails".to_string(),
-                    serde_json::to_value(rails)
-                        .expect("request rails config should serialize to JSON"),
-                );
-            }
-            if let Some(llm_params) = &request_defaults.llm_params {
-                options.insert("llm_params".to_string(), llm_params.clone());
-            }
-            if let Some(llm_output) = request_defaults.llm_output {
-                options.insert("llm_output".to_string(), Json::Bool(llm_output));
-            }
-            if let Some(output_vars) = &request_defaults.output_vars {
-                options.insert("output_vars".to_string(), output_vars.clone());
-            }
-            if let Some(log) = &request_defaults.log {
-                options.insert("log".to_string(), log.clone());
-            }
-            if !options.is_empty() {
-                guardrails.insert("options".to_string(), Json::Object(options));
-            }
-        }
-
-        (!guardrails.is_empty()).then_some(guardrails)
     }
 
     fn chat_completions_url(&self) -> String {
@@ -533,7 +509,10 @@ impl RemoteBackendRuntime {
         body.insert("stream".to_string(), Json::Bool(false));
         body.insert(
             "guardrails".to_string(),
-            Json::Object(self.build_tool_check_guardrails(kind)),
+            Json::Object(match kind {
+                RemoteCheckKind::Input => self.tool_input_guardrails.clone(),
+                RemoteCheckKind::Output => self.tool_output_guardrails.clone(),
+            }),
         );
         let serialized = serde_json::to_vec(&Json::Object(body)).map_err(|err| {
             let message = format!("nemo_guardrails failed to serialize remote request body: {err}");
@@ -637,62 +616,6 @@ impl RemoteBackendRuntime {
             ),
         );
         Ok(response_json)
-    }
-
-    fn build_tool_check_guardrails(&self, kind: RemoteCheckKind) -> Map<String, Json> {
-        let mut guardrails = Map::new();
-        if let Some(config_id) = &self.config_id {
-            guardrails.insert("config_id".to_string(), Json::String(config_id.clone()));
-        }
-        if !self.config_ids.is_empty() {
-            guardrails.insert(
-                "config_ids".to_string(),
-                Json::Array(self.config_ids.iter().cloned().map(Json::String).collect()),
-            );
-        }
-        if let Some(request_defaults) = &self.request_defaults {
-            if let Some(context) = &request_defaults.context {
-                guardrails.insert("context".to_string(), context.clone());
-            }
-            if let Some(thread_id) = &request_defaults.thread_id {
-                guardrails.insert("thread_id".to_string(), Json::String(thread_id.clone()));
-            }
-            if let Some(state) = &request_defaults.state {
-                guardrails.insert("state".to_string(), state.clone());
-            }
-        }
-
-        let mut options = Map::new();
-        let rails = match kind {
-            RemoteCheckKind::Input => json!({
-                "input": false,
-                "output": false,
-                "dialog": false,
-                "retrieval": false,
-                "tool_input": true,
-                "tool_output": false,
-            }),
-            RemoteCheckKind::Output => json!({
-                "input": false,
-                "output": false,
-                "dialog": false,
-                "retrieval": false,
-                "tool_input": false,
-                "tool_output": true,
-            }),
-        };
-        options.insert("rails".to_string(), rails);
-        let mut log = self
-            .request_defaults
-            .as_ref()
-            .and_then(|defaults| defaults.log.as_ref())
-            .and_then(Json::as_object)
-            .cloned()
-            .unwrap_or_default();
-        log.insert("activated_rails".to_string(), Json::Bool(true));
-        options.insert("log".to_string(), Json::Object(log));
-        guardrails.insert("options".to_string(), Json::Object(options));
-        guardrails
     }
 }
 
@@ -850,10 +773,7 @@ pub(super) fn register_remote_backend(
     config: NeMoGuardrailsConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    let remote = config.remote.clone().ok_or_else(|| {
-        PluginError::InvalidConfig("remote config is required when mode is 'remote'".to_string())
-    })?;
-    let runtime = Arc::new(RemoteBackendRuntime::new(&config, &remote)?);
+    let runtime = Arc::new(RemoteBackendRuntime::new(&config)?);
 
     if config.input || config.output {
         let llm_execution_runtime = Arc::clone(&runtime);
@@ -907,6 +827,106 @@ pub(super) fn register_remote_backend(
     }
 
     Ok(())
+}
+
+fn build_base_guardrails_config(
+    config_id: &Option<String>,
+    config_ids: &[String],
+    request_defaults: Option<&RequestDefaultsConfig>,
+) -> Map<String, Json> {
+    let mut guardrails = Map::new();
+    if let Some(config_id) = config_id {
+        guardrails.insert("config_id".to_string(), Json::String(config_id.clone()));
+    }
+    if !config_ids.is_empty() {
+        guardrails.insert(
+            "config_ids".to_string(),
+            Json::Array(config_ids.iter().cloned().map(Json::String).collect()),
+        );
+    }
+    if let Some(request_defaults) = request_defaults {
+        if let Some(context) = &request_defaults.context {
+            guardrails.insert("context".to_string(), context.clone());
+        }
+        if let Some(thread_id) = &request_defaults.thread_id {
+            guardrails.insert("thread_id".to_string(), Json::String(thread_id.clone()));
+        }
+        if let Some(state) = &request_defaults.state {
+            guardrails.insert("state".to_string(), state.clone());
+        }
+    }
+    guardrails
+}
+
+fn build_llm_guardrails_config(
+    config_id: &Option<String>,
+    config_ids: &[String],
+    request_defaults: Option<&RequestDefaultsConfig>,
+) -> Option<Map<String, Json>> {
+    let mut guardrails = build_base_guardrails_config(config_id, config_ids, request_defaults);
+    if let Some(request_defaults) = request_defaults {
+        let mut options = Map::new();
+        if let Some(rails) = &request_defaults.rails {
+            options.insert(
+                "rails".to_string(),
+                serde_json::to_value(rails).expect("request rails config should serialize to JSON"),
+            );
+        }
+        if let Some(llm_params) = &request_defaults.llm_params {
+            options.insert("llm_params".to_string(), llm_params.clone());
+        }
+        if let Some(llm_output) = request_defaults.llm_output {
+            options.insert("llm_output".to_string(), Json::Bool(llm_output));
+        }
+        if let Some(output_vars) = &request_defaults.output_vars {
+            options.insert("output_vars".to_string(), output_vars.clone());
+        }
+        if let Some(log) = &request_defaults.log {
+            options.insert("log".to_string(), log.clone());
+        }
+        if !options.is_empty() {
+            guardrails.insert("options".to_string(), Json::Object(options));
+        }
+    }
+    (!guardrails.is_empty()).then_some(guardrails)
+}
+
+fn build_tool_check_guardrails_config(
+    kind: RemoteCheckKind,
+    config_id: &Option<String>,
+    config_ids: &[String],
+    request_defaults: Option<&RequestDefaultsConfig>,
+) -> Map<String, Json> {
+    let mut guardrails = build_base_guardrails_config(config_id, config_ids, request_defaults);
+    let mut options = Map::new();
+    let rails = match kind {
+        RemoteCheckKind::Input => json!({
+            "input": false,
+            "output": false,
+            "dialog": false,
+            "retrieval": false,
+            "tool_input": true,
+            "tool_output": false,
+        }),
+        RemoteCheckKind::Output => json!({
+            "input": false,
+            "output": false,
+            "dialog": false,
+            "retrieval": false,
+            "tool_input": false,
+            "tool_output": true,
+        }),
+    };
+    options.insert("rails".to_string(), rails);
+    let mut log = request_defaults
+        .and_then(|defaults| defaults.log.as_ref())
+        .and_then(Json::as_object)
+        .cloned()
+        .unwrap_or_default();
+    log.insert("activated_rails".to_string(), Json::Bool(true));
+    options.insert("log".to_string(), Json::Object(log));
+    guardrails.insert("options".to_string(), Json::Object(options));
+    guardrails
 }
 
 #[cfg(any(target_arch = "wasm32", not(feature = "guardrails-remote")))]
