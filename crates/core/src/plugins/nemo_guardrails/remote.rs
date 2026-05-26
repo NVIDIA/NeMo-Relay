@@ -108,112 +108,15 @@ impl RemoteBackendRuntime {
 
     async fn execute(&self, request: LlmRequest, stream: bool) -> crate::error::Result<Json> {
         let parent = get_handle().ok();
-        self.emit_mark(
-            "nemo_guardrails.remote.start",
-            &parent,
-            remote_mark_data(stream, &self.config_id, &self.config_ids, None, None),
-        );
-        let body = self
-            .build_request_body(&request, stream)
-            .inspect_err(|err| {
-                self.emit_mark(
-                    "nemo_guardrails.remote.error",
-                    &parent,
-                    remote_mark_data(
-                        stream,
-                        &self.config_id,
-                        &self.config_ids,
-                        None,
-                        Some(err.to_string()),
-                    ),
-                );
-            })?;
-        let serialized = serde_json::to_vec(&body).map_err(|err| {
-            self.emit_mark(
-                "nemo_guardrails.remote.error",
-                &parent,
-                remote_mark_data(
-                    stream,
-                    &self.config_id,
-                    &self.config_ids,
-                    None,
-                    Some(format!("failed to serialize remote request body: {err}")),
-                ),
-            );
-            FlowError::Internal(format!(
-                "nemo_guardrails failed to serialize remote request body: {err}"
-            ))
-        })?;
+        self.emit_remote_start(&parent, stream);
+        let body = self.build_request_body_with_marks(&parent, &request, stream)?;
         let response = self
-            .client
-            .post(self.chat_completions_url())
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(serialized)
-            .send()
-            .await
-            .map_err(|err| {
-                self.emit_mark(
-                    "nemo_guardrails.remote.error",
-                    &parent,
-                    remote_mark_data(
-                        stream,
-                        &self.config_id,
-                        &self.config_ids,
-                        None,
-                        Some(format!("remote request failed: {err}")),
-                    ),
-                );
-                FlowError::Internal(format!("nemo_guardrails remote request failed: {err}"))
-            })?;
+            .send_remote_request_with_marks(&parent, stream, body)
+            .await?;
         let status = response.status();
-        let payload = response.text().await.map_err(|err| {
-            self.emit_mark(
-                "nemo_guardrails.remote.error",
-                &parent,
-                remote_mark_data(
-                    stream,
-                    &self.config_id,
-                    &self.config_ids,
-                    Some(status.as_u16()),
-                    Some(format!("failed to read remote response body: {err}")),
-                ),
-            );
-            FlowError::Internal(format!(
-                "nemo_guardrails failed to read remote response body: {err}"
-            ))
-        })?;
-        if !status.is_success() {
-            self.emit_mark(
-                "nemo_guardrails.remote.error",
-                &parent,
-                remote_mark_data(
-                    stream,
-                    &self.config_id,
-                    &self.config_ids,
-                    Some(status.as_u16()),
-                    Some(redact_remote_error_payload(status.as_u16(), &payload)),
-                ),
-            );
-            return Err(FlowError::Internal(format!(
-                "nemo_guardrails remote request failed with status {status}: {payload}"
-            )));
-        }
-        let response_json = serde_json::from_str(&payload).map_err(|err| {
-            self.emit_mark(
-                "nemo_guardrails.remote.error",
-                &parent,
-                remote_mark_data(
-                    stream,
-                    &self.config_id,
-                    &self.config_ids,
-                    Some(status.as_u16()),
-                    Some(format!("failed to parse remote response JSON: {err}")),
-                ),
-            );
-            FlowError::Internal(format!(
-                "nemo_guardrails failed to parse remote response JSON: {err}"
-            ))
-        })?;
+        let response_json = self
+            .read_json_response_with_marks(&parent, stream, response)
+            .await?;
         self.emit_mark(
             "nemo_guardrails.remote.end",
             &parent,
@@ -230,65 +133,11 @@ impl RemoteBackendRuntime {
 
     async fn execute_stream(&self, request: LlmRequest) -> crate::error::Result<LlmJsonStream> {
         let parent = get_handle().ok();
-        self.emit_mark(
-            "nemo_guardrails.remote.start",
-            &parent,
-            remote_mark_data(true, &self.config_id, &self.config_ids, None, None),
-        );
-        let body = self.build_request_body(&request, true).inspect_err(|err| {
-            self.emit_mark(
-                "nemo_guardrails.remote.error",
-                &parent,
-                remote_mark_data(
-                    true,
-                    &self.config_id,
-                    &self.config_ids,
-                    None,
-                    Some(err.to_string()),
-                ),
-            );
-        })?;
-        let serialized = serde_json::to_vec(&body).map_err(|err| {
-            self.emit_mark(
-                "nemo_guardrails.remote.error",
-                &parent,
-                remote_mark_data(
-                    true,
-                    &self.config_id,
-                    &self.config_ids,
-                    None,
-                    Some(format!(
-                        "failed to serialize remote stream request body: {err}"
-                    )),
-                ),
-            );
-            FlowError::Internal(format!(
-                "nemo_guardrails failed to serialize remote stream request body: {err}"
-            ))
-        })?;
-        let mut response = self
-            .client
-            .post(self.chat_completions_url())
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(serialized)
-            .send()
-            .await
-            .map_err(|err| {
-                self.emit_mark(
-                    "nemo_guardrails.remote.error",
-                    &parent,
-                    remote_mark_data(
-                        true,
-                        &self.config_id,
-                        &self.config_ids,
-                        None,
-                        Some(format!("remote stream request failed: {err}")),
-                    ),
-                );
-                FlowError::Internal(format!(
-                    "nemo_guardrails remote stream request failed: {err}"
-                ))
-            })?;
+        self.emit_remote_start(&parent, true);
+        let body = self.build_request_body_with_marks(&parent, &request, true)?;
+        let response = self
+            .send_remote_request_with_marks(&parent, true, body)
+            .await?;
         let status = response.status();
         if !status.is_success() {
             let payload = response.text().await.map_err(|err| {
@@ -324,7 +173,147 @@ impl RemoteBackendRuntime {
         }
 
         let (tx, rx) = mpsc::channel(16);
-        let parent_for_task = parent.clone();
+        self.spawn_stream_decoder(response, status, parent.clone(), tx);
+
+        Ok(Box::pin(ReceiverStream::new(rx)) as LlmJsonStream)
+    }
+
+    fn emit_remote_start(&self, parent: &Option<ScopeHandle>, stream: bool) {
+        self.emit_mark(
+            "nemo_guardrails.remote.start",
+            parent,
+            remote_mark_data(stream, &self.config_id, &self.config_ids, None, None),
+        );
+    }
+
+    fn emit_remote_error(
+        &self,
+        parent: &Option<ScopeHandle>,
+        stream: bool,
+        status: Option<u16>,
+        error: impl Into<String>,
+    ) {
+        self.emit_mark(
+            "nemo_guardrails.remote.error",
+            parent,
+            remote_mark_data(
+                stream,
+                &self.config_id,
+                &self.config_ids,
+                status,
+                Some(error.into()),
+            ),
+        );
+    }
+
+    fn build_request_body_with_marks(
+        &self,
+        parent: &Option<ScopeHandle>,
+        request: &LlmRequest,
+        stream: bool,
+    ) -> crate::error::Result<Json> {
+        self.build_request_body(request, stream).inspect_err(|err| {
+            self.emit_remote_error(parent, stream, None, err.to_string());
+        })
+    }
+
+    async fn send_remote_request_with_marks(
+        &self,
+        parent: &Option<ScopeHandle>,
+        stream: bool,
+        body: Json,
+    ) -> crate::error::Result<reqwest::Response> {
+        let serialized = self.serialize_request_body_with_marks(parent, stream, body)?;
+        self.client
+            .post(self.chat_completions_url())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(serialized)
+            .send()
+            .await
+            .map_err(|err| {
+                let message = if stream {
+                    format!("remote stream request failed: {err}")
+                } else {
+                    format!("remote request failed: {err}")
+                };
+                self.emit_remote_error(parent, stream, None, message.clone());
+                FlowError::Internal(format!("nemo_guardrails {message}"))
+            })
+    }
+
+    fn serialize_request_body_with_marks(
+        &self,
+        parent: &Option<ScopeHandle>,
+        stream: bool,
+        body: Json,
+    ) -> crate::error::Result<Vec<u8>> {
+        serde_json::to_vec(&body).map_err(|err| {
+            let context = if stream {
+                "remote stream request body"
+            } else {
+                "remote request body"
+            };
+            let message = format!("failed to serialize {context}: {err}");
+            self.emit_remote_error(parent, stream, None, message.clone());
+            FlowError::Internal(format!("nemo_guardrails {message}"))
+        })
+    }
+
+    async fn read_json_response_with_marks(
+        &self,
+        parent: &Option<ScopeHandle>,
+        stream: bool,
+        response: reqwest::Response,
+    ) -> crate::error::Result<Json> {
+        let status = response.status();
+        let payload = self
+            .read_response_text_with_marks(parent, stream, response, status)
+            .await?;
+        if !status.is_success() {
+            self.emit_remote_error(
+                parent,
+                stream,
+                Some(status.as_u16()),
+                redact_remote_error_payload(status.as_u16(), &payload),
+            );
+            return Err(FlowError::Internal(format!(
+                "nemo_guardrails remote request failed with status {status}: {payload}"
+            )));
+        }
+
+        serde_json::from_str(&payload).map_err(|err| {
+            let message = format!("failed to parse remote response JSON: {err}");
+            self.emit_remote_error(parent, stream, Some(status.as_u16()), message.clone());
+            FlowError::Internal(format!("nemo_guardrails {message}"))
+        })
+    }
+
+    async fn read_response_text_with_marks(
+        &self,
+        parent: &Option<ScopeHandle>,
+        stream: bool,
+        response: reqwest::Response,
+        status: reqwest::StatusCode,
+    ) -> crate::error::Result<String> {
+        response.text().await.map_err(|err| {
+            let context = if stream {
+                "remote stream error body"
+            } else {
+                "remote response body"
+            };
+            let message = format!("failed to read {context}: {err}");
+            self.emit_remote_error(parent, stream, Some(status.as_u16()), message.clone());
+            FlowError::Internal(format!("nemo_guardrails {message}"))
+        })
+    }
+
+    fn spawn_stream_decoder(
+        &self,
+        mut response: reqwest::Response,
+        status: reqwest::StatusCode,
+        parent: Option<ScopeHandle>,
+        tx: mpsc::Sender<crate::error::Result<Json>>,
+    ) {
         let config_id = self.config_id.clone();
         let config_ids = self.config_ids.clone();
         tokio::spawn(async move {
@@ -334,16 +323,12 @@ impl RemoteBackendRuntime {
                     Ok(Some(bytes)) => bytes,
                     Ok(None) => break,
                     Err(err) => {
-                        emit_remote_mark(
-                            "nemo_guardrails.remote.error",
-                            &parent_for_task,
-                            remote_mark_data(
-                                true,
-                                &config_id,
-                                &config_ids,
-                                Some(status.as_u16()),
-                                Some(format!("failed to read remote stream chunk: {err}")),
-                            ),
+                        emit_stream_decode_error(
+                            &parent,
+                            &config_id,
+                            &config_ids,
+                            status,
+                            format!("failed to read remote stream chunk: {err}"),
                         );
                         let _ = tx
                             .send(Err(FlowError::Internal(format!(
@@ -356,16 +341,12 @@ impl RemoteBackendRuntime {
                 let events = match decoder.push_bytes(&bytes) {
                     Ok(events) => events,
                     Err(err) => {
-                        emit_remote_mark(
-                            "nemo_guardrails.remote.error",
-                            &parent_for_task,
-                            remote_mark_data(
-                                true,
-                                &config_id,
-                                &config_ids,
-                                Some(status.as_u16()),
-                                Some(err.to_string()),
-                            ),
+                        emit_stream_decode_error(
+                            &parent,
+                            &config_id,
+                            &config_ids,
+                            status,
+                            err.to_string(),
                         );
                         let _ = tx.send(Err(err)).await;
                         return;
@@ -384,16 +365,12 @@ impl RemoteBackendRuntime {
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    emit_remote_mark(
-                        "nemo_guardrails.remote.error",
-                        &parent_for_task,
-                        remote_mark_data(
-                            true,
-                            &config_id,
-                            &config_ids,
-                            Some(status.as_u16()),
-                            Some(err.to_string()),
-                        ),
+                    emit_stream_decode_error(
+                        &parent,
+                        &config_id,
+                        &config_ids,
+                        status,
+                        err.to_string(),
                     );
                     let _ = tx.send(Err(err)).await;
                     return;
@@ -402,12 +379,10 @@ impl RemoteBackendRuntime {
 
             emit_remote_mark(
                 "nemo_guardrails.remote.end",
-                &parent_for_task,
+                &parent,
                 remote_mark_data(true, &config_id, &config_ids, Some(status.as_u16()), None),
             );
         });
-
-        Ok(Box::pin(ReceiverStream::new(rx)) as LlmJsonStream)
     }
 
     async fn check_tool_input(&self, tool_name: &str, args: &Json) -> crate::error::Result<Json> {
@@ -618,6 +593,26 @@ fn emit_remote_mark(name: &str, parent: &Option<ScopeHandle>, data: Json) {
             .parent_opt(parent.as_ref())
             .data(data)
             .build(),
+    );
+}
+
+fn emit_stream_decode_error(
+    parent: &Option<ScopeHandle>,
+    config_id: &Option<String>,
+    config_ids: &[String],
+    status: reqwest::StatusCode,
+    error: String,
+) {
+    emit_remote_mark(
+        "nemo_guardrails.remote.error",
+        parent,
+        remote_mark_data(
+            true,
+            config_id,
+            config_ids,
+            Some(status.as_u16()),
+            Some(error),
+        ),
     );
 }
 
