@@ -113,21 +113,6 @@ fn spawn_http_responder(
     });
 }
 
-fn spawn_http_responder_sequence(
-    listener: TcpListener,
-    responses: Vec<Vec<u8>>,
-    request_tx: mpsc::Sender<CapturedHttpRequest>,
-) {
-    thread::spawn(move || {
-        for response in responses {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_http_request(&mut stream);
-            stream.write_all(&response).unwrap();
-            request_tx.send(request).unwrap();
-        }
-    });
-}
-
 fn read_http_request(stream: &mut impl Read) -> CapturedHttpRequest {
     let mut bytes = Vec::new();
     let mut buf = [0_u8; 4096];
@@ -609,7 +594,7 @@ fn invalid_shapes_and_values_are_reported() {
             })
     );
 
-    let supported_remote_tool_surface = validate_plugin_config(&plugin_config(json!({
+    let unsupported_remote_tool_input = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
         "tool_input": true,
@@ -618,7 +603,29 @@ fn invalid_shapes_and_values_are_reported() {
             "config_id": "default"
         }
     })));
-    assert!(!supported_remote_tool_surface.has_errors());
+    assert!(unsupported_remote_tool_input.has_errors());
+    assert!(
+        unsupported_remote_tool_input
+            .diagnostics
+            .iter()
+            .any(|diag| {
+                diag.field.as_deref() == Some("tool_input")
+                    && diag
+                        .message
+                        .contains("does not currently support managed tool_input")
+            })
+    );
+
+    let supported_remote_tool_output = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "tool_output": true,
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(!supported_remote_tool_output.has_errors());
 
     let remote_empty_fields = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",

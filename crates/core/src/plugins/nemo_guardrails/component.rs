@@ -935,6 +935,17 @@ fn validate_remote_backend_support(
             "remote mode currently supports only codec = 'openai_chat'".to_string(),
         );
     }
+
+    if config.tool_input {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some("tool_input".to_string()),
+            "remote mode does not currently support managed tool_input against the stock Guardrails remote contract".to_string(),
+        );
+    }
 }
 
 fn validate_request_defaults(
