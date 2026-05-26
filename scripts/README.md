@@ -20,7 +20,7 @@ Keep `scripts/` focused on helpers that are still script-native:
 
 ## Internal Layout
 
-- `docs/`: Fern reference-generation and migration cleanup helpers. Generated API reference output under `docs/reference/api/*-library-reference/` is ignored and recreated by `just docs`.
+- `docs/`: Fern reference-generation, migration cleanup, and `docs-website` branch sync helpers. Generated API reference output under `docs/reference/api/*-library-reference/` is ignored and recreated by `just docs`.
 - `licensing/`: attribution generation helpers, including license inventory diff scripts
 - `lint/`: pre-commit and local lint helpers
 - `test-support/`: shared test utilities

@@ -95,6 +95,28 @@ checking the Fern site, including links and navigation.
 just docs
 ```
 
+## Fern Publishing
+
+NeMo Relay uses a dual-branch Fern publishing model. Authors edit documentation
+on `main` in `docs/` and `fern/`. The generated Fern content on
+`docs-website` is managed by CI and must not be edited by hand. The branch root
+`.gitignore`, `README.md`, and `.github/workflows/publish-fern-docs.yml` are
+branch-local maintenance files and can be updated directly on `docs-website`.
+
+The Fern workflow uses `DOCS_FERN_TOKEN` as the repository secret. Pull-request
+branches under `pull-request/**` get Fern previews when docs change. Pushes to
+`main` sync the generated `fern/pages-dev/` layout to `docs-website` and publish
+the dev docs. Raw SemVer tags such as `0.1.0`, `0.1.0-beta.1`, and `0.1.0-rc.1`
+create public docs versions displayed with a leading `v`. Prerelease indicators
+are stripped from the public docs version path, so `0.1.0-beta.1`,
+`0.1.0-rc.1`, and `0.1.0` all target `v0.1.0`. Stable tags use
+`availability: stable` and update the default `Latest` version. Beta and
+release-candidate tags use `availability: beta`, replace the same base version
+snapshot, and do not update `Latest`. Alpha tags are not published.
+
+The branch sync and version snapshot logic lives in
+`scripts/docs/sync_fern_docs_branch.py`.
+
 ## Licensing and Headers
 
 All source files must include SPDX headers and remain under Apache 2.0 expectations. Reviewers check this during normal review even when hooks do not enforce it automatically.
