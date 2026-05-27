@@ -21,7 +21,7 @@ pkg-fmt = "bin"
 workspace = true
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["atif-storage", "openinference"] }
+nemo-relay = { workspace = true, features = ["object-store", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 async-stream = "0.3"
 axum = "0.8"
