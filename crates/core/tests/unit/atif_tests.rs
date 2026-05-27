@@ -599,6 +599,111 @@ fn test_exporter_llm_lifecycle_plain_input() {
 }
 
 #[test]
+fn test_exporter_openai_responses_lifecycle_extracts_messages() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("gpt-test-model")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "input": "Summarize the Codex worker result.",
+            "model": "gpt-test-model",
+            "prompt_cache_key": "codex-child-thread"
+        }))
+        .model_name("gpt-test-model")
+        .build();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("gpt-test-model")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Codex worker summary complete."
+                        }
+                    ]
+                }
+            ],
+            "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "total_tokens": 18
+            }
+        }))
+        .model_name("gpt-test-model")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(start);
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export();
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let user_step = &trajectory.steps[0];
+    assert_eq!(user_step.source, "user");
+    assert_eq!(
+        user_step.message,
+        json!("Summarize the Codex worker result.")
+    );
+    let user_extra: AtifStepExtra =
+        serde_json::from_value(user_step.extra.clone().unwrap()).unwrap();
+    let llm_request = user_extra.llm_request.unwrap();
+    assert_eq!(llm_request["prompt_cache_key"], json!("codex-child-thread"));
+
+    let agent_step = &trajectory.steps[1];
+    assert_eq!(agent_step.source, "agent");
+    assert_eq!(agent_step.message, json!("Codex worker summary complete."));
+    assert_eq!(agent_step.model_name, Some("gpt-test-model".to_string()));
+    let metrics = agent_step.metrics.as_ref().unwrap();
+    assert_eq!(metrics.prompt_tokens, Some(11));
+    assert_eq!(metrics.completion_tokens, Some(7));
+    let agent_extra: AtifStepExtra =
+        serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(agent_extra.llm_response.unwrap()["id"], json!("resp_1"));
+}
+
+#[test]
+fn test_openai_responses_input_extracts_latest_user_content_block() {
+    let message = extract_user_messages(&json!({
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "Initial task" }
+                ]
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    { "type": "output_text", "text": "Intermediate answer" }
+                ]
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "Follow-up task" }
+                ]
+            }
+        ]
+    }));
+
+    assert_eq!(message, json!("Follow-up task"));
+}
+
+#[test]
 fn test_exporter_llm_tool_calls_promoted() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();

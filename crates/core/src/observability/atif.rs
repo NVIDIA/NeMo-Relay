@@ -434,6 +434,9 @@ fn extract_llm_response_message(output: &Json) -> Json {
         if let Some(answer) = non_null_object_field(obj, "answer") {
             return atif_content_value(&answer);
         }
+        if let Some(content) = openai_responses_output_message(output) {
+            return content;
+        }
         if tool_call_array(output).is_some() {
             return empty_message();
         }
@@ -501,6 +504,61 @@ fn raw_response_message_field<'a>(output: &'a Json, field: &str) -> Option<&'a J
         .and_then(|choice| choice.get("message"))
         .and_then(Json::as_object)
         .and_then(|message| message.get(field))
+}
+
+fn openai_responses_output_message(output: &Json) -> Option<Json> {
+    let object = output.as_object()?;
+    if let Some(output_text) = object.get("output_text").and_then(Json::as_str) {
+        return Some(Json::String(output_text.to_string()));
+    }
+
+    let output_items = object.get("output").and_then(Json::as_array)?;
+    let mut text_parts = Vec::new();
+    for item in output_items {
+        collect_openai_responses_output_text(item, &mut text_parts);
+    }
+
+    match text_parts.as_slice() {
+        [] => None,
+        [text] => Some(Json::String(text.clone())),
+        _ => Some(Json::String(text_parts.join("\n"))),
+    }
+}
+
+fn collect_openai_responses_output_text(item: &Json, text_parts: &mut Vec<String>) {
+    let Some(item_obj) = item.as_object() else {
+        return;
+    };
+    match item_obj.get("type").and_then(Json::as_str) {
+        Some("message") => {
+            if let Some(content) = item_obj.get("content").and_then(Json::as_array) {
+                collect_openai_responses_content_text(content, "output_text", text_parts);
+            }
+        }
+        Some("output_text") => {
+            if let Some(text) = item_obj.get("text").and_then(Json::as_str) {
+                text_parts.push(text.to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_openai_responses_content_text(
+    content: &[Json],
+    block_type: &str,
+    text_parts: &mut Vec<String>,
+) {
+    for block in content {
+        let Some(block_obj) = block.as_object() else {
+            continue;
+        };
+        if block_obj.get("type").and_then(Json::as_str) == Some(block_type)
+            && let Some(text) = block_obj.get("text").and_then(Json::as_str)
+        {
+            text_parts.push(text.to_string());
+        }
+    }
 }
 
 /// Known keys in token_usage that we extract to dedicated fields.
@@ -657,11 +715,58 @@ fn extract_user_messages(input: &Json) -> Json {
         }
     }
     if let Some(obj) = input.as_object()
+        && let Some(message) = obj.get("input").and_then(openai_responses_input_message)
+    {
+        return message;
+    }
+    if let Some(obj) = input.as_object()
         && let Some(prompt) = obj.get("prompt")
     {
         return atif_content_value(prompt);
     }
     atif_content_value(input)
+}
+
+fn openai_responses_input_message(input: &Json) -> Option<Json> {
+    if input.is_string() {
+        return Some(atif_content_value(input));
+    }
+
+    let items = input.as_array()?;
+    items
+        .iter()
+        .rev()
+        .find_map(openai_responses_input_item_message)
+}
+
+fn openai_responses_input_item_message(item: &Json) -> Option<Json> {
+    let item_obj = item.as_object()?;
+    if item_obj.get("role").and_then(Json::as_str) != Some("user") {
+        return None;
+    }
+    let content = item_obj.get("content")?;
+    openai_responses_input_content_message(content)
+}
+
+fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
+    if content.is_string() {
+        return Some(atif_content_value(content));
+    }
+
+    if let Some(content_parts) = content.as_array() {
+        let mut text_parts = Vec::new();
+        collect_openai_responses_content_text(content_parts, "input_text", &mut text_parts);
+        if text_parts.is_empty() {
+            collect_openai_responses_content_text(content_parts, "text", &mut text_parts);
+        }
+        return match text_parts.as_slice() {
+            [] => is_atif_content_parts(content).then(|| content.clone()),
+            [text] => Some(Json::String(text.clone())),
+            _ => Some(Json::String(text_parts.join("\n"))),
+        };
+    }
+
+    None
 }
 
 /// Try to promote `tool_calls` from the raw LLM response into `AtifToolCall` entries.
