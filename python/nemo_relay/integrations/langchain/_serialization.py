@@ -118,8 +118,12 @@ class LangChainModelRequestCodec:
             relay_message: dict[str, Any] = {"role": role}
             if isinstance(msg, str):
                 relay_message["content"] = msg
-            else:
+            elif isinstance(msg, dict):
                 relay_message.update(msg)
+                if "content" not in relay_message:
+                    relay_message["content"] = relay_message.pop("text", "")
+            else:
+                raise ValueError(f"Unsupported LangChain message content type: {type(content)}")
 
             if name is not None:
                 relay_message["name"] = name
