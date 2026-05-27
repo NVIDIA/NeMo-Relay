@@ -117,7 +117,7 @@ path = "tests/integration/api_surface_tests.rs"
 [[test]]
 name = "atif_storage_integration"
 path = "tests/integration/atif_storage_tests.rs"
-required-features = ["atif-storage"]
+required-features = ["object-store"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }
