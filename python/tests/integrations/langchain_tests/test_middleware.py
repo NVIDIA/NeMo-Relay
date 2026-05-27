@@ -239,7 +239,7 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
 
     annotated.messages = [{"role": "user", "content": "hello from intercept"}]
     encoded = codec.encode(annotated, request)
-    round_tripped = payload_to_model_request(model_request, encoded.content)
+    round_tripped = payload_to_model_request(model_request, encoded)
 
     assert round_tripped.messages[0].content == "hello from intercept"
 

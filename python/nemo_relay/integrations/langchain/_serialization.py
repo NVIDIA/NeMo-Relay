@@ -46,7 +46,7 @@ class LangChainModelRequestCodec:
     """Translate LangChain ``ModelRequest`` payloads for request intercepts."""
 
     @classmethod
-    def _langchain_tool_calls_to_annotated(cls, tool_calls: Any) -> list[dict[str, Any]]:
+    def _langchain_tool_calls_to_annotated(cls, tool_calls: list[Any]) -> list[dict[str, Any]]:
         annotated_tool_calls = []
         for tool_call in tool_calls:
             args = tool_call["args"]
@@ -115,7 +115,7 @@ class LangChainModelRequestCodec:
 
         messages = []
         for msg in content:
-            relay_message = {"role": role}
+            relay_message: dict[str, Any] = {"role": role}
             if isinstance(msg, str):
                 relay_message["content"] = msg
             else:
@@ -124,10 +124,12 @@ class LangChainModelRequestCodec:
             if name is not None:
                 relay_message["name"] = name
 
+            # Using getattr as we are inferring subclasses of BaseMessage based upon the role
             if role == "assistant":
-                relay_message["tool_calls"] = cls._langchain_tool_calls_to_annotated(message.tool_calls)
+                tool_calls = getattr(message, "tool_calls", [])
+                relay_message["tool_calls"] = cls._langchain_tool_calls_to_annotated(tool_calls)
             elif role == "tool":
-                relay_message["tool_call_id"] = message.tool_call_id
+                relay_message["tool_call_id"] = getattr(message, "tool_call_id", "")
 
             messages.append(relay_message)
 
