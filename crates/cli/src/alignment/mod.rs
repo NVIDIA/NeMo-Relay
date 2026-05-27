@@ -18,6 +18,7 @@ use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentE
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
+pub(crate) mod hermes;
 
 const REQUEST_AFFINITY_KEY_MIN_CHARS: usize = 24;
 const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
@@ -25,12 +26,14 @@ const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
 #[derive(Debug, Clone)]
 pub(crate) enum SubagentSessionContext {
     Codex(codex::SubagentContext),
+    Hermes(hermes::SubagentContext),
 }
 
 impl SubagentSessionContext {
     pub(crate) fn parent_session_id(&self) -> &str {
         match self {
             Self::Codex(context) => &context.parent_session_id,
+            Self::Hermes(context) => &context.parent_session_id,
         }
     }
 }
@@ -105,12 +108,14 @@ impl PendingSubagentStart {
 #[derive(Debug, Default)]
 pub(crate) struct SessionAlignmentState {
     aliases: HashMap<String, SessionAlias>,
+    completed_aliases: HashMap<String, SessionAlias>,
     pending_subagents: HashMap<String, PendingSubagentStart>,
 }
 
 impl SessionAlignmentState {
     pub(crate) fn clear(&mut self) {
         self.aliases.clear();
+        self.completed_aliases.clear();
         self.pending_subagents.clear();
     }
 
@@ -154,13 +159,41 @@ impl SessionAlignmentState {
         if let Some(child_session_id) = finished_alias.as_ref() {
             // Remove aliases before terminal skip checks so a late child AgentEnd, or a child
             // TurnEnded used as a subagent completion signal, cannot leave stale reparenting state.
-            self.aliases.remove(child_session_id);
+            if let Some(alias) = self.aliases.remove(child_session_id) {
+                self.completed_aliases
+                    .insert(child_session_id.clone(), alias);
+            }
             self.pending_subagents.remove(child_session_id);
         }
         if matches!(&event, NormalizedEvent::AgentEnded(_)) {
             self.clear_for_ended_agent(&session_id);
         }
         event
+    }
+
+    pub(crate) fn align_explicit_subagent_end(&mut self, event: &mut NormalizedEvent) {
+        let NormalizedEvent::SubagentEnded(subagent_event) = event else {
+            return;
+        };
+        let Some(child_session_id) = hermes::child_session_id_for_subagent_event(subagent_event)
+        else {
+            return;
+        };
+        let Some(alias) = self
+            .aliases
+            .get(&child_session_id)
+            .or_else(|| self.completed_aliases.get(&child_session_id))
+            .cloned()
+        else {
+            return;
+        };
+        if subagent_event.session_id != alias.parent_session_id {
+            return;
+        }
+        subagent_event.subagent_id = alias.subagent_id.clone();
+        subagent_event.metadata = merge_metadata(subagent_event.metadata.clone(), alias.metadata());
+        self.aliases.remove(&child_session_id);
+        self.completed_aliases.remove(&child_session_id);
     }
 
     pub(crate) fn pending_for_parent(
@@ -187,6 +220,9 @@ impl SessionAlignmentState {
 
     pub(crate) fn clear_for_ended_agent(&mut self, session_id: &str) {
         self.aliases.retain(|child_session_id, alias| {
+            child_session_id != session_id && alias.parent_session_id != session_id
+        });
+        self.completed_aliases.retain(|child_session_id, alias| {
             child_session_id != session_id && alias.parent_session_id != session_id
         });
         self.pending_subagents.retain(|child_session_id, pending| {
@@ -299,6 +335,7 @@ pub(crate) async fn subagent_session_context(
     codex::subagent_context(event)
         .await
         .map(SubagentSessionContext::Codex)
+        .or_else(|| hermes::subagent_context(event).map(SubagentSessionContext::Hermes))
 }
 
 // Converts an AgentStarted event into a pending child-session record when a harness explicitly
@@ -335,6 +372,9 @@ pub(crate) fn augment_subagent_session_metadata(
         SubagentSessionContext::Codex(context) => {
             codex::augment_subagent_metadata(metadata, context)
         }
+        SubagentSessionContext::Hermes(context) => {
+            hermes::augment_subagent_metadata(metadata, context)
+        }
     }
 }
 
@@ -347,6 +387,7 @@ pub(crate) fn subagent_start_event(
 ) -> SubagentEvent {
     match context {
         SubagentSessionContext::Codex(context) => codex::subagent_start_event(event, context),
+        SubagentSessionContext::Hermes(context) => hermes::subagent_start_event(event, context),
     }
 }
 
@@ -360,14 +401,32 @@ pub(crate) fn alias_for_child_session(
         SubagentSessionContext::Codex(context) => {
             codex::alias_for_child_session(child_session_id, context)
         }
+        SubagentSessionContext::Hermes(context) => {
+            hermes::alias_for_child_session(child_session_id, context)
+        }
     }
+}
+
+pub(crate) fn explicit_subagent_alias(
+    event: &mut NormalizedEvent,
+) -> Option<(String, SessionAlias)> {
+    let NormalizedEvent::SubagentStarted(subagent_event) = event else {
+        return None;
+    };
+    let explicit = hermes::explicit_subagent_alias(subagent_event)?;
+    subagent_event.metadata =
+        merge_metadata(subagent_event.metadata.clone(), explicit.scope_metadata);
+    Some((explicit.child_session_id, explicit.alias))
 }
 
 // Recovers provider-specific metadata from a subagent scope and copies only the fields that should
 // follow LLM spans. Codex contributes thread identifiers today; other harnesses can add filters
 // here without changing session ownership code.
 pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
-    codex::llm_owner_metadata(scope_metadata)
+    merge_metadata(
+        codex::llm_owner_metadata(scope_metadata),
+        hermes::llm_owner_metadata(scope_metadata),
+    )
 }
 
 // Builds a provider-neutral affinity key from the user task text inside common LLM request
@@ -394,6 +453,8 @@ pub(crate) fn aliased_turn_subagent_id(event: &SessionEvent) -> Option<String> {
     json_string_at(
         &event.metadata,
         &[
+            &["hermes_child_subagent_id"][..],
+            &["subagent_id"][..],
             &["codex_subagent_session_id"][..],
             &["subagent_session_id"][..],
         ],

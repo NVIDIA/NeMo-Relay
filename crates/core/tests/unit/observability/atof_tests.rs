@@ -117,6 +117,8 @@ fn default_config_uses_cwd_append_and_timestamped_filename() {
 
     assert_eq!(config.output_directory, std::env::current_dir().unwrap());
     assert_eq!(config.mode, AtofExporterMode::Append);
+    assert_eq!(AtofExporterMode::Append.as_str(), "append");
+    assert_eq!(AtofExporterMode::Overwrite.as_str(), "overwrite");
     assert!(config.filename.starts_with("nemo-relay-events-"));
     assert!(config.filename.ends_with(".jsonl"));
     assert_eq!(
@@ -300,4 +302,26 @@ fn invalid_filename_errors_cleanly() {
     };
 
     assert!(matches!(error, AtofExporterError::OpenFile { .. }));
+}
+
+#[test]
+fn force_flush_reports_stored_subscriber_failure() {
+    let dir = temp_dir("atof-stored-failure");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+
+    exporter.state.lock().unwrap().last_error = Some("write failed".to_string());
+    let error = exporter.force_flush().unwrap_err();
+
+    match error {
+        AtofExporterError::StoredFailure { path, message } => {
+            assert_eq!(path, dir.join("events.jsonl"));
+            assert_eq!(message, "write failed");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
 }

@@ -59,6 +59,14 @@ function normalizePackagePath(value) {
   return value.replace(/^\.\//, '').replaceAll('\\', '/');
 }
 
+/** Extract the OpenClaw release version from supported single-version specs. */
+function normalizeOpenClawVersion(value, fieldName) {
+  assert(typeof value === 'string' && value.length > 0, `${fieldName} is required`);
+  const match = value.match(/^(?:\^|~|>=)?(\d+\.\d+\.\d+)$/);
+  assert(match, `${fieldName} must be a single OpenClaw release version`);
+  return match[1];
+}
+
 /** Recursively list files below a package-local directory. */
 function walkFiles(root, prefix = '') {
   const absoluteRoot = path.join(packageRoot, root, prefix);
@@ -134,6 +142,20 @@ assert(packageJson.openclaw?.compat?.pluginApi, 'openclaw.compat.pluginApi is re
 assert(packageJson.openclaw?.compat?.minGatewayVersion, 'openclaw.compat.minGatewayVersion is required');
 assert(packageJson.openclaw?.build?.openclawVersion, 'openclaw.build.openclawVersion is required');
 assert(packageJson.openclaw?.build?.pluginSdkVersion, 'openclaw.build.pluginSdkVersion is required');
+
+const expectedOpenClawVersion = normalizeOpenClawVersion(packageJson.peerDependencies?.openclaw, 'peerDependencies.openclaw');
+for (const [fieldName, value] of [
+  ['openclaw.compat.pluginApi', packageJson.openclaw.compat.pluginApi],
+  ['openclaw.compat.minGatewayVersion', packageJson.openclaw.compat.minGatewayVersion],
+  ['openclaw.build.openclawVersion', packageJson.openclaw.build.openclawVersion],
+  ['openclaw.build.pluginSdkVersion', packageJson.openclaw.build.pluginSdkVersion],
+]) {
+  const actualOpenClawVersion = normalizeOpenClawVersion(value, fieldName);
+  assert(
+    actualOpenClawVersion === expectedOpenClawVersion,
+    `${fieldName} must target peerDependencies.openclaw version ${expectedOpenClawVersion}`,
+  );
+}
 
 for (const file of packedFiles) {
   assert(!file.startsWith('test/'), `packed package includes test artifact ${file}`);

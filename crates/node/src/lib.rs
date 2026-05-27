@@ -10,7 +10,7 @@
 //!
 //! Tool calls accept an optional `toolCallId` and LLM calls accept an optional `modelName`
 //! for ATIF trajectory correlation. The `AtifExporter` class collects lifecycle events
-//! and exports ATIF v1.6 trajectories.
+//! and exports ATIF v1.7 trajectories.
 
 #![allow(dead_code)]
 

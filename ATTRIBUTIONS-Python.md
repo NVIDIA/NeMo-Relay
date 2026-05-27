@@ -2910,7 +2910,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## langchain (1.3.0)
+## langchain (1.3.2)
 
 ### Licenses
 License: `MIT`
@@ -3010,7 +3010,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langchain-nvidia-ai-endpoints (1.3.0)
+## langchain-nvidia-ai-endpoints (1.4.0)
 
 ### Licenses
 License: `MIT`
@@ -3070,7 +3070,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph (1.2.0)
+## langgraph (1.2.2)
 
 ### Licenses
 License: `MIT`

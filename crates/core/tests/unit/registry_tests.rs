@@ -69,6 +69,12 @@ fn test_empty_registry() {
 }
 
 #[test]
+fn test_default_registry_is_empty() {
+    let reg = SortedRegistry::<PriorityItem>::default();
+    assert!(reg.sorted_values().is_empty());
+}
+
+#[test]
 fn test_negative_priorities() {
     let mut reg = SortedRegistry::new();
     reg.register(item("pos", 10, "P")).unwrap();

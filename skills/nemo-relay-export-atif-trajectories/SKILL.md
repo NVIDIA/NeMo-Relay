@@ -21,7 +21,7 @@ live OTLP spans.
 
 ## Embedded ATIF Semantics
 
-- ATIF export translates NeMo Relay events into ATIF v1.6 trajectory data.
+- ATIF export translates NeMo Relay events into ATIF v1.7 trajectory data.
 - LLM start events become `user` steps; message content is extracted from the
   `LLMRequest.content` payload when possible.
 - LLM end events become `agent` steps with response content, model metadata,
@@ -34,6 +34,8 @@ live OTLP spans.
 - Mark events with data become `system` steps. Scope start/end events are
   structural and are not emitted as trajectory steps.
 - Scope nesting becomes ancestry metadata on exported steps.
+- Nested agent scopes become embedded `subagent_trajectories` with
+  `subagent_trajectory_ref` observations in the parent trajectory.
 - Event payloads become step input, step output, tool-call content, or
   observation content.
 - The exporter preserves collected event order and uses lifecycle pairing to
@@ -41,7 +43,7 @@ live OTLP spans.
 - Exporting does not clear the buffer. Use one exporter per run or call
   `clear()` between runs when concurrent agents share a process.
 - Before using a trajectory in evaluation, confirm `schema_version` is
-  `ATIF-v1.6`, agent metadata is correct, expected LLM/tool steps are present,
+  `ATIF-v1.7`, agent metadata is correct, expected LLM/tool steps are present,
   tool observations follow tool calls, and sensitive fields are absent.
 
 ## Important Semantics

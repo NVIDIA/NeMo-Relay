@@ -119,21 +119,23 @@ func TestOpenInferenceSubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	}
 	defer func() { _ = subscriber.Deregister(name) }()
 
-	handle, err := PushScope("openinference_scope", ScopeTypeAgent)
-	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
-	}
-	if err := EmitEvent(
-		"openinference_mark",
-		WithEventParent(handle),
-		WithEventData(json.RawMessage(`{"step":1}`)),
-		WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
-	); err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
-	}
-	if err := PopScope(handle); err != nil {
-		t.Fatalf("PopScope failed: %v", err)
-	}
+	runWithTestScopeStack(t, func() {
+		handle, err := PushScope("openinference_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		if err := EmitEvent(
+			"openinference_mark",
+			WithEventParent(handle),
+			WithEventData(json.RawMessage(`{"step":1}`)),
+			WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
+		); err != nil {
+			t.Fatalf("EmitEvent failed: %v", err)
+		}
+		if err := PopScope(handle); err != nil {
+			t.Fatalf("PopScope failed: %v", err)
+		}
+	})
 	if err := subscriber.ForceFlush(); err != nil {
 		t.Fatalf("ForceFlush failed: %v", err)
 	}
