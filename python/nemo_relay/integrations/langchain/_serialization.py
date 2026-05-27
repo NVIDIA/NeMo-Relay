@@ -86,32 +86,23 @@ def infer_codec_from_model(model: Any) -> LlmCodec | None:
     return None
 
 
-def _message_content(content: Any) -> Any:
-    return "" if content is None else content
-
-
-def _langchain_tool_calls_to_annotated(tool_calls: Any) -> list[dict[str, Any]] | None:
-    if not isinstance(tool_calls, list) or not tool_calls:
-        return None
-
+def _langchain_tool_calls_to_annotated(tool_calls: Any) -> list[dict[str, Any]]:
     annotated_tool_calls = []
     for tool_call in tool_calls:
-        if not isinstance(tool_call, dict):
-            continue
-        args = tool_call.get("args", {})
+        args = tool_call["args"]
         arguments = args if isinstance(args, str) else json.dumps(args)
         annotated_tool_calls.append(
             {
-                "id": str(tool_call.get("id") or ""),
+                "id": tool_call.get("id") or "",
                 "type": "function",
                 "function": {
-                    "name": str(tool_call.get("name") or ""),
+                    "name": tool_call["name"],
                     "arguments": arguments,
                 },
             }
         )
 
-    return annotated_tool_calls or None
+    return annotated_tool_calls
 
 
 def _annotated_tool_calls_to_langchain(tool_calls: Any) -> list[dict[str, Any]] | None:
@@ -152,36 +143,46 @@ def _annotated_tool_calls_to_langchain(tool_calls: Any) -> list[dict[str, Any]] 
     return langchain_tool_calls or None
 
 
-def _langchain_message_to_annotated(message: BaseMessage) -> dict[str, Any] | None:
-    content = _message_content(getattr(message, "content", ""))
-    name = getattr(message, "name", None)
-    role = {
-        "system": "system",
-        "human": "user",
-        "ai": "assistant",
-        "tool": "tool",
-    }.get(getattr(message, "type", ""))
+def _langchain_message_to_annotated(
+        message: BaseMessage) -> list[dict[str, Any]]:
+    content = message.content
+    if content is None:
+        content = []
+    elif isinstance(content, str):
+        content = [content]
 
-    if role is None:
-        return None
+    name = message.name
+    role = message.type
+    if role == "human":
+        role = "user"
+    elif role == "ai":
+        role = "assistant"
 
-    annotated: dict[str, Any] = {"role": role, "content": content}
-    if name is not None:
-        annotated["name"] = name
+    messages = []
+    for msg in content:
+        relay_message = {}
+        if isinstance(msg, str):
+            relay_message["content"] = msg
+        else:
+            relay_message.update(msg)
 
-    if role == "assistant":
-        tool_calls = _langchain_tool_calls_to_annotated(getattr(message, "tool_calls", None))
-        if tool_calls is not None:
-            annotated["tool_calls"] = tool_calls
-    elif role == "tool":
-        annotated["tool_call_id"] = str(getattr(message, "tool_call_id", ""))
+        relay_message["role"] = role
+        if name is not None:
+            relay_message["name"] = name
 
-    return annotated
+        if role == "assistant":
+            relay_message["tool_calls"] = _langchain_tool_calls_to_annotated(message.tool_calls)
+        elif role == "tool":
+            relay_message["tool_call_id"] = message.tool_call_id
+
+        messages.append(relay_message)
+
+    return messages
 
 
 def _annotated_message_to_langchain(message: dict[str, Any]) -> BaseMessage:
     role = message.get("role")
-    content = _message_content(message.get("content", ""))
+    content = message.get("content", "")
     name = message.get("name")
 
     if role == "system":
