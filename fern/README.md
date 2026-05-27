@@ -46,11 +46,12 @@ layout can be validated outside GitHub Actions.
 
 ## Publishing
 
-The Fern publish workflow uses the GitHub secret `DOCS_FERN_TOKEN` and passes it
-to the Fern CLI as `FERN_TOKEN`.
+The Fern publish workflow uses the `FERN_TOKEN` GitHub environment secret from
+the `fern` environment and passes it to the Fern CLI as `FERN_TOKEN`.
 
-- Pushes to `pull-request/**` that affect docs generate a Fern preview and add
-  the preview URL to the pull request.
+- Pushes to `pull-request/**` that affect docs generate a stable Fern preview
+  and add the preview URL to the pull request. When the pull request is merged,
+  the workflow deletes the matching preview deployment.
 - Pushes to `main` that affect docs regenerate API reference pages, sync
   `docs-website`, and publish the dev docs.
 - Raw SemVer tags such as `0.1.0`, `0.1.0-beta.1`, and `0.1.0-rc.1` create or
