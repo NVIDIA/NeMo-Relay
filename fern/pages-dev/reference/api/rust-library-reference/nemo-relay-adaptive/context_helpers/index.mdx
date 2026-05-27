@@ -5,11 +5,14 @@ slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers
 description: "Context helpers for reading scope metadata on the intercept hot path."
 position: 28
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 Context helpers for reading scope metadata on the intercept hot path.
 
-These functions read from the NeMo Relay scope stack (via [`current_scope_stack`]) to extract information needed by the LLM request intercept:
+These functions read from the NeMo Relay scope stack (via [`current_scope_stack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-current-scope-stack)) to extract information needed by the LLM request intercept:
 
 - [`extract_scope_path`](/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers/fn-extract-scope-path): collects function names from the scope stack for trie lookup
 - [`read_manual_latency_sensitivity`](/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers/fn-read-manual-latency-sensitivity): walks all scopes for manual `latency_sensitive` annotations

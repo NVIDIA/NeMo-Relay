@@ -4,6 +4,9 @@ sidebar-title: "NodeAccumulators"
 description: "Per-node accumulators for all metric types, keyed by call index."
 position: 2
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct NodeAccumulators &#123;\n    pub remaining_calls: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>, <a href=\"struct-runningstats\">RunningStats</a>&gt;,\n    pub interarrival_ms: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>, <a href=\"struct-runningstats\">RunningStats</a>&gt;,\n    pub output_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>, <a href=\"struct-runningstats\">RunningStats</a>&gt;,\n    pub sensitivity: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>, <a href=\"struct-runningstats\">RunningStats</a>&gt;,\n    pub all_remaining_calls: <a href=\"struct-runningstats\">RunningStats</a>,\n    pub all_interarrival_ms: <a href=\"struct-runningstats\">RunningStats</a>,\n    pub all_output_tokens: <a href=\"struct-runningstats\">RunningStats</a>,\n    pub all_sensitivity: <a href=\"struct-runningstats\">RunningStats</a>,\n&#125;"}} /></pre>

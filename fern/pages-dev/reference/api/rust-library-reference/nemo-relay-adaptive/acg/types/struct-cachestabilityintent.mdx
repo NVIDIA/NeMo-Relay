@@ -4,6 +4,9 @@ sidebar-title: "CacheStabilityIntent"
 description: "Cache stability analysis results for a prompt region."
 position: 2
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CacheStabilityIntent &#123;\n    pub stability_score: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    pub stable_prefix_end: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n    pub recommended_retention_tier: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-retentiontier\">RetentionTier</a>&gt;,\n    pub scope_label: <a href=\"enum-sharingscope\">SharingScope</a>,\n    pub confidence: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    pub evidence_count: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n&#125;"}} /></pre>

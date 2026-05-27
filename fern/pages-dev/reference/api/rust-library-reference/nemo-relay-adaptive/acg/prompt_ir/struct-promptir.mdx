@@ -5,6 +5,9 @@ slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/prompt_ir/s
 description: "Prompt Intermediate Representation - the full decomposed prompt."
 position: 2
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PromptIR &#123;\n    pub ir_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    pub blocks: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-promptblock\">PromptBlock</a>&gt;,\n    pub tool_schema_hashes: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-toolschemahash\">ToolSchemaHash</a>&gt;&gt;,\n    pub structured_output_schema_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub source_request_hash: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub created_at: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n&#125;"}} /></pre>

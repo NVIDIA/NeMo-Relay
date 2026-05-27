@@ -4,6 +4,9 @@ sidebar-title: "StabilityThresholds"
 description: "Thresholds controlling prompt-block stability classification."
 position: 2
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct StabilityThresholds &#123;\n    pub stable_threshold: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    pub semi_stable_threshold: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    pub min_observations_for_full_confidence: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n&#125;"}} /></pre>
@@ -64,11 +67,11 @@ Observation count required to reach full confidence.
 
 ### `impl EditorConfig for StabilityThresholds`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EditorConfig for <a href=\"struct-stabilitythresholds\">StabilityThresholds</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-stabilitythresholds\">StabilityThresholds</a>"}} /></pre>
 
 #### `editor_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn editor_schema() -&gt; &amp;'static EditorSchema"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
 
 ### `impl PartialEq for StabilityThresholds`
 

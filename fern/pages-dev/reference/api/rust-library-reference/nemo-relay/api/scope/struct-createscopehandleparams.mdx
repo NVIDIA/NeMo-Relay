@@ -4,6 +4,9 @@ sidebar-title: "CreateScopeHandleParams"
 description: "Builder parameters for `NemoRelayContextState::create_scope_handle`."
 position: 1
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CreateScopeHandleParams&lt;'a&gt; &#123;\n    pub name: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    pub parent_uuid: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>&gt;,\n    pub scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    pub attributes: <a href=\"struct-scopeattributes\">ScopeAttributes</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>

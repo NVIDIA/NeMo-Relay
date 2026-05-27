@@ -4,6 +4,9 @@ sidebar-title: "Message"
 description: "A single message in a conversation, tagged by role."
 position: 11
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Message &#123;\n    System &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    User &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Assistant &#123;\n        content: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-messagecontent\">MessageContent</a>&gt;,\n        tool_calls: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-toolcall\">ToolCall</a>&gt;&gt;,\n        name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Tool &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        tool_call_id: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n&#125;"}} /></pre>

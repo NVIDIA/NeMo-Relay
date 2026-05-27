@@ -4,6 +4,9 @@ sidebar-title: "ToolCallExecuteParams"
 description: "Builder parameters for `tool_call_execute`."
 position: 5
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ToolCallExecuteParams &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub args: <a href=\"../../json/type-json\">Json</a>,\n    pub func: <a href=\"../runtime/callbacks/type-toolexecutionnextfn\">ToolExecutionNextFn</a>,\n    pub parent: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../scope/struct-scopehandle\">ScopeHandle</a>&gt;,\n    pub attributes: <a href=\"struct-toolattributes\">ToolAttributes</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n&#125;"}} /></pre>

@@ -4,6 +4,9 @@ sidebar-title: "AcgComponentConfig"
 description: "Typed helper for the built-in Adaptive Cache Governor (ACG) component."
 position: 1
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AcgComponentConfig &#123;\n    pub provider: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub observation_window: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n    pub priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    pub stability_thresholds: <a href=\"../acg/stability/struct-stabilitythresholds\">StabilityThresholds</a>,\n&#125;"}} /></pre>
@@ -68,11 +71,11 @@ Stability classification thresholds used by the learner.
 
 ### `impl EditorConfig for AcgComponentConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EditorConfig for <a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>"}} /></pre>
 
 #### `editor_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn editor_schema() -&gt; &amp;'static EditorSchema"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
 
 ### `impl Serialize for AcgComponentConfig`
 

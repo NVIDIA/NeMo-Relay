@@ -17,7 +17,7 @@ You will place a managed NeMo Relay tool execution wrapper at the framework's st
 
 You need:
 
-- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](/integrate-into-frameworks/adding-scopes).
+- A framework request or run scope. If the framework does not create one yet, start with [Adding Scopes](/integrate-frameworks/adding-scopes).
 - A stable tool invocation boundary, such as a callback dispatcher, tool registry, or tool adapter.
 - A JSON-compatible projection of tool arguments and results.
 - A subscriber or exporter that can verify emitted tool events.
@@ -124,7 +124,7 @@ async fn run_framework_tool() -> anyhow::Result<serde_json::Value> {
 
 Use explicit lifecycle APIs only when the framework owns the real tool invocation internally and exposes only start and finish hooks. In that case, the integration must preserve the returned handle and call the matching end helper on every success and failure path.
 
-Use standalone request-intercept or conditional-execution helpers when the framework needs only partial middleware behavior before it continues down its own invocation path. See [Code Examples](/integrate-into-frameworks/code-examples#fallback-explicit-api-calls) for those fallback surfaces.
+Use standalone request-intercept or conditional-execution helpers when the framework needs only partial middleware behavior before it continues down its own invocation path. See [Code Examples](/integrate-frameworks/code-examples#fallback-explicit-api-calls) for those fallback surfaces.
 
 ## Validate the Tool Wrapper
 
@@ -149,6 +149,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Add model-provider integration with [Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls).
-- Add request ownership with [Adding Scopes](/integrate-into-frameworks/adding-scopes).
-- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) when framework objects need ID-based lookup.
+- Add model-provider integration with [Wrap LLM Calls](/integrate-frameworks/wrap-llm-calls).
+- Add request ownership with [Adding Scopes](/integrate-frameworks/adding-scopes).
+- Use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) when framework objects need ID-based lookup.

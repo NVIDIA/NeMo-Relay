@@ -4,6 +4,9 @@ sidebar-title: "TelemetryComponentConfig"
 description: "Typed helper for telemetry settings."
 position: 6
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct TelemetryComponentConfig &#123;\n    pub subscriber_name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub learners: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
@@ -60,11 +63,11 @@ Enabled learner identifiers.
 
 ### `impl EditorConfig for TelemetryComponentConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EditorConfig for <a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>"}} /></pre>
 
 #### `editor_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn editor_schema() -&gt; &amp;'static EditorSchema"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
 
 ### `impl Serialize for TelemetryComponentConfig`
 

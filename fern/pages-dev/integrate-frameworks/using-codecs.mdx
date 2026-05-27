@@ -18,7 +18,7 @@ You will choose typed value codecs for framework-facing wrappers so that:
 - Middleware and subscribers receive predictable serialized values
 - The framework callback still receives the application type it expects
 
-For provider-native LLM payload normalization, use [Provider Codecs](/integrate-into-frameworks/provider-codecs).
+For provider-native LLM payload normalization, use [Provider Codecs](/integrate-frameworks/provider-codecs).
 
 ## Before You Start
 
@@ -40,7 +40,7 @@ Typed value codecs are different from provider codecs:
 | Typed value codec | Converts application values to and from JSON. | Dataclasses, Pydantic models, TypeScript object shapes, custom framework types. |
 | Provider codec | Converts provider-specific LLM requests and responses to annotated NeMo Relay request or response data. | OpenAI Chat, OpenAI Responses, Anthropic Messages, custom provider payloads. |
 
-Use this page for typed value codecs. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when middleware needs normalized LLM messages, tools, model names, generation parameters, or provider response annotations.
+Use this page for typed value codecs. Use [Provider Codecs](/integrate-frameworks/provider-codecs) when middleware needs normalized LLM messages, tools, model names, generation parameters, or provider response annotations.
 
 ## How Typed Value Codecs Work
 
@@ -173,6 +173,6 @@ contract.
 
 Use these links to continue from this workflow into the next related task.
 
-- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when provider payloads need normalized request or response annotations.
-- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) when framework objects cannot pass through JSON payloads.
-- Use [Integrate into Frameworks Code Examples](/integrate-into-frameworks/code-examples) for explicit fallback APIs.
+- Use [Provider Codecs](/integrate-frameworks/provider-codecs) when provider payloads need normalized request or response annotations.
+- Use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) when framework objects cannot pass through JSON payloads.
+- Use [Integrate into Frameworks Code Examples](/integrate-frameworks/code-examples) for explicit fallback APIs.

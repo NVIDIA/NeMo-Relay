@@ -4,6 +4,9 @@ sidebar-title: "CacheTelemetryEvent"
 description: "Per-call cache telemetry event."
 position: 4
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CacheTelemetryEvent &#123;\n    pub request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    pub agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub cache_creation_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub total_prompt_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub hit_rate: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    pub miss_reason: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-cachemissreason\">CacheMissReason</a>&gt;,\n    pub miss_diagnosis: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-cachemissdiagnosis\">CacheMissDiagnosis</a>&gt;,\n    pub provider: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n&#125;"}} /></pre>
@@ -68,7 +71,7 @@ Computes hit rate from token counts. Returns `0.0` if `total_prompt_tokens` is z
 
 #### `from_usage`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_usage(\n    request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    provider: <a href=\"enum-cachetelemetryprovider\">CacheTelemetryProvider</a>,\n    usage: &amp;Usage,\n    timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n    request_facts: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-cacherequestfacts\">CacheRequestFacts</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_usage(\n    request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    provider: <a href=\"enum-cachetelemetryprovider\">CacheTelemetryProvider</a>,\n    usage: &amp;<a href=\"../../../nemo-relay/codec/response/struct-usage\">Usage</a>,\n    timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n    request_facts: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-cacherequestfacts\">CacheRequestFacts</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
 
 Builds a canonical cache telemetry event from normalized usage fields.
 

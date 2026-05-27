@@ -4,9 +4,12 @@ sidebar-title: "AdaptiveConfig"
 description: "Canonical config document for the adaptive plugin component."
 position: 2
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AdaptiveConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub agent_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub state: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-stateconfig\">StateConfig</a>&gt;,\n    pub telemetry: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>&gt;,\n    pub adaptive_hints: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-adaptivehintscomponentconfig\">AdaptiveHintsComponentConfig</a>&gt;,\n    pub tool_parallelism: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-toolparallelismcomponentconfig\">ToolParallelismComponentConfig</a>&gt;,\n    pub acg: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>&gt;,\n    pub policy: ConfigPolicy,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AdaptiveConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub agent_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub state: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-stateconfig\">StateConfig</a>&gt;,\n    pub telemetry: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>&gt;,\n    pub adaptive_hints: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-adaptivehintscomponentconfig\">AdaptiveHintsComponentConfig</a>&gt;,\n    pub tool_parallelism: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-toolparallelismcomponentconfig\">ToolParallelismComponentConfig</a>&gt;,\n    pub acg: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>&gt;,\n    pub policy: <a href=\"../../nemo-relay/plugin/struct-configpolicy\">ConfigPolicy</a>,\n&#125;"}} /></pre>
 
 Canonical config document for the adaptive plugin component.
 
@@ -84,11 +87,11 @@ Adaptive-local unsupported-config policy.
 
 ### `impl EditorConfig for AdaptiveConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EditorConfig for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
 
 #### `editor_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn editor_schema() -&gt; &amp;'static EditorSchema"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
 
 ### `impl Serialize for AdaptiveConfig`
 

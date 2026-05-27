@@ -5,6 +5,9 @@ slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/prompt_ir/s
 description: "A single addressable block within the Prompt IR."
 position: 1
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PromptBlock &#123;\n    pub span_id: <a href=\"struct-spanid\">SpanId</a>,\n    pub sequence_index: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub role: <a href=\"enum-promptrole\">PromptRole</a>,\n    pub content: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub content_type: <a href=\"enum-blockcontenttype\">BlockContentType</a>,\n    pub provenance: <a href=\"enum-provenancelabel\">ProvenanceLabel</a>,\n    pub sensitivity: <a href=\"enum-sensitivitylabel\">SensitivityLabel</a>,\n    pub token_metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-tokenizationmetadata\">TokenizationMetadata</a>&gt;,\n&#125;"}} /></pre>

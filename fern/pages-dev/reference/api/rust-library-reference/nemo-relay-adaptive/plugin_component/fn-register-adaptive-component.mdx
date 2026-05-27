@@ -5,9 +5,12 @@ slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/plugin_componen
 description: "Registers the adaptive component kind in the core plugin registry."
 position: 4
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_adaptive_component() -&gt; Result&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_adaptive_component() -&gt; <a href=\"../../nemo-relay/plugin/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Registers the adaptive component kind in the core plugin registry.
 
@@ -15,7 +18,7 @@ Call this during startup before validating or initializing plugin configs that c
 
 ## Returns
 
-A core plugin [`Result`] that is `Ok(())` when the adaptive component kind is available in the registry.
+A core plugin [`Result`](/reference/api/rust-library-reference/nemo-relay/plugin/type-result) that is `Ok(())` when the adaptive component kind is available in the registry.
 
 ## Errors
 

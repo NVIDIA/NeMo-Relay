@@ -5,15 +5,11 @@ instances:
 - url: nvidia-nemo-relay.docs.buildwithfern.com/nemo/relay
   custom-domain: docs.nvidia.com/nemo/relay
   multi-source: true
-
 title: NVIDIA NeMo Relay
-
 global-theme: nvidia
-
 experimental:
   mdx-components:
   - ./components
-
 products:
 - display-name: NeMo Relay
   slug: /

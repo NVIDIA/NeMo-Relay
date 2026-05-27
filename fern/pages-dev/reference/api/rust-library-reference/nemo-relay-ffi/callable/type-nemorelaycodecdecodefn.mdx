@@ -4,6 +4,9 @@ sidebar-title: "NemoRelayCodecDecodeFn"
 description: "Nullable version of `NemoRelayCodecDecodeCb` for use as an optional parameter in FFI execute functions. Pass null to indicate no codec."
 position: 20
 ---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayCodecDecodeFn = <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>, request: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>&gt;;"}} /></pre>
