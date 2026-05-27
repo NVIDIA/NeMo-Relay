@@ -10,6 +10,9 @@ on:
       - 'pull-request/**'
     tags:
       - '*'
+  pull_request:
+    types:
+      - closed
   workflow_dispatch:
     inputs:
       tag:
@@ -24,7 +27,7 @@ concurrency:
 jobs:
   changed-files:
     name: Detect docs changes
-    if: ${{ github.ref_type != 'tag' }}
+    if: ${{ github.ref_type != 'tag' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -147,7 +150,9 @@ jobs:
           FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
         run: |
           set -euo pipefail
-          if OUTPUT="$("$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs --preview 2>&1)"; then
+          pr_number="${GITHUB_REF_NAME#pull-request/}"
+          preview_id="pull-request-${pr_number}"
+          if OUTPUT="$("$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs --preview --id "$preview_id" 2>&1)"; then
             fern_exit=0
           else
             fern_exit=$?
@@ -174,6 +179,56 @@ jobs:
             --create-if-none \
             --body "Fern docs preview: ${{ steps.preview.outputs.url }}/dev"
 
+  cleanup-preview-docs:
+    name: Clean up docs preview
+    if: >-
+      ${{
+        github.event_name == 'pull_request'
+        && github.event.action == 'closed'
+        && github.event.pull_request.merged == true
+      }}
+    runs-on: ubuntu-latest
+    environment: fern
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      UV_PYTHON_DOWNLOADS: never
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: source-checkout
+          fetch-depth: 1
+
+      - name: Load CI tool versions
+        id: ci-config
+        uses: ./source-checkout/.github/actions/load-ci-tool-versions
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_version }}
+
+      - name: Install Fern CLI
+        working-directory: source-checkout
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+
+      - name: Delete preview deployment
+        working-directory: source-checkout/fern
+        env:
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          preview_id="pull-request-${PR_NUMBER}"
+          echo "Deleting Fern docs preview: ${preview_id}"
+          "$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" docs preview delete --id "$preview_id" \
+            || echo "Fern preview deletion returned non-zero; it may already be deleted."
+
   publish-dev-docs:
     name: Publish dev docs
     needs: changed-files
@@ -186,6 +241,7 @@ jobs:
         )
       }}
     runs-on: ubuntu-latest
+    environment: fern
     timeout-minutes: 60
     permissions:
       contents: write
@@ -253,7 +309,7 @@ jobs:
         working-directory: source-checkout
         env:
           NEMO_RELAY_DOCS_DEPS_READY: "1"
-          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
         run: just docs
 
       - name: Checkout docs website branch
@@ -302,7 +358,7 @@ jobs:
         if: ${{ steps.changes.outputs.has_changes == 'true' }}
         working-directory: docs-checkout/fern
         env:
-          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
         run: |
           "$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs
 
@@ -314,6 +370,7 @@ jobs:
         || (github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.tag != null)
       }}
     runs-on: ubuntu-latest
+    environment: fern
     timeout-minutes: 30
     permissions:
       contents: write
@@ -403,6 +460,6 @@ jobs:
       - name: Publish docs
         working-directory: docs-checkout/fern
         env:
-          FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          FERN_TOKEN: ${{ secrets.FERN_TOKEN }}
         run: |
           "$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs

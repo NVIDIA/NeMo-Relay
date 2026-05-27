@@ -254,8 +254,8 @@ The workflow boundary is split intentionally:
 
 - The language-specific reusable workflows produce publishable package artifacts
   after their tests pass.
-- [`.github/workflows/ci_docs.yml`](.github/workflows/ci_docs.yml) validates the
-  Fern documentation.
+- [`.github/workflows/fern-docs.yml`](.github/workflows/fern-docs.yml) validates
+  and publishes Fern documentation independently from package CI.
 - [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) owns all crates.io,
   PyPI, and npm publication decisions and credentials.
 - This layout also satisfies the official `pypa/gh-action-pypi-publish`

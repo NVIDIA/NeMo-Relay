@@ -138,22 +138,6 @@ jobs:
       base: ${{ needs.ci_changes.outputs.base }}
       default_branch: ${{ github.event.repository.default_branch }}
 
-  ci_docs:
-    name: Documentation
-    needs: [prepare, ci_changes, ci_check]
-    uses: ./.github/workflows/ci_docs.yml
-    if: >-
-      ${{
-        !cancelled()
-        && needs.ci_changes.result == 'success'
-        && needs.ci_check.result == 'success'
-        && needs.ci_changes.outputs.run_docs == 'true'
-      }}
-    permissions:
-      contents: read
-    secrets:
-      DOCS_FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
-
   ci_rust:
     name: Rust
     needs: [prepare, ci_changes, ci_check]
@@ -226,7 +210,6 @@ jobs:
       - prepare
       - ci_changes
       - ci_check
-      - ci_docs
       - ci_rust
       - ci_go
       - ci_node
@@ -241,7 +224,6 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.ci_changes.result }}
           CHECK_RESULT: ${{ needs.ci_check.result }}
-          DOCS_RESULT: ${{ needs.ci_docs.result }}
           RUST_RESULT: ${{ needs.ci_rust.result }}
           GO_RESULT: ${{ needs.ci_go.result }}
           NODE_RESULT: ${{ needs.ci_node.result }}
@@ -272,8 +254,6 @@ jobs:
 
           require_success "Changes" "$CHANGES_RESULT"
           require_success "Check" "$CHECK_RESULT"
-
-          allow_success_or_skipped "Documentation" "$DOCS_RESULT"
 
           if [[ "$publish_packages" == "true" ]]; then
             require_success "Rust" "$RUST_RESULT"
