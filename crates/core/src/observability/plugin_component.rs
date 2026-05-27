@@ -958,7 +958,7 @@ fn write_atif(write: &PendingAtifWrite, storage: Option<&AtifRemoteStorage>) -> 
             std::fs::write(path, &write.payload)
         }
         AtifWriteDestination::Remote { filename } => {
-            #[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+            #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
             {
                 let storage = storage.ok_or_else(|| {
                     std::io::Error::other(
@@ -967,7 +967,7 @@ fn write_atif(write: &PendingAtifWrite, storage: Option<&AtifRemoteStorage>) -> 
                 })?;
                 storage.put(filename, &write.payload)
             }
-            #[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+            #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
             {
                 let _ = (storage, filename);
                 Err(std::io::Error::other(
