@@ -177,7 +177,7 @@ jobs:
           gh pr comment "https://github.com/${{ github.repository }}/pull/${pr_number}" \
             --edit-last \
             --create-if-none \
-            --body "Fern docs preview: ${{ steps.preview.outputs.url }}/dev"
+            --body "Fern docs preview: ${{ steps.preview.outputs.url }}"
 
   cleanup-preview-docs:
     name: Clean up docs preview
