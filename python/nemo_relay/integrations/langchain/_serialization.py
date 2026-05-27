@@ -213,19 +213,16 @@ class LangChainModelRequestCodec:
         tool_choice = payload.get("tool_choice")
         extra = {key: value for key, value in payload.items() if key not in _LANGCHAIN_MODELED_REQUEST_KEYS}
 
-        annotated = AnnotatedLLMRequest(
+        return AnnotatedLLMRequest(
             messages,
             model=model if isinstance(model, str) else None,
             tools=tools if isinstance(tools, list) else None,
             tool_choice=tool_choice if isinstance(tool_choice, str | dict) else None,
             extra=extra or None,
         )
-        print(f"Decoded LangChain request into annotated form: {annotated} : {annotated is None}")
-        return annotated
 
     def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
         """Encode annotated request edits back into a LangChain-shaped payload."""
-        print(f"Encoding annotated request back to LangChain form: {annotated} : {annotated is None}")
         payload = dict(original.content)
         payload.update(annotated.extra)
         payload["messages"] = messages_to_dict(
