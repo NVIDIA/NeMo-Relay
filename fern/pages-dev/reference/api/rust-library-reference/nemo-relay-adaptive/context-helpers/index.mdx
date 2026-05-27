@@ -1,0 +1,40 @@
+---
+title: "Module context_helpers"
+sidebar-title: "context_helpers"
+description: "Context helpers for reading scope metadata on the intercept hot path."
+position: 28
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Context helpers for reading scope metadata on the intercept hot path.
+
+These functions read from the NeMo Relay scope stack (via [`current_scope_stack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope-stack/fn-current-scope-stack)) to extract information needed by the LLM request intercept:
+
+- [`extract_scope_path`](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-extract-scope-path): collects function names from the scope stack for trie lookup
+- [`read_manual_latency_sensitivity`](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-read-manual-latency-sensitivity): walks all scopes for manual `latency_sensitive` annotations
+- [`resolve_agent_id`](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-resolve-agent-id): returns the first Agent scope name from the scope stack
+
+All functions are safe to call from sync contexts (intercepts are sync closures). They acquire a read lock on the scope stack, which is always fast.
+
+## Metadata Convention
+
+Manual latency sensitivity is stored in scope metadata under the JSON path `/nemo_relay_adaptive/latency_sensitivity` as a positive integer.
+
+## Structs
+
+- [SharedParentScopeIdentity](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/struct-sharedparentscopeidentity): Session-local scope identity used to coordinate warm-first cohorts.
+
+## Constants
+
+- [LATENCY_SENSITIVITY_POINTER](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/constant-latency-sensitivity-pointer): Metadata key path for manual latency sensitivity annotation.
+
+## Functions
+
+- [extract_scope_path](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-extract-scope-path): Extracts the current function call path from the NeMo Relay scope stack.
+- [read_manual_latency_sensitivity](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-read-manual-latency-sensitivity): Reads the maximum manual latency sensitivity from all scopes in the current scope stack.
+- [resolve_agent_id](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-resolve-agent-id): Resolves the agent ID from the current scope stack.
+- [resolve_shared_parent_scope_identity](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-resolve-shared-parent-scope-identity): Resolves the session-local identity used by warm-first cohort coordination.
+- [set_latency_sensitivity](/reference/api/rust-library-reference/nemo-relay-adaptive/context-helpers/fn-set-latency-sensitivity): Sets latency sensitivity on the current (top) scope using max-merge semantics.

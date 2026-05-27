@@ -1,0 +1,61 @@
+---
+title: "Struct Anthropic Cache Plugin"
+sidebar-title: "AnthropicCachePlugin"
+description: "Anthropic-specific provider plugin for cache_control breakpoint injection."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct AnthropicCachePlugin { /* private fields */ }
+```
+
+Anthropic-specific provider plugin for cache_control breakpoint injection.
+
+Translates `CacheStability` and `Retention` intents into Anthropic's explicit `cache_control` annotations. Other intent types are marked `Ignored` / `NotRelevant`.
+
+## Construction
+
+```rust
+let registry = CapabilityRegistry::with_defaults();
+let plugin = AnthropicCachePlugin::new(&registry);
+```
+
+## Implementations
+
+### `impl AnthropicCachePlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-anthropiccacheplugin\">AnthropicCachePlugin</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(registry: &amp;<a href=\"../capability/struct-capabilityregistry\">CapabilityRegistry</a>) -&gt; Self"}} /></pre>
+
+Create a new Anthropic cache plugin backed by the given capability registry.
+
+The registry is cloned into an `Arc` for shared ownership.
+
+## Trait Implementations
+
+### `impl ProviderPlugin for AnthropicCachePlugin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../plugin/trait-providerplugin\">ProviderPlugin</a> for <a href=\"struct-anthropiccacheplugin\">AnthropicCachePlugin</a>"}} /></pre>
+
+#### `plugin_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">plugin_id</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `plugin_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">plugin_name</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `translate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">translate</a>(&amp;self, input: &amp;<a href=\"../plugin/struct-plugininput\">PluginInput</a>&lt;'_&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../plugin/struct-pluginoutput\">PluginOutput</a>&gt;"}} /></pre>
+
+#### `capabilities`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../plugin/trait-providerplugin\">capabilities</a>(&amp;self) -&gt; <a href=\"../capability/struct-backendcapabilities\">BackendCapabilities</a>"}} /></pre>

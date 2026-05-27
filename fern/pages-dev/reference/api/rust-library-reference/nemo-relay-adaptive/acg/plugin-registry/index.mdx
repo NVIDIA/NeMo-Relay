@@ -1,0 +1,20 @@
+---
+title: "Module plugin_registry"
+sidebar-title: "plugin_registry"
+description: "Plugin registry for storing and retrieving provider plugins."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Plugin registry for storing and retrieving provider plugins.
+
+[`PluginRegistry`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin-registry/struct-pluginregistry) is an instance-scoped (not global static) store for [`ProviderPlugin`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/trait-providerplugin) trait objects. Plugins are stored as `Arc<dyn ProviderPlugin>` keyed by plugin ID.
+
+Instance-scoped design is more testable and can be promoted to a static later if needed.
+
+## Structs
+
+- [PluginRegistry](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin-registry/struct-pluginregistry): Registry for storing and retrieving provider plugins.

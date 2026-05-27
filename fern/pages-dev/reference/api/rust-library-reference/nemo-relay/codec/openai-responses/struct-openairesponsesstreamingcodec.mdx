@@ -1,0 +1,62 @@
+---
+title: "Struct OpenAI Responses Streaming Codec"
+sidebar-title: "OpenAIResponsesStreamingCodec"
+description: "Streaming counterpart to `OpenAIResponsesCodec`."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct OpenAIResponsesStreamingCodec { /* private fields */ }
+```
+
+Streaming counterpart to [`OpenAIResponsesCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai-responses/struct-openairesponsescodec).
+
+Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/openai-responses/struct-openairesponsescodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
+
+## Strategy
+
+The Responses API is a relatively forgiving streaming target because every event carries either the full `response` snapshot (`response.created`, `response.in_progress`, `response.completed`, `response.failed`, `response.incomplete`) or the final-state output item (`response.output_item.done`). We:
+
+1. Track the latest `response` snapshot - terminal events (`completed`/`failed`/`incomplete`) typically carry the complete state including `output`, so we prefer those when present.
+2. Track output items by `output_index` - `output_item.done` events deliver the final per-item state, used as a fallback when the terminal `response.output` is missing or empty.
+3. Per-token `output_text.delta` and `function_call_arguments.delta` events are ignored because their content is redelivered in the matching `output_item.done` event. Skipping deltas keeps the codec resilient to schema additions and avoids double-accumulation.
+
+Internal state lives behind `Arc<Mutex<...>>` so the `&self`-produced collector and finalizer closures share access. Each instance is single-use because [`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn) consumes the finalize step.
+
+## Implementations
+
+### `impl OpenAIResponsesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a fresh streaming codec with empty accumulator state.
+
+## Trait Implementations
+
+### `impl Default for OpenAIResponsesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl StreamingCodec for OpenAIResponsesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../streaming/trait-streamingcodec\">StreamingCodec</a> for <a href=\"struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>
+
+#### `collector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">collector</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
+
+#### `finalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../streaming/trait-streamingcodec\">finalizer</a>(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>

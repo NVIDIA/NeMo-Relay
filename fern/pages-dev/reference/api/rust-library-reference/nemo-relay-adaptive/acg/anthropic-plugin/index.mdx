@@ -1,0 +1,31 @@
+---
+title: "Module anthropic_plugin"
+sidebar-title: "anthropic_plugin"
+description: "Anthropic cache plugin for the Adaptive Cache Governor (ACG) system."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Anthropic cache plugin for the Adaptive Cache Governor (ACG) system.
+
+Translates ACG stability classifications into Anthropic-specific `cache_control` breakpoints on content blocks. Implements the [`ProviderPlugin`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/trait-providerplugin) trait with:
+
+- **Breakpoint budget allocation**: Up to 4 breakpoints per request.
+- **Token minimum enforcement**: Per-model from [`CapabilityRegistry`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-capabilityregistry).
+- **TTL mapping**: `RetentionTier` to Anthropic TTL (5m default or 1h extended).
+- **Tool schema canonicalization**: RFC 8785 via [`canonicalize_value`].
+- **System string-to-array conversion**: Handles both string and array-of-blocks format.
+
+## Threat mitigations
+
+- T-08-01: Only injects `cache_control` annotations with fixed structure `{"type": "ephemeral"}`.
+- T-08-02: `scope_label` is logged in detail but does NOT change cache visibility.
+- T-08-03: All JSON access uses Option-returning methods; errors propagate via `Result`.
+- T-08-05: TTL is hardcoded to exactly 2 behaviors (omit or `"1h"`).
+
+## Structs
+
+- [AnthropicCachePlugin](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/anthropic-plugin/struct-anthropiccacheplugin): Anthropic-specific provider plugin for cache_control breakpoint injection.

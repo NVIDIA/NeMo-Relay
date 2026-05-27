@@ -1,0 +1,28 @@
+---
+title: "Function propagate_scope_to_thread"
+sidebar-title: "propagate_scope_to_thread"
+description: "Capture the current scope stack handle for use in another thread."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn propagate_scope_to_thread() -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"type-scopestackhandle\">ScopeStackHandle</a>&gt;"}} /></pre>
+
+Capture the current scope stack handle for use in another thread.
+
+This returns the handle currently visible to the caller so it can be passed into [`set_thread_scope_stack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope-stack/fn-set-thread-scope-stack) elsewhere.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the active [`ScopeStackHandle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope-stack/type-scopestackhandle).
+
+## Errors
+
+Returns an error when the current context does not yet own an active scope stack.
+
+## Notes
+
+The returned handle is shared; it does not clone the underlying stack.

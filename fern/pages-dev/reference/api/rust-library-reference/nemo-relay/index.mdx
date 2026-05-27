@@ -15,7 +15,7 @@ The core runtime library for the NeMo Relay multi-language agent framework. This
 
 ### Architecture
 
-The runtime is organized around a **global context** ([`api::runtime::NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate)) that holds all registered middleware (guardrails, intercepts, subscribers) and a **scope stack** ([`api::runtime::ScopeStack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-scopestack)) that tracks the hierarchical execution context via task-local or thread-local storage.
+The runtime is organized around a **global context** ([`api::runtime::NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate)) that holds all registered middleware (guardrails, intercepts, subscribers) and a **scope stack** ([`api::runtime::ScopeStack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope-stack/struct-scopestack)) that tracks the hierarchical execution context via task-local or thread-local storage.
 
 ### Primary Entry Points
 
@@ -51,7 +51,7 @@ All middleware is priority-ordered (ascending) and registered by name for easy a
 
 - [api](/reference/api/rust-library-reference/nemo-relay/api): Public API for the NeMo Relay runtime.
 - [codec](/reference/api/rust-library-reference/nemo-relay/codec): LLM codec types, traits, and built-in implementations.
-- [config_editor](/reference/api/rust-library-reference/nemo-relay/config_editor): Typed configuration editor metadata.
+- [config_editor](/reference/api/rust-library-reference/nemo-relay/config-editor): Typed configuration editor metadata.
 - [error](/reference/api/rust-library-reference/nemo-relay/error): Error types for the NeMo Relay runtime.
 - [json](/reference/api/rust-library-reference/nemo-relay/json): JSON utilities for the NeMo Relay runtime.
 - [observability](/reference/api/rust-library-reference/nemo-relay/observability): Optional observability integrations for NeMo Relay Core.
@@ -61,4 +61,4 @@ All middleware is priority-ordered (ascending) and registered by name for easy a
 
 ## Macros
 
-- [editor_config](/reference/api/rust-library-reference/nemo-relay/macro-editor-config): Implements [`EditorConfig`](/reference/api/rust-library-reference/nemo-relay/config_editor/trait-editorconfig) for a configuration type.
+- [editor_config](/reference/api/rust-library-reference/nemo-relay/macro-editor-config): Implements [`EditorConfig`](/reference/api/rust-library-reference/nemo-relay/config-editor/trait-editorconfig) for a configuration type.

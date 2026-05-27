@@ -1,0 +1,121 @@
+---
+title: "Enum Editor Field Kind"
+sidebar-title: "EditorFieldKind"
+description: "Editor control shape for one configuration field."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub enum EditorFieldKind {
+    Boolean,
+    String,
+    Integer,
+    Float,
+    Enum,
+    StringMap,
+    Json,
+    Section,
+}
+```
+
+Editor control shape for one configuration field.
+
+## Variants
+
+### `Boolean`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Boolean"}} /></pre>
+
+Boolean toggle.
+
+### `String`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "String"}} /></pre>
+
+String-like value, including paths.
+
+### `Integer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Integer"}} /></pre>
+
+Integer value.
+
+### `Float`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Float"}} /></pre>
+
+Floating-point number value.
+
+### `Enum`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Enum"}} /></pre>
+
+String enum with a fixed set of allowed values.
+
+### `StringMap`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "StringMap"}} /></pre>
+
+Object with string keys and string values.
+
+### `Json`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Json"}} /></pre>
+
+Arbitrary JSON value.
+
+### `Section`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Section"}} /></pre>
+
+Nested configuration section.
+
+## Trait Implementations
+
+### `impl Clone for EditorFieldKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for EditorFieldKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl PartialEq for EditorFieldKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-editorfieldkind\">EditorFieldKind</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for EditorFieldKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>
+
+### `impl Eq for EditorFieldKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>
+
+### `impl StructuralPartialEq for EditorFieldKind`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-editorfieldkind\">EditorFieldKind</a>"}} /></pre>

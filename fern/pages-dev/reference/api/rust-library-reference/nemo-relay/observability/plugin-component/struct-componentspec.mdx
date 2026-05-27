@@ -1,0 +1,70 @@
+---
+title: "Struct Component Spec"
+sidebar-title: "ComponentSpec"
+description: "Top-level observability component wrapper."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ComponentSpec &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub config: <a href=\"struct-observabilityconfig\">ObservabilityConfig</a>,\n&#125;"}} /></pre>
+
+Top-level observability component wrapper.
+
+Use this wrapper when constructing a [`PluginComponentSpec`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-plugincomponentspec) from Rust instead of hand-writing the generic plugin component shape. The component kind is always [`OBSERVABILITY_PLUGIN_KIND`](/reference/api/rust-library-reference/nemo-relay/observability/plugin-component/constant-observability-plugin-kind).
+
+## Fields
+
+### `enabled: bool`
+
+Whether the observability component should be activated.
+
+### `config: ObservabilityConfig`
+
+Observability config for this top-level component.
+
+## Implementations
+
+### `impl ComponentSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-componentspec\">ComponentSpec</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(config: <a href=\"struct-observabilityconfig\">ObservabilityConfig</a>) -&gt; Self"}} /></pre>
+
+Creates an enabled observability component spec.
+
+The returned component can be converted into the generic plugin config entry with `PluginComponentSpec::from(...)`.
+
+## Trait Implementations
+
+### `impl Clone for ComponentSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-componentspec\">ComponentSpec</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-componentspec\">ComponentSpec</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ComponentSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-componentspec\">ComponentSpec</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl From<ComponentSpec> for PluginComponentSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"struct-componentspec\">ComponentSpec</a>&gt; for <a href=\"../../plugin/struct-plugincomponentspec\">PluginComponentSpec</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"struct-componentspec\">ComponentSpec</a>) -&gt; Self"}} /></pre>

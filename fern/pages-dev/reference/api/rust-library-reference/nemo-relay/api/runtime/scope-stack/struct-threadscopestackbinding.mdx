@@ -1,0 +1,32 @@
+---
+title: "Struct Thread Scope Stack Binding"
+sidebar-title: "ThreadScopeStackBinding"
+description: "Captured thread-local scope stack binding."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct ThreadScopeStackBinding { /* private fields */ }
+```
+
+Captured thread-local scope stack binding.
+
+This preserves both the visible scope stack handle and whether it was explicitly installed on the current thread.
+
+## Trait Implementations
+
+### `impl Clone for ThreadScopeStackBinding`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-threadscopestackbinding\">ThreadScopeStackBinding</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-threadscopestackbinding\">ThreadScopeStackBinding</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

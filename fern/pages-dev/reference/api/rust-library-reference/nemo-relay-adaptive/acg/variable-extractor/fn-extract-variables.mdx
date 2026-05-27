@@ -1,0 +1,26 @@
+---
+title: "Function extract_variables"
+sidebar-title: "extract_variables"
+description: "Extract variables from one content string."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn extract_variables(\n    content: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    span_id: &amp;<a href=\"../prompt-ir/struct-spanid\">SpanId</a>,\n    patterns: &amp;[<a href=\"struct-variablepattern\">VariablePattern</a>],\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-extractionresult\">ExtractionResult</a>&gt;"}} /></pre>
+
+Extract variables from one content string.
+
+Matching patterns are applied greedily by start position, preferring longer matches when multiple patterns overlap.
+
+## Parameters
+
+- `content`: Block content to analyze.
+- `span_id`: Span identifier associated with the content.
+- `patterns`: Variable patterns to evaluate.
+
+## Returns
+
+`Some(ExtractionResult)` when at least one variable is found and `None` otherwise.
