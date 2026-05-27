@@ -83,7 +83,7 @@ class NemoRelayMiddleware(AgentMiddleware):
         """Wrap a sync LangChain agent model call in NeMo Relay LLM execution."""
         (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
 
-        async def _call(req: Any) -> Any:
+        async def _call(req: nemo_relay.LLMRequest) -> Any:
             response = handler(payload_to_model_request(request, req))
             return model_response_to_json(response, object_codec)
 
@@ -106,8 +106,7 @@ class NemoRelayMiddleware(AgentMiddleware):
         """Wrap an async LangChain agent model call in NeMo Relay LLM execution."""
         (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
 
-        async def _call(req: Any) -> Any:
-            print(f"type(req): {type(req)}")
+        async def _call(req: nemo_relay.LLMRequest) -> Any:
             response = await handler(payload_to_model_request(request, req))
             return model_response_to_json(response, object_codec)
 
