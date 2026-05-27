@@ -248,15 +248,26 @@ impl Default for AtifSectionConfig {
 pub enum AtifStorageConfig {
     /// S3-compatible object storage.
     ///
-    /// Credentials, region, and endpoint URL are read from the standard AWS
-    /// environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-    /// `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_ENDPOINT_URL`,
-    /// `AWS_ALLOW_HTTP`). These settings are intentionally omitted from this
-    /// configuration so secrets cannot end up in checked-in config files.
+    /// Non-secret connection settings (`region`, `endpoint_url`, `allow_http`)
+    /// and the static `access_key_id` may be set directly. The secret
+    /// credential fields (`secret_access_key_var`, `session_token_var`) must
+    /// reference the *name* of an environment variable that holds the secret,
+    /// so multiple S3 destinations can coexist in one config without writing
+    /// secrets into checked-in files. Any field left unset falls back to the
+    /// matching `AWS_*` environment variable (`AWS_ACCESS_KEY_ID`,
+    /// `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`,
+    /// `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`).
     S3(S3StorageConfig),
 }
 
 /// S3-compatible storage settings for ATIF trajectory upload.
+///
+/// Every connection field is optional. Unset fields fall back to the matching
+/// `AWS_*` environment variable, preserving the env-driven workflow while
+/// letting one config file fully describe a destination when needed. Secret
+/// credentials are referenced by env var *name* (the `_var` suffix), so
+/// multiple destinations can each carry their own credentials without leaking
+/// secret material into the config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct S3StorageConfig {
@@ -266,6 +277,29 @@ pub struct S3StorageConfig {
     /// inserted automatically when one is missing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_prefix: Option<String>,
+    /// Static AWS access key ID. When unset, `AWS_ACCESS_KEY_ID` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_key_id: Option<String>,
+    /// Name of the environment variable that holds the static secret access
+    /// key. Validated to be non-empty and present at plugin initialization
+    /// time. When unset, `AWS_SECRET_ACCESS_KEY` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_access_key_var: Option<String>,
+    /// Name of the environment variable that holds the optional STS session
+    /// token. Validated to be non-empty and present at plugin initialization
+    /// time. When unset, `AWS_SESSION_TOKEN` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_token_var: Option<String>,
+    /// AWS region for the bucket. When unset, `AWS_REGION` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// Endpoint URL override for S3-compatible storage (for example, MinIO).
+    /// When unset, `AWS_ENDPOINT_URL` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_url: Option<String>,
+    /// Allow plain HTTP endpoints. When unset, `AWS_ALLOW_HTTP` is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_http: Option<bool>,
 }
 
 /// Shared OTLP exporter config for OpenTelemetry and OpenInference.
@@ -601,14 +635,14 @@ fn register_atif_dispatcher(
     Ok(())
 }
 
-#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
 fn build_atif_storage(config: &AtifStorageConfig) -> PluginResult<Arc<AtifRemoteStorage>> {
     AtifRemoteStorage::from_config(config)
         .map(Arc::new)
         .map_err(observability_registration_error)
 }
 
-#[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
 fn build_atif_storage(_config: &AtifStorageConfig) -> PluginResult<Arc<AtifRemoteStorage>> {
     Err(PluginError::InvalidConfig(
         "ATIF storage support is not enabled in this build".to_string(),
@@ -949,7 +983,10 @@ fn prepare_atif_file(
     })
 }
 
-fn write_atif(write: &PendingAtifWrite, storage: Option<&AtifRemoteStorage>) -> std::io::Result<()> {
+fn write_atif(
+    write: &PendingAtifWrite,
+    storage: Option<&AtifRemoteStorage>,
+) -> std::io::Result<()> {
     match &write.destination {
         AtifWriteDestination::Local(path) => {
             if let Some(parent) = path.parent() {
@@ -1195,7 +1232,7 @@ fn validate_observability_plugin_config(
                 "ATIF file export is not supported on WebAssembly".to_string(),
             );
         }
-        #[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+        #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
         if section.storage.is_some() {
             push_policy_diag(
                 &mut diagnostics,
@@ -1340,6 +1377,79 @@ fn validate_atif_storage_values(
                     "ATIF storage bucket must be non-empty".to_string(),
                 );
             }
+            validate_atif_storage_env_var(
+                diagnostics,
+                policy,
+                "storage.secret_access_key_var",
+                s3.secret_access_key_var.as_deref(),
+            );
+            validate_atif_storage_env_var(
+                diagnostics,
+                policy,
+                "storage.session_token_var",
+                s3.session_token_var.as_deref(),
+            );
+        }
+    }
+}
+
+fn validate_atif_storage_env_var(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    var_name: Option<&str>,
+) {
+    let Some(var_name) = var_name else {
+        return;
+    };
+    let trimmed = var_name.trim();
+    if trimmed.is_empty() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atif".to_string()),
+            Some(field.to_string()),
+            format!("ATIF {field} must be the name of an environment variable, not empty"),
+        );
+        return;
+    }
+    if trimmed != var_name {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atif".to_string()),
+            Some(field.to_string()),
+            format!("ATIF {field} must not have surrounding whitespace; got '{var_name}'"),
+        );
+        return;
+    }
+    match std::env::var(var_name) {
+        Ok(value) if !value.is_empty() => {}
+        Ok(_) => {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atif".to_string()),
+                Some(field.to_string()),
+                format!(
+                    "ATIF {field}='{var_name}' references an environment variable that is set but empty"
+                ),
+            );
+        }
+        Err(_) => {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atif".to_string()),
+                Some(field.to_string()),
+                format!(
+                    "ATIF {field}='{var_name}' references an environment variable that is not set"
+                ),
+            );
         }
     }
 }
@@ -1453,7 +1563,7 @@ fn default_output_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-#[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
 struct AtifRemoteStorage;
 
 /// Remote storage handle for ATIF trajectory uploads.
@@ -1463,20 +1573,97 @@ struct AtifRemoteStorage;
 /// event) submit uploads over a synchronous channel and block on the reply, so
 /// the handle stays safe to drive from any thread regardless of whether the
 /// caller is already inside another tokio runtime.
-#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
 struct AtifRemoteStorage {
     sender: std::sync::mpsc::Sender<AtifUploadRequest>,
     key_prefix: String,
 }
 
-#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
 struct AtifUploadRequest {
     key: String,
     payload: Vec<u8>,
     reply: std::sync::mpsc::Sender<std::io::Result<()>>,
 }
 
-#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[derive(Default)]
+struct S3BuilderOverrides {
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+    session_token: Option<String>,
+    region: Option<String>,
+    endpoint_url: Option<String>,
+    allow_http: Option<bool>,
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+impl S3BuilderOverrides {
+    fn resolve(s3: &S3StorageConfig) -> std::io::Result<Self> {
+        Ok(Self {
+            access_key_id: s3.access_key_id.clone(),
+            secret_access_key: resolve_env_var_field(
+                "storage.secret_access_key_var",
+                s3.secret_access_key_var.as_deref(),
+            )?,
+            session_token: resolve_env_var_field(
+                "storage.session_token_var",
+                s3.session_token_var.as_deref(),
+            )?,
+            region: s3.region.clone(),
+            endpoint_url: s3.endpoint_url.clone(),
+            allow_http: s3.allow_http,
+        })
+    }
+
+    fn apply(
+        self,
+        mut builder: object_store::aws::AmazonS3Builder,
+    ) -> object_store::aws::AmazonS3Builder {
+        if let Some(value) = self.access_key_id {
+            builder = builder.with_access_key_id(value);
+        }
+        if let Some(value) = self.secret_access_key {
+            builder = builder.with_secret_access_key(value);
+        }
+        if let Some(value) = self.session_token {
+            builder = builder.with_token(value);
+        }
+        if let Some(value) = self.region {
+            builder = builder.with_region(value);
+        }
+        if let Some(value) = self.endpoint_url {
+            builder = builder.with_endpoint(value);
+        }
+        if let Some(value) = self.allow_http {
+            builder = builder.with_allow_http(value);
+        }
+        builder
+    }
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+fn resolve_env_var_field(field: &str, var_name: Option<&str>) -> std::io::Result<Option<String>> {
+    let Some(var_name) = var_name else {
+        return Ok(None);
+    };
+    if var_name.trim().is_empty() || var_name.trim() != var_name {
+        return Err(std::io::Error::other(format!(
+            "ATIF {field} must be the name of an environment variable, not '{var_name}'"
+        )));
+    }
+    match std::env::var(var_name) {
+        Ok(value) if !value.is_empty() => Ok(Some(value)),
+        Ok(_) => Err(std::io::Error::other(format!(
+            "ATIF {field}='{var_name}' references an environment variable that is set but empty"
+        ))),
+        Err(_) => Err(std::io::Error::other(format!(
+            "ATIF {field}='{var_name}' references an environment variable that is not set"
+        ))),
+    }
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
 impl AtifRemoteStorage {
     fn from_config(config: &AtifStorageConfig) -> std::io::Result<Self> {
         match config {
@@ -1487,6 +1674,7 @@ impl AtifRemoteStorage {
     fn build_s3(s3: &S3StorageConfig) -> std::io::Result<Self> {
         let bucket = s3.bucket.clone();
         let key_prefix = normalize_storage_key_prefix(s3.key_prefix.as_deref());
+        let overrides = S3BuilderOverrides::resolve(s3)?;
 
         let (req_tx, req_rx) = std::sync::mpsc::channel::<AtifUploadRequest>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::io::Result<()>>();
@@ -1506,7 +1694,8 @@ impl AtifRemoteStorage {
                         return;
                     }
                 };
-                let store = match object_store::aws::AmazonS3Builder::from_env()
+                let store = match overrides
+                    .apply(object_store::aws::AmazonS3Builder::from_env())
                     .with_bucket_name(&bucket)
                     .build()
                 {
@@ -1525,6 +1714,7 @@ impl AtifRemoteStorage {
 
                 while let Ok(request) = req_rx.recv() {
                     let result = runtime.block_on(async {
+                        use object_store::ObjectStoreExt as _;
                         store
                             .put(
                                 &object_store::path::Path::from(request.key.clone()),
@@ -1574,7 +1764,7 @@ impl AtifRemoteStorage {
     }
 }
 
-#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
 fn normalize_storage_key_prefix(raw: Option<&str>) -> String {
     let trimmed = raw.unwrap_or("").trim();
     if trimmed.is_empty() {

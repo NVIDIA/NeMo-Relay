@@ -74,6 +74,43 @@ class AtofConfig:
 
 
 @dataclass(slots=True)
+class S3StorageConfig:
+    """S3-compatible remote storage settings for ATIF trajectory upload.
+
+    Every connection field is optional. Unset fields fall back to the matching
+    ``AWS_*`` environment variable. Secret credentials are referenced by env
+    var *name* (the ``_var`` suffix), validated at plugin initialization time,
+    so multiple destinations can each carry their own credentials without
+    leaking secret material into the config.
+    """
+
+    bucket: str = ""
+    key_prefix: str | None = None
+    access_key_id: str | None = None
+    secret_access_key_var: str | None = None
+    session_token_var: str | None = None
+    region: str | None = None
+    endpoint_url: str | None = None
+    allow_http: bool | None = None
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this S3 storage config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "type": "s3",
+                "bucket": self.bucket,
+                "key_prefix": self.key_prefix,
+                "access_key_id": self.access_key_id,
+                "secret_access_key_var": self.secret_access_key_var,
+                "session_token_var": self.session_token_var,
+                "region": self.region,
+                "endpoint_url": self.endpoint_url,
+                "allow_http": self.allow_http,
+            }
+        )
+
+
+@dataclass(slots=True)
 class AtifConfig:
     """Per-top-level-agent ATIF file export settings."""
 
@@ -85,6 +122,7 @@ class AtifConfig:
     extra: JsonObject | None = None
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
+    storage: S3StorageConfig | JsonObject | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""
@@ -97,6 +135,7 @@ class AtifConfig:
             "extra": self.extra,
             "output_directory": self.output_directory,
             "filename_template": self.filename_template,
+            "storage": self.storage,
         }
         if value["agent_version"] is None:
             value.pop("agent_version")
@@ -184,6 +223,7 @@ __all__ = [
     "ConfigPolicy",
     "AtofConfig",
     "AtifConfig",
+    "S3StorageConfig",
     "OtlpConfig",
     "ObservabilityConfig",
     "OBSERVABILITY_PLUGIN_KIND",

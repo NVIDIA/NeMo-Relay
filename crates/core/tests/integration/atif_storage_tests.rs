@@ -12,7 +12,7 @@
 //! used so concurrent runs cannot collide; an override is available via
 //! `NEMO_RELAY_S3_TEST_KEY_PREFIX` for environments that pin a prefix.
 
-#![cfg(feature = "atif-storage")]
+#![cfg(feature = "object-store")]
 
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
 };
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde_json::{Value as Json, json};
 use uuid::Uuid;
 
@@ -40,14 +40,17 @@ fn env_value_is_truthy(value: Option<&str>) -> bool {
 }
 
 fn run_tests_enabled() -> bool {
-    let raw =
-        std::env::var_os(RUN_ENV).map(|value| value.to_string_lossy().into_owned());
+    let raw = std::env::var_os(RUN_ENV).map(|value| value.to_string_lossy().into_owned());
     env_value_is_truthy(raw.as_deref())
 }
 
 fn read_bucket() -> Option<String> {
     let value = std::env::var(BUCKET_ENV).ok()?;
-    if value.trim().is_empty() { None } else { Some(value) }
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn build_test_key_prefix() -> String {
@@ -125,9 +128,7 @@ fn read_object_with_retries(
     })
 }
 
-fn build_verification_store(
-    bucket: &str,
-) -> (tokio::runtime::Runtime, Box<dyn ObjectStore>) {
+fn build_verification_store(bucket: &str) -> (tokio::runtime::Runtime, Box<dyn ObjectStore>) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -139,11 +140,7 @@ fn build_verification_store(
     (runtime, Box::new(store))
 }
 
-fn cleanup_prefix(
-    runtime: &tokio::runtime::Runtime,
-    store: &dyn ObjectStore,
-    key_prefix: &str,
-) {
+fn cleanup_prefix(runtime: &tokio::runtime::Runtime, store: &dyn ObjectStore, key_prefix: &str) {
     use futures::stream::StreamExt;
     runtime.block_on(async {
         let prefix_path = object_store::path::Path::from(key_prefix.trim_end_matches('/'));
@@ -192,12 +189,8 @@ fn atif_storage_uploads_trajectory_to_s3() {
     )
     .expect("push agent scope");
     let session_id = handle.uuid;
-    pop_scope(
-        PopScopeParams::builder()
-            .handle_uuid(&handle.uuid)
-            .build(),
-    )
-    .expect("pop agent scope");
+    pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())
+        .expect("pop agent scope");
 
     clear_plugin_configuration().expect("plugin teardown should flush the trajectory");
 
@@ -211,7 +204,10 @@ fn atif_storage_uploads_trajectory_to_s3() {
         "uploaded artifact should be an ATIF trajectory"
     );
     let expected_session_id = session_id.to_string();
-    assert_eq!(value["session_id"].as_str(), Some(expected_session_id.as_str()));
+    assert_eq!(
+        value["session_id"].as_str(),
+        Some(expected_session_id.as_str())
+    );
 
     cleanup_prefix(&runtime, store.as_ref(), &key_prefix);
 }

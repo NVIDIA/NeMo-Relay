@@ -824,3 +824,152 @@ fn atif_storage_editor_field_is_optional_json() {
     assert_eq!(storage.kind, EditorFieldKind::Json);
     assert!(storage.optional);
 }
+
+#[test]
+fn atif_storage_s3_parses_full_credential_block() {
+    let parsed: AtifSectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": {
+            "type": "s3",
+            "bucket": "my-bucket",
+            "key_prefix": "openshell/",
+            "access_key_id": "AKIAEXAMPLE",
+            "secret_access_key_var": "MY_SECRET_VAR",
+            "session_token_var": "MY_TOKEN_VAR",
+            "region": "us-west-2",
+            "endpoint_url": "https://s3.example.com",
+            "allow_http": false
+        }
+    }))
+    .expect("full credential block should parse");
+    let storage = parsed.storage.expect("storage should be present");
+    match storage {
+        AtifStorageConfig::S3(s3) => {
+            assert_eq!(s3.bucket, "my-bucket");
+            assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
+            assert_eq!(s3.access_key_id.as_deref(), Some("AKIAEXAMPLE"));
+            assert_eq!(s3.secret_access_key_var.as_deref(), Some("MY_SECRET_VAR"));
+            assert_eq!(s3.session_token_var.as_deref(), Some("MY_TOKEN_VAR"));
+            assert_eq!(s3.region.as_deref(), Some("us-west-2"));
+            assert_eq!(s3.endpoint_url.as_deref(), Some("https://s3.example.com"));
+            assert_eq!(s3.allow_http, Some(false));
+        }
+    }
+}
+
+#[test]
+fn atif_storage_secret_var_missing_env_is_rejected() {
+    let var_name = "NEMO_RELAY_TEST_S3_SECRET_MISSING_ZZZZ";
+    // SAFETY: tests in this binary do not concurrently observe this uniquely
+    // named env var, so removing it is safe.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": {
+                "type": "s3",
+                "bucket": "my-bucket",
+                "secret_access_key_var": var_name
+            }
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage.secret_access_key_var")),
+        "expected diagnostic for missing env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_secret_var_empty_env_is_rejected() {
+    let var_name = "NEMO_RELAY_TEST_S3_SECRET_EMPTY_ZZZZ";
+    // SAFETY: this uniquely named env var is only touched by this test.
+    unsafe {
+        std::env::set_var(var_name, "");
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": {
+                "type": "s3",
+                "bucket": "my-bucket",
+                "secret_access_key_var": var_name
+            }
+        }
+    })));
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage.secret_access_key_var")),
+        "expected diagnostic for empty env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_secret_var_present_env_is_accepted() {
+    let var_name = "NEMO_RELAY_TEST_S3_SECRET_OK_ZZZZ";
+    // SAFETY: this uniquely named env var is only touched by this test.
+    unsafe {
+        std::env::set_var(var_name, "secret-value");
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": {
+                "type": "s3",
+                "bucket": "my-bucket",
+                "secret_access_key_var": var_name
+            }
+        }
+    })));
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    assert!(
+        !report.has_errors(),
+        "validation should pass when env var is set: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_secret_var_empty_name_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": {
+                "type": "s3",
+                "bucket": "my-bucket",
+                "secret_access_key_var": "   "
+            }
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage.secret_access_key_var")),
+        "expected diagnostic for empty var name: {:?}",
+        report.diagnostics
+    );
+}

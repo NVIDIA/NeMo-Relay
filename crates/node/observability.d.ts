@@ -13,6 +13,18 @@ export interface AtofConfig {
   mode?: 'append' | 'overwrite' | string;
 }
 
+export interface S3StorageConfig {
+  type: 's3';
+  bucket: string;
+  key_prefix?: string;
+  access_key_id?: string;
+  secret_access_key_var?: string;
+  session_token_var?: string;
+  region?: string;
+  endpoint_url?: string;
+  allow_http?: boolean;
+}
+
 export interface AtifConfig {
   enabled?: boolean;
   agent_name?: string;
@@ -22,6 +34,7 @@ export interface AtifConfig {
   extra?: Record<string, Json>;
   output_directory?: string;
   filename_template?: string;
+  storage?: S3StorageConfig;
 }
 
 export interface OtlpConfig {

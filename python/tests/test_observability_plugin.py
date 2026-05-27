@@ -18,6 +18,7 @@ from nemo_relay.observability import (
     ComponentSpec,
     ObservabilityConfig,
     OtlpConfig,
+    S3StorageConfig,
 )
 
 if typing.TYPE_CHECKING:
@@ -68,6 +69,31 @@ class TestObservabilityConfigHelpers:
 
     def test_list_kinds_includes_builtin_observability(self):
         assert OBSERVABILITY_PLUGIN_KIND in plugin.list_kinds()
+
+    def test_s3_storage_config_serializes_credential_fields(self):
+        storage = S3StorageConfig(
+            bucket="my-bucket",
+            key_prefix="prefix/",
+            access_key_id="AKIAEXAMPLE",
+            secret_access_key_var="MY_SECRET",
+            session_token_var="MY_TOKEN",
+            region="us-west-2",
+            endpoint_url="https://s3.example.com",
+            allow_http=False,
+        )
+        assert storage.to_dict() == {
+            "type": "s3",
+            "bucket": "my-bucket",
+            "key_prefix": "prefix/",
+            "access_key_id": "AKIAEXAMPLE",
+            "secret_access_key_var": "MY_SECRET",
+            "session_token_var": "MY_TOKEN",
+            "region": "us-west-2",
+            "endpoint_url": "https://s3.example.com",
+            "allow_http": False,
+        }
+        atif = AtifConfig(enabled=True, storage=storage)
+        assert atif.to_dict()["storage"] == storage.to_dict()
 
     @pytest.mark.parametrize("use_context_manager", [True, False])
     async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool):

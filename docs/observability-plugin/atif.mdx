@@ -77,18 +77,37 @@ bucket = "nemo-relay-traces"
 key_prefix = "openshell/"
 ```
 
-Credentials, region, and endpoint URL are read from the standard AWS
-environment variables and are deliberately not surfaced in the configuration so
-secrets cannot end up in checked-in config files:
+#### Connection fields
 
-| Environment Variable | Purpose |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | Static access key (or use `AWS_SESSION_TOKEN`-based credentials). |
-| `AWS_SECRET_ACCESS_KEY` | Static secret key. |
-| `AWS_SESSION_TOKEN` | Optional session token for temporary credentials. |
-| `AWS_REGION` | Bucket region. |
-| `AWS_ENDPOINT_URL` | Optional endpoint override for S3-compatible storage. |
-| `AWS_ALLOW_HTTP` | Set to `true` when targeting an HTTP endpoint. |
+By default, credentials, region, and endpoint URL are read from the standard
+AWS environment variables. Any non-secret connection field can also be set
+directly in the config so a single file can describe a complete destination,
+which is what unblocks running multiple S3-compatible endpoints side by side
+(for example, an in-cluster MinIO target and a remote AWS target):
+
+| Field | Default | Notes |
+|---|---|---|
+| `bucket` | required | Destination bucket name. |
+| `key_prefix` | `""` | Optional prefix applied to every object. A trailing `/` is added if missing. |
+| `access_key_id` | `AWS_ACCESS_KEY_ID` | Inline static access key ID. |
+| `region` | `AWS_REGION` | Bucket region. |
+| `endpoint_url` | `AWS_ENDPOINT_URL` | Endpoint override for S3-compatible storage. |
+| `allow_http` | `AWS_ALLOW_HTTP` | Set to `true` when targeting an HTTP endpoint. |
+
+Explicit fields take precedence; anything left unset falls back to the matching
+`AWS_*` environment variable.
+
+#### Secret credential fields
+
+Secret values stay out of checked-in config files. Each secret field carries a
+`_var` suffix and holds the *name* of an environment variable that contains the
+secret value. The name is validated at plugin initialization time:
+
+| Field | Env Var Fallback | Notes |
+|---|---|---|
+| `secret_access_key_var` | `AWS_SECRET_ACCESS_KEY` | Name of the env var that holds the static secret key. |
+| `session_token_var` | `AWS_SESSION_TOKEN` | Name of the env var that holds the optional STS session token. |
+
 
 Each trajectory is uploaded under `{key_prefix}{rendered_filename}`. The
 `filename_template` is rendered the same way it would be for local files, so a
