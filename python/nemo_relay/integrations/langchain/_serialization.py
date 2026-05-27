@@ -26,7 +26,6 @@ from nemo_relay.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec,
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
 
-
 # In order to infer codec support from LangChain chat model types, we need to import them here.
 # However these may not be installed in the user's environment.
 _HAS_ANTHROPIC = False
@@ -265,12 +264,12 @@ def model_request_to_payload(model_name: str | None, request: ModelRequest[Any])
 
 def payload_to_model_request(
     original: ModelRequest[Any],
-    payload: dict[str, Any],
+    llm_request: LLMRequest,
 ) -> ModelRequest[Any]:
     """Apply supported NeMo Relay request-intercept edits back to ``ModelRequest``."""
     overrides: dict[str, Any] = {}
 
-    raw_messages = payload.get("messages")
+    raw_messages = llm_request.content.get("messages")
     if isinstance(raw_messages, list) and len(raw_messages) > 0:
         try:
             system_message, messages = split_system_message(messages_from_dict(raw_messages))
@@ -279,14 +278,24 @@ def payload_to_model_request(
         except Exception:
             pass
 
-    model_settings = payload.get("model_settings")
+    model_settings = llm_request.content.get("model_settings")
     if isinstance(model_settings, dict):
         overrides["model_settings"] = model_settings
+    else:
+        overrides["model_settings"] = {}
 
-    if "tool_choice" in payload:
-        overrides["tool_choice"] = payload["tool_choice"]
+    extra_headers = overrides["model_settings"].get("extra_headers", {})
+    if len(llm_request.headers) > 0:
+        extra_headers.update(llm_request.headers)
+        overrides["model_settings"]["extra_headers"] = extra_headers
 
-    return original.override(**overrides) if overrides else original
+    if "tool_choice" in llm_request.content:
+        overrides["tool_choice"] = llm_request.content["tool_choice"]
+
+    result = original.override(**overrides) if overrides else original
+    print(result.model.default_headers)
+    print(result.model_settings)
+    return result
 
 
 def _model_response_payload(response: ModelResponse[Any], codec: Any) -> dict[str, Any]:

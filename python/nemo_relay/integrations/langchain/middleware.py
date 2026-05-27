@@ -14,7 +14,6 @@ import nemo_relay
 from nemo_relay.integrations.langchain._serialization import (
     LangChainModelRequestCodec,
     get_model_name,
-    infer_codec_from_model,
     model_request_to_payload,
     model_response_from_json,
     model_response_to_json,
@@ -85,7 +84,7 @@ class NemoRelayMiddleware(AgentMiddleware):
         (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
 
         async def _call(req: Any) -> Any:
-            response = handler(payload_to_model_request(request, req.content))
+            response = handler(payload_to_model_request(request, req))
             return model_response_to_json(response, object_codec)
 
         result = run_sync(
@@ -108,7 +107,8 @@ class NemoRelayMiddleware(AgentMiddleware):
         (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
 
         async def _call(req: Any) -> Any:
-            response = await handler(payload_to_model_request(request, req.content))
+            print(f"type(req): {type(req)}")
+            response = await handler(payload_to_model_request(request, req))
             return model_response_to_json(response, object_codec)
 
         result = await self._llm_execute(
