@@ -12,6 +12,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 import nemo_relay
 from nemo_relay.integrations.langchain._serialization import (
+    LangChainModelRequestCodec,
     get_model_name,
     infer_codec_from_model,
     model_request_to_payload,
@@ -72,8 +73,9 @@ class NemoRelayMiddleware(AgentMiddleware):
         object_codec = nemo_relay.typed.BestEffortAnyCodec()
         model_name = get_model_name(request.model)
         llm_request = nemo_relay.LLMRequest({}, model_request_to_payload(model_name, request))
-        model_codec = infer_codec_from_model(request.model)
-        return (object_codec, llm_request, model_name, model_codec)
+        request_codec = LangChainModelRequestCodec()
+        response_codec = infer_codec_from_model(request.model)
+        return (object_codec, llm_request, model_name, request_codec, response_codec)
 
     def wrap_model_call(
         self,
@@ -81,7 +83,7 @@ class NemoRelayMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
         """Wrap a sync LangChain agent model call in NeMo Relay LLM execution."""
-        (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
+        (object_codec, llm_request, model_name, request_codec, response_codec) = self._prepare_model_call(request)
 
         async def _call(req: Any) -> Any:
             response = handler(payload_to_model_request(request, req.content))
@@ -92,8 +94,8 @@ class NemoRelayMiddleware(AgentMiddleware):
                 model_name=model_name,
                 request=llm_request,
                 func=_call,
-                codec=model_codec,
-                response_codec=model_codec,
+                codec=request_codec,
+                response_codec=response_codec,
             )
         )
         return model_response_from_json(result, object_codec)
@@ -104,7 +106,7 @@ class NemoRelayMiddleware(AgentMiddleware):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
         """Wrap an async LangChain agent model call in NeMo Relay LLM execution."""
-        (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
+        (object_codec, llm_request, model_name, request_codec, response_codec) = self._prepare_model_call(request)
 
         async def _call(req: Any) -> Any:
             response = await handler(payload_to_model_request(request, req.content))
@@ -114,8 +116,8 @@ class NemoRelayMiddleware(AgentMiddleware):
             model_name=model_name,
             request=llm_request,
             func=_call,
-            codec=model_codec,
-            response_codec=model_codec,
+            codec=request_codec,
+            response_codec=response_codec,
         )
         return model_response_from_json(result, object_codec)
 

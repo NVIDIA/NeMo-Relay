@@ -5,11 +5,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import ModelResponse
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
     messages_from_dict,
@@ -17,6 +20,7 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command, Send
 
+from nemo_relay import AnnotatedLLMRequest, LLMRequest
 from nemo_relay.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 if TYPE_CHECKING:
@@ -50,6 +54,7 @@ except ImportError:
     pass
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_relay_integrations_langchain_model_response"
+_LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
 
 
 def get_model_name(model: Any) -> str | None:
@@ -79,6 +84,159 @@ def infer_codec_from_model(model: Any) -> LlmCodec | None:
             return OpenAIChatCodec()
 
     return None
+
+
+def _message_content(content: Any) -> Any:
+    return "" if content is None else content
+
+
+def _langchain_tool_calls_to_annotated(tool_calls: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return None
+
+    annotated_tool_calls = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        args = tool_call.get("args", {})
+        arguments = args if isinstance(args, str) else json.dumps(args)
+        annotated_tool_calls.append(
+            {
+                "id": str(tool_call.get("id") or ""),
+                "type": "function",
+                "function": {
+                    "name": str(tool_call.get("name") or ""),
+                    "arguments": arguments,
+                },
+            }
+        )
+
+    return annotated_tool_calls or None
+
+
+def _annotated_tool_calls_to_langchain(tool_calls: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return None
+
+    langchain_tool_calls = []
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            name = str(function.get("name") or "")
+            arguments = function.get("arguments", {})
+        else:
+            name = str(tool_call.get("name") or "")
+            arguments = tool_call.get("args", {})
+
+        if isinstance(arguments, str):
+            try:
+                args = json.loads(arguments)
+            except json.JSONDecodeError:
+                args = {"arguments": arguments}
+        elif isinstance(arguments, dict):
+            args = arguments
+        else:
+            args = {}
+
+        langchain_tool_calls.append(
+            {
+                "name": name,
+                "args": args,
+                "id": str(tool_call.get("id") or ""),
+                "type": "tool_call",
+            }
+        )
+
+    return langchain_tool_calls or None
+
+
+def _langchain_message_to_annotated(message: BaseMessage) -> dict[str, Any] | None:
+    content = _message_content(getattr(message, "content", ""))
+    name = getattr(message, "name", None)
+    role = {
+        "system": "system",
+        "human": "user",
+        "ai": "assistant",
+        "tool": "tool",
+    }.get(getattr(message, "type", ""))
+
+    if role is None:
+        return None
+
+    annotated: dict[str, Any] = {"role": role, "content": content}
+    if name is not None:
+        annotated["name"] = name
+
+    if role == "assistant":
+        tool_calls = _langchain_tool_calls_to_annotated(getattr(message, "tool_calls", None))
+        if tool_calls is not None:
+            annotated["tool_calls"] = tool_calls
+    elif role == "tool":
+        annotated["tool_call_id"] = str(getattr(message, "tool_call_id", ""))
+
+    return annotated
+
+
+def _annotated_message_to_langchain(message: dict[str, Any]) -> BaseMessage:
+    role = message.get("role")
+    content = _message_content(message.get("content", ""))
+    name = message.get("name")
+
+    if role == "system":
+        return SystemMessage(content=content, name=name)
+    if role == "user":
+        return HumanMessage(content=content, name=name)
+    if role == "assistant":
+        tool_calls = _annotated_tool_calls_to_langchain(message.get("tool_calls"))
+        return AIMessage(content=content, name=name, tool_calls=tool_calls or [])
+    if role == "tool":
+        return ToolMessage(content=content, name=name, tool_call_id=str(message.get("tool_call_id") or ""))
+    raise ValueError(f"Unsupported annotated LangChain message role: {role!r}")
+
+
+class LangChainModelRequestCodec:
+    """Translate LangChain ``ModelRequest`` payloads for request intercepts."""
+
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a LangChain-shaped request payload into an annotated request."""
+        payload = request.content
+        raw_messages = payload.get("messages", [])
+        messages: list[dict[str, Any]] = []
+        if isinstance(raw_messages, list):
+            for message in messages_from_dict(raw_messages):
+                annotated = _langchain_message_to_annotated(message)
+                if annotated is not None:
+                    messages.append(annotated)
+
+        model = payload.get("model")
+        tools = payload.get("tools")
+        tool_choice = payload.get("tool_choice")
+        extra = {key: value for key, value in payload.items() if key not in _LANGCHAIN_MODELED_REQUEST_KEYS}
+
+        return AnnotatedLLMRequest(
+            messages,
+            model=model if isinstance(model, str) else None,
+            tools=tools if isinstance(tools, list) else None,
+            tool_choice=tool_choice if isinstance(tool_choice, str | dict) else None,
+            extra=extra or None,
+        )
+
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode annotated request edits back into a LangChain-shaped payload."""
+        payload = dict(original.content)
+        payload.update(annotated.extra)
+        payload["messages"] = messages_to_dict(
+            [_annotated_message_to_langchain(message) for message in annotated.messages]
+        )
+        if annotated.model is not None:
+            payload["model"] = annotated.model
+        if annotated.tools is not None:
+            payload["tools"] = annotated.tools
+        if annotated.tool_choice is not None:
+            payload["tool_choice"] = annotated.tool_choice
+        return LLMRequest(dict(original.headers), payload)
 
 
 def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | None, list[BaseMessage]]:
