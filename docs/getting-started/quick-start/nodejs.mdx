@@ -1,0 +1,122 @@
+---
+title: "Node.js Quick Start"
+description: ""
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This quick start shows the smallest Node.js workflow that emits scope, tool, and LLM
+events.
+
+## Choose an Install Path
+
+Pick the installation path that matches whether you are using a published package or a
+local checkout.
+
+### Install from a Package Manager
+
+Use this path when you want the published package for application development.
+
+```bash
+npm install nemo-relay-node
+```
+
+### Install from the Repository
+
+Use this path when you are working from a local checkout and need editable source
+behavior.
+
+```bash
+npm install --ignore-scripts
+npm run build --workspace=nemo-relay-node
+```
+
+This path is for local source development when you need to build the binding from the repository checkout.
+
+## Run One Scope, One Tool Call, and One LLM Call
+
+The example below runs one minimal instrumented workflow through the binding.
+
+```js
+const {
+  ScopeType,
+  registerSubscriber,
+  deregisterSubscriber,
+  LlmRequest,
+  withScope,
+  event,
+  toolCallExecute,
+  llmCallExecute,
+} = require("nemo-relay-node");
+
+async function main() {
+  registerSubscriber("quickstart-printer", (runtimeEvent) => {
+    console.log(`event=${runtimeEvent.kind} name=${runtimeEvent.name}`);
+  });
+
+  await withScope("demo-agent", ScopeType.Agent, async (handle) => {
+    event("initialized", handle, { binding: "node" }, null);
+
+    const toolResult = await toolCallExecute(
+      "search",
+      { query: "hello" },
+      (args) => ({ echo: args.query }),
+      handle,
+      null,
+      null,
+      null,
+    );
+
+    const llmResult = await llmCallExecute(
+      "demo-provider",
+      new LlmRequest({}, { messages: [{ role: "user", content: "hi" }] }),
+      (request) => ({ ok: true, messages: request.content.messages }),
+      handle,
+      null,
+      null,
+      null,
+      null,
+    );
+
+    console.log(toolResult);
+    console.log(llmResult);
+  });
+
+  deregisterSubscriber("quickstart-printer");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+## What Success Looks Like
+
+You should see:
+
+- Event lines for the scope, tool, LLM, and mark lifecycle
+- `{ echo: 'hello' }` from the tool call
+- An object containing `ok: true` and the echoed message payload from the LLM callback
+
+That combination tells you both the business callbacks and the instrumentation
+pipeline are working.
+
+## Where the Node.js Surface Lives
+
+These package entry points are the main Node.js APIs to use from applications and
+integrations.
+
+- Runtime lifecycle APIs are exported from the package root.
+- Typed wrappers live in `nemo-relay-node/typed`.
+- Plugin helpers live in `nemo-relay-node/plugin`.
+- Adaptive helpers live in `nemo-relay-node/adaptive`.
+
+## What to Learn Next
+
+Use these links to continue from the quick start into the core runtime concepts.
+
+- [Instrument Applications Code Examples](/instrument-applications/code-examples)
+- [Subscribers](/about-nemo-relay/concepts/subscribers)
+- [Using Codecs](/integrate-into-frameworks/using-codecs)

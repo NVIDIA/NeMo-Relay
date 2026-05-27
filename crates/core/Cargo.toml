@@ -14,8 +14,12 @@ readme = "README.md"
 workspace = true
 
 [features]
-default = ["otel", "openinference"]
+default = ["otel", "openinference", "guardrails-remote"]
 schema = ["dep:schemars"]
+guardrails-remote = [
+    "dep:reqwest",
+    "dep:rustls",
+]
 otel = [
     "dep:async-trait",
     "dep:getrandom",

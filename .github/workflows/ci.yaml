@@ -29,7 +29,6 @@ jobs:
         && !cancelled()
         && needs.prepare.result == 'success'
         && needs.ci_required.result == 'success'
-        && needs.prepare.outputs.publish_docs != 'true'
       }}
     permissions:
       contents: read
@@ -74,14 +73,10 @@ jobs:
         run: |
           set -euo pipefail
           full_ci=false
-          publish_docs=false
           publish_packages=false
 
           if [[ "$REF_TYPE" == "tag" || "$REF_NAME" == "$DEFAULT_BRANCH" ]]; then
             full_ci=true
-          fi
-          if [[ "$REF_TYPE" == "tag" ]]; then
-            publish_docs=true
           fi
           if [[ "$REF_TYPE" == "tag" && ! "$REF_NAME" =~ -alpha\.[0-9]+$ ]]; then
             publish_packages=true
@@ -89,7 +84,6 @@ jobs:
 
           {
             printf 'full_ci=%s\n' "$full_ci"
-            printf 'publish_docs=%s\n' "$publish_docs"
             printf 'publish_packages=%s\n' "$publish_packages"
           } >> "$GITHUB_OUTPUT"
 
@@ -98,7 +92,6 @@ jobs:
       is_pr: ${{ startsWith(github.ref_name, 'pull-request/') }}
       is_main_branch: ${{ github.ref_name == 'main' }}
       has_skip_ci_label: ${{ steps.get-pr-info.outcome == 'success' && contains(fromJSON(steps.get-pr-info.outputs.pr-info).labels.*.name, 'skip-ci') || false }}
-      publish_docs: ${{ steps.policy.outputs.publish_docs }}
       publish_packages: ${{ steps.policy.outputs.publish_packages }}
       pr_info: ${{ steps.get-pr-info.outcome == 'success' && steps.get-pr-info.outputs.pr-info || '' }}
 
@@ -144,24 +137,6 @@ jobs:
     with:
       base: ${{ needs.ci_changes.outputs.base }}
       default_branch: ${{ github.event.repository.default_branch }}
-
-  ci_docs:
-    name: Documentation
-    needs: [prepare, ci_changes, ci_check]
-    uses: ./.github/workflows/ci_docs.yml
-    if: >-
-      ${{
-        !cancelled()
-        && needs.ci_changes.result == 'success'
-        && needs.ci_check.result == 'success'
-        && needs.ci_changes.outputs.run_docs == 'true'
-      }}
-    permissions:
-      contents: read
-    with:
-      ref_type: ${{ github.ref_type }}
-      ref_name: ${{ github.ref_name }}
-      publish_docs: ${{ needs.prepare.outputs.publish_docs == 'true' }}
 
   ci_rust:
     name: Rust
@@ -235,7 +210,6 @@ jobs:
       - prepare
       - ci_changes
       - ci_check
-      - ci_docs
       - ci_rust
       - ci_go
       - ci_node
@@ -250,13 +224,11 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.ci_changes.result }}
           CHECK_RESULT: ${{ needs.ci_check.result }}
-          DOCS_RESULT: ${{ needs.ci_docs.result }}
           RUST_RESULT: ${{ needs.ci_rust.result }}
           GO_RESULT: ${{ needs.ci_go.result }}
           NODE_RESULT: ${{ needs.ci_node.result }}
           PYTHON_RESULT: ${{ needs.ci_python.result }}
           WEBASSEMBLY_RESULT: ${{ needs.ci_wasm.result }}
-          publish_docs: ${{ needs.prepare.outputs.publish_docs }}
           publish_packages: ${{ needs.prepare.outputs.publish_packages }}
         run: |
           set -euo pipefail
@@ -283,12 +255,6 @@ jobs:
           require_success "Changes" "$CHANGES_RESULT"
           require_success "Check" "$CHECK_RESULT"
 
-          if [[ "$publish_docs" == "true" ]]; then
-            require_success "Documentation" "$DOCS_RESULT"
-          else
-            allow_success_or_skipped "Documentation" "$DOCS_RESULT"
-          fi
-
           if [[ "$publish_packages" == "true" ]]; then
             require_success "Rust" "$RUST_RESULT"
             require_success "Node.js" "$NODE_RESULT"
@@ -306,22 +272,6 @@ jobs:
           if [[ "$failed" == "true" ]]; then
             exit 1
           fi
-
-  deploy-docs:
-    name: Deploy Documentation
-    needs: [prepare, ci_required]
-    if: ${{ needs.prepare.outputs.publish_docs == 'true' && needs.ci_required.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy GitHub Pages Site
-        id: deployment
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
 
   release-cli-artifacts:
     name: Release CLI Artifacts

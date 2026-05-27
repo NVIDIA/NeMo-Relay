@@ -37,7 +37,7 @@ python/
   tests/      # Python tests
 go/
   nemo_relay/  # Experimental Go CGo binding and tests
-docs/         # Sphinx documentation site
+fern/         # Fern documentation site
 scripts/      # Stable wrappers and helper scripts; build/test/docs entry points live in justfile
 third_party/  # Pinned upstream checkouts for sample integration patches
 patches/      # NeMo Relay patch sets applied to third_party checkouts
@@ -115,8 +115,7 @@ Documentation targets:
 
 ```bash
 just docs
-just docs-linkcheck
-just docs-github-pages
+just docs-api-reference
 ```
 
 Package targets:
@@ -155,10 +154,10 @@ Minimum guidance:
 - Node.js binding or wrapper changes: `just test-node`.
 - Go binding or raw FFI changes: `just test-go` and the relevant Rust/FFI checks.
 - WebAssembly binding changes: `just test-wasm`.
-- Documentation site changes: `just docs`; use `just docs-linkcheck` for link or navigation changes.
+- Documentation site changes: `just docs`. Run docs link validation with `just docs-linkcheck` when links change. The recipes regenerate the ignored Fern API reference pages before validation.
 - Cross-language API changes: run the touched binding tests and update docs, package READMEs, and generated surfaces where applicable.
 
-Before review, prefer `uv run pre-commit run --all-files` when the change crosses languages or tooling. The hooks enforce SPDX headers, file hygiene, Ruff, `ty`, docs link checks, Cargo formatting/lints/audits, Go formatting/vet, Node formatting, and public docstring checks.
+Before review, prefer `uv run pre-commit run --all-files` when the change crosses languages or tooling. The hooks enforce SPDX headers, file hygiene, Ruff, `ty`, Markdown link checks, Cargo formatting/lints/audits, Go formatting/vet, Node formatting, and public docstring checks.
 
 ## Key Conventions
 
@@ -238,7 +237,7 @@ Current public API-based integrations include:
 These workflow notes keep public documentation, examples, and PR preparation aligned
 with repository expectations.
 
-- Update `README.md`, `docs/`, package READMEs, and binding-support notes when public behavior, package names, examples, or supported bindings change.
+- Update `README.md`, `fern/`, package READMEs, and binding-support notes when public behavior, package names, examples, or supported bindings change.
 - Keep release-process details in maintainer docs such as `RELEASING.md`. Do not move release-history policy into user-facing docs or `CHANGELOG.md`.
 - Keep stable public wrappers at the `scripts/` root in docs and examples. Reference namespaced helper paths only when documenting internal maintenance work.
 - Use branch prefixes from the contributor docs: `feat/`, `fix/`, `docs/`, `test/`, or `refactor/`.
