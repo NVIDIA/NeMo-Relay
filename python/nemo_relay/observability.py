@@ -122,7 +122,9 @@ class AtifConfig:
     extra: JsonObject | None = None
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
-    storage: S3StorageConfig | JsonObject | None = None
+    # Accepts a single backend (back-compat) or a list for fan-out. Each entry
+    # may be a typed `S3StorageConfig` or a raw JSON object with a `type` tag.
+    storage: S3StorageConfig | JsonObject | list[S3StorageConfig | JsonObject] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""

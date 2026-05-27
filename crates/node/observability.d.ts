@@ -34,7 +34,7 @@ export interface AtifConfig {
   extra?: Record<string, Json>;
   output_directory?: string;
   filename_template?: string;
-  storage?: S3StorageConfig;
+  storage?: S3StorageConfig | S3StorageConfig[];
 }
 
 export interface OtlpConfig {

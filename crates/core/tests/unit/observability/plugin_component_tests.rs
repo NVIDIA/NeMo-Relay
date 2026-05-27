@@ -590,10 +590,13 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         EventCategory::agent(),
         None,
     ));
-    manager
-        .lock()
-        .unwrap()
-        .observe_global(&start_event, "__test__", Arc::clone(&manager), None);
+    let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
+    manager.lock().unwrap().observe_global(
+        &start_event,
+        "__test__",
+        Arc::clone(&manager),
+        Arc::clone(&empty_storage),
+    );
     {
         let dispatcher = manager.lock().unwrap();
         assert!(dispatcher.agents.contains_key(&agent.uuid));
@@ -611,24 +614,28 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         EventCategory::agent(),
         None,
     ));
-    let pending_write = manager
+    let (pending_write, targets) = manager
         .lock()
         .unwrap()
         .observe_scope(&end_event, agent.uuid)
         .unwrap();
     let path = dir.join(format!("nemo-relay-atif-{}.json", agent.uuid));
     assert!(!path.exists());
-    write_atif(&pending_write, None).unwrap();
+    let results = write_atif(&pending_write, empty_storage.as_slice(), &targets);
+    for (label, result) in &results {
+        assert!(result.is_ok(), "{label:?}: {result:?}");
+    }
     let scope_subscriber = manager
         .lock()
         .unwrap()
-        .complete_scope_write(agent.uuid, Ok(()));
+        .complete_scope_write(agent.uuid, results);
     if let Some((scope_uuid, name)) = scope_subscriber {
         let _ = scope_deregister_subscriber(&scope_uuid, &name);
     }
 
     let dispatcher = manager.lock().unwrap();
-    assert!(dispatcher.last_error.is_none());
+    assert!(dispatcher.fatal_error.is_none());
+    assert!(dispatcher.sink_errors.is_empty());
     assert!(!dispatcher.agents.contains_key(&agent.uuid));
     assert!(!dispatcher.scope_subscribers.contains_key(&agent.uuid));
     assert!(path.exists());
@@ -755,9 +762,9 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
 }
 
 #[test]
-fn atif_storage_defaults_to_none() {
+fn atif_storage_defaults_to_empty() {
     let config = AtifSectionConfig::default();
-    assert!(config.storage.is_none());
+    assert!(config.storage.is_empty());
 }
 
 #[test]
@@ -772,13 +779,51 @@ fn atif_storage_section_parses_s3_variant() {
         }
     }))
     .expect("valid storage section should parse");
-    let storage = parsed.storage.expect("storage should be present");
-    match storage {
+    assert_eq!(
+        parsed.storage.len(),
+        1,
+        "single-table form parses as one entry"
+    );
+    match &parsed.storage[0] {
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
         }
     }
+}
+
+#[test]
+fn atif_storage_section_parses_array_of_tables() {
+    let parsed: AtifSectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": [
+            {"type": "s3", "bucket": "primary", "key_prefix": "p/"},
+            {"type": "s3", "bucket": "archive", "endpoint_url": "http://minio:9000"}
+        ]
+    }))
+    .expect("array-of-tables form should parse");
+    assert_eq!(parsed.storage.len(), 2);
+    match &parsed.storage[0] {
+        AtifStorageConfig::S3(s3) => assert_eq!(s3.bucket, "primary"),
+    }
+    match &parsed.storage[1] {
+        AtifStorageConfig::S3(s3) => {
+            assert_eq!(s3.bucket, "archive");
+            assert_eq!(s3.endpoint_url.as_deref(), Some("http://minio:9000"));
+        }
+    }
+}
+
+#[test]
+fn atif_storage_section_parses_empty_array() {
+    let parsed: AtifSectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": []
+    }))
+    .expect("empty array should parse");
+    assert!(parsed.storage.is_empty());
 }
 
 #[test]
@@ -813,7 +858,30 @@ fn atif_storage_empty_bucket_is_rejected() {
         report
             .diagnostics
             .iter()
-            .any(|diag| diag.field.as_deref() == Some("storage.bucket"))
+            .any(|diag| diag.field.as_deref() == Some("storage[0].bucket"))
+    );
+}
+
+#[test]
+fn atif_storage_diagnostics_carry_sink_index() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [
+                {"type": "s3", "bucket": "ok"},
+                {"type": "s3", "bucket": ""}
+            ]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[1].bucket")),
+        "diagnostic should point at the second entry: {:?}",
+        report.diagnostics
     );
 }
 
@@ -843,8 +911,8 @@ fn atif_storage_s3_parses_full_credential_block() {
         }
     }))
     .expect("full credential block should parse");
-    let storage = parsed.storage.expect("storage should be present");
-    match storage {
+    assert_eq!(parsed.storage.len(), 1);
+    match &parsed.storage[0] {
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
@@ -882,7 +950,7 @@ fn atif_storage_secret_var_missing_env_is_rejected() {
         report
             .diagnostics
             .iter()
-            .any(|diag| diag.field.as_deref() == Some("storage.secret_access_key_var")),
+            .any(|diag| diag.field.as_deref() == Some("storage[0].secret_access_key_var")),
         "expected diagnostic for missing env var: {:?}",
         report.diagnostics
     );
@@ -915,7 +983,7 @@ fn atif_storage_secret_var_empty_env_is_rejected() {
         report
             .diagnostics
             .iter()
-            .any(|diag| diag.field.as_deref() == Some("storage.secret_access_key_var")),
+            .any(|diag| diag.field.as_deref() == Some("storage[0].secret_access_key_var")),
         "expected diagnostic for empty env var: {:?}",
         report.diagnostics
     );
@@ -968,7 +1036,7 @@ fn atif_storage_secret_var_empty_name_is_rejected() {
         report
             .diagnostics
             .iter()
-            .any(|diag| diag.field.as_deref() == Some("storage.secret_access_key_var")),
+            .any(|diag| diag.field.as_deref() == Some("storage[0].secret_access_key_var")),
         "expected diagnostic for empty var name: {:?}",
         report.diagnostics
     );
