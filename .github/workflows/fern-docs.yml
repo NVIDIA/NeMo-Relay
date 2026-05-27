@@ -201,6 +201,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
           path: source-checkout
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -210,6 +211,7 @@ jobs:
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
+          package-manager-cache: false
 
       - name: Install Fern CLI
         working-directory: source-checkout
