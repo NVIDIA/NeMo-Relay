@@ -23,7 +23,7 @@
 //!
 //! Tool calls accept an optional `tool_call_id` and LLM calls accept an optional
 //! `model_name` for ATIF trajectory correlation. The `AtifExporter` class
-//! collects lifecycle events and exports ATIF v1.6 trajectories.
+//! collects lifecycle events and exports ATIF v1.7 trajectories.
 //! - `callable` (internal) -- Adapters that convert JavaScript callback
 //!   functions into the Rust closure signatures expected by the core runtime.
 //! - `convert` (internal) -- JSON marshalling helpers between `JsValue` and

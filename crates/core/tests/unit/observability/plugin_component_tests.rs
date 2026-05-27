@@ -606,6 +606,16 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
     assert_eq!(first_json["agent"]["name"], "NeMo Relay");
     assert_eq!(first_json["agent"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(first_json["agent"]["model_name"], "unknown");
+    assert_eq!(first_json["schema_version"], "ATIF-v1.7");
+    assert_eq!(first_json["trajectory_id"], first.uuid.to_string());
+    assert_eq!(
+        first_json["subagent_trajectories"][0]["trajectory_id"],
+        nested.uuid.to_string()
+    );
+    assert_eq!(
+        first_json["steps"][0]["observation"]["results"][0]["subagent_trajectory_ref"][0]["trajectory_id"],
+        nested.uuid.to_string()
+    );
     let first_serialized = first_json.to_string();
     assert!(first_serialized.contains("first-agent"));
     assert!(first_serialized.contains("nested-agent"));
@@ -614,6 +624,126 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
     let second_serialized = second_json.to_string();
     assert!(second_serialized.contains("second-agent"));
     assert!(!second_serialized.contains("first-agent"));
+}
+
+#[test]
+fn atif_routes_global_descendant_events_by_parent_uuid() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-global-descendant");
+    let root_uuid = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid();
+    let agent = push_agent("root-agent");
+    let agent_uuid = agent.uuid;
+    let child_uuid = Uuid::now_v7();
+    let manager = Arc::new(Mutex::new(AtifDispatcher::new(AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(dir.clone()),
+        ..AtifSectionConfig::default()
+    })));
+
+    let start_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(agent_uuid)
+            .parent_uuid(root_uuid)
+            .name("root-agent")
+            .metadata(json!({"session_id": "root-session"}))
+            .build(),
+        ScopeCategory::Start,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(&start_event, "__test__", Arc::clone(&manager))
+            .is_none()
+    );
+
+    let child_start_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(child_uuid)
+            .parent_uuid(agent_uuid)
+            .name("child-agent")
+            .metadata(json!({"session_id": "child-session"}))
+            .build(),
+        ScopeCategory::Start,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(&child_start_event, "__test__", Arc::clone(&manager))
+            .is_none()
+    );
+
+    let child_end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(child_uuid)
+            .parent_uuid(agent_uuid)
+            .name("child-agent")
+            .build(),
+        ScopeCategory::End,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(&child_end_event, "__test__", Arc::clone(&manager))
+            .is_none()
+    );
+
+    let end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(agent_uuid)
+            .parent_uuid(root_uuid)
+            .name("root-agent")
+            .build(),
+        ScopeCategory::End,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    let pending_write = manager
+        .lock()
+        .unwrap()
+        .observe_global(&end_event, "__test__", Arc::clone(&manager))
+        .unwrap();
+    let path = dir.join(format!("nemo-relay-atif-{agent_uuid}.json"));
+    write_atif_file(&pending_write).unwrap();
+    let scope_subscriber = manager
+        .lock()
+        .unwrap()
+        .complete_scope_write(agent_uuid, Ok(()));
+    if let Some((scope_uuid, name)) = scope_subscriber {
+        let _ = scope_deregister_subscriber(&scope_uuid, &name);
+    }
+
+    let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(
+        value["subagent_trajectories"][0]["session_id"],
+        "child-session"
+    );
+    assert_eq!(
+        value["subagent_trajectories"][0]["trajectory_id"],
+        child_uuid.to_string()
+    );
+    assert_eq!(
+        value["steps"][0]["observation"]["results"][0]["subagent_trajectory_ref"][0]["trajectory_id"],
+        child_uuid.to_string()
+    );
+    pop(&agent);
 }
 
 #[test]
@@ -643,7 +773,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         EventCategory::agent(),
         None,
     ));
-    manager
+    let _ = manager
         .lock()
         .unwrap()
         .observe_global(&start_event, "__test__", Arc::clone(&manager));
