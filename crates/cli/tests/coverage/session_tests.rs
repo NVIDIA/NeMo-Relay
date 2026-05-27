@@ -3093,6 +3093,178 @@ async fn idle_timeout_closes_codex_session_without_session_end_hook() {
 }
 
 #[tokio::test]
+async fn idle_timeout_keeps_recent_claude_subagent_session_open() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-recent", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "claude-recent".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "recent-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + Duration::from_secs(5),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 0);
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("claude-recent").unwrap();
+    assert!(session.turn_scope.is_some());
+    assert!(session.subagents.contains_key("recent-worker"));
+}
+
+#[tokio::test]
+async fn idle_timeout_closes_claude_subagent_with_no_followup_activity() {
+    let subscriber_name = "cli-claude-idle-subagent-close-reason-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let close_statuses = Arc::new(StdMutex::new(Vec::<(String, String)>::new()));
+    let captured = close_statuses.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && (event.name() == "subagent:idle-worker"
+                    || event
+                        .metadata()
+                        .and_then(|metadata| metadata.get("session_id"))
+                        .and_then(Value::as_str)
+                        == Some("claude-idle"))
+            {
+                let status = event
+                    .output()
+                    .and_then(|output| output.get("status"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), status));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-idle", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "claude-idle".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "idle-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 1);
+    {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("claude-idle").unwrap();
+        assert!(session.turn_scope.is_none());
+        assert!(session.subagents.is_empty());
+    }
+
+    let statuses = close_statuses.lock().unwrap().clone();
+    assert!(
+        statuses.contains(&(
+            "subagent:idle-worker".to_string(),
+            "idle_timeout".to_string()
+        )),
+        "expected idle timeout to close the Claude subagent scope, got {statuses:?}"
+    );
+    assert!(
+        statuses.contains(&("claude-code-turn".to_string(), "idle_timeout".to_string())),
+        "expected idle timeout to close the Claude turn scope, got {statuses:?}"
+    );
+
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn idle_timeout_waits_for_active_claude_subagent_tool_call() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-active-tool", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "claude-active-tool".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "active-tool-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "claude-active-tool".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("active-tool-worker".into()),
+                    arguments: json!({ "file_path": "README.md" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 0);
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("claude-active-tool").unwrap();
+    assert!(session.turn_scope.is_some());
+    assert!(session.subagents.contains_key("active-tool-worker"));
+    assert_eq!(session.tools.len(), 1);
+}
+
+#[tokio::test]
 async fn idle_timeout_waits_for_active_gateway_llm_call() {
     let manager = SessionManager::new(session_test_config());
     let prep = manager
