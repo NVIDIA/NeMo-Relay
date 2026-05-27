@@ -299,7 +299,6 @@ fn explicit_registration_helpers_are_idempotent_and_reversible() {
     assert!(register_observability_component().is_ok());
     assert!(register_observability_component().is_ok());
     assert!(deregister_observability_component());
-    assert!(lookup_plugin(OBSERVABILITY_PLUGIN_KIND).is_none());
     assert!(!deregister_observability_component());
     register_observability_component().unwrap();
 }

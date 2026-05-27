@@ -14,7 +14,7 @@ use serde_json::{Map, Value as Json};
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
-    lookup_plugin, register_plugin,
+    register_plugin,
 };
 
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
@@ -388,9 +388,7 @@ impl Plugin for NeMoGuardrailsPlugin {
 pub fn register_nemo_guardrails_component() -> PluginResult<()> {
     match register_plugin(Arc::new(NeMoGuardrailsPlugin)) {
         Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(_))
-            if lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some() =>
-        {
+        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
             Ok(())
         }
         Err(err) => Err(err),

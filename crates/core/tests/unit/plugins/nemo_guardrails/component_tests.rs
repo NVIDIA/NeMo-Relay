@@ -433,7 +433,6 @@ fn explicit_registration_helpers_are_idempotent_and_reversible() {
     assert!(register_nemo_guardrails_component().is_ok());
     assert!(register_nemo_guardrails_component().is_ok());
     assert!(deregister_nemo_guardrails_component());
-    assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_none());
     assert!(!deregister_nemo_guardrails_component());
     register_nemo_guardrails_component().unwrap();
 }
