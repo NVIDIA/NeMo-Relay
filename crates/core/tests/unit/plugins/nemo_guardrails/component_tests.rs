@@ -424,6 +424,21 @@ fn builtin_registration_is_automatic() {
 }
 
 #[test]
+fn explicit_registration_helpers_are_idempotent_and_reversible() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+
+    assert!(register_nemo_guardrails_component().is_ok());
+    assert!(register_nemo_guardrails_component().is_ok());
+    assert!(deregister_nemo_guardrails_component());
+    assert!(lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_none());
+    assert!(!deregister_nemo_guardrails_component());
+    register_nemo_guardrails_component().unwrap();
+}
+
+#[test]
 fn disabled_component_validates_and_initializes_without_runtime_work() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
@@ -482,6 +497,30 @@ fn invalid_shapes_and_values_are_reported() {
             .any(|diag| diag.code == "nemo_guardrails.invalid_plugin_config")
     );
 
+    let unsupported_version_and_mode = validate_plugin_config(&plugin_config(json!({
+        "version": 2,
+        "mode": "hybrid",
+        "codec": "openai_chat",
+        "remote": {"endpoint": "http://localhost:8000", "config_id": "default"}
+    })));
+    assert!(unsupported_version_and_mode.has_errors());
+    assert!(
+        unsupported_version_and_mode
+            .diagnostics
+            .iter()
+            .any(
+                |diag| diag.code == "nemo_guardrails.unsupported_config_version"
+                    && diag.field.as_deref() == Some("version")
+            )
+    );
+    assert!(
+        unsupported_version_and_mode
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("mode")
+                && diag.message.contains("mode must be 'remote' or 'local'"))
+    );
+
     let local_missing_source = validate_plugin_config(&plugin_config(json!({
         "mode": "local",
         "codec": "openai_chat",
@@ -504,6 +543,24 @@ fn invalid_shapes_and_values_are_reported() {
             .diagnostics
             .iter()
             .any(|diag| diag.message.contains("colang_content can only be used"))
+    );
+
+    let local_rejects_remote_section = validate_plugin_config(&plugin_config(json!({
+        "mode": "local",
+        "config_yaml": "rails:\n  input: []\n",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(local_rejects_remote_section.has_errors());
+    assert!(
+        local_rejects_remote_section
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("remote")
+                && diag.message.contains("cannot be used when mode is 'local'"))
     );
 
     let remote_missing_identity = validate_plugin_config(&plugin_config(json!({
@@ -696,12 +753,19 @@ fn invalid_shapes_and_values_are_reported() {
 
     let local_empty_fields = validate_plugin_config(&plugin_config(json!({
         "mode": "local",
+        "config_path": "",
         "config_yaml": "",
         "colang_content": "",
         "codec": "openai_chat",
         "local": {"python_module": ""}
     })));
     assert!(local_empty_fields.has_errors());
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("config_path"))
+    );
     assert!(
         local_empty_fields
             .diagnostics
@@ -730,11 +794,11 @@ fn invalid_shapes_and_values_are_reported() {
         },
         "request_defaults": {
             "context": true,
-            "thread_id": "short",
+            "thread_id": "   ",
             "state": {"foo": "bar"},
             "llm_params": [],
             "log": "verbose",
-            "output_vars": 7,
+            "output_vars": ["answer", "", 7],
             "rails": {
                 "retrieval": [""]
             }
@@ -755,7 +819,7 @@ fn invalid_shapes_and_values_are_reported() {
     );
     assert!(invalid_request_defaults.diagnostics.iter().any(|diag| {
         diag.message
-            .contains("request_defaults.thread_id must be at least 16 characters long")
+            .contains("request_defaults.thread_id must not be empty")
     }));
     assert!(
         invalid_request_defaults
@@ -783,7 +847,13 @@ fn invalid_shapes_and_values_are_reported() {
         invalid_request_defaults
             .diagnostics
             .iter()
-            .any(|diag| diag.field.as_deref() == Some("request_defaults.output_vars"))
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.output_vars[1]"))
+    );
+    assert!(
+        invalid_request_defaults
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.output_vars[2]"))
     );
     assert!(
         invalid_request_defaults
@@ -791,6 +861,50 @@ fn invalid_shapes_and_values_are_reported() {
             .iter()
             .any(|diag| diag.field.as_deref() == Some("request_defaults.rails.retrieval[0]"))
     );
+
+    let invalid_request_output_vars_shape = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        },
+        "request_defaults": {
+            "thread_id": "short",
+            "output_vars": 7
+        }
+    })));
+    assert!(invalid_request_output_vars_shape.has_errors());
+    assert!(
+        invalid_request_output_vars_shape
+            .diagnostics
+            .iter()
+            .any(
+                |diag| diag.field.as_deref() == Some("request_defaults.thread_id")
+                    && diag
+                        .message
+                        .contains("request_defaults.thread_id must be at least 16 characters long")
+            )
+    );
+    assert!(
+        invalid_request_output_vars_shape
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("request_defaults.output_vars"))
+    );
+
+    let valid_bool_output_vars = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        },
+        "request_defaults": {
+            "output_vars": true
+        }
+    })));
+    assert!(!valid_bool_output_vars.has_errors());
 }
 
 #[test]
@@ -858,6 +972,32 @@ fn enabled_local_initialization_fails_fast_until_backend_exists() {
     match error {
         crate::plugin::PluginError::RegistrationFailed(message) => {
             assert!(message.contains("local backend"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn enabled_unknown_mode_initialization_fails_fast_when_policy_ignores_validation() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+
+    let error = futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "mode": "hybrid",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    }))))
+    .unwrap_err();
+
+    match error {
+        crate::plugin::PluginError::InvalidConfig(message) => {
+            assert!(message.contains("unsupported NeMo Guardrails mode 'hybrid'"));
         }
         other => panic!("unexpected error: {other}"),
     }

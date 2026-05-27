@@ -996,48 +996,67 @@ fn build_llm_guardrails_config(
     output_enabled: bool,
 ) -> Option<Map<String, Json>> {
     let mut guardrails = build_base_guardrails_config(config_id, config_ids, request_defaults);
-    let mut options = Map::new();
+    let options = build_llm_options(request_defaults, input_enabled, output_enabled);
 
-    if let Some(mut rails) = request_defaults
-        .and_then(|defaults| defaults.rails.as_ref())
-        .map(serialize_request_rails)
-    {
-        if !input_enabled {
-            rails.insert("input".to_string(), Json::Bool(false));
-        }
-        if !output_enabled {
-            rails.insert("output".to_string(), Json::Bool(false));
-        }
-        options.insert("rails".to_string(), Json::Object(rails));
-    } else if !input_enabled || !output_enabled {
-        let mut rails = Map::new();
-        if !input_enabled {
-            rails.insert("input".to_string(), Json::Bool(false));
-        }
-        if !output_enabled {
-            rails.insert("output".to_string(), Json::Bool(false));
-        }
-        options.insert("rails".to_string(), Json::Object(rails));
-    }
-
-    if let Some(request_defaults) = request_defaults {
-        if let Some(llm_params) = &request_defaults.llm_params {
-            options.insert("llm_params".to_string(), llm_params.clone());
-        }
-        if let Some(llm_output) = request_defaults.llm_output {
-            options.insert("llm_output".to_string(), Json::Bool(llm_output));
-        }
-        if let Some(output_vars) = &request_defaults.output_vars {
-            options.insert("output_vars".to_string(), output_vars.clone());
-        }
-        if let Some(log) = &request_defaults.log {
-            options.insert("log".to_string(), log.clone());
-        }
-    }
     if !options.is_empty() {
         guardrails.insert("options".to_string(), Json::Object(options));
     }
     (!guardrails.is_empty()).then_some(guardrails)
+}
+
+fn build_llm_options(
+    request_defaults: Option<&RequestDefaultsConfig>,
+    input_enabled: bool,
+    output_enabled: bool,
+) -> Map<String, Json> {
+    let mut options = Map::new();
+    if let Some(rails) = build_llm_rails_option(request_defaults, input_enabled, output_enabled) {
+        options.insert("rails".to_string(), Json::Object(rails));
+    }
+    insert_llm_request_default_options(&mut options, request_defaults);
+    options
+}
+
+fn build_llm_rails_option(
+    request_defaults: Option<&RequestDefaultsConfig>,
+    input_enabled: bool,
+    output_enabled: bool,
+) -> Option<Map<String, Json>> {
+    let mut rails = request_defaults
+        .and_then(|defaults| defaults.rails.as_ref())
+        .map(serialize_request_rails)
+        .unwrap_or_default();
+
+    if !input_enabled {
+        rails.insert("input".to_string(), Json::Bool(false));
+    }
+    if !output_enabled {
+        rails.insert("output".to_string(), Json::Bool(false));
+    }
+
+    (!rails.is_empty()).then_some(rails)
+}
+
+fn insert_llm_request_default_options(
+    options: &mut Map<String, Json>,
+    request_defaults: Option<&RequestDefaultsConfig>,
+) {
+    let Some(request_defaults) = request_defaults else {
+        return;
+    };
+
+    if let Some(llm_params) = &request_defaults.llm_params {
+        options.insert("llm_params".to_string(), llm_params.clone());
+    }
+    if let Some(llm_output) = request_defaults.llm_output {
+        options.insert("llm_output".to_string(), Json::Bool(llm_output));
+    }
+    if let Some(output_vars) = &request_defaults.output_vars {
+        options.insert("output_vars".to_string(), output_vars.clone());
+    }
+    if let Some(log) = &request_defaults.log {
+        options.insert("log".to_string(), log.clone());
+    }
 }
 
 fn build_tool_check_guardrails_config(
@@ -1105,6 +1124,10 @@ fn configured_tool_selector(
         serde_json::to_value(selector).expect("tool rail selector should serialize to JSON")
     })
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/nemo_guardrails/remote_coverage_tests.rs"]
+mod coverage_tests;
 
 #[cfg(any(target_arch = "wasm32", not(feature = "guardrails-remote")))]
 pub(super) fn register_remote_backend(
