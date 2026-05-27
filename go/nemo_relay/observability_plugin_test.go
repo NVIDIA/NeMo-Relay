@@ -85,16 +85,20 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
 	}
 
-	handle, err := PushScope("go-observability-agent", ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":true}`)))
-	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
-	}
-	if err := EmitEvent("go-mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))); err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
-	}
-	if err := PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))); err != nil {
-		t.Fatalf("PopScope failed: %v", err)
-	}
+	var handle *ScopeHandle
+	runWithTestScopeStack(t, func() {
+		var err error
+		handle, err = PushScope("go-observability-agent", ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":true}`)))
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		if err := EmitEvent("go-mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))); err != nil {
+			t.Fatalf("EmitEvent failed: %v", err)
+		}
+		if err := PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))); err != nil {
+			t.Fatalf("PopScope failed: %v", err)
+		}
+	})
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
 	}
@@ -121,11 +125,14 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 func TestObservabilityPluginAtifSplitsMultipleTopLevelAgents(t *testing.T) {
 	Dir := t.TempDir()
 	InitializeAtifPlugin(t, Dir)
-	First := EmitAgentStart(t, "first", FirstAgentName)
-	Nested := EmitAgentStart(t, "nested", NestedAgentName)
-	EmitAgentEnd(t, "nested", Nested)
-	EmitAgentEnd(t, "first", First)
-	Second := EmitAgentTrajectory(t, "second", SecondAgentName)
+	var First, Nested, Second *ScopeHandle
+	runWithTestScopeStack(t, func() {
+		First = EmitAgentStart(t, "first", FirstAgentName)
+		Nested = EmitAgentStart(t, "nested", NestedAgentName)
+		EmitAgentEnd(t, "nested", Nested)
+		EmitAgentEnd(t, "first", First)
+		Second = EmitAgentTrajectory(t, "second", SecondAgentName)
+	})
 	requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
 
 	Files, err := filepath.Glob(filepath.Join(Dir, TrajectoryFilenamePrefix+"*.json"))
@@ -199,19 +206,23 @@ func TestObservabilityAtifOpenAgentFlushesOnClear(t *testing.T) {
 	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
 		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
 	}
-	handle, err := PushScope("go-open-agent", ScopeTypeAgent)
-	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
-	}
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
-	}
+	var handle *ScopeHandle
+	runWithTestScopeStack(t, func() {
+		var err error
+		handle, err = PushScope("go-open-agent", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		if err := ClearPluginConfiguration(); err != nil {
+			t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+		}
+		if err := PopScope(handle); err != nil {
+			t.Fatalf("PopScope failed: %v", err)
+		}
+	})
 	path := filepath.Join(dir, "nemo-relay-atif-"+handle.UUID()+".json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected open-agent ATIF file at %s: %v", path, err)
-	}
-	if err := PopScope(handle); err != nil {
-		t.Fatalf("PopScope failed: %v", err)
 	}
 }
 
