@@ -54,10 +54,10 @@ Choose the exporter based on the downstream system:
 
 | Need | Use |
 |---|---|
-| Raw canonical event stream | [Agent Trajectory Observability Format (ATOF)](/plugins/observability/atof) |
-| Offline analysis, replay, or evaluation trajectories | [Agent Trajectory Interchange Format (ATIF)](/plugins/observability/atif) |
-| Generic OTLP traces | [OpenTelemetry](/plugins/observability/opentelemetry) |
-| OpenInference-oriented agent and LLM spans | [OpenInference](/plugins/observability/openinference) |
+| Raw canonical event stream | [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof) |
+| Offline analysis, replay, or evaluation trajectories | [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif) |
+| Generic OTLP traces | [OpenTelemetry](/observability-plugin/opentelemetry) |
+| OpenInference-oriented agent and LLM spans | [OpenInference](/observability-plugin/openinference) |
 
 Start with in-process event inspection before exporting externally. Add sanitize
 guardrails before exporters receive sensitive payloads.
@@ -82,10 +82,10 @@ are not written into ATIF.
 
 ## Pages
 
-- [Observability Configuration](/plugins/observability/configuration) documents the whole plugin
+- [Observability Configuration](/observability-plugin/configuration) documents the whole plugin
   component shape, activation, validation, and teardown.
-- [Agent Trajectory Observability Format (ATOF)](/plugins/observability/atof) covers raw JSONL event stream export.
-- [Agent Trajectory Interchange Format (ATIF)](/plugins/observability/atif) covers per-agent trajectory export.
-- [OpenTelemetry](/plugins/observability/opentelemetry) covers generic OTLP trace export.
-- [OpenInference](/plugins/observability/openinference) covers OpenInference-oriented OTLP trace
+- [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof) covers raw JSONL event stream export.
+- [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif) covers per-agent trajectory export.
+- [OpenTelemetry](/observability-plugin/opentelemetry) covers generic OTLP trace export.
+- [OpenInference](/observability-plugin/openinference) covers OpenInference-oriented OTLP trace
   export.

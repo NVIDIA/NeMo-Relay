@@ -33,7 +33,7 @@ A provider codec is a pure data translator at the NeMo Relay LLM boundary.
 - An LLM request codec converts a raw provider request into a normalized annotated request, then encodes any annotated edits back into the original provider request.
 - An LLM response codec converts a raw provider response into a normalized response annotation for lifecycle events.
 
-Provider codecs let framework code keep using provider-native payloads while NeMo Relay middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](/integrate-frameworks/using-codecs).
+Provider codecs let framework code keep using provider-native payloads while NeMo Relay middleware works against a shared annotated model. For application-facing type conversion, use [Using Codecs](/integrate-into-frameworks/using-codecs).
 
 ## How Provider Codecs Work
 
@@ -45,7 +45,7 @@ When a managed LLM call has a request codec:
 4. NeMo Relay calls `encode` to merge the annotated request back into the original raw request.
 5. Execution intercepts and the provider callback receive the encoded provider request.
 
-When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
+When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
 
 Codec implementations should preserve fields they do not understand. Treat `encode` as a merge operation over the original provider payload, not as a full replacement.
 
@@ -368,7 +368,7 @@ contract.
 
 Use these links to continue from this workflow into the next related task.
 
-- Use [Using Codecs](/integrate-frameworks/using-codecs) for typed value codecs.
-- Use [Provider Response Codecs](/integrate-frameworks/provider-response-codecs) for response-only annotations and subscriber examples.
+- Use [Using Codecs](/integrate-into-frameworks/using-codecs) for typed value codecs.
+- Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only annotations and subscriber examples.
 - Use [Add Middleware](/instrument-applications/advanced-guide) before adding request transforms.
-- Use [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) when the framework boundary includes SDK objects or streams that cannot pass through JSON payloads.
+- Use [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) when the framework boundary includes SDK objects or streams that cannot pass through JSON payloads.

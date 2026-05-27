@@ -33,20 +33,20 @@ Use these signals to decide whether this documentation path matches your current
 If you own the application call sites directly, use [Instrument Applications](/instrument-applications/about) first.
 If your application uses a maintained public integration such as LangChain,
 LangGraph, Deep Agents, or OpenClaw, start with
-[Supported Integrations](/integrations/about).
+[Supported Integrations](/supported-integrations/about).
 
 ## Guides
 
 Use these guide links to move from the overview into task-specific instructions.
 
-- [Adding Scopes](/integrate-frameworks/adding-scopes) shows how framework request and run hooks become NeMo Relay ownership boundaries.
-- [Wrap Tool Calls](/integrate-frameworks/wrap-tool-calls) explains where to place managed tool wrappers and tool lifecycle fallbacks.
-- [Wrap LLM Calls](/integrate-frameworks/wrap-llm-calls) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
-- [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
-- [Using Codecs](/integrate-frameworks/using-codecs) explains typed value codecs for framework-facing wrappers.
-- [Provider Codecs](/integrate-frameworks/provider-codecs) explains provider request and response codecs for normalized middleware and event annotations.
-- [Provider Response Codecs](/integrate-frameworks/provider-response-codecs) focuses on response-only annotations for subscribers and exporters.
-- [Code Examples](/integrate-frameworks/code-examples) collects fallback APIs, mark events, and repository patch workflow examples.
+- [Adding Scopes](/integrate-into-frameworks/adding-scopes) shows how framework request and run hooks become NeMo Relay ownership boundaries.
+- [Wrap Tool Calls](/integrate-into-frameworks/wrap-tool-calls) explains where to place managed tool wrappers and tool lifecycle fallbacks.
+- [Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls) explains where to place managed provider wrappers, model names, streaming behavior, and LLM lifecycle fallbacks.
+- [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data) shows how to keep clients, streams, callbacks, and SDK objects outside JSON payloads.
+- [Using Codecs](/integrate-into-frameworks/using-codecs) explains typed value codecs for framework-facing wrappers.
+- [Provider Codecs](/integrate-into-frameworks/provider-codecs) explains provider request and response codecs for normalized middleware and event annotations.
+- [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) focuses on response-only annotations for subscribers and exporters.
+- [Code Examples](/integrate-into-frameworks/code-examples) collects fallback APIs, mark events, and repository patch workflow examples.
 
 For coding-agent hook and LLM gateway observability, use
 [NeMo Relay CLI](/nemo-relay-cli/about). That section covers Claude Code,

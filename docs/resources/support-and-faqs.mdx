@@ -202,7 +202,7 @@ Use manual lifecycle APIs only when the framework owns the invocation internally
 and you only have start and finish hooks. In that case, preserve the start
 handle, emit the matching end event, and handle error paths deliberately. See
 [Invocation API Selection](/instrument-applications/code-examples#invocation-api-selection)
-and [Preferred Integration Order](/integrate-frameworks/code-examples#preferred-integration-order).
+and [Preferred Integration Order](/integrate-into-frameworks/code-examples#preferred-integration-order).
 
 ### How Are Tool Calls And LLM Calls Different?
 
@@ -222,7 +222,7 @@ object. Use the streaming helpers when callers need incremental output or when
 subscribers should observe streaming lifecycle activity.
 
 Refer to [Streaming LLM Execution](/instrument-applications/code-examples#streaming-llm-execution)
-and [Wrap LLM Calls](/integrate-frameworks/wrap-llm-calls#streaming-providers).
+and [Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls#streaming-providers).
 
 ## Middleware, Policy, And Data
 
@@ -301,7 +301,7 @@ instances outside NeMo Relay payloads.
 
 When a framework exposes non-serializable objects, pass stable IDs or summarized
 metadata through NeMo Relay and keep the original objects in framework-owned
-storage. Refer to [Handle Non-Serializable Data](/integrate-frameworks/non-serializable-data).
+storage. Refer to [Handle Non-Serializable Data](/integrate-into-frameworks/non-serializable-data).
 
 ### How Do I Keep Sensitive Data Out Of Observability?
 
@@ -311,7 +311,7 @@ configuration and source code, and emit summarized metadata when full request or
 response bodies are not needed.
 
 Refer to [Middleware](/about-nemo-relay/concepts/middleware#guardrails) and
-[Observability](/plugins/observability/about).
+[Observability](/observability-plugin/about).
 
 ## Observability And Export
 
@@ -325,7 +325,7 @@ operational tracing, trajectory export, or analytics.
 
 Refer to [Subscribers](/about-nemo-relay/concepts/subscribers),
 [Events](/about-nemo-relay/concepts/events), and
-[Observability](/plugins/observability/about).
+[Observability](/observability-plugin/about).
 
 ### Which Exporter Should I Use?
 
@@ -335,10 +335,10 @@ OpenInference when your tracing stack expects OpenInference-style agent and LLM
 semantics. Use Agent Trajectory Interchange Format (ATIF) when you need
 trajectory artifacts for analysis, replay, or evaluation workflows.
 
-Refer to [Exporter Selection](/plugins/observability/about#exporter-selection),
-[OpenTelemetry](/plugins/observability/opentelemetry),
-[OpenInference](/plugins/observability/openinference), and
-[Agent Trajectory Interchange Format (ATIF)](/plugins/observability/atif).
+Refer to [Exporter Selection](/observability-plugin/about#exporter-selection),
+[OpenTelemetry](/observability-plugin/opentelemetry),
+[OpenInference](/observability-plugin/openinference), and
+[Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif).
 
 ### Can I Use NeMo Relay Just For Observability Without Adaptive Tuning Or Middleware?
 
@@ -384,10 +384,10 @@ telemetry and in-memory state so the runtime can observe representative
 workflows before changing behavior. Enable active behavior one area at a time,
 such as adaptive hints, tool parallelism, or cache-governor behavior.
 
-Refer to [Adaptive](/plugins/adaptive/about),
-[Adaptive Configuration](/plugins/adaptive/configuration),
-[Adaptive Cache Governor (ACG)](/plugins/adaptive/acg), and
-[Adaptive Hints](/plugins/adaptive/adaptive-hints).
+Refer to [Adaptive](/adaptive-plugin/about),
+[Adaptive Configuration](/adaptive-plugin/configuration),
+[Adaptive Cache Governor (ACG)](/adaptive-plugin/acg), and
+[Adaptive Hints](/adaptive-plugin/adaptive-hints).
 
 ## Framework Integration And APIs
 
@@ -403,7 +403,7 @@ helpers only when the framework needs those decisions before it invokes its own
 downstream code.
 
 Refer to [Framework Integrations](/about-nemo-relay/concepts/framework-integrations) and
-[Integrate into Frameworks](/integrate-frameworks/about).
+[Integrate into Frameworks](/integrate-into-frameworks/about).
 
 ### How Does NeMo Relay Connect To My Favorite Agent Harness Or Framework?
 
@@ -424,9 +424,9 @@ into a normalized request shape for middleware and encoded back before the real
 provider call. Use provider response codecs when provider responses need a
 normalized annotated shape for events or downstream consumers.
 
-Refer to [Using Codecs](/integrate-frameworks/using-codecs),
-[Provider Codecs](/integrate-frameworks/provider-codecs), and
-[Provider Response Codecs](/integrate-frameworks/provider-response-codecs).
+Refer to [Using Codecs](/integrate-into-frameworks/using-codecs),
+[Provider Codecs](/integrate-into-frameworks/provider-codecs), and
+[Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs).
 
 ### How Are Third-Party Integrations Maintained?
 
@@ -435,15 +435,15 @@ upstream source checkouts under `third_party/`. Use the repository wrapper
 scripts when checking or applying those patches, and regenerate the patch after
 changing files inside a submodule.
 
-Refer to [Framework Integration Code Examples](/integrate-frameworks/code-examples#quickstart-apply-maintained-patches)
+Refer to [Framework Integration Code Examples](/integrate-into-frameworks/code-examples#quickstart-apply-maintained-patches)
 and the repository root `third_party/README.md`.
 
 ### Where Are The API Docs?
 
 Use [API](/reference/api) for generated symbol-level documentation.
-The primary generated entry points are [Python API](/reference/api/python),
-[Node.js API](/reference/api/nodejs), and
-[Rust API](/reference/api/rust).
+The primary generated entry points are [Python API](/reference/api/python-library-reference),
+[Node.js API](/reference/api/nodejs-library-reference), and
+[Rust API](/reference/api/rust-library-reference).
 
 Go, WebAssembly, and raw FFI are experimental and source-first; use their source
 directories and tests when you need exact behavior.

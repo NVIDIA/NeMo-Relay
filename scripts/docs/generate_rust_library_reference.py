@@ -162,10 +162,11 @@ def _run_cargo_doc(repo_root: Path) -> None:
 def _output_relative(crate_name: str, crate_dir: Path, html_path: Path) -> Path:
     crate_slug = _crate_slug(crate_name)
     rel = html_path.relative_to(crate_dir)
+    parent_parts = [_slug_part(part) for part in rel.parent.parts]
     if rel.name == "index.html":
-        return Path(crate_slug, *rel.parent.parts, "index.mdx")
+        return Path(crate_slug, *parent_parts, "index.mdx")
     stem = rel.name.removesuffix(".html")
-    return Path(crate_slug, *rel.parent.parts, f"{_slug_part(stem)}.mdx")
+    return Path(crate_slug, *parent_parts, f"{_slug_part(stem)}.mdx")
 
 
 def _page_url(output_rel: Path) -> str:

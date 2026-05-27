@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 navigation:
-  - folder: ./about
+  - folder: ./about-nemo-relay
     title: "About NeMo Relay"
     slug: about-nemo-relay
     title-source: frontmatter
@@ -14,7 +14,7 @@ navigation:
     title: "NeMo Relay CLI"
     slug: nemo-relay-cli
     title-source: frontmatter
-  - folder: ./integrations
+  - folder: ./supported-integrations
     title: "Supported Integrations"
     slug: supported-integrations
     title-source: frontmatter
@@ -22,15 +22,15 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - folder: ./plugins/observability
+  - folder: ./observability-plugin
     title: "Observability Plugin"
     slug: observability-plugin
     title-source: frontmatter
-  - folder: ./plugins/adaptive
+  - folder: ./adaptive-plugin
     title: "Adaptive Plugin"
     slug: adaptive-plugin
     title-source: frontmatter
-  - folder: ./integrate-frameworks
+  - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"
     slug: integrate-into-frameworks
     title-source: frontmatter

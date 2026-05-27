@@ -325,9 +325,9 @@ The pre-commit hooks do not currently enforce SPDX headers automatically, but re
 Before making significant changes, read through the documentation in
 [`docs/`](docs/), especially:
 
-- [Architecture Overview](docs/about/architecture.mdx) -- runtime model and data flow
-- [Scopes](docs/about/concepts/scopes.mdx) -- scopes, handles, events, and runtime ownership
-- [Middleware](docs/about/concepts/middleware.mdx) -- execution ordering and middleware behavior
+- [Architecture Overview](docs/about-nemo-relay/architecture.mdx) -- runtime model and data flow
+- [Scopes](docs/about-nemo-relay/concepts/scopes.mdx) -- scopes, handles, events, and runtime ownership
+- [Middleware](docs/about-nemo-relay/concepts/middleware.mdx) -- execution ordering and middleware behavior
 - [API Reference](docs/reference/api/index.mdx) -- public surfaces across Rust, Python, and Node.js
 
 The codebase follows a layered architecture: **Core (Rust)** provides the runtime, with bindings through **FFI (C, used by Go through CGo)**, **PyO3 (Python)**, **NAPI (Node.js)**, and **wasm-bindgen (WebAssembly)**. Each binding mirrors the full API surface.
