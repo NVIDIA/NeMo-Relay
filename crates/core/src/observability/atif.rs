@@ -782,10 +782,9 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
 ///
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
 fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
-    let arr = tool_call_array(output)?;
-    if arr.is_empty() {
-        return None;
-    }
+    let arr = tool_call_array(output)
+        .or_else(|| openai_responses_function_call_items(output))
+        .filter(|arr| !arr.is_empty())?;
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
         let tc_obj = tc.as_object()?;
@@ -801,6 +800,7 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         let name = func
             .and_then(|f| f.get("name"))
             .or_else(|| tc_obj.get("name"))
+            .or_else(|| tc_obj.get("tool_name"))
             .or_else(|| tc_obj.get("function_name"))
             .and_then(Json::as_str)
             .unwrap_or("")
@@ -843,6 +843,24 @@ fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
         .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
 }
 
+fn openai_responses_function_call_items(output: &Json) -> Option<&Vec<Json>> {
+    output
+        .as_object()
+        .and_then(|object| object.get("output"))
+        .and_then(Json::as_array)
+        .filter(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Json::as_str) == Some("function_call")
+                    && item.as_object().is_some_and(|object| {
+                        object.contains_key("call_id")
+                            || object.contains_key("id")
+                            || object.contains_key("name")
+                            || object.contains_key("tool_name")
+                    })
+            })
+        })
+}
+
 fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
     let Some(raw_arguments) = raw_arguments else {
         return serde_json::json!({});
@@ -871,6 +889,7 @@ fn tool_call_extra(tool_call: &Json) -> Option<Json> {
                 | "type"
                 | "function"
                 | "name"
+                | "tool_name"
                 | "function_name"
                 | "arguments"
                 | "args"
@@ -997,6 +1016,37 @@ fn build_invocation_info(
         status: Some("completed".to_string()),
         framework: Some(framework.to_string()),
     }
+}
+
+fn delegation_tool_call_id(value: &Json) -> Option<String> {
+    [
+        &["tool_call_id"][..],
+        &["toolCallId"],
+        &["source_call_id"],
+        &["sourceCallId"],
+        &["delegation_tool_call_id"],
+        &["delegationToolCallId"],
+        &["parent_tool_call_id"],
+        &["parentToolCallId"],
+        &["extra", "tool_call_id"],
+        &["extra", "toolCallId"],
+        &["extra", "source_call_id"],
+        &["extra", "sourceCallId"],
+        &["extra", "delegation_tool_call_id"],
+        &["extra", "delegationToolCallId"],
+        &["extra", "parent_tool_call_id"],
+        &["extra", "parentToolCallId"],
+    ]
+    .into_iter()
+    .find_map(|path| json_string_at(value, path))
+}
+
+fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str().map(ToString::to_string)
 }
 
 struct EventLookupMaps {
@@ -1334,6 +1384,87 @@ impl StepConversionState {
             .push_tool_metadata(build_ancestry(event, &lookups.name_map), invocation);
     }
 
+    fn resolve_subagent_source_call_id(&self, event: &Event) -> Option<String> {
+        let candidate = event
+            .metadata()
+            .and_then(delegation_tool_call_id)
+            .or_else(|| event.data().and_then(delegation_tool_call_id))?;
+
+        self.current_agent
+            .has_tool_call_id(&candidate)
+            .then_some(candidate)
+    }
+
+    fn subagent_reference_result(
+        child: &AgentScopeNode,
+        event: &Event,
+        source_call_id: Option<String>,
+    ) -> AtifObservationResult {
+        AtifObservationResult {
+            source_call_id,
+            content: None,
+            subagent_trajectory_ref: Some(vec![AtifSubagentTrajectoryRef {
+                trajectory_id: Some(child.uuid.to_string()),
+                session_id: child.session_id.clone(),
+                extra: Some(serde_json::json!({
+                    "name": child.name.clone(),
+                    "scope_uuid": child.uuid.to_string(),
+                })),
+            }]),
+            extra: Some(event_extra(event)),
+        }
+    }
+
+    fn attach_subagent_ref_to_agent_step(
+        &mut self,
+        child: &AgentScopeNode,
+        event: &Event,
+        source_call_id: &str,
+    ) -> bool {
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return false;
+        };
+        let Some(step) = self.steps.get_mut(step_idx) else {
+            return false;
+        };
+        let Some(tool_calls) = step.tool_calls.as_deref() else {
+            return false;
+        };
+        if !tool_calls
+            .iter()
+            .any(|tool_call| tool_call.tool_call_id == source_call_id)
+        {
+            return false;
+        }
+
+        let observation = step.observation.get_or_insert_with(|| AtifObservation {
+            results: Vec::new(),
+        });
+        if let Some(result) = observation
+            .results
+            .iter_mut()
+            .find(|result| result.source_call_id.as_deref() == Some(source_call_id))
+        {
+            let refs = result.subagent_trajectory_ref.get_or_insert_with(Vec::new);
+            refs.push(AtifSubagentTrajectoryRef {
+                trajectory_id: Some(child.uuid.to_string()),
+                session_id: child.session_id.clone(),
+                extra: Some(serde_json::json!({
+                    "name": child.name.clone(),
+                    "scope_uuid": child.uuid.to_string(),
+                })),
+            });
+            return true;
+        }
+
+        observation.results.push(Self::subagent_reference_result(
+            child,
+            event,
+            Some(source_call_id.to_string()),
+        ));
+        true
+    }
+
     fn handle_mark(&mut self, mark: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
         let Some(data) = mark.data() else {
@@ -1375,7 +1506,14 @@ impl StepConversionState {
     }
 
     fn handle_subagent_start(&mut self, child: &AgentScopeNode, event: &Event) {
+        let source_call_id = self.resolve_subagent_source_call_id(event);
         self.flush_observations();
+        if let Some(source_call_id) = source_call_id
+            && self.attach_subagent_ref_to_agent_step(child, event, &source_call_id)
+        {
+            self.finalize_agent_extra();
+            return;
+        }
         self.finalize_agent_extra();
 
         self.steps.push(AtifStep {
@@ -1388,19 +1526,7 @@ impl StepConversionState {
             reasoning_content: None,
             tool_calls: None,
             observation: Some(AtifObservation {
-                results: vec![AtifObservationResult {
-                    source_call_id: None,
-                    content: None,
-                    subagent_trajectory_ref: Some(vec![AtifSubagentTrajectoryRef {
-                        trajectory_id: Some(child.uuid.to_string()),
-                        session_id: child.session_id.clone(),
-                        extra: Some(serde_json::json!({
-                            "name": child.name.clone(),
-                            "scope_uuid": child.uuid.to_string(),
-                        })),
-                    }]),
-                    extra: Some(event_extra(event)),
-                }],
+                results: vec![Self::subagent_reference_result(child, event, None)],
             }),
             metrics: None,
             llm_call_count: None,
@@ -1417,6 +1543,37 @@ impl StepConversionState {
         }
         self.steps
     }
+}
+
+fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &HashSet<String>) {
+    for step in steps.iter_mut() {
+        let Some(observation) = &mut step.observation else {
+            continue;
+        };
+        observation.results.retain_mut(|result| {
+            if let Some(refs) = &mut result.subagent_trajectory_ref {
+                refs.retain(|reference| {
+                    reference
+                        .trajectory_id
+                        .as_ref()
+                        .is_some_and(|trajectory_id| child_trajectory_ids.contains(trajectory_id))
+                });
+                if refs.is_empty() {
+                    result.subagent_trajectory_ref = None;
+                }
+            }
+            result.content.is_some() || result.subagent_trajectory_ref.is_some()
+        });
+        if observation.results.is_empty() {
+            step.observation = None;
+        }
+    }
+    steps.retain(|step| {
+        !(step.source == "system"
+            && step.observation.is_none()
+            && step.message == empty_message()
+            && step.extra.is_none())
+    });
 }
 
 fn refresh_tool_call_lookup(
@@ -1444,6 +1601,7 @@ struct AgentScopeNode {
     uuid: Uuid,
     name: String,
     session_id: Option<String>,
+    referenced_by_parent: bool,
     parent_agent: Option<Uuid>,
     children: Vec<Uuid>,
     start_timestamp: DateTime<Utc>,
@@ -1518,6 +1676,7 @@ impl AgentScopeTree {
                         .and_then(|metadata| metadata.get("session_id"))
                         .and_then(Json::as_str)
                         .map(ToString::to_string),
+                    referenced_by_parent: is_subagent_reference_event(event),
                     parent_agent,
                     children: Vec::new(),
                     start_timestamp: *event.timestamp(),
@@ -1591,6 +1750,12 @@ fn agent_scope_role(event: &Event) -> Option<&str> {
         .metadata()
         .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
         .and_then(Json::as_str)
+}
+
+fn is_subagent_reference_event(event: &Event) -> bool {
+    agent_scope_role(event) == Some("subagent")
+        || event.metadata().and_then(delegation_tool_call_id).is_some()
+        || event.data().and_then(delegation_tool_call_id).is_some()
 }
 
 fn nearest_agent_parent(
@@ -1694,7 +1859,7 @@ fn agent_scope_to_trajectory(
     sorted_events: &[&Event],
     is_root: bool,
 ) -> AtifTrajectory {
-    let steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid);
+    let mut steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid);
     let subagent_trajectories = tree
         .nodes
         .get(&agent_uuid)
@@ -1711,9 +1876,25 @@ fn agent_scope_to_trajectory(
                         false,
                     )
                 })
+                .filter(|trajectory| {
+                    !trajectory.steps.is_empty()
+                        || trajectory
+                            .trajectory_id
+                            .as_deref()
+                            .and_then(|trajectory_id| Uuid::parse_str(trajectory_id).ok())
+                            .and_then(|uuid| tree.nodes.get(&uuid))
+                            .is_some_and(|child| !child.referenced_by_parent)
+                })
                 .collect::<Vec<_>>()
         })
         .filter(|children| !children.is_empty());
+    let child_trajectory_ids = subagent_trajectories
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|trajectory| trajectory.trajectory_id.clone())
+        .collect::<HashSet<_>>();
+    prune_subagent_refs(&mut steps, &child_trajectory_ids);
     let trajectory_id = if is_root {
         session_id.to_string()
     } else {
