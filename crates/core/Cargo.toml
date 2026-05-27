@@ -14,7 +14,7 @@ readme = "README.md"
 workspace = true
 
 [features]
-default = ["otel", "openinference", "guardrails-remote", "atif-storage"]
+default = ["otel", "openinference", "guardrails-remote", "object-store"]
 schema = ["dep:schemars"]
 guardrails-remote = [
     "dep:reqwest",
