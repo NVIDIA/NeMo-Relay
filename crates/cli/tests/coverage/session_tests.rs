@@ -1375,6 +1375,7 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-usage");
+    assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(10));
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(5));
     assert_eq!(atif["steps"][1]["metrics"]["cached_tokens"], json!(3));
@@ -1451,6 +1452,7 @@ async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-clean");
+    assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
     assert_eq!(atif["steps"][0]["source"], json!("user"));
     assert_eq!(atif["steps"][1]["source"], json!("agent"));
@@ -1503,34 +1505,25 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
+    assert!(atif["subagent_trajectories"].is_null());
     let root_steps = atif["steps"].as_array().unwrap();
     assert_eq!(root_steps.len(), 1);
     assert_eq!(root_steps[0]["source"], json!("system"));
+    assert_eq!(root_steps[0]["message"], json!("subagent_stop"));
     assert_eq!(
-        root_steps[0]["observation"]["results"][0]["subagent_trajectory_ref"][0]["extra"]["name"],
-        json!("hermes-turn")
-    );
-
-    let turn = &atif["subagent_trajectories"][0];
-    assert_eq!(turn["session_id"], json!("hermes-orphan"));
-    let steps = turn["steps"].as_array().unwrap();
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0]["source"], json!("system"));
-    assert_eq!(steps[0]["message"], json!("subagent_stop"));
-    assert_eq!(
-        steps[0]["extra"]["event_payload"]["hook_event_name"],
+        root_steps[0]["extra"]["event_payload"]["hook_event_name"],
         json!("subagent_stop")
     );
     assert_eq!(
-        steps[0]["extra"]["event_payload"]["extra"]["subagent_id"],
+        root_steps[0]["extra"]["event_payload"]["extra"]["subagent_id"],
         json!("worker-1")
     );
     assert_eq!(
-        steps[0]["extra"]["ancestry"]["function_name"],
+        root_steps[0]["extra"]["ancestry"]["function_name"],
         json!("subagent_end_without_start")
     );
     assert_eq!(
-        steps[0]["extra"]["ancestry"]["parent_name"],
+        root_steps[0]["extra"]["ancestry"]["parent_name"],
         json!("hermes-turn")
     );
 }
@@ -1630,8 +1623,7 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "parent-session");
-    let turn = &atif["subagent_trajectories"][0];
-    let child = &turn["subagent_trajectories"][0];
+    let child = &atif["subagent_trajectories"][0];
     assert_eq!(child["session_id"], json!("child-session"));
     assert!(
         !child["steps"].as_array().unwrap().is_empty(),
@@ -1690,6 +1682,7 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "empty-mark");
     assert!(atif["steps"].as_array().unwrap().is_empty());
+    assert!(atif["subagent_trajectories"].is_null());
 }
 
 #[tokio::test]

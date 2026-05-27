@@ -1458,7 +1458,7 @@ struct AgentScopeTree {
 impl AgentScopeTree {
     fn from_events(events: &[&Event]) -> Self {
         let mut scope_parent_map = HashMap::new();
-        let mut agent_uuids = HashSet::new();
+        let mut agent_scope_roles = HashMap::new();
 
         for event in events {
             if is_start_event(event) {
@@ -1466,15 +1466,38 @@ impl AgentScopeTree {
                     scope_parent_map.insert(event.uuid(), parent_uuid);
                 }
                 if event.scope_type() == Some(crate::api::scope::ScopeType::Agent) {
-                    agent_uuids.insert(event.uuid());
+                    agent_scope_roles
+                        .insert(event.uuid(), agent_scope_role(event).map(str::to_string));
                 }
             }
+        }
+
+        let mut agent_uuids = HashSet::new();
+        for event in events {
+            if !is_start_event(event)
+                || event.scope_type() != Some(crate::api::scope::ScopeType::Agent)
+            {
+                continue;
+            }
+            if agent_scope_role(event) == Some("turn")
+                && nearest_non_turn_agent_parent(
+                    event.parent_uuid(),
+                    &scope_parent_map,
+                    &agent_scope_roles,
+                    Some(event.uuid()),
+                )
+                .is_some()
+            {
+                continue;
+            }
+            agent_uuids.insert(event.uuid());
         }
 
         let mut nodes = HashMap::new();
         for event in events {
             if !is_start_event(event)
                 || event.scope_type() != Some(crate::api::scope::ScopeType::Agent)
+                || !agent_uuids.contains(&event.uuid())
             {
                 continue;
             }
@@ -1562,6 +1585,13 @@ impl AgentScopeTree {
     }
 }
 
+fn agent_scope_role(event: &Event) -> Option<&str> {
+    event
+        .metadata()
+        .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
+        .and_then(Json::as_str)
+}
+
 fn nearest_agent_parent(
     mut current: Option<Uuid>,
     scope_parent_map: &HashMap<Uuid, Uuid>,
@@ -1571,6 +1601,25 @@ fn nearest_agent_parent(
     while let Some(uuid) = current {
         if Some(uuid) != excluded_uuid && agent_uuids.contains(&uuid) {
             return Some(uuid);
+        }
+        current = scope_parent_map.get(&uuid).copied();
+    }
+    None
+}
+
+fn nearest_non_turn_agent_parent(
+    mut current: Option<Uuid>,
+    scope_parent_map: &HashMap<Uuid, Uuid>,
+    agent_scope_roles: &HashMap<Uuid, Option<String>>,
+    excluded_uuid: Option<Uuid>,
+) -> Option<Uuid> {
+    while let Some(uuid) = current {
+        if Some(uuid) != excluded_uuid {
+            if let Some(role) = agent_scope_roles.get(&uuid) {
+                if role.as_deref() != Some("turn") {
+                    return Some(uuid);
+                }
+            }
         }
         current = scope_parent_map.get(&uuid).copied();
     }
