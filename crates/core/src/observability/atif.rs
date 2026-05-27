@@ -783,8 +783,9 @@ fn openai_responses_input_content_message(content: &Json) -> Option<Json> {
 /// Returns `None` if there are no tool calls or the structure is unrecognized.
 fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
     let arr = tool_call_array(output)
-        .or_else(|| openai_responses_function_call_items(output))
-        .filter(|arr| !arr.is_empty())?;
+        .filter(|arr| !arr.is_empty())
+        .map(|arr| arr.iter().collect::<Vec<_>>())
+        .or_else(|| openai_responses_function_call_items(output))?;
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
         let tc_obj = tc.as_object()?;
@@ -843,22 +844,16 @@ fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
         .or_else(|| raw_response_message_field(output, "tool_calls").and_then(Json::as_array))
 }
 
-fn openai_responses_function_call_items(output: &Json) -> Option<&Vec<Json>> {
-    output
+fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
+    let items = output
         .as_object()
         .and_then(|object| object.get("output"))
-        .and_then(Json::as_array)
-        .filter(|items| {
-            items.iter().any(|item| {
-                item.get("type").and_then(Json::as_str) == Some("function_call")
-                    && item.as_object().is_some_and(|object| {
-                        object.contains_key("call_id")
-                            || object.contains_key("id")
-                            || object.contains_key("name")
-                            || object.contains_key("tool_name")
-                    })
-            })
-        })
+        .and_then(Json::as_array)?;
+    let function_call_items = items
+        .iter()
+        .filter(|item| item.get("type").and_then(Json::as_str) == Some("function_call"))
+        .collect::<Vec<_>>();
+    (!function_call_items.is_empty()).then_some(function_call_items)
 }
 
 fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
@@ -1130,6 +1125,16 @@ impl PendingAgentStep {
         self.tool_invocations.push(invocation);
     }
 
+    fn push_tool_call_id(&mut self, tool_call_id: String) {
+        if !self
+            .tool_call_order
+            .iter()
+            .any(|known_id| known_id == &tool_call_id)
+        {
+            self.tool_call_order.push(tool_call_id);
+        }
+    }
+
     fn has_active_step(&self) -> bool {
         self.step_idx.is_some()
     }
@@ -1167,6 +1172,8 @@ impl PendingAgentStep {
 struct StepConversionState {
     steps: Vec<AtifStep>,
     last_tool_call_map: std::collections::HashMap<String, String>,
+    tool_scope_call_ids: std::collections::HashMap<Uuid, String>,
+    active_tool_call_id: Option<String>,
     pending_observations: Vec<AtifObservationResult>,
     pending_obs_timestamp: Option<String>,
     current_reasoning_effort: Option<Json>,
@@ -1185,6 +1192,9 @@ impl StepConversionState {
             }
             ("scope", Some(crate::api::event::ScopeCategory::End), Some("llm")) => {
                 self.handle_llm_end(event, lookups)
+            }
+            ("scope", Some(crate::api::event::ScopeCategory::Start), Some("tool")) => {
+                self.handle_tool_start(event)
             }
             ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
                 self.handle_tool_end(event, lookups)
@@ -1224,10 +1234,11 @@ impl StepConversionState {
                 }
             }
             if !attached.is_empty() {
-                if let Some(observation) = &mut step.observation {
-                    observation.results.extend(attached);
-                } else {
-                    step.observation = Some(AtifObservation { results: attached });
+                let observation = step.observation.get_or_insert_with(|| AtifObservation {
+                    results: Vec::new(),
+                });
+                for result in attached {
+                    merge_observation_result(observation, result);
                 }
             }
             observations = standalone;
@@ -1267,6 +1278,8 @@ impl StepConversionState {
     fn handle_llm_start(&mut self, event: &Event, lookups: &EventLookupMaps) {
         self.flush_observations();
         self.finalize_agent_extra();
+        self.tool_scope_call_ids.clear();
+        self.active_tool_call_id = None;
 
         let Some(input) = event.data() else {
             return;
@@ -1342,10 +1355,73 @@ impl StepConversionState {
         );
     }
 
+    fn handle_tool_start(&mut self, event: &Event) {
+        let Some(source_call_id) = self.source_call_id_for_tool_start(event) else {
+            return;
+        };
+        if !self.ensure_tool_call_on_current_agent(event, &source_call_id) {
+            return;
+        }
+        self.tool_scope_call_ids
+            .insert(event.uuid(), source_call_id.clone());
+        self.active_tool_call_id = Some(source_call_id);
+    }
+
+    fn source_call_id_for_tool_start(&self, event: &Event) -> Option<String> {
+        if !self.current_agent.has_active_step() {
+            return None;
+        }
+        event
+            .tool_call_id()
+            .map(ToOwned::to_owned)
+            .or_else(|| self.last_tool_call_map.get(event.name()).cloned())
+            .or_else(|| Some(event.uuid().to_string()))
+    }
+
+    fn ensure_tool_call_on_current_agent(&mut self, event: &Event, source_call_id: &str) -> bool {
+        if self.current_agent.has_tool_call_id(source_call_id) {
+            self.tool_scope_call_ids
+                .insert(event.uuid(), source_call_id.to_string());
+            return true;
+        }
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return false;
+        };
+        let Some(step) = self.steps.get_mut(step_idx) else {
+            return false;
+        };
+        let tool_calls = step.tool_calls.get_or_insert_with(Vec::new);
+        if tool_calls
+            .iter()
+            .any(|tool_call| tool_call.tool_call_id == source_call_id)
+        {
+            self.current_agent
+                .push_tool_call_id(source_call_id.to_string());
+            return true;
+        }
+        tool_calls.push(AtifToolCall {
+            tool_call_id: source_call_id.to_string(),
+            function_name: event.name().to_string(),
+            arguments: event
+                .data()
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})),
+            extra: Some(event_extra(event)),
+        });
+        self.current_agent
+            .push_tool_call_id(source_call_id.to_string());
+        if !event.name().is_empty() {
+            self.last_tool_call_map
+                .insert(event.name().to_string(), source_call_id.to_string());
+        }
+        true
+    }
+
     fn resolve_source_call_id(&self, event: &Event) -> Option<String> {
         let candidate = event
             .tool_call_id()
             .map(ToOwned::to_owned)
+            .or_else(|| self.tool_scope_call_ids.get(&event.uuid()).cloned())
             .or_else(|| self.last_tool_call_map.get(event.name()).cloned())?;
 
         if self.current_agent.has_tool_call_id(&candidate)
@@ -1374,6 +1450,10 @@ impl StepConversionState {
             });
         }
 
+        if self.active_tool_call_id.as_deref() == source_call_id.as_deref() {
+            self.active_tool_call_id = None;
+        }
+
         if !self.current_agent.has_active_step() || source_call_id.is_none() {
             return;
         }
@@ -1388,7 +1468,8 @@ impl StepConversionState {
         let candidate = event
             .metadata()
             .and_then(delegation_tool_call_id)
-            .or_else(|| event.data().and_then(delegation_tool_call_id))?;
+            .or_else(|| event.data().and_then(delegation_tool_call_id))
+            .or_else(|| self.active_tool_call_id.clone())?;
 
         self.current_agent
             .has_tool_call_id(&candidate)
@@ -1511,25 +1592,34 @@ impl StepConversionState {
         if let Some(source_call_id) = source_call_id
             && self.attach_subagent_ref_to_agent_step(child, event, &source_call_id)
         {
-            self.finalize_agent_extra();
             return;
         }
         self.finalize_agent_extra();
 
+        let source_call_id = format!("subagent:{}", child.uuid);
         self.steps.push(AtifStep {
             step_id: 0,
-            source: "system".to_string(),
+            source: "agent".to_string(),
             message: empty_message(),
             timestamp: Some(event.timestamp().to_rfc3339()),
             model_name: None,
             reasoning_effort: None,
             reasoning_content: None,
-            tool_calls: None,
+            tool_calls: Some(vec![AtifToolCall {
+                tool_call_id: source_call_id.clone(),
+                function_name: child.name.clone(),
+                arguments: subagent_dispatch_arguments(child, event),
+                extra: Some(event_extra(event)),
+            }]),
             observation: Some(AtifObservation {
-                results: vec![Self::subagent_reference_result(child, event, None)],
+                results: vec![Self::subagent_reference_result(
+                    child,
+                    event,
+                    Some(source_call_id),
+                )],
             }),
             metrics: None,
-            llm_call_count: None,
+            llm_call_count: Some(0),
             is_copied_context: None,
             extra: None,
         });
@@ -1538,11 +1628,48 @@ impl StepConversionState {
     fn finish(mut self) -> Vec<AtifStep> {
         self.flush_observations();
         self.finalize_agent_extra();
-        for (index, step) in self.steps.iter_mut().enumerate() {
-            step.step_id = index + 1;
-        }
+        renumber_steps(&mut self.steps);
         self.steps
     }
+}
+
+fn merge_observation_result(observation: &mut AtifObservation, mut result: AtifObservationResult) {
+    if let Some(source_call_id) = result.source_call_id.as_deref()
+        && let Some(existing) = observation
+            .results
+            .iter_mut()
+            .find(|existing| existing.source_call_id.as_deref() == Some(source_call_id))
+    {
+        if existing.content.is_none() {
+            existing.content = result.content.take();
+        }
+        if let Some(mut refs) = result.subagent_trajectory_ref.take() {
+            existing
+                .subagent_trajectory_ref
+                .get_or_insert_with(Vec::new)
+                .append(&mut refs);
+        }
+        if existing.extra.is_none() {
+            existing.extra = result.extra.take();
+        }
+        return;
+    }
+
+    observation.results.push(result);
+}
+
+fn subagent_dispatch_arguments(child: &AgentScopeNode, event: &Event) -> Json {
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("name".to_string(), Json::String(child.name.clone()));
+    if let Some(session_id) = &child.session_id {
+        arguments.insert("session_id".to_string(), Json::String(session_id.clone()));
+    }
+    if let Some(data) = event.data()
+        && !data.is_null()
+    {
+        arguments.insert("payload".to_string(), data.clone());
+    }
+    Json::Object(arguments)
 }
 
 fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &HashSet<String>) {
@@ -1573,7 +1700,19 @@ fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &HashSet
             && step.observation.is_none()
             && step.message == empty_message()
             && step.extra.is_none())
+            && !(step.source == "agent"
+                && step.llm_call_count == Some(0)
+                && step.observation.is_none()
+                && step.message == empty_message()
+                && step.extra.is_none())
     });
+    renumber_steps(steps);
+}
+
+fn renumber_steps(steps: &mut [AtifStep]) {
+    for (index, step) in steps.iter_mut().enumerate() {
+        step.step_id = index + 1;
+    }
 }
 
 fn refresh_tool_call_lookup(
