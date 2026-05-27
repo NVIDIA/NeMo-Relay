@@ -200,7 +200,7 @@ def test_wrap_model_call_routes_through_llm_execute(
     from nemo_relay.integrations.langchain._serialization import LangChainModelRequestCodec
 
     assert isinstance(recording_middleware.calls[0]["codec"], LangChainModelRequestCodec)
-    assert recording_middleware.calls[0]["response_codec"] is None
+    assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
 def test_awrap_model_call_routes_through_llm_execute(
@@ -221,7 +221,7 @@ def test_awrap_model_call_routes_through_llm_execute(
     from nemo_relay.integrations.langchain._serialization import LangChainModelRequestCodec
 
     assert isinstance(recording_middleware.calls[0]["codec"], LangChainModelRequestCodec)
-    assert recording_middleware.calls[0]["response_codec"] is None
+    assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
 def test_langchain_model_request_codec_round_trips_messages(model_request: ModelRequest[Any]):

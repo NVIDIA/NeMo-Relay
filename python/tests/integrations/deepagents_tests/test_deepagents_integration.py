@@ -234,6 +234,7 @@ def test_e2e_agent(
             AIMessage(content="created turtle after reviewer verified turtle"),
         ]
     )
+    
     kwargs = deepagents_integration_module.add_nemo_relay_integration(
         model=model,
         tools=[],
