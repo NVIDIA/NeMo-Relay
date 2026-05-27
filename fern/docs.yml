@@ -8,6 +8,10 @@ instances:
 
 title: NVIDIA NeMo Relay
 
+navbar-links:
+- type: github
+  value: https://github.com/NVIDIA/NeMo-Relay
+
 global-theme: nvidia
 
 experimental:
