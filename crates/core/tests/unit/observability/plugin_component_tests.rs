@@ -593,7 +593,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
     manager
         .lock()
         .unwrap()
-        .observe_global(&start_event, "__test__", Arc::clone(&manager));
+        .observe_global(&start_event, "__test__", Arc::clone(&manager), None);
     {
         let dispatcher = manager.lock().unwrap();
         assert!(dispatcher.agents.contains_key(&agent.uuid));
@@ -618,7 +618,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         .unwrap();
     let path = dir.join(format!("nemo-relay-atif-{}.json", agent.uuid));
     assert!(!path.exists());
-    write_atif_file(&pending_write).unwrap();
+    write_atif(&pending_write, None).unwrap();
     let scope_subscriber = manager
         .lock()
         .unwrap()
@@ -752,4 +752,75 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
     assert!(names.contains(&"__nemo_relay_plugin__observability__opentelemetry".to_string()));
     assert!(names.contains(&"__nemo_relay_plugin__observability__openinference".to_string()));
     clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn atif_storage_defaults_to_none() {
+    let config = AtifSectionConfig::default();
+    assert!(config.storage.is_none());
+}
+
+#[test]
+fn atif_storage_section_parses_s3_variant() {
+    let parsed: AtifSectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": {
+            "type": "s3",
+            "bucket": "my-bucket",
+            "key_prefix": "openshell/"
+        }
+    }))
+    .expect("valid storage section should parse");
+    let storage = parsed.storage.expect("storage should be present");
+    match storage {
+        AtifStorageConfig::S3(s3) => {
+            assert_eq!(s3.bucket, "my-bucket");
+            assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
+        }
+    }
+}
+
+#[test]
+fn atif_storage_unknown_backend_type_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": {"type": "carrier-pigeon", "bucket": "ignored"}
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "observability.invalid_plugin_config")
+    );
+}
+
+#[test]
+fn atif_storage_empty_bucket_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": {"type": "s3", "bucket": "  "}
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage.bucket"))
+    );
+}
+
+#[test]
+fn atif_storage_editor_field_is_optional_json() {
+    let schema = AtifSectionConfig::editor_schema();
+    let storage = schema.field("storage").expect("storage editor field");
+    assert_eq!(storage.kind, EditorFieldKind::Json);
+    assert!(storage.optional);
 }

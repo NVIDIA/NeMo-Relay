@@ -199,12 +199,24 @@ pub struct AtifSectionConfig {
     /// Extra ATIF agent metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<Json>,
-    /// Directory containing trajectory JSON files.
+    /// Directory containing trajectory JSON files. Ignored when [`storage`] is set.
+    ///
+    /// [`storage`]: Self::storage
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
     /// Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID.
+    /// When [`storage`] is set, the rendered filename is appended to the storage key prefix.
+    ///
+    /// [`storage`]: Self::storage
     #[serde(default = "default_atif_filename_template")]
     pub filename_template: String,
+    /// Optional remote storage destination. When set, completed trajectories are
+    /// uploaded to the configured backend and the local file write at
+    /// [`output_directory`] is skipped.
+    ///
+    /// [`output_directory`]: Self::output_directory
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<AtifStorageConfig>,
 }
 
 impl Default for AtifSectionConfig {
@@ -218,8 +230,42 @@ impl Default for AtifSectionConfig {
             extra: None,
             output_directory: None,
             filename_template: default_atif_filename_template(),
+            storage: None,
         }
     }
+}
+
+/// Remote storage destination for ATIF trajectory files.
+///
+/// When [`AtifSectionConfig::storage`] is set, the ATIF dispatcher uploads each
+/// completed trajectory to the configured backend instead of writing it to the
+/// local filesystem. The shape is tagged with a `type` discriminator so
+/// additional backends (for example, Azure Blob Storage) can be added without
+/// breaking existing configs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AtifStorageConfig {
+    /// S3-compatible object storage.
+    ///
+    /// Credentials, region, and endpoint URL are read from the standard AWS
+    /// environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+    /// `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_ENDPOINT_URL`,
+    /// `AWS_ALLOW_HTTP`). These settings are intentionally omitted from this
+    /// configuration so secrets cannot end up in checked-in config files.
+    S3(S3StorageConfig),
+}
+
+/// S3-compatible storage settings for ATIF trajectory upload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct S3StorageConfig {
+    /// Destination bucket name. Must be non-empty.
+    pub bucket: String,
+    /// Optional key prefix applied to every uploaded object. A trailing `/` is
+    /// inserted automatically when one is missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_prefix: Option<String>,
 }
 
 /// Shared OTLP exporter config for OpenTelemetry and OpenInference.
@@ -338,6 +384,7 @@ crate::editor_config! {
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
+        storage => { label: "storage", kind: Json, optional: true },
     }
 }
 
@@ -505,9 +552,19 @@ fn register_atif_dispatcher(
         ));
     }
 
+    let storage = match section.storage.as_ref() {
+        Some(storage_config) => Some(build_atif_storage(storage_config)?),
+        None => None,
+    };
+
     let manager = Arc::new(Mutex::new(AtifDispatcher::new(section)));
-    let dispatcher = atif_dispatcher_subscriber(Arc::clone(&manager), ctx.qualify_name("atif-"));
+    let dispatcher = atif_dispatcher_subscriber(
+        Arc::clone(&manager),
+        ctx.qualify_name("atif-"),
+        storage.clone(),
+    );
     ctx.register_subscriber("atif", dispatcher)?;
+    let shutdown_storage = storage.clone();
     ctx.add_registration(PluginRegistration::new(
         "observability",
         ctx.qualify_name("atif.shutdown"),
@@ -525,7 +582,7 @@ fn register_atif_dispatcher(
             }
             for write in work.writes {
                 let agent_uuid = write.agent_uuid;
-                let result = write_atif_file(&write);
+                let result = write_atif(&write, shutdown_storage.as_deref());
                 let mut guard = manager.lock().map_err(|err| {
                     PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
                 })?;
@@ -542,6 +599,20 @@ fn register_atif_dispatcher(
         }),
     ));
     Ok(())
+}
+
+#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+fn build_atif_storage(config: &AtifStorageConfig) -> PluginResult<Arc<AtifRemoteStorage>> {
+    AtifRemoteStorage::from_config(config)
+        .map(Arc::new)
+        .map_err(observability_registration_error)
+}
+
+#[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+fn build_atif_storage(_config: &AtifStorageConfig) -> PluginResult<Arc<AtifRemoteStorage>> {
+    Err(PluginError::InvalidConfig(
+        "ATIF storage support is not enabled in this build".to_string(),
+    ))
 }
 
 #[cfg(feature = "otel")]
@@ -617,20 +688,30 @@ struct AtifDispatcher {
 
 struct ManagedAtifExporter {
     exporter: AtifExporter,
-    path: PathBuf,
+    destination: AtifWriteDestination,
     observed_events: Vec<Event>,
     written: bool,
 }
 
 struct PendingAtifWrite {
     agent_uuid: Uuid,
-    path: PathBuf,
+    destination: AtifWriteDestination,
     payload: Vec<u8>,
 }
 
 struct AtifFlushWork {
     writes: Vec<PendingAtifWrite>,
     scope_subscribers: Vec<(Uuid, String)>,
+}
+
+/// Where a completed ATIF trajectory should be written.
+#[derive(Debug, Clone)]
+enum AtifWriteDestination {
+    /// Write to the local filesystem at the given path.
+    Local(PathBuf),
+    /// Upload to the configured remote storage backend using the given filename
+    /// (the storage backend's key prefix is applied at upload time).
+    Remote { filename: String },
 }
 
 impl AtifDispatcher {
@@ -643,7 +724,13 @@ impl AtifDispatcher {
         }
     }
 
-    fn observe_global(&mut self, event: &Event, subscriber_prefix: &str, state: Arc<Mutex<Self>>) {
+    fn observe_global(
+        &mut self,
+        event: &Event,
+        subscriber_prefix: &str,
+        state: Arc<Mutex<Self>>,
+        storage: Option<Arc<AtifRemoteStorage>>,
+    ) {
         if self.last_error.is_some() || !is_top_level_trajectory_start(event) {
             return;
         }
@@ -655,12 +742,12 @@ impl AtifDispatcher {
         let session_id = event.uuid().to_string();
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
-        let path = self.output_path(&session_id);
+        let destination = self.output_destination(&session_id);
         self.agents.insert(
             event.uuid(),
             ManagedAtifExporter {
                 exporter,
-                path,
+                destination,
                 observed_events: vec![event.clone()],
                 written: false,
             },
@@ -668,7 +755,7 @@ impl AtifDispatcher {
 
         let agent_uuid = event.uuid();
         let name = format!("{subscriber_prefix}{agent_uuid}");
-        let callback = atif_scope_subscriber(state, agent_uuid);
+        let callback = atif_scope_subscriber(state, agent_uuid, storage);
         // Attach the scoped subscriber to the trajectory root rather than the
         // global registry so sibling top-level trajectories never share events.
         if let Err(err) = scope_register_subscriber(&agent_uuid, &name, callback) {
@@ -776,35 +863,45 @@ impl AtifDispatcher {
         }
     }
 
-    fn output_path(&self, session_id: &str) -> PathBuf {
+    fn output_destination(&self, session_id: &str) -> AtifWriteDestination {
+        let filename = self
+            .config
+            .filename_template
+            .replace("{session_id}", session_id);
+        if self.config.storage.is_some() {
+            return AtifWriteDestination::Remote { filename };
+        }
         let directory = self
             .config
             .output_directory
             .clone()
             .unwrap_or_else(default_output_directory);
-        let filename = self
-            .config
-            .filename_template
-            .replace("{session_id}", session_id);
-        directory.join(filename)
+        AtifWriteDestination::Local(directory.join(filename))
     }
 }
 
 fn atif_dispatcher_subscriber(
     manager: Arc<Mutex<AtifDispatcher>>,
     subscriber_prefix: String,
+    storage: Option<Arc<AtifRemoteStorage>>,
 ) -> EventSubscriberFn {
     Arc::new(move |event: &Event| {
         let Ok(mut guard) = manager.lock() else {
             return;
         };
-        guard.observe_global(event, &subscriber_prefix, Arc::clone(&manager));
+        guard.observe_global(
+            event,
+            &subscriber_prefix,
+            Arc::clone(&manager),
+            storage.clone(),
+        );
     })
 }
 
 fn atif_scope_subscriber(
     manager: Arc<Mutex<AtifDispatcher>>,
     agent_uuid: Uuid,
+    storage: Option<Arc<AtifRemoteStorage>>,
 ) -> EventSubscriberFn {
     Arc::new(move |event: &Event| {
         let pending_write = {
@@ -816,7 +913,7 @@ fn atif_scope_subscriber(
         let Some(write) = pending_write else {
             return;
         };
-        let result = write_atif_file(&write);
+        let result = write_atif(&write, storage.as_deref());
         let scope_subscriber = {
             let Ok(mut guard) = manager.lock() else {
                 return;
@@ -847,17 +944,38 @@ fn prepare_atif_file(
     agent.written = true;
     Ok(PendingAtifWrite {
         agent_uuid,
-        path: agent.path.clone(),
+        destination: agent.destination.clone(),
         payload,
     })
 }
 
-fn write_atif_file(write: &PendingAtifWrite) -> std::io::Result<()> {
-    if let Some(parent) = write.path.parent() {
-        std::fs::create_dir_all(parent)?;
+fn write_atif(write: &PendingAtifWrite, storage: Option<&AtifRemoteStorage>) -> std::io::Result<()> {
+    match &write.destination {
+        AtifWriteDestination::Local(path) => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, &write.payload)
+        }
+        AtifWriteDestination::Remote { filename } => {
+            #[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+            {
+                let storage = storage.ok_or_else(|| {
+                    std::io::Error::other(
+                        "ATIF remote destination requires a configured storage backend",
+                    )
+                })?;
+                storage.put(filename, &write.payload)
+            }
+            #[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+            {
+                let _ = (storage, filename);
+                Err(std::io::Error::other(
+                    "ATIF storage support is not enabled in this build",
+                ))
+            }
+        }
     }
-    std::fs::write(&write.path, &write.payload)?;
-    Ok(())
 }
 
 fn is_top_level_trajectory_start(event: &Event) -> bool {
@@ -1010,6 +1128,7 @@ fn validate_observability_plugin_config(
             "extra",
             "output_directory",
             "filename_template",
+            "storage",
         ],
     );
     validate_section_fields(
@@ -1074,6 +1193,17 @@ fn validate_observability_plugin_config(
                 Some("atif".to_string()),
                 Some("enabled".to_string()),
                 "ATIF file export is not supported on WebAssembly".to_string(),
+            );
+        }
+        #[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+        if section.storage.is_some() {
+            push_policy_diag(
+                &mut diagnostics,
+                config.policy.unsupported_value,
+                "observability.feature_disabled",
+                Some("atif".to_string()),
+                Some("storage".to_string()),
+                "ATIF storage support is not enabled in this build".to_string(),
             );
         }
     }
@@ -1188,6 +1318,30 @@ fn validate_atif_values(
             "ATIF filename_template must contain '{session_id}'".to_string(),
         );
     }
+    if let Some(storage) = &section.storage {
+        validate_atif_storage_values(diagnostics, policy, storage);
+    }
+}
+
+fn validate_atif_storage_values(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    storage: &AtifStorageConfig,
+) {
+    match storage {
+        AtifStorageConfig::S3(s3) => {
+            if s3.bucket.trim().is_empty() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atif".to_string()),
+                    Some("storage.bucket".to_string()),
+                    "ATIF storage bucket must be non-empty".to_string(),
+                );
+            }
+        }
+    }
 }
 
 fn validate_otlp_values(
@@ -1297,6 +1451,140 @@ fn default_timeout_millis() -> u64 {
 
 fn default_output_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[cfg(not(all(feature = "atif-storage", not(target_arch = "wasm32"))))]
+struct AtifRemoteStorage;
+
+/// Remote storage handle for ATIF trajectory uploads.
+///
+/// The handle owns a dedicated OS thread that runs a single-threaded tokio
+/// runtime. Subscriber callbacks (which run on the runtime that emitted the
+/// event) submit uploads over a synchronous channel and block on the reply, so
+/// the handle stays safe to drive from any thread regardless of whether the
+/// caller is already inside another tokio runtime.
+#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+struct AtifRemoteStorage {
+    sender: std::sync::mpsc::Sender<AtifUploadRequest>,
+    key_prefix: String,
+}
+
+#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+struct AtifUploadRequest {
+    key: String,
+    payload: Vec<u8>,
+    reply: std::sync::mpsc::Sender<std::io::Result<()>>,
+}
+
+#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+impl AtifRemoteStorage {
+    fn from_config(config: &AtifStorageConfig) -> std::io::Result<Self> {
+        match config {
+            AtifStorageConfig::S3(s3) => Self::build_s3(s3),
+        }
+    }
+
+    fn build_s3(s3: &S3StorageConfig) -> std::io::Result<Self> {
+        let bucket = s3.bucket.clone();
+        let key_prefix = normalize_storage_key_prefix(s3.key_prefix.as_deref());
+
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<AtifUploadRequest>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::io::Result<()>>();
+
+        std::thread::Builder::new()
+            .name("nemo-relay-atif-storage".to_string())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(std::io::Error::other(format!(
+                            "failed to build ATIF storage runtime: {err}"
+                        ))));
+                        return;
+                    }
+                };
+                let store = match object_store::aws::AmazonS3Builder::from_env()
+                    .with_bucket_name(&bucket)
+                    .build()
+                {
+                    Ok(store) => Arc::new(store) as Arc<dyn object_store::ObjectStore>,
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(std::io::Error::other(format!(
+                            "failed to build S3 client for bucket '{bucket}': {err}"
+                        ))));
+                        return;
+                    }
+                };
+                if ready_tx.send(Ok(())).is_err() {
+                    return;
+                }
+                drop(ready_tx);
+
+                while let Ok(request) = req_rx.recv() {
+                    let result = runtime.block_on(async {
+                        store
+                            .put(
+                                &object_store::path::Path::from(request.key.clone()),
+                                object_store::PutPayload::from(request.payload),
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_err(|err| {
+                                std::io::Error::other(format!(
+                                    "S3 upload to '{}' failed: {err}",
+                                    request.key
+                                ))
+                            })
+                    });
+                    let _ = request.reply.send(result);
+                }
+            })
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to spawn ATIF storage thread: {err}"))
+            })?;
+
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(Self {
+                sender: req_tx,
+                key_prefix,
+            }),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(std::io::Error::other(
+                "ATIF storage thread exited before signalling readiness",
+            )),
+        }
+    }
+
+    fn put(&self, filename: &str, payload: &[u8]) -> std::io::Result<()> {
+        let key = format!("{}{}", self.key_prefix, filename);
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        self.sender
+            .send(AtifUploadRequest {
+                key,
+                payload: payload.to_vec(),
+                reply: reply_tx,
+            })
+            .map_err(|_| std::io::Error::other("ATIF storage thread is not running"))?;
+        reply_rx
+            .recv()
+            .map_err(|_| std::io::Error::other("ATIF storage thread dropped the upload reply"))?
+    }
+}
+
+#[cfg(all(feature = "atif-storage", not(target_arch = "wasm32")))]
+fn normalize_storage_key_prefix(raw: Option<&str>) -> String {
+    let trimmed = raw.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.ends_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/")
+    }
 }
 
 #[cfg(test)]

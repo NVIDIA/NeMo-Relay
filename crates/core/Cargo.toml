@@ -14,11 +14,16 @@ readme = "README.md"
 workspace = true
 
 [features]
-default = ["otel", "openinference", "guardrails-remote"]
+default = ["otel", "openinference", "guardrails-remote", "atif-storage"]
 schema = ["dep:schemars"]
 guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
+]
+atif-storage = [
+    "dep:object_store",
+    "tokio/net",
+    "tokio/time",
 ]
 otel = [
     "dep:async-trait",
@@ -75,10 +80,11 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", features = ["Headers", "Request", "RequestInit", "Response", "Window", "console"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }
 futures = "0.3"
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "testing"] }
 serde_json = "1"
+object_store = { version = "0.11", default-features = false, features = ["aws"] }
 
 [[test]]
 name = "codec_integration"
@@ -108,6 +114,11 @@ path = "tests/integration/stream_tests.rs"
 name = "api_surface_integration"
 path = "tests/integration/api_surface_tests.rs"
 
+[[test]]
+name = "atif_storage_integration"
+path = "tests/integration/atif_storage_tests.rs"
+required-features = ["atif-storage"]
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }
 
@@ -116,3 +127,4 @@ opentelemetry-otlp = { version = "0.31.1", default-features = false, features = 
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tonic = { version = "0.14.1", default-features = false, optional = true }
+object_store = { version = "0.11", default-features = false, features = ["aws"], optional = true }

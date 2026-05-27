@@ -49,8 +49,55 @@ This configuration writes a trajectory file such as
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
-| `output_directory` | Current working directory | Directory containing trajectory files. |
+| `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is set. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. |
+| `storage` | Omitted | Optional remote storage destination. When set, trajectories are uploaded to the configured backend instead of being written locally. See [Remote storage](#remote-storage). |
+
+## Remote storage
+
+For sandboxed runtimes such as NemoClaw / Omnistation / OpenShell, where local
+trace files are not durable across sessions, configure the `storage` block to
+ship completed trajectories directly to object storage. When `storage` is set
+the local file write is replaced by an upload; `output_directory` is ignored.
+
+The block is tagged with a `type` discriminator so additional backends can be
+added without breaking existing configs. Today, S3-compatible object storage is
+supported.
+
+### S3-compatible storage
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[components.config.atif.storage]
+type = "s3"
+bucket = "nemo-relay-traces"
+key_prefix = "openshell/"
+```
+
+Credentials, region, and endpoint URL are read from the standard AWS
+environment variables and are deliberately not surfaced in the configuration so
+secrets cannot end up in checked-in config files:
+
+| Environment Variable | Purpose |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | Static access key (or use `AWS_SESSION_TOKEN`-based credentials). |
+| `AWS_SECRET_ACCESS_KEY` | Static secret key. |
+| `AWS_SESSION_TOKEN` | Optional session token for temporary credentials. |
+| `AWS_REGION` | Bucket region. |
+| `AWS_ENDPOINT_URL` | Optional endpoint override for S3-compatible storage. |
+| `AWS_ALLOW_HTTP` | Set to `true` when targeting an HTTP endpoint. |
+
+Each trajectory is uploaded under `{key_prefix}{rendered_filename}`. The
+`filename_template` is rendered the same way it would be for local files, so a
+local→remote transition keeps object names stable. A trailing `/` is added to
+`key_prefix` when one is missing.
+
+If an upload fails, the failure surfaces through the dispatcher's last-error
+result on plugin teardown; subsequent trajectory writes for the same dispatcher
+session are short-circuited.
 
 ## Expected Output
 
@@ -257,3 +304,7 @@ exporter.clear();
 - Tool definitions or `extra` metadata are not JSON-compatible.
 - The application never opens a top-level `agent` scope, so no trajectory file
   is created.
+- `storage.type` is unknown or `storage.bucket` is empty.
+- `storage` is set in a build that was compiled without the `atif-storage`
+  feature, or on a target (such as WebAssembly) where remote storage is not
+  supported.
