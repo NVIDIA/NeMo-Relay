@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtifStepExtra &#123;\n    pub ancestry: <a href=\"struct-atifancestry\">AtifAncestry</a>,\n    pub invocation: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atifinvocationinfo\">AtifInvocationInfo</a>&gt;,\n    pub llm_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub tool_ancestry: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-atifancestry\">AtifAncestry</a>&gt;,\n    pub tool_invocations: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-atifinvocationinfo\">AtifInvocationInfo</a>&gt;&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtifStepExtra &#123;\n    pub ancestry: <a href=\"struct-atifancestry\">AtifAncestry</a>,\n    pub invocation: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atifinvocationinfo\">AtifInvocationInfo</a>&gt;,\n    pub llm_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub llm_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub event_payload: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub tool_ancestry: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-atifancestry\">AtifAncestry</a>&gt;,\n    pub tool_invocations: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-atifinvocationinfo\">AtifInvocationInfo</a>&gt;&gt;,\n&#125;"}} /></pre>
 
 Lineage payload serialized into ATIF `Step.extra`.
 
@@ -28,6 +28,14 @@ Step-level invocation timing.
 ### `llm_request: Option<Json>`
 
 Full unwrapped LLM request payload for request-level fidelity.
+
+### `llm_response: Option<Json>`
+
+Full raw LLM response payload for response-level fidelity.
+
+### `event_payload: Option<Json>`
+
+Full raw point-in-time event payload for mark/system steps.
 
 ### `tool_ancestry: Vec<AtifAncestry>`
 
