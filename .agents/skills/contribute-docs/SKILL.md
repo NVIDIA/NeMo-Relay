@@ -26,6 +26,9 @@ Use this skill for docs-only or example-heavy changes.
 - Keep stable user-facing wrappers at `scripts/` root in docs and examples;
   only point at namespaced helper paths when documenting internal maintenance
   work
+- In MDX files, top-of-file comments must use JSX comment delimiters:
+  `{/*` to open and `*/}` to close. Do not use HTML comments for MDX SPDX
+  headers.
 
 ## Checklist
 
@@ -33,6 +36,7 @@ Use this skill for docs-only or example-heavy changes.
 - [ ] Relevant getting-started or reference docs updated
 - [ ] Example commands still match current package names and paths
 - [ ] Relevant package or crate `README.md` files updated when examples or binding guidance changed
+- [ ] New or regenerated MDX files use `{/* ... */}` for top-of-file SPDX comments
 - [ ] Release-policy docs still point to GitHub Releases as the only release-history source of truth
 - [ ] Run `just docs` when the docs site changed; `./scripts/build-docs.sh html` remains the compatibility wrapper
 

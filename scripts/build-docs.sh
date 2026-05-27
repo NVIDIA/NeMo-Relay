@@ -9,14 +9,14 @@ export REPO_ROOT
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/build-docs.sh [html|linkcheck|pages]
+Usage: ./scripts/build-docs.sh [html|check|linkcheck]
 
-Compatibility wrapper around the `just` docs recipes.
+Compatibility wrapper around the `just docs` recipe.
 
 Modes:
 - html       Run `just docs`
-- linkcheck  Run `just docs-linkcheck`
-- pages      Run `just docs-github-pages`
+- check      Run `just docs`
+- linkcheck  Run `just docs` for compatibility
 
 EOF
     return $?
@@ -26,14 +26,11 @@ mode="docs"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        html)
+        html|check)
             mode="docs"
             ;;
         linkcheck)
-            mode="docs-linkcheck"
-            ;;
-        pages)
-            mode="docs-github-pages"
+            mode="docs"
             ;;
         -h|--help)
             usage
