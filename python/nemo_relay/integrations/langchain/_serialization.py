@@ -21,36 +21,9 @@ from langchain_core.messages import (
 from langgraph.types import Command, Send
 
 from nemo_relay import AnnotatedLLMRequest, LLMRequest
-from nemo_relay.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
-
-# In order to infer codec support from LangChain chat model types, we need to import them here.
-# However these may not be installed in the user's environment.
-_HAS_ANTHROPIC = False
-_HAS_OPENAI = False
-_HAS_NVIDIA = False
-try:
-    from langchain_anthropic import ChatAnthropic
-
-    _HAS_ANTHROPIC = True
-except ImportError:
-    pass
-
-try:
-    from langchain_openai import ChatOpenAI
-
-    _HAS_OPENAI = True
-except ImportError:
-    pass
-
-try:
-    from langchain_nvidia_ai_endpoints import ChatNVIDIA
-
-    _HAS_NVIDIA = True
-except ImportError:
-    pass
 
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_relay_integrations_langchain_model_response"
 _LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
@@ -67,26 +40,6 @@ def get_model_name(model: Any) -> str | None:
         value = getattr(model, attr, None)
         if isinstance(value, str) and value:
             return value
-    return None
-
-
-def infer_codec_from_model(model: Any) -> LlmCodec | None:
-    """Infer a NeMo Relay codec name from a LangChain chat model."""
-    if _HAS_ANTHROPIC:
-        if isinstance(model, ChatAnthropic):
-            return AnthropicMessagesCodec()
-
-    if _HAS_NVIDIA:
-        if isinstance(model, ChatNVIDIA):
-            return OpenAIChatCodec()
-
-    if _HAS_OPENAI:
-        if isinstance(model, ChatOpenAI):
-            if getattr(model, "use_responses_api", None) is True:
-                return OpenAIResponsesCodec()
-
-            return OpenAIChatCodec()
-
     return None
 
 

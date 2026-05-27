@@ -342,32 +342,6 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
 
 
-def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch):
-    from nemo_relay.integrations.langchain import _serialization
-
-    MockChatAnthropic = MagicMock(spec=type("MockChatAnthropic", (), {}))
-    MockChatOpenAI = MagicMock(spec=type("MockChatOpenAI", (), {}))
-    MockChatOpenAIResponses = MagicMock(spec=MockChatOpenAI.__class__)
-    MockChatOpenAIResponses.use_responses_api = True
-    MockChatNVIDIA = MagicMock(spec=type("MockChatNVIDIA", (), {}))
-
-    monkeypatch.setattr(_serialization, "ChatAnthropic", MockChatAnthropic.__class__, raising=False)
-    monkeypatch.setattr(_serialization, "ChatOpenAI", MockChatOpenAI.__class__, raising=False)
-    monkeypatch.setattr(_serialization, "ChatNVIDIA", MockChatNVIDIA.__class__, raising=False)
-    monkeypatch.setattr(_serialization, "_HAS_ANTHROPIC", True)
-    monkeypatch.setattr(_serialization, "_HAS_OPENAI", True)
-    monkeypatch.setattr(_serialization, "_HAS_NVIDIA", True)
-
-    assert isinstance(_serialization.infer_codec_from_model(MockChatAnthropic), AnthropicMessagesCodec)
-    assert isinstance(_serialization.infer_codec_from_model(MockChatOpenAI), OpenAIChatCodec)
-    assert isinstance(
-        _serialization.infer_codec_from_model(MockChatOpenAIResponses),
-        OpenAIResponsesCodec,
-    )
-    assert isinstance(_serialization.infer_codec_from_model(MockChatNVIDIA), OpenAIChatCodec)
-    assert _serialization.infer_codec_from_model(object()) is None
-
-
 @pytest.mark.parametrize("use_async", [False, True])
 def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMiddleware):
     """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
