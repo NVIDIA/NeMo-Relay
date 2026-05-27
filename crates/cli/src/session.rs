@@ -284,14 +284,13 @@ impl SessionManager {
             if event.is_terminal() && !sessions.contains_key(&session_id) {
                 continue;
             }
-            if let Some((child_session_id, alias)) = explicit_subagent_alias {
-                if !sessions
+            if let Some((child_session_id, alias)) = explicit_subagent_alias
+                && sessions
                     .get(&child_session_id)
-                    .is_some_and(|session| !session.can_reparent_as_subagent_alias())
-                {
-                    sessions.remove(&child_session_id);
-                    alignment_state.insert_alias(child_session_id, alias);
-                }
+                    .is_none_or(|session| session.can_reparent_as_subagent_alias())
+            {
+                sessions.remove(&child_session_id);
+                alignment_state.insert_alias(child_session_id, alias);
             }
             alignment_state.align_explicit_subagent_end(&mut event);
             let event_kind = event_agent_kind(&event);

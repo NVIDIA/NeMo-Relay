@@ -700,8 +700,7 @@ fn extract_reasoning_content(output: &Json) -> Option<String> {
 fn extract_user_messages(input: &Json) -> Json {
     if let Some(obj) = input.as_object()
         && let Some(messages) = obj.get("messages").and_then(Json::as_array)
-    {
-        if let Some(message) = messages
+        && let Some(message) = messages
             .iter()
             .rev()
             .filter_map(Json::as_object)
@@ -710,9 +709,8 @@ fn extract_user_messages(input: &Json) -> Json {
                 None => true,
             })
             .and_then(|message| message.get("content"))
-        {
-            return atif_content_value(message);
-        }
+    {
+        return atif_content_value(message);
     }
     if let Some(obj) = input.as_object()
         && let Some(message) = obj.get("input").and_then(openai_responses_input_message)
@@ -1614,12 +1612,11 @@ fn nearest_non_turn_agent_parent(
     excluded_uuid: Option<Uuid>,
 ) -> Option<Uuid> {
     while let Some(uuid) = current {
-        if Some(uuid) != excluded_uuid {
-            if let Some(role) = agent_scope_roles.get(&uuid) {
-                if role.as_deref() != Some("turn") {
-                    return Some(uuid);
-                }
-            }
+        if Some(uuid) != excluded_uuid
+            && let Some(role) = agent_scope_roles.get(&uuid)
+            && role.as_deref() != Some("turn")
+        {
+            return Some(uuid);
         }
         current = scope_parent_map.get(&uuid).copied();
     }
@@ -1639,17 +1636,10 @@ fn events_to_trajectory(
     sorted.sort_by_key(|event| *event.timestamp());
     let tree = AgentScopeTree::from_events(&sorted);
 
-    if let Some(root_uuid) = tree.choose_root(session_id) {
-        if can_use_agent_scope_tree(&tree, &sorted) {
-            return agent_scope_to_trajectory(
-                &tree,
-                root_uuid,
-                session_id,
-                &agent_info,
-                &sorted,
-                true,
-            );
-        }
+    if let Some(root_uuid) = tree.choose_root(session_id)
+        && can_use_agent_scope_tree(&tree, &sorted)
+    {
+        return agent_scope_to_trajectory(&tree, root_uuid, session_id, &agent_info, &sorted, true);
     }
 
     let steps = events_to_steps(&sorted);
