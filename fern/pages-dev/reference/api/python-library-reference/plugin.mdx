@@ -239,6 +239,14 @@ def clear() -> None
 
 Clear the active plugin configuration.
 
+### `plugin`
+
+```python
+def plugin(config: PluginConfig | JsonObject) -> AsyncContextManager[ConfigReport]
+```
+
+Context manager for plugin initialization and cleanup.
+
 ### `report`
 
 ```python
