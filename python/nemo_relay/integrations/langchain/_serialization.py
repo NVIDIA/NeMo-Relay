@@ -33,7 +33,6 @@ _LC_TO_RELAY_MESSAGE_ROLE = {
 }
 
 
-
 def get_model_name(model: Any) -> str | None:
     """Best-effort extraction of a model name from a LangChain chat model."""
     for attr in ("model", "model_name", "model_id", "deployment_name"):
