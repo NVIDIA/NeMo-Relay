@@ -339,6 +339,41 @@ fn maps_hermes_subagent_child_identifiers() {
 }
 
 #[test]
+fn maps_hermes_camel_case_child_subagent_identifiers() {
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "childSubagentId": "sa-camel-top"
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "childSubagentId": "sa-camel-extra"
+            }
+        }),
+    ] {
+        let expected = payload
+            .get("childSubagentId")
+            .or_else(|| payload.pointer("/extra/childSubagentId"))
+            .and_then(|value| value.as_str())
+            .expect("test payload should include childSubagentId")
+            .to_string();
+        let outcome = hermes::adapt(payload, &headers);
+
+        match &outcome.events[0] {
+            NormalizedEvent::SubagentStarted(event) => {
+                assert_eq!(event.subagent_id, expected);
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+}
+
+#[test]
 fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
     let headers = HeaderMap::new();
 

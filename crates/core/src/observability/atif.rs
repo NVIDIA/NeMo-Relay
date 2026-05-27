@@ -372,13 +372,16 @@ impl AtifExporter {
     /// Exporting does not clear the buffered events. Call [`AtifExporter::clear`]
     /// when you need to reset the exporter between trajectories.
     pub fn export(&self) -> AtifTrajectory {
-        let state = self.state.lock().unwrap();
-        let collected_events: Vec<&Event> = state.events.iter().collect();
-        events_to_trajectory(
-            &state.session_id,
-            state.agent_info.clone(),
-            &collected_events,
-        )
+        let (session_id, agent_info, events) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.session_id.clone(),
+                state.agent_info.clone(),
+                state.events.clone(),
+            )
+        };
+        let collected_events: Vec<&Event> = events.iter().collect();
+        events_to_trajectory(&session_id, agent_info, &collected_events)
     }
 
     /// Clear all collected events from the internal buffer.

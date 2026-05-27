@@ -851,6 +851,71 @@ async fn codex_subagent_start_does_not_reparent_active_child_session() {
 }
 
 #[tokio::test]
+async fn hermes_subagent_start_does_not_reparent_active_child_session() {
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "parent-session"
+        }),
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "child-session"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "child-session",
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": { "body": { "model": "qwen" } }
+            }
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "child_session_id": "child-session",
+                "child_subagent_id": "sa-1",
+                "parent_turn_id": "parent-turn-1"
+            }
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    assert!(!has_alignment_alias(&manager, "child-session").await);
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.contains_key("child-session"));
+        assert!(
+            !sessions
+                .get("parent-session")
+                .unwrap()
+                .subagents
+                .contains_key("sa-1")
+        );
+        assert!(
+            sessions
+                .get("child-session")
+                .unwrap()
+                .llms
+                .contains_key("child-session:child-task:1")
+        );
+    }
+
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
 async fn codex_aliased_hook_llm_routes_to_subagent_scope() {
     let manager = SessionManager::new(session_test_config());
     manager
@@ -1623,6 +1688,13 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "parent-session");
+    assert!(
+        atif["subagent_trajectories"]
+            .as_array()
+            .is_some_and(|trajectories| !trajectories.is_empty()),
+        "parent ATIF must include at least one embedded subagent trajectory: {}",
+        serde_json::to_string_pretty(&atif).unwrap()
+    );
     let child = &atif["subagent_trajectories"][0];
     assert_eq!(child["session_id"], json!("child-session"));
     assert!(
