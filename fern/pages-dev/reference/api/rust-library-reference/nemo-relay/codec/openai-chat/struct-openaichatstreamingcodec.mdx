@@ -1,6 +1,7 @@
 ---
 title: "Struct OpenAI Chat Streaming Codec"
 sidebar-title: "OpenAIChatStreamingCodec"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/openai_chat/struct-openaichatstreamingcodec"
 description: "Streaming counterpart to `OpenAIChatCodec`."
 position: 2
 ---
@@ -13,9 +14,9 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 pub struct OpenAIChatStreamingCodec { /* private fields */ }
 ```
 
-Streaming counterpart to [`OpenAIChatCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai-chat/struct-openaichatcodec).
+Streaming counterpart to [`OpenAIChatCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai_chat/struct-openaichatcodec).
 
-Replays the OpenAI Chat Completions SSE chunk sequence into the same JSON shape returned for a non-streaming request (`{id, object, created, model, choices: [{message, finish_reason}], usage}`). Once finalized, the assembled JSON can be fed back through [`OpenAIChatCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/openai-chat/struct-openaichatcodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
+Replays the OpenAI Chat Completions SSE chunk sequence into the same JSON shape returned for a non-streaming request (`{id, object, created, model, choices: [{message, finish_reason}], usage}`). Once finalized, the assembled JSON can be fed back through [`OpenAIChatCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/openai_chat/struct-openaichatcodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
 
 ## Strategy
 

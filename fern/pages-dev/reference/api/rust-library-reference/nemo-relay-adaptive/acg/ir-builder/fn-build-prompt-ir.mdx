@@ -1,6 +1,7 @@
 ---
 title: "Function build_prompt_ir"
 sidebar-title: "build_prompt_ir"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/ir_builder/fn-build-prompt-ir"
 description: "Build a normalized `PromptIR` from an annotated LLM request."
 position: 1
 ---
@@ -9,9 +10,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_prompt_ir(request: &amp;<a href=\"../../../nemo-relay/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../prompt-ir/struct-promptir\">PromptIR</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_prompt_ir(request: &amp;<a href=\"../../../nemo-relay/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../prompt_ir/struct-promptir\">PromptIR</a>&gt;"}} /></pre>
 
-Build a normalized [`PromptIR`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/prompt-ir/struct-promptir) from an annotated LLM request.
+Build a normalized [`PromptIR`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/prompt_ir/struct-promptir) from an annotated LLM request.
 
 The builder preserves prompt order, inserts tool-schema blocks before the first non-system message when tools are present, and computes the request hashes needed by downstream Adaptive Cache Governor (ACG) analysis.
 
@@ -21,7 +22,7 @@ The builder preserves prompt order, inserts tool-schema blocks before the first 
 
 ## Returns
 
-A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/error/type-result) containing the constructed [`PromptIR`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/prompt-ir/struct-promptir).
+A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/error/type-result) containing the constructed [`PromptIR`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/prompt_ir/struct-promptir).
 
 ## Errors
 

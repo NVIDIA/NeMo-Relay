@@ -32,13 +32,13 @@ Fallback chain:
 
 #### `new`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(root: &amp;'a <a href=\"../data-models/struct-predictiontrienode\">PredictionTrieNode</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(root: &amp;'a <a href=\"../data_models/struct-predictiontrienode\">PredictionTrieNode</a>) -&gt; Self"}} /></pre>
 
 Create a new lookup over the given trie root.
 
 #### `find`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn find(\n    &amp;self,\n    path: &amp;[<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>],\n    call_index: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;'a <a href=\"../data-models/struct-llmcallprediction\">LlmCallPrediction</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn find(\n    &amp;self,\n    path: &amp;[<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>],\n    call_index: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;'a <a href=\"../data_models/struct-llmcallprediction\">LlmCallPrediction</a>&gt;"}} /></pre>
 
 Find the best matching prediction for the given path and call index.
 

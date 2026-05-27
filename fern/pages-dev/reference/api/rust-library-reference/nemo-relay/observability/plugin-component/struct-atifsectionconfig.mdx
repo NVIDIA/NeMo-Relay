@@ -1,6 +1,7 @@
 ---
 title: "Struct Atif Section Config"
 sidebar-title: "AtifSectionConfig"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig"
 description: "Per-trajectory ATIF exporter config."
 position: 1
 ---
@@ -13,7 +14,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Per-trajectory ATIF exporter config.
 
-When enabled, this section creates a dispatcher that opens a separate [`crate::observability::atif::AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) for each top-level agent or turn scope. The `{session_id}` placeholder in [`AtifSectionConfig::filename_template`](/reference/api/rust-library-reference/nemo-relay/observability/plugin-component/struct-atifsectionconfig) is required so concurrent sibling trajectories cannot overwrite each other's files.
+When enabled, this section creates a dispatcher that opens a separate [`crate::observability::atif::AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) for each top-level agent or turn scope. The `{session_id}` placeholder in [`AtifSectionConfig::filename_template`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is required so concurrent sibling trajectories cannot overwrite each other's files.
 
 ## Fields
 
@@ -89,11 +90,11 @@ Filename template. `{session_id}` is replaced with the top-level trajectory scop
 
 ### `impl EditorConfig for AtifSectionConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../config-editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-atifsectionconfig\">AtifSectionConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-atifsectionconfig\">AtifSectionConfig</a>"}} /></pre>
 
 #### `editor_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../config-editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../config-editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
 
 ### `impl Serialize for AtifSectionConfig`
 

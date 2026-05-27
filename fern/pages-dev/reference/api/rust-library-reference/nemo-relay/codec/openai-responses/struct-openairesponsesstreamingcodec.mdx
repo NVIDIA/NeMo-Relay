@@ -1,6 +1,7 @@
 ---
 title: "Struct OpenAI Responses Streaming Codec"
 sidebar-title: "OpenAIResponsesStreamingCodec"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/openai_responses/struct-openairesponsesstreamingcodec"
 description: "Streaming counterpart to `OpenAIResponsesCodec`."
 position: 2
 ---
@@ -13,9 +14,9 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 pub struct OpenAIResponsesStreamingCodec { /* private fields */ }
 ```
 
-Streaming counterpart to [`OpenAIResponsesCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai-responses/struct-openairesponsescodec).
+Streaming counterpart to [`OpenAIResponsesCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses/struct-openairesponsescodec).
 
-Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/openai-responses/struct-openairesponsescodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
+Replays the OpenAI Responses SSE event sequence into the same JSON shape the API returns for a non-streaming request (`{id, model, status, output, usage, incomplete_details, ...}`). Once finalized, the assembled JSON can be fed back through [`OpenAIResponsesCodec::decode_response`](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses/struct-openairesponsescodec) to produce the canonical [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
 
 ## Strategy
 
