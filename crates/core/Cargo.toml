@@ -20,7 +20,7 @@ guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
 ]
-atif-storage = [
+object-store = [
     "dep:object_store",
     "tokio/net",
     "tokio/time",
