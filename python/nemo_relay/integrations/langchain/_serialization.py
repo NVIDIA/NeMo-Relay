@@ -292,10 +292,7 @@ def payload_to_model_request(
     if "tool_choice" in llm_request.content:
         overrides["tool_choice"] = llm_request.content["tool_choice"]
 
-    result = original.override(**overrides) if overrides else original
-    print(result.model.default_headers)
-    print(result.model_settings)
-    return result
+    return original.override(**overrides) if overrides else original
 
 
 def _model_response_payload(response: ModelResponse[Any], codec: Any) -> dict[str, Any]:
