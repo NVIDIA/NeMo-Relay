@@ -132,6 +132,12 @@ def _slug_part(value: str) -> str:
     return value or "item"
 
 
+def _rustdoc_path_part(value: str) -> str:
+    value = value.replace("!", "-bang")
+    value = re.sub(r"[^A-Za-z0-9_-]+", "-", value)
+    return value.strip("-").lower() or "item"
+
+
 def _crate_slug(crate_name: str) -> str:
     return crate_name.replace("_", "-")
 
@@ -169,6 +175,16 @@ def _output_relative(crate_name: str, crate_dir: Path, html_path: Path) -> Path:
     return Path(crate_slug, *parent_parts, f"{_slug_part(stem)}.mdx")
 
 
+def _url_relative(crate_name: str, crate_dir: Path, html_path: Path) -> Path:
+    crate_slug = _crate_slug(crate_name)
+    rel = html_path.relative_to(crate_dir)
+    parent_parts = [_rustdoc_path_part(part) for part in rel.parent.parts]
+    if rel.name == "index.html":
+        return Path(crate_slug, *parent_parts, "index.mdx")
+    stem = rel.name.removesuffix(".html")
+    return Path(crate_slug, *parent_parts, f"{_slug_part(stem)}.mdx")
+
+
 def _page_url(output_rel: Path) -> str:
     without_suffix = output_rel.with_suffix("")
     parts = list(without_suffix.parts)
@@ -194,10 +210,11 @@ def _discover_pages(doc_root: Path, output_dir: Path) -> dict[Path, Page]:
             if 'id="main-content"' not in html_path.read_text(encoding="utf-8", errors="ignore"):
                 continue
             output_rel = _output_relative(crate_name, crate_dir, html_path)
+            url_rel = _url_relative(crate_name, crate_dir, html_path)
             pages[html_path.resolve()] = Page(
                 html_path=html_path.resolve(),
                 output_path=output_dir / output_rel,
-                url=_page_url(output_rel),
+                url=_page_url(url_rel),
                 crate_name=crate_name,
                 crate_dir_name=crate_dir_name,
             )
