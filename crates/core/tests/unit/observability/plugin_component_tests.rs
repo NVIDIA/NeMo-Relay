@@ -292,6 +292,18 @@ fn built_in_registration_is_automatic() {
 }
 
 #[test]
+fn explicit_registration_helpers_are_idempotent_and_reversible() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    assert!(register_observability_component().is_ok());
+    assert!(register_observability_component().is_ok());
+    assert!(deregister_observability_component());
+    assert!(!deregister_observability_component());
+    register_observability_component().unwrap();
+}
+
+#[test]
 fn empty_and_disabled_config_register_nothing() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -412,6 +424,14 @@ fn invalid_shapes_and_strict_policy_are_reported() {
             .any(|diag| diag.code == "observability.invalid_plugin_config")
     );
 
+    let unsupported_version = validate_plugin_config(&plugin_config(json!({
+        "version": 2,
+    })));
+    assert!(unsupported_version.has_errors());
+    assert!(unsupported_version.diagnostics.iter().any(|diag| diag.code
+        == "observability.unsupported_config_version"
+        && diag.field.as_deref() == Some("version")));
+
     let strict_unknown = validate_plugin_config(&plugin_config(json!({
         "policy": {"unknown_field": "error"},
         "opentelemetry": {"unexpected": true}
@@ -458,6 +478,17 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
     let error = futures::executor::block_on(initialize_plugins(invalid_atof)).unwrap_err();
     assert!(error.to_string().contains("ATOF mode"));
 
+    let invalid_atif_template = plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "single-file.json"
+        }
+    }));
+    let error = futures::executor::block_on(initialize_plugins(invalid_atif_template)).unwrap_err();
+    assert!(error.to_string().contains("filename_template"));
+
     let invalid_path = plugin_config(json!({
         "atof": {
             "enabled": true,
@@ -467,6 +498,28 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
     }));
     let error = futures::executor::block_on(initialize_plugins(invalid_path)).unwrap_err();
     assert!(error.to_string().contains("registration failed"));
+
+    let invalid_otel_transport = plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "opentelemetry": {
+            "enabled": true,
+            "transport": "udp"
+        }
+    }));
+    let error =
+        futures::executor::block_on(initialize_plugins(invalid_otel_transport)).unwrap_err();
+    assert!(error.to_string().contains("OpenTelemetry transport"));
+
+    let invalid_openinference_transport = plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "openinference": {
+            "enabled": true,
+            "transport": "udp"
+        }
+    }));
+    let error = futures::executor::block_on(initialize_plugins(invalid_openinference_transport))
+        .unwrap_err();
+    assert!(error.to_string().contains("OpenInference transport"));
 }
 
 #[test]
@@ -764,6 +817,60 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
     assert!(path.exists());
     drop(dispatcher);
     pop(&agent);
+}
+
+#[test]
+fn atif_dispatcher_records_failed_agent_writes() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-write-error");
+    let root_uuid = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid();
+    let agent = push_agent("failed-write-agent");
+    let dispatcher = Arc::new(Mutex::new(AtifDispatcher::new(AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(dir),
+        ..AtifSectionConfig::default()
+    })));
+
+    let start_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(agent.uuid)
+            .parent_uuid(root_uuid)
+            .name("failed-write-agent")
+            .build(),
+        ScopeCategory::Start,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    dispatcher
+        .lock()
+        .unwrap()
+        .observe_global(&start_event, "__test__", Arc::clone(&dispatcher));
+
+    let mut dispatcher = dispatcher.lock().unwrap();
+    let error = dispatcher
+        .finish_agent_write(agent.uuid, Err(std::io::Error::other("disk full")))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "disk full");
+    assert_eq!(dispatcher.last_error.as_deref(), Some("disk full"));
+    assert!(dispatcher.last_error_result().is_err());
+    drop(dispatcher);
+    pop(&agent);
+}
+
+#[test]
+fn atif_dispatcher_default_output_path_uses_current_directory() {
+    let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    assert_eq!(
+        dispatcher.output_path("session-1"),
+        std::env::current_dir()
+            .unwrap()
+            .join("nemo-relay-atif-session-1.json")
+    );
 }
 
 #[test]

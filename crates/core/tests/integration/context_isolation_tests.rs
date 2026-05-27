@@ -10,7 +10,9 @@ use nemo_relay::api::runtime::{
     propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
     task_scope_push, task_scope_remove, task_scope_top,
 };
-use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::api::scope::{
+    PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
+};
 use nemo_relay::error::FlowError;
 use uuid::Uuid;
 
@@ -51,6 +53,36 @@ fn test_two_scope_stacks_are_independent() {
     let root_b_uuid = stack_b.read().unwrap().top().uuid;
     // They each have their own root
     assert_ne!(root_a_uuid, root_b_uuid); // scope_a != scope_b
+}
+
+#[test]
+fn test_pop_scope_rejects_non_top_and_unknown_handles() {
+    set_thread_scope_stack(create_scope_stack());
+
+    let outer = push_scope(
+        PushScopeParams::builder()
+            .name("outer")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let inner = push_scope(
+        PushScopeParams::builder()
+            .name("inner")
+            .scope_type(ScopeType::Function)
+            .build(),
+    )
+    .unwrap();
+
+    let non_top = pop_scope(PopScopeParams::builder().handle_uuid(&outer.uuid).build());
+    assert!(matches!(non_top, Err(FlowError::InvalidArgument(_))));
+
+    let unknown = Uuid::now_v7();
+    let missing = pop_scope(PopScopeParams::builder().handle_uuid(&unknown).build());
+    assert!(matches!(missing, Err(FlowError::NotFound(_))));
+
+    pop_scope(PopScopeParams::builder().handle_uuid(&inner.uuid).build()).unwrap();
+    pop_scope(PopScopeParams::builder().handle_uuid(&outer.uuid).build()).unwrap();
 }
 
 /// Two tokio tasks with TASK_SCOPE_STACK.scope() → verify isolated.

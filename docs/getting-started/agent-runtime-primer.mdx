@@ -53,12 +53,12 @@ The simplest mental model is:
 flowchart LR
   boundary["App or framework boundary"]
   scope["NeMo Relay scope"]
-  call["Managed tool or LLM call"]
+  managedCall["Managed tool or LLM call"]
   middleware["Middleware"]
   event["Lifecycle event"]
   sink["Subscriber or exporter"]
 
-  boundary --> scope --> call --> middleware --> event --> sink
+  boundary --> scope --> managedCall --> middleware --> event --> sink
 ```
 
 ## What NeMo Relay Does Not Replace
