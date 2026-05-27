@@ -724,6 +724,23 @@ class AtifExporter:
         """Clear collected events without changing subscriber registration."""
         ...
 
+class Subscription:
+    """Closeable event subscriber registration."""
+
+    def close(self) -> bool:
+        """Close the subscription.
+
+        Returns:
+            ``True`` if a live subscriber was removed, otherwise ``False``.
+        """
+        ...
+    def __enter__(self) -> "Subscription":
+        """Enter a context manager and return this subscription."""
+        ...
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+        """Close the subscription when leaving a context manager."""
+        ...
+
 class AtofExporterMode:
     """File write mode for ``AtofExporter``."""
 
@@ -1756,6 +1773,17 @@ def register_subscriber(name: str, callback: Callable[[ScopeEvent | MarkEvent], 
     """
     ...
 
+def subscribe(callback: Callable[[ScopeEvent | MarkEvent], None]) -> Subscription:
+    """Register an anonymous global event subscriber callback.
+
+    Args:
+        callback: Function invoked for each emitted scope or mark event.
+
+    Returns:
+        A closeable subscription handle.
+    """
+    ...
+
 def deregister_subscriber(name: str) -> bool:
     """Remove a global event subscriber.
 
@@ -2062,6 +2090,21 @@ def scope_register_subscriber(
 
     Returns:
         ``None``.
+    """
+    ...
+
+def scope_subscribe(
+    scope_uuid: str,
+    callback: Callable[[ScopeEvent | MarkEvent], None],
+) -> Subscription:
+    """Register an anonymous scope-local event subscriber callback.
+
+    Args:
+        scope_uuid: UUID of the owning scope.
+        callback: Event callback used while the owning scope is active.
+
+    Returns:
+        A closeable subscription handle.
     """
     ...
 

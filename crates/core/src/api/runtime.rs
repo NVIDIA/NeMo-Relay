@@ -21,4 +21,5 @@ pub use scope_stack::{
     restore_thread_scope_stack, scope_stack_active, set_thread_scope_stack,
     sync_thread_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
+pub(crate) use state::EventSubscriberSnapshot;
 pub use state::NemoRelayContextState;

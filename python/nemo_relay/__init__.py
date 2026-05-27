@@ -22,7 +22,8 @@ Top-level exports also include:
 - scope stack helpers such as ``get_scope_stack()``, ``create_scope_stack()``,
   ``set_thread_scope_stack()``, and ``scope_stack_active()``
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
-  ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
+  ``LLMRequest``, ``ScopeType``, ``Subscription``, and the lifecycle event
+  classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
   ``OpenTelemetrySubscriber``, and ``OpenInferenceSubscriber``
 - JSON and callback type aliases used by middleware, typed wrappers, and
@@ -97,6 +98,7 @@ from nemo_relay._native import (
     ScopeHandle,
     ScopeStack,
     ScopeType,
+    Subscription,
     ToolAttributes,
     ToolHandle,
 )
@@ -441,6 +443,7 @@ __all__ = [
     "ScopeEvent",
     "MarkEvent",
     "ScopeHandle",
+    "Subscription",
     "ToolHandle",
     "LLMHandle",
     "LLMRequest",

@@ -164,6 +164,65 @@ pub fn py_scope_stack_active() -> bool {
     scope_stack_is_active()
 }
 
+enum PySubscriptionInner {
+    Global(core_subscriber_api::SubscriberHandle),
+    Scope(core_subscriber_api::ScopeSubscriberHandle),
+}
+
+/// Closeable event subscriber registration returned by ``subscribe`` helpers.
+#[pyclass(name = "Subscription")]
+pub struct PySubscription {
+    inner: Option<PySubscriptionInner>,
+}
+
+#[pymethods]
+impl PySubscription {
+    /// Close this subscription.
+    ///
+    /// Returns ``True`` when a live subscriber was removed and ``False`` when
+    /// the subscription had already been closed or scope cleanup already
+    /// removed it.
+    fn close(&mut self) -> PyResult<bool> {
+        let Some(inner) = self.inner.as_ref() else {
+            return Ok(false);
+        };
+        let removed = match inner {
+            PySubscriptionInner::Global(handle) => handle.close(),
+            PySubscriptionInner::Scope(handle) => handle.close(),
+        }
+        .map_err(to_py_err)?;
+        self.inner = None;
+        Ok(removed)
+    }
+
+    /// Enter a Python context manager.
+    fn __enter__(slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        slf
+    }
+
+    /// Exit a Python context manager, closing the subscription.
+    fn __exit__(
+        &mut self,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let _ = self.close()?;
+        Ok(false)
+    }
+}
+
+impl Drop for PySubscription {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.take() {
+            let _ = match inner {
+                PySubscriptionInner::Global(handle) => handle.close(),
+                PySubscriptionInner::Scope(handle) => handle.close(),
+            };
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
@@ -1235,6 +1294,16 @@ fn register_subscriber(name: &str, callback: Py<PyAny>) -> PyResult<()> {
         .map_err(to_py_err)
 }
 
+/// Register an anonymous global event subscriber and return a closeable handle.
+#[pyfunction]
+fn subscribe(callback: Py<PyAny>) -> PyResult<PySubscription> {
+    core_subscriber_api::subscribe(py_callable::wrap_py_event_subscriber(callback))
+        .map(|handle| PySubscription {
+            inner: Some(PySubscriptionInner::Global(handle)),
+        })
+        .map_err(to_py_err)
+}
+
 /// Remove a previously registered event subscriber.
 ///
 /// Returns ``True`` if a subscriber with that name was found and removed.
@@ -1570,6 +1639,17 @@ fn scope_register_subscriber(scope_uuid: &str, name: &str, callback: Py<PyAny>) 
     .map_err(to_py_err)
 }
 
+/// Register an anonymous scope-local event subscriber and return a closeable handle.
+#[pyfunction]
+fn scope_subscribe(scope_uuid: &str, callback: Py<PyAny>) -> PyResult<PySubscription> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core_subscriber_api::scope_subscribe(&uuid, py_callable::wrap_py_event_subscriber(callback))
+        .map(|handle| PySubscription {
+            inner: Some(PySubscriptionInner::Scope(handle)),
+        })
+        .map_err(to_py_err)
+}
+
 /// Remove a previously registered scope-local event subscriber.
 #[pyfunction]
 fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
@@ -1583,6 +1663,8 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PySubscription>()?;
+
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
@@ -1680,6 +1762,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Subscribers
     m.add_function(wrap_pyfunction!(register_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(subscribe, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_subscriber, m)?)?;
 
     // Scope-local tool guardrails
@@ -1768,6 +1851,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Scope-local subscribers
     m.add_function(wrap_pyfunction!(scope_register_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(scope_subscribe, m)?)?;
     m.add_function(wrap_pyfunction!(scope_deregister_subscriber, m)?)?;
 
     // Standalone middleware chains

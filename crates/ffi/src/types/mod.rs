@@ -12,6 +12,7 @@
 
 use libc::c_char;
 use nemo_relay::api::runtime::{ScopeStackHandle, ThreadScopeStackBinding};
+use nemo_relay::api::subscriber::{ScopeSubscriberHandle, SubscriberHandle};
 use nemo_relay::plugin::PluginRegistrationContext;
 use serde_json::Value as Json;
 
@@ -47,6 +48,8 @@ pub struct FfiLLMHandle(pub LlmHandle);
 pub struct FfiLLMRequest(pub LlmRequest);
 /// Opaque wrapper around a lifecycle event emitted by the runtime.
 pub struct FfiEvent(pub Event);
+/// Opaque handle to a closeable event subscriber registration.
+pub struct FfiSubscriptionHandle(pub FfiSubscription);
 /// Opaque handle to an isolated scope stack for per-request/per-task isolation.
 pub struct FfiScopeStack(pub ScopeStackHandle);
 /// Opaque handle to a captured thread-local scope stack binding.
@@ -83,6 +86,14 @@ pub struct FfiCodecHandle {
     #[allow(dead_code)]
     pub(crate) codec: std::sync::Arc<dyn LlmCodec>,
     pub(crate) response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+}
+
+/// Event subscriber registration owned by an FFI subscription handle.
+pub enum FfiSubscription {
+    /// Global anonymous subscriber.
+    Global(SubscriberHandle),
+    /// Scope-local anonymous subscriber.
+    Scope(ScopeSubscriberHandle),
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +218,22 @@ pub unsafe extern "C" fn nemo_relay_llm_request_free(ptr: *mut FfiLLMRequest) {
 /// `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_event_free(ptr: *mut FfiEvent) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free a subscription handle returned by `nemo_relay_subscribe` or
+/// `nemo_relay_scope_subscribe`.
+///
+/// Dropping the handle performs best-effort deregistration if it has not
+/// already been closed.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by an `nemo_relay_*subscribe`
+/// function, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_subscription_free(ptr: *mut FfiSubscriptionHandle) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

@@ -5,6 +5,19 @@
 
 use super::*;
 
+unsafe extern "C" fn subscription_log_cb(user_data: *mut libc::c_void, event: *const FfiEvent) {
+    let log = unsafe { &*(user_data as *const Arc<Mutex<Vec<String>>>) };
+    let name = unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default();
+    log.lock().unwrap_or_else(|e| e.into_inner()).push(name);
+}
+
+unsafe extern "C" fn subscription_log_free(user_data: *mut libc::c_void) {
+    *lock_unpoisoned(plugin_frees()) += 1;
+    if !user_data.is_null() {
+        drop(unsafe { Box::from_raw(user_data as *mut Arc<Mutex<Vec<String>>>) });
+    }
+}
+
 #[test]
 fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
@@ -404,6 +417,234 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
             nemo_relay_deregister_llm_conditional_execution_guardrail(llm_guard.as_ptr()),
             NemoRelayStatus::Ok
         );
+
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_subscription_handle_close_free_and_callback_lifetime() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let mut subscription: *mut FfiSubscriptionHandle = ptr::null_mut();
+        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let user_data = Box::into_raw(Box::new(Arc::clone(&events))) as *mut libc::c_void;
+        assert_eq!(
+            nemo_relay_subscribe(
+                subscription_log_cb,
+                user_data,
+                Some(subscription_log_free),
+                &mut subscription,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!subscription.is_null());
+
+        let before = cstring("ffi_subscription_before_close");
+        assert_eq!(
+            nemo_relay_event(before.as_ptr(), ptr::null(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        let mut removed = false;
+        assert_eq!(
+            nemo_relay_subscription_close(subscription, &mut removed),
+            NemoRelayStatus::Ok
+        );
+        assert!(removed);
+        assert_eq!(
+            nemo_relay_subscription_close(subscription, &mut removed),
+            NemoRelayStatus::Ok
+        );
+        assert!(!removed);
+        assert_eq!(
+            nemo_relay_subscription_close(subscription, ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        let after = cstring("ffi_subscription_after_close");
+        assert_eq!(
+            nemo_relay_event(after.as_ptr(), ptr::null(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_subscription_free(subscription);
+
+        let names = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(names, vec!["ffi_subscription_before_close"]);
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 1);
+
+        assert_eq!(
+            nemo_relay_subscription_close(ptr::null_mut(), &mut removed),
+            NemoRelayStatus::NullPointer
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_scope_subscription_handle_closes_and_scope_pop_cleans_up() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let scope_name = cstring("ffi_scope_subscription_owner");
+        let mut scope = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+
+        let mut explicit: *mut FfiSubscriptionHandle = ptr::null_mut();
+        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let explicit_data = Box::into_raw(Box::new(Arc::clone(&events))) as *mut libc::c_void;
+        assert_eq!(
+            nemo_relay_scope_subscribe(
+                scope_uuid.as_ptr(),
+                subscription_log_cb,
+                explicit_data,
+                Some(subscription_log_free),
+                &mut explicit,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let before = cstring("ffi_scope_subscription_before_close");
+        assert_eq!(
+            nemo_relay_event(before.as_ptr(), scope, ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        let mut removed = false;
+        assert_eq!(
+            nemo_relay_subscription_close(explicit, &mut removed),
+            NemoRelayStatus::Ok
+        );
+        assert!(removed);
+        assert_eq!(
+            nemo_relay_subscription_close(explicit, &mut removed),
+            NemoRelayStatus::Ok
+        );
+        assert!(!removed);
+        let after = cstring("ffi_scope_subscription_after_close");
+        assert_eq!(
+            nemo_relay_event(after.as_ptr(), scope, ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_subscription_free(explicit);
+
+        let mut cleanup: *mut FfiSubscriptionHandle = ptr::null_mut();
+        let cleanup_data = Box::into_raw(Box::new(Arc::clone(&events))) as *mut libc::c_void;
+        assert_eq!(
+            nemo_relay_scope_subscribe(
+                scope_uuid.as_ptr(),
+                subscription_log_cb,
+                cleanup_data,
+                Some(subscription_log_free),
+                &mut cleanup,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_subscription_close(cleanup, &mut removed),
+            NemoRelayStatus::Ok
+        );
+        assert!(!removed);
+        nemo_relay_subscription_free(cleanup);
+
+        let names = events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(
+            names,
+            vec![
+                "ffi_scope_subscription_before_close",
+                "ffi_scope_subscription_owner"
+            ]
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 2);
+
+        assert_eq!(
+            nemo_relay_scope_subscribe(
+                scope_uuid.as_ptr(),
+                subscription_log_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_subscription_validation_failures_do_not_consume_callback_data() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let invalid_uuid = cstring("not-a-uuid");
+        let mut subscription: *mut FfiSubscriptionHandle =
+            std::ptr::NonNull::<FfiSubscriptionHandle>::dangling().as_ptr();
+        let events: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let user_data = Box::into_raw(Box::new(Arc::clone(&events))) as *mut libc::c_void;
+
+        assert_eq!(
+            nemo_relay_subscribe(
+                subscription_log_cb,
+                user_data,
+                Some(subscription_log_free),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 0);
+
+        assert_eq!(
+            nemo_relay_scope_subscribe(
+                invalid_uuid.as_ptr(),
+                subscription_log_cb,
+                user_data,
+                Some(subscription_log_free),
+                &mut subscription,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(subscription.is_null());
+        subscription = std::ptr::NonNull::<FfiSubscriptionHandle>::dangling().as_ptr();
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 0);
+
+        let missing_uuid = cstring(&Uuid::now_v7().to_string());
+        assert_eq!(
+            nemo_relay_scope_subscribe(
+                missing_uuid.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                Some(subscription_log_free),
+                &mut subscription,
+            ),
+            NemoRelayStatus::NotFound
+        );
+        assert!(subscription.is_null());
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 0);
+
+        subscription_log_free(user_data);
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 1);
 
         nemo_relay_scope_stack_free(stack);
     }

@@ -134,3 +134,63 @@ test('WebAssembly withScope supports async callbacks', async () => {
     stack.free();
   }
 });
+
+test('WebAssembly subscribe returns a closeable handle', () => {
+  const stack = resetScopeStack();
+  const events = [];
+  const subscription = wasm.subscribe((event) => events.push(event));
+
+  try {
+    wasm.event('wasm_handle_before_close', null, null, null);
+    assert.equal(subscription.close(), true);
+    assert.equal(subscription.close(), false);
+    wasm.event('wasm_handle_after_close', null, null, null);
+
+    assert.deepEqual(
+      events.map((event) => event.name),
+      ['wasm_handle_before_close'],
+    );
+  } finally {
+    subscription.free();
+    stack.free();
+  }
+});
+
+test('WebAssembly scopeSubscribe closes and scope pop cleans up', () => {
+  const stack = resetScopeStack();
+  const scope = wasm.pushScope('wasm_scope_handle_owner', wasm.ScopeType.Agent, null, 0, null, null);
+  let popped = false;
+
+  try {
+    const explicitEvents = [];
+    const explicit = wasm.scopeSubscribe(scope.uuid, (event) => explicitEvents.push(event));
+    wasm.event('wasm_scope_handle_before_close', scope, null, null);
+    assert.equal(explicit.close(), true);
+    assert.equal(explicit.close(), false);
+    wasm.event('wasm_scope_handle_after_close', scope, null, null);
+    explicit.free();
+
+    assert.deepEqual(
+      explicitEvents.map((event) => event.name),
+      ['wasm_scope_handle_before_close'],
+    );
+
+    const cleanupEvents = [];
+    const cleanup = wasm.scopeSubscribe(scope.uuid, (event) => cleanupEvents.push(event));
+    wasm.popScope(scope);
+    popped = true;
+    assert.equal(cleanup.close(), false);
+    cleanup.free();
+
+    assert.deepEqual(
+      cleanupEvents.map((event) => event.name),
+      ['wasm_scope_handle_owner'],
+    );
+  } finally {
+    if (!popped) {
+      wasm.popScope(scope);
+    }
+    scope.free();
+    stack.free();
+  }
+});

@@ -118,24 +118,32 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	}
 	defer func() { _ = subscriber.Deregister(name) }()
 
-	handle, err := PushScope("otel_scope", ScopeTypeAgent)
+	stack, err := NewScopeStack()
 	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
+		t.Fatalf("NewScopeStack failed: %v", err)
 	}
-	if err := EmitEvent(
-		"otel_mark",
-		WithEventParent(handle),
-		WithEventData(json.RawMessage(`{"step":1}`)),
-		WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
-	); err != nil {
-		t.Fatalf("EmitEvent failed: %v", err)
-	}
-	if err := PopScope(handle); err != nil {
-		t.Fatalf("PopScope failed: %v", err)
-	}
-	if err := subscriber.ForceFlush(); err != nil {
-		t.Fatalf("ForceFlush failed: %v", err)
-	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := PushScope("otel_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		if err := EmitEvent(
+			"otel_mark",
+			WithEventParent(handle),
+			WithEventData(json.RawMessage(`{"step":1}`)),
+			WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
+		); err != nil {
+			t.Fatalf("EmitEvent failed: %v", err)
+		}
+		if err := PopScope(handle); err != nil {
+			t.Fatalf("PopScope failed: %v", err)
+		}
+		if err := subscriber.ForceFlush(); err != nil {
+			t.Fatalf("ForceFlush failed: %v", err)
+		}
+	})
 
 	select {
 	case request := <-requests:

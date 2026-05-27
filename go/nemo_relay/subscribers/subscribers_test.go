@@ -78,6 +78,43 @@ func TestSubscriberShorthands(t *testing.T) {
 	mu.Unlock()
 }
 
+func TestSubscriptionHandleShorthand(t *testing.T) {
+	var events []string
+	var mu sync.Mutex
+
+	subscription, err := subscriberspkg.Subscribe(func(event nemo_relay.Event) {
+		mu.Lock()
+		events = append(events, event.Name())
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	if err := nemo_relay.EmitEvent("subs_handle_before_close"); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+	if closed, err := subscription.Close(); err != nil {
+		t.Fatalf("Subscription Close failed: %v", err)
+	} else if !closed {
+		t.Fatal("Subscription Close did not report a live close")
+	}
+	if closed, err := subscription.Close(); err != nil {
+		t.Fatalf("second Subscription Close failed: %v", err)
+	} else if closed {
+		t.Fatal("second Subscription Close reported a live close")
+	}
+	if err := nemo_relay.EmitEvent("subs_handle_after_close"); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 || events[0] != "subs_handle_before_close" {
+		t.Fatalf("unexpected subscription events: %#v", events)
+	}
+}
+
 func TestScopeSubscriberShorthands(t *testing.T) {
 	stack, err := nemo_relay.NewScopeStack()
 	if err != nil {
@@ -95,6 +132,86 @@ func TestScopeSubscriberShorthands(t *testing.T) {
 		markCount := countScopedMarks(t, handle)
 		if markCount != 1 {
 			t.Fatalf("expected exactly one scoped mark, got %d", markCount)
+		}
+	})
+}
+
+func TestScopeSubscriptionHandleShorthand(t *testing.T) {
+	stack, err := nemo_relay.NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := nemo_relay.PushScope("subs_scope_handle_owner", nemo_relay.ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		popped := false
+		defer func() {
+			if !popped {
+				_ = nemo_relay.PopScope(handle)
+			}
+		}()
+
+		var explicitEvents []string
+		var explicitMu sync.Mutex
+		explicit, err := subscriberspkg.ScopeSubscribe(handle.UUID(), func(event nemo_relay.Event) {
+			explicitMu.Lock()
+			explicitEvents = append(explicitEvents, event.Name())
+			explicitMu.Unlock()
+		})
+		if err != nil {
+			t.Fatalf("ScopeSubscribe failed: %v", err)
+		}
+		if err := nemo_relay.EmitEvent("subs_scope_handle_before_close"); err != nil {
+			t.Fatalf("EmitEvent failed: %v", err)
+		}
+		if closed, err := explicit.Close(); err != nil {
+			t.Fatalf("Scope subscription Close failed: %v", err)
+		} else if !closed {
+			t.Fatal("Scope subscription Close did not report a live close")
+		}
+		if closed, err := explicit.Close(); err != nil {
+			t.Fatalf("second Scope subscription Close failed: %v", err)
+		} else if closed {
+			t.Fatal("second Scope subscription Close reported a live close")
+		}
+		if err := nemo_relay.EmitEvent("subs_scope_handle_after_close"); err != nil {
+			t.Fatalf("EmitEvent failed: %v", err)
+		}
+
+		explicitMu.Lock()
+		if len(explicitEvents) != 1 || explicitEvents[0] != "subs_scope_handle_before_close" {
+			t.Fatalf("unexpected explicit scope subscription events: %#v", explicitEvents)
+		}
+		explicitMu.Unlock()
+
+		var cleanupEvents []string
+		var cleanupMu sync.Mutex
+		cleanup, err := subscriberspkg.ScopeSubscribe(handle.UUID(), func(event nemo_relay.Event) {
+			cleanupMu.Lock()
+			cleanupEvents = append(cleanupEvents, event.Name())
+			cleanupMu.Unlock()
+		})
+		if err != nil {
+			t.Fatalf("ScopeSubscribe cleanup failed: %v", err)
+		}
+		if err := nemo_relay.PopScope(handle); err != nil {
+			t.Fatalf("PopScope failed: %v", err)
+		}
+		popped = true
+		if closed, err := cleanup.Close(); err != nil {
+			t.Fatalf("cleanup subscription Close failed: %v", err)
+		} else if closed {
+			t.Fatal("cleanup subscription Close reported a live close after scope cleanup")
+		}
+
+		cleanupMu.Lock()
+		defer cleanupMu.Unlock()
+		if len(cleanupEvents) != 1 || cleanupEvents[0] != "subs_scope_handle_owner" {
+			t.Fatalf("unexpected cleanup scope subscription events: %#v", cleanupEvents)
 		}
 	})
 }

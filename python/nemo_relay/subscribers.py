@@ -31,9 +31,12 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     register_subscriber as _native_register,
 )
+from nemo_relay._native import (
+    subscribe as _native_subscribe,
+)
 
 if TYPE_CHECKING:
-    from nemo_relay import Event
+    from nemo_relay import Event, Subscription
 
 
 def register(name: str, callback: "Callable[[Event], None]") -> None:
@@ -57,6 +60,27 @@ def register(name: str, callback: "Callable[[Event], None]") -> None:
         nemo_relay.subscribers.register("printer", lambda event: print(event.kind))
     """
     return _native_register(name, callback)
+
+
+def subscribe(callback: "Callable[[Event], None]") -> "Subscription":
+    """Register a global event subscriber and return a closeable handle.
+
+    Args:
+        callback: Callable invoked as ``callback(event)`` for every emitted
+            lifecycle event.
+
+    Returns:
+        Subscription: A native handle with ``close()`` and context-manager
+        support.
+
+    Example::
+
+        import nemo_relay
+
+        with nemo_relay.subscribers.subscribe(lambda event: print(event.kind)):
+            nemo_relay.scope.event("checkpoint")
+    """
+    return _native_subscribe(callback)
 
 
 def deregister(name: str) -> bool:
@@ -83,4 +107,4 @@ def deregister(name: str) -> bool:
     return _native_deregister(name)
 
 
-__all__ = ["register", "deregister"]
+__all__ = ["register", "subscribe", "deregister"]

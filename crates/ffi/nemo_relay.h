@@ -185,6 +185,11 @@ typedef struct FfiScopeStack FfiScopeStack;
 typedef struct FfiStream FfiStream;
 
 /**
+ * Opaque handle to a closeable event subscriber registration.
+ */
+typedef struct FfiSubscriptionHandle FfiSubscriptionHandle;
+
+/**
  * Opaque handle to a captured thread-local scope stack binding.
  */
 typedef struct FfiThreadScopeStackBinding FfiThreadScopeStackBinding;
@@ -1813,6 +1818,59 @@ NemoRelayStatus nemo_relay_scope_stack_restore_thread(struct FfiThreadScopeStack
 bool nemo_relay_scope_stack_active(void);
 
 /**
+ * Register an anonymous global event subscriber and return a closeable handle.
+ *
+ * # Parameters
+ * - `cb`: Event callback. The `FfiEvent` is valid only during the call.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data` after registration ownership
+ *   has been accepted.
+ * - `out`: Receives the subscription handle on success.
+ *
+ * # Safety
+ * `cb` must be a valid function pointer. `out` must be non-null and valid for
+ * writes.
+ */
+NemoRelayStatus nemo_relay_subscribe(NemoRelayEventSubscriberCb cb,
+                                     void *user_data,
+                                     NemoRelayFreeFn free_fn,
+                                     struct FfiSubscriptionHandle **out);
+
+/**
+ * Register an anonymous scope-local event subscriber and return a closeable handle.
+ *
+ * # Parameters
+ * - `scope_uuid`: UUID of the active scope that owns the subscriber.
+ * - `cb`: Event callback. The `FfiEvent` is valid only during the call.
+ * - `user_data`: Opaque pointer passed to `cb`.
+ * - `free_fn`: Optional destructor for `user_data` after registration ownership
+ *   has been accepted.
+ * - `out`: Receives the subscription handle on success.
+ *
+ * # Safety
+ * `scope_uuid` must be a valid C string. `cb` must be a valid function
+ * pointer. `out` must be non-null and valid for writes.
+ */
+NemoRelayStatus nemo_relay_scope_subscribe(const char *scope_uuid,
+                                           NemoRelayEventSubscriberCb cb,
+                                           void *user_data,
+                                           NemoRelayFreeFn free_fn,
+                                           struct FfiSubscriptionHandle **out);
+
+/**
+ * Close a subscription handle.
+ *
+ * This function is idempotent. Closing after automatic scope cleanup succeeds.
+ * `removed` receives true only when this call removed a live subscriber.
+ *
+ * # Safety
+ * `handle` must be a valid pointer returned by `nemo_relay_subscribe` or
+ * `nemo_relay_scope_subscribe`. `removed` must be non-null and valid for
+ * writes.
+ */
+NemoRelayStatus nemo_relay_subscription_close(struct FfiSubscriptionHandle *handle, bool *removed);
+
+/**
  * Begin a manual tool call lifecycle span.
  *
  * This emits a tool Start event after applying sanitize-request guardrails to
@@ -2058,6 +2116,19 @@ void nemo_relay_llm_request_free(struct FfiLLMRequest *ptr);
  * `ptr` must be a valid pointer returned by an `nemo_relay_*` function, or null.
  */
 void nemo_relay_event_free(struct FfiEvent *ptr);
+
+/**
+ * Free a subscription handle returned by `nemo_relay_subscribe` or
+ * `nemo_relay_scope_subscribe`.
+ *
+ * Dropping the handle performs best-effort deregistration if it has not
+ * already been closed.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by an `nemo_relay_*subscribe`
+ * function, or null.
+ */
+void nemo_relay_subscription_free(struct FfiSubscriptionHandle *ptr);
 
 /**
  * Free a scope stack handle previously returned by `nemo_relay_scope_stack_create`.

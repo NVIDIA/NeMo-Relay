@@ -16,6 +16,7 @@ use crate::api::runtime::{
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
+use uuid::Uuid;
 
 /// Scope-owned middleware registries and subscribers.
 ///
@@ -49,6 +50,8 @@ pub(crate) struct ScopeLocalRegistries {
         SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Scope-local lifecycle subscribers visible while the owning scope is active.
     pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
+    /// Anonymous scope-local lifecycle subscribers owned by closeable handles.
+    pub(crate) anonymous_event_subscribers: HashMap<Uuid, EventSubscriberFn>,
 }
 
 impl ScopeLocalRegistries {
@@ -71,6 +74,7 @@ impl ScopeLocalRegistries {
             llm_execution_intercepts: SortedRegistry::new(),
             llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),
+            anonymous_event_subscribers: HashMap::new(),
         }
     }
 }

@@ -95,6 +95,9 @@ from nemo_relay._native import (
     ScopeType as ScopeType,
 )
 from nemo_relay._native import (
+    Subscription as Subscription,
+)
+from nemo_relay._native import (
     ToolAttributes as ToolAttributes,
 )
 from nemo_relay._native import (

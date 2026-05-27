@@ -20,6 +20,7 @@ use std::ffi::{CStr, CString};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
@@ -214,10 +215,12 @@ pub type NemoRelayPluginRegisterCb = unsafe extern "C" fn(
 // ---------------------------------------------------------------------------
 
 /// RAII wrapper around a C user-data pointer and its associated free function.
-/// Ensures the free function is called exactly once when dropped.
+/// When ownership is armed, ensures the free function is called exactly once
+/// when dropped.
 struct UserData {
     ptr: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
+    free_on_drop: AtomicBool,
 }
 
 unsafe impl Send for UserData {}
@@ -225,7 +228,10 @@ unsafe impl Sync for UserData {}
 
 impl Drop for UserData {
     fn drop(&mut self) {
-        if let Some(free) = self.free_fn {
+        if self.free_on_drop.load(Ordering::Acquire)
+            && !self.ptr.is_null()
+            && let Some(free) = self.free_fn
+        {
             unsafe { free(self.ptr) };
         }
     }
@@ -234,11 +240,23 @@ impl Drop for UserData {
 fn make_user_data(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
+    free_on_drop: bool,
 ) -> std::sync::Arc<UserData> {
     std::sync::Arc::new(UserData {
         ptr: user_data,
         free_fn,
+        free_on_drop: AtomicBool::new(free_on_drop),
     })
+}
+
+pub(crate) struct DeferredUserData {
+    user_data: Arc<UserData>,
+}
+
+impl DeferredUserData {
+    pub(crate) fn accept(self) {
+        self.user_data.free_on_drop.store(true, Ordering::Release);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +269,7 @@ pub fn wrap_tool_sanitize_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> ToolSanitizeFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |name: &str, args: Json| {
         let c_name = CString::new(name).unwrap_or_default();
         let c_args = json_to_c_string(&args);
@@ -269,7 +287,7 @@ pub fn wrap_tool_conditional_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> ToolConditionalFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |name: &str, args: &Json| {
         clear_last_error();
         let c_name = CString::new(name).unwrap_or_default();
@@ -295,7 +313,7 @@ pub fn wrap_tool_request_intercept_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> ToolInterceptFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |name: &str, args: Json| {
         clear_last_error();
         let c_name = CString::new(name).unwrap_or_default();
@@ -315,7 +333,7 @@ pub fn wrap_tool_exec_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Box::new(move |args: Json| {
         let ud = ud.clone();
         Box::pin(async move {
@@ -342,7 +360,7 @@ pub fn wrap_tool_exec_intercept_fn(
         + Send
         + Sync,
 > {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let ud = ud.clone();
         Box::pin(async move {
@@ -403,7 +421,7 @@ pub fn wrap_llm_exec_intercept_fn(
         + Send
         + Sync,
 > {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(
         move |_name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
             let ud = ud.clone();
@@ -477,7 +495,7 @@ pub fn wrap_llm_stream_exec_intercept_fn(
         > + Send
         + Sync,
 > {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(
         move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
             let ud = ud.clone();
@@ -546,7 +564,7 @@ pub fn wrap_json_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> Box<dyn Fn(Json) -> Json + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Box::new(move |value: Json| {
         let c_json = json_to_c_string(&value);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
@@ -566,7 +584,7 @@ pub fn wrap_llm_request_intercept_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> LlmRequestInterceptFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(
         move |name: &str, request: LlmRequest, annotated: Option<AnnotatedLLMRequest>| {
             clear_last_error();
@@ -644,7 +662,7 @@ pub fn wrap_llm_response_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> LlmSanitizeResponseFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |response: Json| {
         let c_json = json_to_c_string(&response);
         let result_ptr = unsafe { cb(ud.ptr, c_json) };
@@ -661,7 +679,7 @@ pub fn wrap_llm_sanitize_request_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> LlmSanitizeRequestFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |request: LlmRequest| {
         let ffi_req = Box::into_raw(Box::new(FfiLLMRequest(request)));
         let result_ptr = unsafe { cb(ud.ptr, ffi_req) };
@@ -686,7 +704,7 @@ pub fn wrap_llm_conditional_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> LlmConditionalFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(move |request: &LlmRequest| {
         clear_last_error();
         let ffi_req = FfiLLMRequest(request.clone());
@@ -711,7 +729,7 @@ pub fn wrap_llm_exec_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> Box<dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Box::new(move |request: LlmRequest| {
         let ud = ud.clone();
         Box::pin(async move {
@@ -744,7 +762,7 @@ pub fn wrap_llm_stream_exec_fn(
         > + Send
         + Sync,
 > {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Box::new(move |request: LlmRequest| {
         let ud = ud.clone();
         Box::pin(async move {
@@ -809,7 +827,26 @@ pub fn wrap_event_subscriber(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> EventSubscriberFn {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
+    wrap_event_subscriber_user_data(cb, ud)
+}
+
+pub(crate) fn wrap_event_subscriber_deferred(
+    cb: NemoRelayEventSubscriberCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> (EventSubscriberFn, DeferredUserData) {
+    let ud = make_user_data(user_data, free_fn, false);
+    (
+        wrap_event_subscriber_user_data(cb, ud.clone()),
+        DeferredUserData { user_data: ud },
+    )
+}
+
+fn wrap_event_subscriber_user_data(
+    cb: NemoRelayEventSubscriberCb,
+    ud: Arc<UserData>,
+) -> EventSubscriberFn {
     Arc::new(move |event: &Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
@@ -887,7 +924,7 @@ pub fn wrap_codec_fn(
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> Arc<dyn LlmCodec> {
-    let ud = make_user_data(user_data, free_fn);
+    let ud = make_user_data(user_data, free_fn, true);
     Arc::new(FfiCodec {
         decode_cb,
         encode_cb,

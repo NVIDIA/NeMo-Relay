@@ -15,6 +15,7 @@ from nemo_relay import (
     ScopeType,
     llm,
     scope,
+    scope_local,
     subscribers,
     tools,
 )
@@ -63,6 +64,47 @@ class TestSubscribers:
 
     def test_deregister_nonexistent(self):
         assert not subscribers.deregister("nonexistent_sub")
+
+    def test_subscribe_handle_close_is_idempotent(self):
+        events = []
+        subscription = subscribers.subscribe(lambda e: events.append(e))
+        scope.event("py_handle_before_close")
+        assert subscription.close()
+        assert not subscription.close()
+        scope.event("py_handle_after_close")
+
+        assert [e.name for e in events] == ["py_handle_before_close"]
+
+    def test_subscribe_context_manager_closes(self):
+        events = []
+        with subscribers.subscribe(lambda e: events.append(e)) as subscription:
+            scope.event("py_handle_context")
+
+        assert not subscription.close()
+        scope.event("py_handle_context_after")
+        assert [e.name for e in events] == ["py_handle_context"]
+
+    def test_scope_subscribe_handle_close_and_scope_cleanup(self):
+        handle = scope.push("py_scope_handle_owner", ScopeType.Agent)
+        popped = False
+        try:
+            explicit_events = []
+            explicit = scope_local.subscribe(handle, lambda e: explicit_events.append(e))
+            scope.event("py_scope_handle_before_close", handle=handle)
+            assert explicit.close()
+            assert not explicit.close()
+            scope.event("py_scope_handle_after_close", handle=handle)
+            assert [e.name for e in explicit_events] == ["py_scope_handle_before_close"]
+
+            cleanup_events = []
+            cleanup = scope_local.subscribe(handle, lambda e: cleanup_events.append(e))
+            scope.pop(handle)
+            popped = True
+            assert not cleanup.close()
+            assert [e.name for e in cleanup_events] == ["py_scope_handle_owner"]
+        finally:
+            if not popped:
+                scope.pop(handle)
 
 
 class TestSubscriberEventDetails:

@@ -208,12 +208,13 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
         captured.lock().unwrap().push(event.clone());
     });
     let subscribers = [subscriber];
+    let subscriber_snapshot = state.collect_event_subscribers(&subscribers);
 
     let rejection = NemoRelayContextState::tool_conditional_execution_snapshot_chain(
         "snapshot_target",
         &json!({}),
         &entries,
-        &subscribers,
+        &subscriber_snapshot,
         None,
         None,
     )
@@ -283,15 +284,17 @@ fn context_state_supports_extensions_events_and_builders() {
 
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
     let subscriber_events = events.clone();
-    state.event_subscribers.insert(
-        "capture".to_string(),
-        Arc::new(move |event: &Event| {
-            subscriber_events
-                .lock()
-                .unwrap()
-                .push(event.kind().to_string());
-        }),
-    );
+    state
+        .register_event_subscriber(
+            "capture",
+            Arc::new(move |event: &Event| {
+                subscriber_events
+                    .lock()
+                    .unwrap()
+                    .push(event.kind().to_string());
+            }),
+        )
+        .unwrap();
     let event = state.create_event(crate::api::event::MarkEvent::new(
         crate::api::event::BaseEvent::builder().name("mark").build(),
         None,

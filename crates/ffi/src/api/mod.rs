@@ -70,6 +70,7 @@ mod plugin;
 mod scope;
 mod scope_registry;
 mod scope_stack;
+mod subscription;
 mod tool_lifecycle;
 mod tool_registry;
 
@@ -80,6 +81,7 @@ pub use plugin::*;
 pub use scope::*;
 pub use scope_registry::*;
 pub use scope_stack::*;
+pub use subscription::*;
 pub use tool_lifecycle::*;
 pub use tool_registry::*;
 

@@ -2284,6 +2284,42 @@ pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
 // Subscriber registrations
 // ---------------------------------------------------------------------------
 
+enum SubscriptionInner {
+    Global(core_subscriber_api::SubscriberHandle),
+    Scope(core_subscriber_api::ScopeSubscriberHandle),
+}
+
+/// Closeable event subscriber registration.
+#[napi]
+pub struct Subscription {
+    inner: StdMutex<Option<SubscriptionInner>>,
+}
+
+#[napi]
+impl Subscription {
+    /// Close this subscription.
+    ///
+    /// Returns `true` when a live subscriber was removed and `false` when the
+    /// subscription was already closed or scope cleanup already removed it.
+    #[napi]
+    pub fn close(&self) -> Result<bool> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::from_reason("subscription lock poisoned"))?;
+        let Some(inner) = guard.as_ref() else {
+            return Ok(false);
+        };
+        let removed = match inner {
+            SubscriptionInner::Global(handle) => handle.close(),
+            SubscriptionInner::Scope(handle) => handle.close(),
+        }
+        .map_err(to_napi_err)?;
+        *guard = None;
+        Ok(removed)
+    }
+}
+
 /// Register a named event subscriber that receives all lifecycle events.
 ///
 /// The `callback` receives each event as the canonical JSON event object. Events are
@@ -2295,6 +2331,19 @@ pub fn register_subscriber(
     callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core_subscriber_api::register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
+        .map_err(to_napi_err)
+}
+
+/// Register an anonymous event subscriber and return a closeable handle.
+///
+/// The `callback` receives each event as the canonical JSON event object. Events are
+/// delivered asynchronously and non-blocking.
+#[napi]
+pub fn subscribe(callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>) -> Result<Subscription> {
+    core_subscriber_api::subscribe(callable::wrap_js_event_subscriber(callback))
+        .map(|handle| Subscription {
+            inner: StdMutex::new(Some(SubscriptionInner::Global(handle))),
+        })
         .map_err(to_napi_err)
 }
 
@@ -2796,6 +2845,24 @@ pub fn scope_register_subscriber(
         callable::wrap_js_event_subscriber(callback),
     )
     .map_err(to_napi_err)
+}
+
+/// Register an anonymous scope-local event subscriber and return a closeable handle.
+///
+/// The `callback` receives each event as the canonical JSON event object. Events are
+/// delivered asynchronously and non-blocking.
+#[napi]
+pub fn scope_subscribe(
+    scope_uuid: String,
+    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+) -> Result<Subscription> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    core_subscriber_api::scope_subscribe(&uuid, callable::wrap_js_event_subscriber(callback))
+        .map(|handle| Subscription {
+            inner: StdMutex::new(Some(SubscriptionInner::Scope(handle))),
+        })
+        .map_err(to_napi_err)
 }
 
 /// Deregister a scope-local event subscriber by name.

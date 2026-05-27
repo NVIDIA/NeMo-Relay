@@ -1375,6 +1375,56 @@ pub fn deregister_llm_stream_execution_intercept(name: &str) -> Result<bool, JsV
 // Subscriber registrations
 // ---------------------------------------------------------------------------
 
+enum SubscriptionInner {
+    Global(relay_subscriber_api::SubscriberHandle),
+    Scope(relay_subscriber_api::ScopeSubscriberHandle),
+}
+
+fn close_subscription_inner(inner: &SubscriptionInner) -> FlowResult<bool> {
+    match inner {
+        SubscriptionInner::Global(handle) => handle.close(),
+        SubscriptionInner::Scope(handle) => handle.close(),
+    }
+}
+
+/// Closeable event subscriber registration.
+#[wasm_bindgen(js_name = Subscription)]
+pub struct Subscription {
+    inner: Arc<Mutex<Option<SubscriptionInner>>>,
+}
+
+#[wasm_bindgen(js_class = Subscription)]
+impl Subscription {
+    /// Close this subscription.
+    ///
+    /// Returns `true` when a live subscriber was removed and `false` when the
+    /// subscription was already closed or scope cleanup already removed it.
+    #[wasm_bindgen(js_name = close)]
+    pub fn close(&self) -> Result<bool, JsValue> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| JsValue::from_str("subscription lock poisoned"))?;
+        let Some(inner) = guard.as_ref() else {
+            return Ok(false);
+        };
+        let removed = close_subscription_inner(inner).map_err(to_js_err)?;
+        *guard = None;
+        Ok(removed)
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        let Ok(mut guard) = self.inner.lock() else {
+            return;
+        };
+        if let Some(inner) = guard.take() {
+            let _ = close_subscription_inner(&inner);
+        }
+    }
+}
+
 /// Registers an event subscriber that receives lifecycle events.
 ///
 /// - `name` - Unique subscriber name.
@@ -1385,6 +1435,20 @@ pub fn register_subscriber(
     #[wasm_bindgen(unchecked_param_type = "(event: Json) => any")] callback: Function,
 ) -> Result<(), JsValue> {
     relay_subscriber_api::register_subscriber(name, callable::wrap_js_event_subscriber(callback))
+        .map_err(to_js_err)
+}
+
+/// Registers an anonymous event subscriber and returns a closeable handle.
+///
+/// - `callback` - JS function `(event) => void` called for each event.
+#[wasm_bindgen(js_name = "subscribe")]
+pub fn subscribe(
+    #[wasm_bindgen(unchecked_param_type = "(event: Json) => any")] callback: Function,
+) -> Result<Subscription, JsValue> {
+    relay_subscriber_api::subscribe(callable::wrap_js_event_subscriber(callback))
+        .map(|handle| Subscription {
+            inner: Arc::new(Mutex::new(Some(SubscriptionInner::Global(handle)))),
+        })
         .map_err(to_js_err)
 }
 
@@ -1885,6 +1949,24 @@ pub fn scope_register_subscriber(
         callable::wrap_js_event_subscriber(callback),
     )
     .map_err(to_js_err)
+}
+
+/// Registers an anonymous scope-local event subscriber and returns a closeable handle.
+///
+/// - `scope_uuid` - UUID of the scope to register on.
+/// - `callback` - JS function `(event) => void` called for each event.
+#[wasm_bindgen(js_name = "scopeSubscribe")]
+pub fn scope_subscribe(
+    #[wasm_bindgen(js_name = "scopeUuid")] scope_uuid: &str,
+    #[wasm_bindgen(unchecked_param_type = "(event: Json) => any")] callback: Function,
+) -> Result<Subscription, JsValue> {
+    let uuid = uuid::Uuid::parse_str(scope_uuid)
+        .map_err(|e| JsValue::from_str(&format!("invalid UUID: {e}")))?;
+    relay_subscriber_api::scope_subscribe(&uuid, callable::wrap_js_event_subscriber(callback))
+        .map(|handle| Subscription {
+            inner: Arc::new(Mutex::new(Some(SubscriptionInner::Scope(handle)))),
+        })
+        .map_err(to_js_err)
 }
 
 /// Removes a scope-local event subscriber by name.
