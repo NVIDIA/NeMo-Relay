@@ -92,8 +92,8 @@ class TestObservabilityConfigHelpers:
             "endpoint_url": "https://s3.example.com",
             "allow_http": False,
         }
-        atif = AtifConfig(enabled=True, storage=storage)
-        assert atif.to_dict()["storage"] == storage.to_dict()
+        atif = AtifConfig(enabled=True, storage=[storage])
+        assert atif.to_dict()["storage"] == [storage.to_dict()]
 
     @pytest.mark.parametrize("use_context_manager", [True, False])
     async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool):

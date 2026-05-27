@@ -217,33 +217,9 @@ pub struct AtifSectionConfig {
     /// is recorded against that destination and skipped on subsequent
     /// trajectories, while the other destinations continue to receive writes.
     ///
-    /// Accepts either the canonical array-of-tables form or, for back-compat,
-    /// a single TOML table that describes one destination.
-    ///
     /// [`output_directory`]: Self::output_directory
-    #[serde(
-        default,
-        deserialize_with = "deserialize_storage_list",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub storage: Vec<AtifStorageConfig>,
-}
-
-/// Accept either a single storage table (back-compat) or an array of tables.
-fn deserialize_storage_list<'de, D>(deserializer: D) -> Result<Vec<AtifStorageConfig>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        Many(Vec<AtifStorageConfig>),
-        One(AtifStorageConfig),
-    }
-    match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::Many(list) => Ok(list),
-        OneOrMany::One(entry) => Ok(vec![entry]),
-    }
 }
 
 impl Default for AtifSectionConfig {
@@ -838,11 +814,8 @@ impl AtifDispatcher {
         subscriber_prefix: &str,
         state: Arc<Mutex<Self>>,
         storage: AtifStorageList,
-    ) {
-        if self.fatal_error.is_some() || !is_top_level_trajectory_start(event) {
-            return;
-    ) -> Option<PendingAtifWrite> {
-        if self.last_error.is_some() {
+    ) -> Option<(PendingAtifWrite, Vec<SinkLabel>)> {
+        if self.fatal_error.is_some() {
             return None;
         }
 
@@ -862,7 +835,6 @@ impl AtifDispatcher {
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
         let (filename, local_path) = self.prepare_destination(&session_id);
-        let path = self.output_path(&session_id);
         self.scope_owners.insert(event.uuid(), event.uuid());
         self.agents.insert(
             event.uuid(),
@@ -889,7 +861,10 @@ impl AtifDispatcher {
         None
     }
 
-    fn observe_descendant_from_global(&mut self, event: &Event) -> Option<PendingAtifWrite> {
+    fn observe_descendant_from_global(
+        &mut self,
+        event: &Event,
+    ) -> Option<(PendingAtifWrite, Vec<SinkLabel>)> {
         let owner = self.scope_owners.get(&event.uuid()).copied().or_else(|| {
             event
                 .parent_uuid()
@@ -1052,27 +1027,26 @@ fn atif_dispatcher_subscriber(
     storage: AtifStorageList,
 ) -> EventSubscriberFn {
     Arc::new(move |event: &Event| {
-        let pending_write = {
+        let pending = {
             let Ok(mut guard) = manager.lock() else {
                 return;
             };
-            guard.observe_global(event, &subscriber_prefix, Arc::clone(&manager))
+            guard.observe_global(
+                event,
+                &subscriber_prefix,
+                Arc::clone(&manager),
+                Arc::clone(&storage),
+            )
         };
-        let Some(write) = pending_write else {
+        let Some((write, targets)) = pending else {
             return;
         };
-        guard.observe_global(
-            event,
-            &subscriber_prefix,
-            Arc::clone(&manager),
-            Arc::clone(&storage),
-        );
-        let result = write_atif_file(&write);
+        let results = write_atif(&write, storage.as_slice(), &targets);
         let scope_subscriber = {
             let Ok(mut guard) = manager.lock() else {
                 return;
             };
-            guard.complete_scope_write(write.agent_uuid, result)
+            guard.complete_scope_write(write.agent_uuid, results)
         };
         if let Some((scope_uuid, name)) = scope_subscriber {
             let _ = scope_deregister_subscriber(&scope_uuid, &name);

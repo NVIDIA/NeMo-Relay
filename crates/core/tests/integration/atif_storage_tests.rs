@@ -79,11 +79,11 @@ fn build_observability_config(bucket: &str, key_prefix: &str) -> PluginConfig {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {
+            "storage": [{
                 "type": "s3",
                 "bucket": bucket,
                 "key_prefix": key_prefix,
-            }
+            }]
         }
     }) else {
         unreachable!("config builder produced non-object root")

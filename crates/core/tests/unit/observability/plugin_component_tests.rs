@@ -643,6 +643,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         output_directory: Some(dir.clone()),
         ..AtifSectionConfig::default()
     })));
+    let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
 
     let start_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
@@ -660,7 +661,12 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         manager
             .lock()
             .unwrap()
-            .observe_global(&start_event, "__test__", Arc::clone(&manager))
+            .observe_global(
+                &start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
             .is_none()
     );
 
@@ -680,7 +686,12 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         manager
             .lock()
             .unwrap()
-            .observe_global(&child_start_event, "__test__", Arc::clone(&manager))
+            .observe_global(
+                &child_start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
             .is_none()
     );
 
@@ -699,7 +710,12 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         manager
             .lock()
             .unwrap()
-            .observe_global(&child_end_event, "__test__", Arc::clone(&manager))
+            .observe_global(
+                &child_end_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
             .is_none()
     );
 
@@ -714,17 +730,25 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         EventCategory::agent(),
         None,
     ));
-    let pending_write = manager
+    let (pending_write, targets) = manager
         .lock()
         .unwrap()
-        .observe_global(&end_event, "__test__", Arc::clone(&manager))
+        .observe_global(
+            &end_event,
+            "__test__",
+            Arc::clone(&manager),
+            Arc::clone(&empty_storage),
+        )
         .unwrap();
     let path = dir.join(format!("nemo-relay-atif-{agent_uuid}.json"));
-    write_atif_file(&pending_write).unwrap();
+    let results = write_atif(&pending_write, empty_storage.as_slice(), &targets);
+    for (label, result) in &results {
+        assert!(result.is_ok(), "{label:?}: {result:?}");
+    }
     let scope_subscriber = manager
         .lock()
         .unwrap()
-        .complete_scope_write(agent_uuid, Ok(()));
+        .complete_scope_write(agent_uuid, results);
     if let Some((scope_uuid, name)) = scope_subscriber {
         let _ = scope_deregister_subscriber(&scope_uuid, &name);
     }
@@ -780,10 +804,6 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
         Arc::clone(&manager),
         Arc::clone(&empty_storage),
     );
-    let _ = manager
-        .lock()
-        .unwrap()
-        .observe_global(&start_event, "__test__", Arc::clone(&manager));
     {
         let dispatcher = manager.lock().unwrap();
         assert!(dispatcher.agents.contains_key(&agent.uuid));
@@ -857,17 +877,26 @@ fn atif_dispatcher_records_failed_agent_writes() {
         EventCategory::agent(),
         None,
     ));
-    dispatcher
-        .lock()
-        .unwrap()
-        .observe_global(&start_event, "__test__", Arc::clone(&dispatcher));
+    dispatcher.lock().unwrap().observe_global(
+        &start_event,
+        "__test__",
+        Arc::clone(&dispatcher),
+        Arc::new(Vec::new()),
+    );
 
     let mut dispatcher = dispatcher.lock().unwrap();
-    let error = dispatcher
-        .finish_agent_write(agent.uuid, Err(std::io::Error::other("disk full")))
-        .unwrap_err();
-    assert_eq!(error.to_string(), "disk full");
-    assert_eq!(dispatcher.last_error.as_deref(), Some("disk full"));
+    let scope_subscriber = dispatcher.complete_scope_write(
+        agent.uuid,
+        vec![(SinkLabel::Local, Err(std::io::Error::other("disk full")))],
+    );
+    assert!(scope_subscriber.is_some());
+    assert_eq!(
+        dispatcher
+            .sink_errors
+            .get(&SinkLabel::Local)
+            .map(String::as_str),
+        Some("disk full")
+    );
     assert!(dispatcher.last_error_result().is_err());
     drop(dispatcher);
     pop(&agent);
@@ -876,8 +905,10 @@ fn atif_dispatcher_records_failed_agent_writes() {
 #[test]
 fn atif_dispatcher_default_output_path_uses_current_directory() {
     let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    let (filename, local_path) = dispatcher.prepare_destination("session-1");
+    assert_eq!(filename, "nemo-relay-atif-session-1.json");
     assert_eq!(
-        dispatcher.output_path("session-1"),
+        local_path.unwrap(),
         std::env::current_dir()
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
@@ -1013,24 +1044,37 @@ fn atif_storage_section_parses_s3_variant() {
     let parsed: AtifSectionConfig = serde_json::from_value(json!({
         "enabled": true,
         "filename_template": "trajectory-{session_id}.json",
-        "storage": {
+        "storage": [{
             "type": "s3",
             "bucket": "my-bucket",
             "key_prefix": "openshell/"
-        }
+        }]
     }))
     .expect("valid storage section should parse");
-    assert_eq!(
-        parsed.storage.len(),
-        1,
-        "single-table form parses as one entry"
-    );
+    assert_eq!(parsed.storage.len(), 1);
     match &parsed.storage[0] {
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
         }
     }
+}
+
+#[test]
+fn atif_storage_section_rejects_single_table() {
+    let err = serde_json::from_value::<AtifSectionConfig>(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": {
+            "type": "s3",
+            "bucket": "my-bucket"
+        }
+    }))
+    .expect_err("storage must be a list");
+    assert!(
+        err.to_string().contains("invalid type"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -1073,7 +1117,7 @@ fn atif_storage_unknown_backend_type_is_rejected() {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {"type": "carrier-pigeon", "bucket": "ignored"}
+            "storage": [{"type": "carrier-pigeon", "bucket": "ignored"}]
         }
     })));
     assert!(report.has_errors());
@@ -1091,7 +1135,7 @@ fn atif_storage_empty_bucket_is_rejected() {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {"type": "s3", "bucket": "  "}
+            "storage": [{"type": "s3", "bucket": "  "}]
         }
     })));
     assert!(report.has_errors());
@@ -1139,7 +1183,7 @@ fn atif_storage_s3_parses_full_credential_block() {
     let parsed: AtifSectionConfig = serde_json::from_value(json!({
         "enabled": true,
         "filename_template": "trajectory-{session_id}.json",
-        "storage": {
+        "storage": [{
             "type": "s3",
             "bucket": "my-bucket",
             "key_prefix": "openshell/",
@@ -1149,7 +1193,7 @@ fn atif_storage_s3_parses_full_credential_block() {
             "region": "us-west-2",
             "endpoint_url": "https://s3.example.com",
             "allow_http": false
-        }
+        }]
     }))
     .expect("full credential block should parse");
     assert_eq!(parsed.storage.len(), 1);
@@ -1179,11 +1223,11 @@ fn atif_storage_secret_var_missing_env_is_rejected() {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {
+            "storage": [{
                 "type": "s3",
                 "bucket": "my-bucket",
                 "secret_access_key_var": var_name
-            }
+            }]
         }
     })));
     assert!(report.has_errors());
@@ -1208,11 +1252,11 @@ fn atif_storage_secret_var_empty_env_is_rejected() {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {
+            "storage": [{
                 "type": "s3",
                 "bucket": "my-bucket",
                 "secret_access_key_var": var_name
-            }
+            }]
         }
     })));
     // SAFETY: cleanup of test-only env var.
@@ -1241,11 +1285,11 @@ fn atif_storage_secret_var_present_env_is_accepted() {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {
+            "storage": [{
                 "type": "s3",
                 "bucket": "my-bucket",
                 "secret_access_key_var": var_name
-            }
+            }]
         }
     })));
     // SAFETY: cleanup of test-only env var.
@@ -1265,11 +1309,11 @@ fn atif_storage_secret_var_empty_name_is_rejected() {
         "atif": {
             "enabled": true,
             "filename_template": "trajectory-{session_id}.json",
-            "storage": {
+            "storage": [{
                 "type": "s3",
                 "bucket": "my-bucket",
                 "secret_access_key_var": "   "
-            }
+            }]
         }
     })));
     assert!(report.has_errors());
