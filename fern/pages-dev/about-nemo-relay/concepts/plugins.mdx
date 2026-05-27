@@ -165,6 +165,19 @@ inferred from the plugin namespace instead of exposed in public config.
 Detailed observability plugin configuration belongs in
 [Observability Configuration](/observability-plugin/configuration).
 
+### NeMo Guardrails
+
+The core crate also ships a built-in `nemo_guardrails` plugin component. It is
+the first-party Guardrails integration point that NeMo Relay owns through the
+shared plugin system.
+
+The current shipped user-facing lane is the remote backend. It gives NeMo Relay
+one canonical plugin kind and config shape for Guardrails-backed managed LLM
+and tool checks while broader backend parity work remains separate.
+
+Detailed Guardrails plugin configuration belongs in
+[NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration).
+
 For the CLI gateway's `plugins.toml` discovery, precedence, merge, and editing
 rules, see [Plugin Configuration Files](/build-plugins/plugin-configuration-files).
 

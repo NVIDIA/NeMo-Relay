@@ -30,6 +30,10 @@ navigation:
   title: Adaptive Plugin
   slug: adaptive-plugin
   title-source: frontmatter
+- folder: ../pages-dev/nemo-guardrails-plugin
+  title: NeMo Guardrails Plugin
+  slug: nemo-guardrails-plugin
+  title-source: frontmatter
 - folder: ../pages-dev/integrate-into-frameworks
   title: Integrate into Frameworks
   slug: integrate-into-frameworks
