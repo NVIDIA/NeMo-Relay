@@ -6,6 +6,9 @@ instances:
   custom-domain: docs.nvidia.com/nemo/relay
   multi-source: true
 title: NVIDIA NeMo Relay
+navbar-links:
+- type: github
+  value: https://github.com/NVIDIA/NeMo-Relay
 global-theme: nvidia
 experimental:
   mdx-components:
