@@ -13,9 +13,16 @@ use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, Sc
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::{Map, json};
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
+use std::net::TcpListener;
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+const TEST_RECV_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn temp_dir(prefix: &str) -> PathBuf {
     let id = SystemTime::now()
@@ -109,6 +116,40 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+fn start_atof_socket_sink(
+    expected_events: usize,
+) -> (String, mpsc::Receiver<Vec<serde_json::Value>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut events = Vec::with_capacity(expected_events);
+        for _ in 0..expected_events {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            events.push(serde_json::from_str(line.trim_end()).unwrap());
+        }
+        sender.send(events).unwrap();
+    });
+    (address, receiver)
+}
+
+fn start_atof_eof_sink() -> (String, mpsc::Receiver<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut buffer = String::new();
+        reader.read_to_string(&mut buffer).unwrap();
+        sender.send(()).unwrap();
+    });
+    (address, receiver)
 }
 
 #[test]
@@ -216,6 +257,163 @@ fn subscriber_writes_canonical_event_jsonl() {
         lines[0]["category_profile"]["annotated_request"]["model"],
         "demo-model"
     );
+}
+
+#[test]
+fn streaming_exporter_writes_canonical_event_json_values_to_socket() {
+    let (address, receiver) = start_atof_socket_sink(1);
+    let exporter = AtofStreamingExporter::connect(address).unwrap();
+    let event = make_annotated_llm_event("streamed-llm-start");
+
+    (exporter.subscriber())(&event);
+    exporter.shutdown().unwrap();
+
+    let delivered = receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    assert_eq!(delivered[0], event.try_to_json_value().unwrap());
+    assert_eq!(exporter.stats().events_sent, 1);
+}
+
+#[test]
+fn streaming_exporter_reports_connection_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+
+    let error = match AtofStreamingExporter::connect(address) {
+        Ok(_) => panic!("expected streaming exporter connection to fail"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, AtofExporterError::ConnectStream { .. }));
+}
+
+#[test]
+fn streaming_exporter_configuration_error_names_socket_options() {
+    let error = AtofExporterError::ConfigureStream {
+        address: "127.0.0.1:65535".to_string(),
+        operation: "set_write_timeout",
+        timeout: Some(ATOF_STREAM_WRITE_TIMEOUT),
+        source: std::io::Error::other("timeout option rejected"),
+    }
+    .to_string();
+
+    assert!(error.contains("set_write_timeout"));
+    assert!(error.contains("ATOF_STREAM_WRITE_TIMEOUT"));
+}
+
+#[test]
+fn streaming_exporter_shutdown_closes_stream_after_stored_error() {
+    let (address, receiver) = start_atof_eof_sink();
+    let exporter = AtofStreamingExporter::connect(address).unwrap();
+
+    let last_error = Arc::clone(&exporter.state.lock().unwrap().last_error);
+    *last_error.lock().unwrap() = Some("forced failure".to_string());
+    let error = exporter.shutdown().unwrap_err();
+
+    assert!(matches!(
+        error,
+        AtofExporterError::StoredStreamFailure { .. }
+    ));
+    receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+}
+
+#[test]
+fn streaming_exporter_preserves_first_stored_error() {
+    let last_error = Arc::new(Mutex::new(None));
+
+    store_stream_error(&last_error, "first failure".to_string());
+    store_stream_error(&last_error, "later failure".to_string());
+
+    assert_eq!(
+        stream_last_error(&last_error),
+        Some("first failure".to_string())
+    );
+}
+
+#[test]
+fn streaming_exporter_registers_with_runtime_events() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_global();
+
+    let pre_handle = crate::api::scope::push_scope(
+        PushScopeParams::builder()
+            .name("pre_atof_streaming_scope")
+            .scope_type(ScopeType::Agent)
+            .input(json!({"before": true}))
+            .build(),
+    )
+    .unwrap();
+    crate::api::scope::event(
+        EmitMarkEventParams::builder()
+            .name("pre_atof_streaming_mark")
+            .parent(&pre_handle)
+            .data(json!({"before": true}))
+            .build(),
+    )
+    .unwrap();
+    crate::api::scope::pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&pre_handle.uuid)
+            .output(json!({"before": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let (address, receiver) = start_atof_socket_sink(3);
+    let exporter = AtofStreamingExporter::connect(address).unwrap();
+    let name = format!("atof_streaming_exporter_{}", Uuid::now_v7());
+
+    exporter.register(&name).unwrap();
+    let handle = crate::api::scope::push_scope(
+        PushScopeParams::builder()
+            .name("atof_streaming_scope")
+            .scope_type(ScopeType::Agent)
+            .input(json!({"scope": true}))
+            .build(),
+    )
+    .unwrap();
+    crate::api::scope::event(
+        EmitMarkEventParams::builder()
+            .name("atof_streaming_mark")
+            .parent(&handle)
+            .data(json!({"mark": true}))
+            .build(),
+    )
+    .unwrap();
+    crate::api::scope::pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&handle.uuid)
+            .output(json!({"done": true}))
+            .build(),
+    )
+    .unwrap();
+
+    assert!(exporter.deregister(&name).unwrap());
+    assert!(!exporter.deregister(&name).unwrap());
+    exporter.shutdown().unwrap();
+
+    let events = receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    let scope_start = &events[0];
+    let mark = &events[1];
+    let scope_end = &events[2];
+
+    assert_eq!(scope_start["name"], "atof_streaming_scope");
+    assert_eq!(scope_start["scope_category"], "start");
+    assert_eq!(mark["name"], "atof_streaming_mark");
+    assert_eq!(mark["kind"], "mark");
+    assert_eq!(scope_end["name"], "atof_streaming_scope");
+    assert_eq!(scope_end["scope_category"], "end");
+    assert!(
+        events
+            .iter()
+            .all(|event| event["name"] != "pre_atof_streaming_scope")
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["name"] != "pre_atof_streaming_mark")
+    );
+    assert_eq!(exporter.stats().events_sent, 3);
 }
 
 #[test]
