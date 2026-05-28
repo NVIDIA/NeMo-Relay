@@ -200,7 +200,7 @@ fn atif_storage_uploads_trajectory_to_s3() {
     let value: Json = serde_json::from_slice(&body).expect("uploaded payload should be JSON");
     assert_eq!(
         value["schema_version"].as_str(),
-        Some("ATIF-v1.6"),
+        Some("ATIF-v1.7"),
         "uploaded artifact should be an ATIF trajectory"
     );
     let expected_session_id = session_id.to_string();
