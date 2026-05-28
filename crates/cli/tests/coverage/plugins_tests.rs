@@ -219,16 +219,24 @@ fn component_enablement_shortcuts_clear_and_reset_differ() {
     let config = PluginConfig::default();
     let mut components = editable_components(&config).unwrap();
 
-    components[0].set_enabled(false);
-    apply_component_enablement_shortcut(&mut components[0], MenuShortcut::Reset);
-    assert!(components[0].enabled());
+    let observability = components
+        .iter_mut()
+        .find(|component| component.label() == "Observability")
+        .unwrap();
+    observability.set_enabled(false);
+    apply_component_enablement_shortcut(observability, MenuShortcut::Reset);
+    assert!(observability.enabled());
 
-    apply_component_enablement_shortcut(&mut components[0], MenuShortcut::Clear);
-    assert!(!components[0].enabled());
+    apply_component_enablement_shortcut(observability, MenuShortcut::Clear);
+    assert!(!observability.enabled());
 
-    components[1].set_enabled(true);
-    apply_component_enablement_shortcut(&mut components[1], MenuShortcut::Reset);
-    assert!(!components[1].enabled());
+    let adaptive = components
+        .iter_mut()
+        .find(|component| component.label() == "Adaptive")
+        .unwrap();
+    adaptive.set_enabled(true);
+    apply_component_enablement_shortcut(adaptive, MenuShortcut::Reset);
+    assert!(!adaptive.enabled());
 }
 
 #[test]
