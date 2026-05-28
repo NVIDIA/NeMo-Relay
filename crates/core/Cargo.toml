@@ -111,6 +111,10 @@ name = "stream_integration"
 path = "tests/integration/stream_tests.rs"
 
 [[test]]
+name = "subscriber_dispatcher_integration"
+path = "tests/integration/subscriber_dispatcher_tests.rs"
+
+[[test]]
 name = "api_surface_integration"
 path = "tests/integration/api_surface_tests.rs"
 
