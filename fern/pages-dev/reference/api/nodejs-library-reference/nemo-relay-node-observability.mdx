@@ -25,6 +25,22 @@ export interface AtofConfig {
 }
 ```
 
+### `S3StorageConfig`
+
+```ts
+export interface S3StorageConfig {
+  type: 's3';
+  bucket: string;
+  key_prefix?: string;
+  access_key_id?: string;
+  secret_access_key_var?: string;
+  session_token_var?: string;
+  region?: string;
+  endpoint_url?: string;
+  allow_http?: boolean;
+}
+```
+
 ### `AtifConfig`
 
 ```ts
@@ -37,6 +53,7 @@ export interface AtifConfig {
   extra?: Record<string, Json>;
   output_directory?: string;
   filename_template?: string;
+  storage?: S3StorageConfig | S3StorageConfig[];
 }
 ```
 

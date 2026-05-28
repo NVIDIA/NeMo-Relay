@@ -49,8 +49,100 @@ This configuration writes a trajectory file such as
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
-| `output_directory` | Current working directory | Directory containing trajectory files. |
+| `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. |
+| `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend instead of being written locally. See [Remote storage](#remote-storage). |
+
+## Remote storage
+
+For sandboxed runtimes such as NemoClaw / Omnistation / OpenShell, where local
+trace files are not durable across sessions, configure `storage` to ship
+completed trajectories directly to object storage. When `storage` is non-empty
+the local file write is replaced by uploads to every configured backend;
+`output_directory` is ignored.
+
+Each storage entry is tagged with a `type` discriminator so additional
+backends can be added without breaking existing configs. Today, S3-compatible
+object storage is supported.
+
+### S3-compatible storage
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[[components.config.atif.storage]]
+type = "s3"
+bucket = "nemo-relay-traces"
+key_prefix = "openshell/"
+```
+
+### Multiple destinations
+
+Add additional `[[components.config.atif.storage]]` tables to fan out the same
+trajectory to every destination — for example, an in-cluster MinIO target and a
+remote AWS target:
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[[components.config.atif.storage]]
+type = "s3"
+bucket = "nemo-relay-traces"
+key_prefix = "openshell/"
+
+[[components.config.atif.storage]]
+type = "s3"
+bucket = "team-archive"
+key_prefix = "openshell/"
+endpoint_url = "http://localhost:9000"
+allow_http = true
+```
+
+#### Connection fields
+
+By default, credentials, region, and endpoint URL are read from the standard
+AWS environment variables. Any non-secret connection field can also be set
+directly in the config so a single file can describe a complete destination,
+which is what unblocks running multiple S3-compatible endpoints side by side
+(for example, an in-cluster MinIO target and a remote AWS target):
+
+| Field | Default | Notes |
+|---|---|---|
+| `bucket` | required | Destination bucket name. |
+| `key_prefix` | `""` | Optional prefix applied to every object. A trailing `/` is added if missing. |
+| `access_key_id` | `AWS_ACCESS_KEY_ID` | Inline static access key ID. |
+| `region` | `AWS_REGION` | Bucket region. |
+| `endpoint_url` | `AWS_ENDPOINT_URL` | Endpoint override for S3-compatible storage. |
+| `allow_http` | `AWS_ALLOW_HTTP` | Set to `true` when targeting an HTTP endpoint. |
+
+Explicit fields take precedence; anything left unset falls back to the matching
+`AWS_*` environment variable.
+
+#### Secret credential fields
+
+Secret values stay out of checked-in config files. Each secret field carries a
+`_var` suffix and holds the *name* of an environment variable that contains the
+secret value. The name is validated at plugin initialization time:
+
+| Field | Env Var Fallback | Notes |
+|---|---|---|
+| `secret_access_key_var` | `AWS_SECRET_ACCESS_KEY` | Name of the env var that holds the static secret key. |
+| `session_token_var` | `AWS_SESSION_TOKEN` | Name of the env var that holds the optional STS session token. |
+
+
+Each trajectory is uploaded under `{key_prefix}{rendered_filename}`. The
+`filename_template` is rendered the same way it would be for local files, so a
+local→remote transition keeps object names stable. A trailing `/` is added to
+`key_prefix` when one is missing.
+
+If an upload fails for a given destination, that destination is recorded as
+unhealthy and skipped on later trajectories. The other destinations continue
+to receive writes. All recorded sink failures are joined into the dispatcher's
+last-error result on plugin teardown.
 
 ## Expected Output
 
@@ -262,3 +354,7 @@ exporter.clear();
 - Tool definitions or `extra` metadata are not JSON-compatible.
 - The application never opens a top-level `agent` scope, so no trajectory file
   is created.
+- `storage[i].type` is unknown or `storage[i].bucket` is empty for some entry.
+- `storage` is non-empty in a build that was compiled without the
+  `atif-storage` feature, or on a target (such as WebAssembly) where remote
+  storage is not supported.

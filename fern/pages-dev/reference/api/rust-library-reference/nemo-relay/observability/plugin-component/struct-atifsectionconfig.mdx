@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtifSectionConfig &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub agent_name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub agent_version: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub model_name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub tool_definitions: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;&gt;,\n    pub extra: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub output_directory: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>&gt;,\n    pub filename_template: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtifSectionConfig &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub agent_name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub agent_version: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub model_name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub tool_definitions: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;&gt;,\n    pub extra: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub output_directory: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>&gt;,\n    pub filename_template: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub storage: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"enum-atifstorageconfig\">AtifStorageConfig</a>&gt;,\n&#125;"}} /></pre>
 
 Per-trajectory ATIF exporter config.
 
@@ -44,11 +44,15 @@ Extra ATIF agent metadata.
 
 ### `output_directory: Option<PathBuf>`
 
-Directory containing trajectory JSON files.
+Directory containing trajectory JSON files. Ignored when [`storage`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is non-empty.
 
 ### `filename_template: String`
 
-Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID.
+Filename template. `{session_id}` is replaced with the top-level trajectory scope UUID. When [`storage`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is non-empty, the rendered filename is appended to each backend's key prefix.
+
+### `storage: Vec<AtifStorageConfig>`
+
+Optional list of remote storage destinations. When non-empty, completed trajectories are uploaded to every configured backend instead of being written locally; the local file write at [`output_directory`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is skipped. Backends are independent: an upload failure on one destination is recorded against that destination and skipped on subsequent trajectories, while the other destinations continue to receive writes.
 
 ## Trait Implementations
 
