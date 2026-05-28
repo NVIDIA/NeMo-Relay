@@ -18,10 +18,12 @@ LLM request intercepts receive three arguments: `name`, `request`, and `annotate
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+from typing import Any
+
 import nemo_relay
 
 class HeaderPlugin:
-    def validate(self, plugin_config):
+    def validate(self, plugin_config: dict[str, Any]) -> list[dict[str, str]]:
         if "header_name" not in plugin_config or "value" not in plugin_config:
             return [{
                 "level": "error",
@@ -30,8 +32,13 @@ class HeaderPlugin:
             }]
         return []
 
-    def register(self, plugin_config, context):
-        def add_header(name, request, annotated):
+    def register(self, plugin_config: dict[str, Any], context: nemo_relay.plugin.PluginContext):
+        def add_header(
+            name: str,
+            request: nemo_relay.LLMRequest,
+            annotated: nemo_relay.AnnotatedLLMRequest | None
+        ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+            # The request object is immutable, however we can return a new instance with updated headers.
             headers = request.headers.copy()
             headers[plugin_config["header_name"]] = plugin_config["value"]
             return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
