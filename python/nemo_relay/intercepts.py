@@ -11,8 +11,9 @@ Example::
     import nemo_relay
 
     def add_header(name, request, annotated):
-        request.headers["X-Trace"] = "demo"
-        return request, annotated
+        headers = request.headers.copy()
+        headers["X-Trace"] = "demo"
+        return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
     nemo_relay.intercepts.register_llm_request("trace-header", 10, False, add_header)
 """
@@ -178,8 +179,9 @@ def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmReq
         import nemo_relay
 
         def add_header(name, request, annotated):
-            request.headers["X-Trace"] = "req-123"
-            return request, annotated
+            headers = request.headers.copy()
+            headers["X-Trace"] = "req-123"
+            return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
         nemo_relay.intercepts.register_llm_request(
             "trace-header",

@@ -38,8 +38,9 @@ Example::
         return {**args, "api_key": "***"}
 
     def add_header(name, request, annotated):
-        request.headers["Authorization"] = "Bearer test-token"
-        return request, annotated
+        headers = request.headers.copy()
+        headers["Authorization"] = "Bearer test-token"
+        return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
     async def tool_impl(args):
         return {"echo": args["query"]}
