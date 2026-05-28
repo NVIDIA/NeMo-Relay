@@ -14,7 +14,7 @@ use serde_json::{Map, Value as Json};
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
-    lookup_plugin, register_plugin,
+    register_plugin,
 };
 
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
@@ -388,9 +388,7 @@ impl Plugin for NeMoGuardrailsPlugin {
 pub fn register_nemo_guardrails_component() -> PluginResult<()> {
     match register_plugin(Arc::new(NeMoGuardrailsPlugin)) {
         Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(_))
-            if lookup_plugin(NEMO_GUARDRAILS_PLUGIN_KIND).is_some() =>
-        {
+        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
             Ok(())
         }
         Err(err) => Err(err),
@@ -964,28 +962,7 @@ fn validate_request_defaults(
         "request_defaults.context",
         "request_defaults.context must be a JSON object",
     );
-    if let Some(thread_id) = &request_defaults.thread_id {
-        let trimmed_thread_id = thread_id.trim();
-        if trimmed_thread_id.is_empty() {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "nemo_guardrails.unsupported_value",
-                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                Some("request_defaults.thread_id".to_string()),
-                "request_defaults.thread_id must not be empty".to_string(),
-            );
-        } else if trimmed_thread_id.len() < 16 {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "nemo_guardrails.unsupported_value",
-                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                Some("request_defaults.thread_id".to_string()),
-                "request_defaults.thread_id must be at least 16 characters long".to_string(),
-            );
-        }
-    }
+    validate_request_thread_id(diagnostics, policy, request_defaults.thread_id.as_deref());
     validate_json_object_field(
         diagnostics,
         policy,
@@ -993,25 +970,7 @@ fn validate_request_defaults(
         "request_defaults.state",
         "request_defaults.state must be a JSON object",
     );
-    if let Some(state) = request_defaults
-        .state
-        .as_ref()
-        .and_then(|value| value.as_object())
-    {
-        let contains_supported_key = state.contains_key("events") || state.contains_key("state");
-        let contains_unsupported_key = state.keys().any(|key| key != "events" && key != "state");
-        if (!state.is_empty() && !contains_supported_key) || contains_unsupported_key {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "nemo_guardrails.unsupported_value",
-                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                Some("request_defaults.state".to_string()),
-                "request_defaults.state must be empty or contain only 'events' or 'state'"
-                    .to_string(),
-            );
-        }
-    }
+    validate_request_state_keys(diagnostics, policy, request_defaults.state.as_ref());
     validate_json_object_field(
         diagnostics,
         policy,
@@ -1027,69 +986,151 @@ fn validate_request_defaults(
         "request_defaults.log must be a JSON object",
     );
 
-    if let Some(output_vars) = &request_defaults.output_vars {
-        match output_vars {
-            Json::Bool(_) => {}
-            Json::Array(values) => {
-                for (index, value) in values.iter().enumerate() {
-                    if !value.is_string()
-                        || value.as_str().is_some_and(|entry| entry.trim().is_empty())
-                    {
-                        push_policy_diag(
-                            diagnostics,
-                            policy.unsupported_value,
-                            "nemo_guardrails.unsupported_value",
-                            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                            Some(format!("request_defaults.output_vars[{index}]")),
-                            "request_defaults.output_vars array entries must be non-empty strings"
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-            _ => push_policy_diag(
+    validate_output_vars(diagnostics, policy, request_defaults.output_vars.as_ref());
+    validate_request_rails(diagnostics, policy, request_defaults.rails.as_ref());
+}
+
+fn push_request_defaults_diag(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    message: &str,
+) {
+    push_policy_diag(
+        diagnostics,
+        policy.unsupported_value,
+        "nemo_guardrails.unsupported_value",
+        Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+        Some(field.to_string()),
+        message.to_string(),
+    );
+}
+
+fn validate_request_thread_id(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    thread_id: Option<&str>,
+) {
+    let Some(thread_id) = thread_id else {
+        return;
+    };
+
+    let trimmed_thread_id = thread_id.trim();
+    if trimmed_thread_id.is_empty() {
+        push_request_defaults_diag(
+            diagnostics,
+            policy,
+            "request_defaults.thread_id",
+            "request_defaults.thread_id must not be empty",
+        );
+    } else if trimmed_thread_id.len() < 16 {
+        push_request_defaults_diag(
+            diagnostics,
+            policy,
+            "request_defaults.thread_id",
+            "request_defaults.thread_id must be at least 16 characters long",
+        );
+    }
+}
+
+fn validate_request_state_keys(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    state: Option<&Json>,
+) {
+    let Some(state) = state.and_then(Json::as_object) else {
+        return;
+    };
+
+    let contains_supported_key = state.contains_key("events") || state.contains_key("state");
+    let contains_unsupported_key = state.keys().any(|key| key != "events" && key != "state");
+    if (!state.is_empty() && !contains_supported_key) || contains_unsupported_key {
+        push_request_defaults_diag(
+            diagnostics,
+            policy,
+            "request_defaults.state",
+            "request_defaults.state must be empty or contain only 'events' or 'state'",
+        );
+    }
+}
+
+fn validate_output_vars(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    output_vars: Option<&Json>,
+) {
+    let Some(output_vars) = output_vars else {
+        return;
+    };
+
+    match output_vars {
+        Json::Bool(_) => {}
+        Json::Array(values) => validate_output_var_entries(diagnostics, policy, values),
+        _ => push_request_defaults_diag(
+            diagnostics,
+            policy,
+            "request_defaults.output_vars",
+            "request_defaults.output_vars must be a boolean or an array of strings",
+        ),
+    }
+}
+
+fn validate_output_var_entries(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    values: &[Json],
+) {
+    for (index, value) in values.iter().enumerate() {
+        if !value.is_string() || value.as_str().is_some_and(|entry| entry.trim().is_empty()) {
+            push_request_defaults_diag(
                 diagnostics,
-                policy.unsupported_value,
-                "nemo_guardrails.unsupported_value",
-                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                Some("request_defaults.output_vars".to_string()),
-                "request_defaults.output_vars must be a boolean or an array of strings".to_string(),
-            ),
+                policy,
+                &format!("request_defaults.output_vars[{index}]"),
+                "request_defaults.output_vars array entries must be non-empty strings",
+            );
         }
     }
+}
 
-    if let Some(rails) = &request_defaults.rails {
-        validate_rail_selector(
-            diagnostics,
-            policy,
-            rails.input.as_ref(),
-            "request_defaults.rails.input",
-        );
-        validate_rail_selector(
-            diagnostics,
-            policy,
-            rails.output.as_ref(),
-            "request_defaults.rails.output",
-        );
-        validate_rail_selector(
-            diagnostics,
-            policy,
-            rails.retrieval.as_ref(),
-            "request_defaults.rails.retrieval",
-        );
-        validate_rail_selector(
-            diagnostics,
-            policy,
-            rails.tool_output.as_ref(),
-            "request_defaults.rails.tool_output",
-        );
-        validate_rail_selector(
-            diagnostics,
-            policy,
-            rails.tool_input.as_ref(),
-            "request_defaults.rails.tool_input",
-        );
-    }
+fn validate_request_rails(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    rails: Option<&RequestRailsConfig>,
+) {
+    let Some(rails) = rails else {
+        return;
+    };
+
+    validate_rail_selector(
+        diagnostics,
+        policy,
+        rails.input.as_ref(),
+        "request_defaults.rails.input",
+    );
+    validate_rail_selector(
+        diagnostics,
+        policy,
+        rails.output.as_ref(),
+        "request_defaults.rails.output",
+    );
+    validate_rail_selector(
+        diagnostics,
+        policy,
+        rails.retrieval.as_ref(),
+        "request_defaults.rails.retrieval",
+    );
+    validate_rail_selector(
+        diagnostics,
+        policy,
+        rails.tool_output.as_ref(),
+        "request_defaults.rails.tool_output",
+    );
+    validate_rail_selector(
+        diagnostics,
+        policy,
+        rails.tool_input.as_ref(),
+        "request_defaults.rails.tool_input",
+    );
 }
 
 fn validate_json_object_field(

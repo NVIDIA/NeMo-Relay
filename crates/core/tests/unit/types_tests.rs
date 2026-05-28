@@ -5,18 +5,88 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde_json::{Map, json};
 use uuid::{Uuid, Version};
 
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, MarkEvent, ScopeCategory,
+    ScopeEvent, attributes_from_handle, llm_attributes_to_strings, scope_attributes_to_strings,
+    tool_attributes_to_strings,
 };
 use crate::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
-use crate::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::{ToolAttributes, ToolHandle};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::response::AnnotatedLlmResponse;
+use crate::config_editor::{EditorConfig, EditorFieldKind};
+
+#[derive(Default, serde::Serialize)]
+struct NestedEditorFixture {
+    enabled: bool,
+}
+
+crate::editor_config! {
+    impl NestedEditorFixture {
+        enabled => {
+            label: "Enabled",
+            kind: Boolean,
+        },
+    }
+}
+
+#[derive(Default, serde::Serialize)]
+struct EditorFixture {
+    enabled: bool,
+    name: String,
+    count: u64,
+    ratio: f64,
+    mode: String,
+    headers: std::collections::BTreeMap<String, String>,
+    payload: serde_json::Value,
+    nested: NestedEditorFixture,
+}
+
+crate::editor_config! {
+    impl EditorFixture {
+        enabled => {
+            label: "Enabled",
+            kind: Boolean,
+        },
+        name => {
+            label: "Name",
+            kind: String,
+            optional: true,
+        },
+        count => {
+            label: "Count",
+            kind: Integer,
+        },
+        ratio => {
+            label: "Ratio",
+            kind: Float,
+        },
+        mode => {
+            label: "Mode",
+            kind: Enum,
+            values: ["fast", "safe"],
+        },
+        headers => {
+            label: "Headers",
+            kind: StringMap,
+        },
+        payload => {
+            label: "Payload",
+            kind: Json,
+        },
+        nested => {
+            label: "Nested",
+            kind: Section,
+            nested: NestedEditorFixture,
+            default: NestedEditorFixture,
+        },
+    }
+}
 
 fn annotated_request(model: &str, text: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
@@ -231,6 +301,259 @@ fn event_accessors_cover_scope_tool_llm_and_mark_variants() {
     assert_eq!(mark_event.input(), None);
     assert_eq!(mark_event.output(), None);
     assert_eq!(mark_event.tool_call_id(), None);
+}
+
+#[test]
+fn event_categories_round_trip_all_scope_variants() {
+    let cases = [
+        (EventCategory::agent(), ScopeType::Agent, "agent"),
+        (EventCategory::function(), ScopeType::Function, "function"),
+        (EventCategory::tool(), ScopeType::Tool, "tool"),
+        (EventCategory::llm(), ScopeType::Llm, "llm"),
+        (
+            EventCategory::retriever(),
+            ScopeType::Retriever,
+            "retriever",
+        ),
+        (EventCategory::embedder(), ScopeType::Embedder, "embedder"),
+        (EventCategory::reranker(), ScopeType::Reranker, "reranker"),
+        (
+            EventCategory::guardrail(),
+            ScopeType::Guardrail,
+            "guardrail",
+        ),
+        (
+            EventCategory::evaluator(),
+            ScopeType::Evaluator,
+            "evaluator",
+        ),
+        (EventCategory::custom(), ScopeType::Custom, "custom"),
+        (EventCategory::unknown(), ScopeType::Unknown, "unknown"),
+    ];
+
+    for (category, scope_type, wire_value) in cases {
+        assert_eq!(category.as_str(), wire_value);
+        assert_eq!(category.to_scope_type(), scope_type);
+        assert_eq!(EventCategory::from(scope_type), category);
+        assert_eq!(ScopeType::from(&category), scope_type);
+    }
+
+    let vendor_category = EventCategory::new("vendor.special");
+    assert_eq!(vendor_category.as_str(), "vendor.special");
+    assert_eq!(vendor_category.to_scope_type(), ScopeType::Unknown);
+}
+
+#[test]
+fn event_mutators_schema_flags_and_attribute_helpers_cover_remaining_paths() {
+    let mut scope_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("scope")
+            .data(json!({"payload": true}))
+            .data_schema(DataSchema::builder().name("payload").version("1").build())
+            .build(),
+        ScopeCategory::Start,
+        vec!["relocatable".to_string(), "parallel".to_string()],
+        EventCategory::custom(),
+        Some(CategoryProfile::builder().subtype("initial").build()),
+    ));
+
+    assert!(scope_event.is_scope_start());
+    assert!(!scope_event.is_scope_end());
+    assert_eq!(
+        scope_event
+            .data_schema()
+            .map(|schema| (schema.name.as_str(), schema.version.as_str())),
+        Some(("payload", "1"))
+    );
+    assert_eq!(
+        scope_event.attributes(),
+        Some(["parallel".to_string(), "relocatable".to_string()].as_slice())
+    );
+
+    let scope_profile = scope_event.category_profile_mut().unwrap();
+    scope_profile.subtype = Some("updated".to_string());
+    assert_eq!(
+        scope_event
+            .category_profile()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("updated")
+    );
+
+    let mut mark_event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("mark").build(),
+        Some(EventCategory::evaluator()),
+        Some(CategoryProfile::builder().subtype("score").build()),
+    ));
+    assert!(!mark_event.is_scope_start());
+    assert!(!mark_event.is_scope_end());
+    assert_eq!(
+        mark_event.category().map(EventCategory::as_str),
+        Some("evaluator")
+    );
+
+    let mark_profile = mark_event.category_profile_mut().unwrap();
+    mark_profile.subtype = Some("quality".to_string());
+    assert_eq!(
+        mark_event
+            .category_profile()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("quality")
+    );
+
+    let scope_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("scope-end").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::function(),
+        None,
+    ));
+    assert!(!scope_end.is_scope_start());
+    assert!(scope_end.is_scope_end());
+
+    assert_eq!(
+        attributes_from_handle(HandleAttributes::Scope(
+            ScopeAttributes::PARALLEL | ScopeAttributes::RELOCATABLE
+        )),
+        vec!["parallel".to_string(), "relocatable".to_string()]
+    );
+    assert_eq!(
+        attributes_from_handle(HandleAttributes::Tool(ToolAttributes::REMOTE)),
+        vec!["remote".to_string()]
+    );
+    assert_eq!(
+        attributes_from_handle(HandleAttributes::Llm(
+            LlmAttributes::STATEFUL | LlmAttributes::STREAMING
+        )),
+        vec!["stateful".to_string(), "streaming".to_string()]
+    );
+    assert!(attributes_from_handle(HandleAttributes::Scope(ScopeAttributes::empty())).is_empty());
+    assert!(attributes_from_handle(HandleAttributes::Tool(ToolAttributes::empty())).is_empty());
+    assert!(attributes_from_handle(HandleAttributes::Llm(LlmAttributes::empty())).is_empty());
+}
+
+#[test]
+fn event_timestamp_deserialization_accepts_strings_and_epoch_micros() {
+    let timestamp = DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let from_string: Event = serde_json::from_value(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": timestamp.to_rfc3339(),
+        "name": "string-timestamp"
+    }))
+    .unwrap();
+    assert_eq!(*from_string.timestamp(), timestamp);
+
+    let micros = timestamp.timestamp_micros();
+    let from_i64: Event = serde_json::from_value(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": micros,
+        "name": "i64-timestamp"
+    }))
+    .unwrap();
+    assert_eq!(*from_i64.timestamp(), timestamp);
+
+    let from_u64: Event = serde_json::from_value(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": micros as u64,
+        "name": "u64-timestamp"
+    }))
+    .unwrap();
+    assert_eq!(*from_u64.timestamp(), timestamp);
+
+    let out_of_range = serde_json::from_value::<Event>(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": u64::MAX,
+        "name": "bad-timestamp"
+    }));
+    assert!(out_of_range.is_err());
+
+    let invalid_string = serde_json::from_value::<Event>(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": "not-a-timestamp",
+        "name": "bad-string-timestamp"
+    }));
+    assert!(invalid_string.is_err());
+
+    let invalid_type = serde_json::from_value::<Event>(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": false,
+        "name": "bad-type-timestamp"
+    }));
+    assert!(invalid_type.is_err());
+}
+
+#[test]
+fn scope_type_strings_and_editor_metadata_cover_public_helpers() {
+    let scope_types = [
+        (ScopeType::Agent, "agent"),
+        (ScopeType::Function, "function"),
+        (ScopeType::Tool, "tool"),
+        (ScopeType::Llm, "llm"),
+        (ScopeType::Retriever, "retriever"),
+        (ScopeType::Embedder, "embedder"),
+        (ScopeType::Reranker, "reranker"),
+        (ScopeType::Guardrail, "guardrail"),
+        (ScopeType::Evaluator, "evaluator"),
+        (ScopeType::Custom, "custom"),
+        (ScopeType::Unknown, "unknown"),
+    ];
+    for (scope_type, expected) in scope_types {
+        assert_eq!(scope_type.as_str(), expected);
+    }
+
+    let schema = EditorFixture::editor_schema();
+    assert_eq!(
+        schema.field("enabled").map(|field| field.kind),
+        Some(EditorFieldKind::Boolean)
+    );
+    assert_eq!(
+        schema
+            .field("name")
+            .map(|field| (field.kind, field.optional)),
+        Some((EditorFieldKind::String, true))
+    );
+    assert_eq!(
+        schema.field("count").map(|field| field.kind),
+        Some(EditorFieldKind::Integer)
+    );
+    assert_eq!(
+        schema.field("ratio").map(|field| field.kind),
+        Some(EditorFieldKind::Float)
+    );
+    assert_eq!(
+        schema
+            .field("mode")
+            .map(|field| (field.kind, field.enum_values)),
+        Some((EditorFieldKind::Enum, &["fast", "safe"][..]))
+    );
+    assert_eq!(
+        schema.field("headers").map(|field| field.kind),
+        Some(EditorFieldKind::StringMap)
+    );
+    assert_eq!(
+        schema.field("payload").map(|field| field.kind),
+        Some(EditorFieldKind::Json)
+    );
+
+    let nested = schema.field("nested").unwrap();
+    assert_eq!(nested.kind, EditorFieldKind::Section);
+    assert!(nested.schema().unwrap().field("enabled").is_some());
+    assert_eq!(nested.default_value().unwrap(), json!({"enabled": false}));
+    assert!(schema.field("missing").is_none());
 }
 
 #[test]

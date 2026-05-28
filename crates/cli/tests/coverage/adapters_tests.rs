@@ -309,6 +309,71 @@ fn maps_hermes_shell_hook_tool_payload() {
 }
 
 #[test]
+fn maps_hermes_subagent_child_identifiers() {
+    let headers = HeaderMap::new();
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "child_session_id": "child-session",
+                "child_subagent_id": "sa-1",
+                "parent_turn_id": "turn-1"
+            }
+        }),
+        &headers,
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::SubagentStarted(event) => {
+            assert_eq!(event.agent_kind, AgentKind::Hermes);
+            assert_eq!(event.session_id, "parent-session");
+            assert_eq!(event.subagent_id, "sa-1");
+            assert_eq!(
+                event.payload["extra"]["child_session_id"],
+                json!("child-session")
+            );
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_camel_case_child_subagent_identifiers() {
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "childSubagentId": "sa-camel-top"
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "childSubagentId": "sa-camel-extra"
+            }
+        }),
+    ] {
+        let expected = payload
+            .get("childSubagentId")
+            .or_else(|| payload.pointer("/extra/childSubagentId"))
+            .and_then(|value| value.as_str())
+            .expect("test payload should include childSubagentId")
+            .to_string();
+        let outcome = hermes::adapt(payload, &headers);
+
+        match &outcome.events[0] {
+            NormalizedEvent::SubagentStarted(event) => {
+                assert_eq!(event.subagent_id, expected);
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+}
+
+#[test]
 fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
     let headers = HeaderMap::new();
 

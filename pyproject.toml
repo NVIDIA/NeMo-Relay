@@ -63,14 +63,14 @@ test = [
 
 [project.optional-dependencies]
 langchain = [
-    "langchain>=1.3.0,<2.0.0",
+    "langchain>=1.3.2,<2.0.0",
     "langchain-core",
     "langgraph", # allow any compatible version
 ]
 
 langgraph = [
     "nemo-relay[langchain]",
-    "langgraph>=1.2.0,<2.0.0",
+    "langgraph>=1.2.2,<2.0.0",
 ]
 
 deepagents = [
@@ -80,7 +80,7 @@ deepagents = [
 
 langchain-nvidia = [
     "nemo-relay[langchain]",
-    "langchain-nvidia-ai-endpoints~=1.0",
+    "langchain-nvidia-ai-endpoints>=1.4.0,<2.0.0",
 ]
 
 [tool.maturin]

@@ -851,6 +851,71 @@ async fn codex_subagent_start_does_not_reparent_active_child_session() {
 }
 
 #[tokio::test]
+async fn hermes_subagent_start_does_not_reparent_active_child_session() {
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "parent-session"
+        }),
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "child-session"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "child-session",
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": { "body": { "model": "qwen" } }
+            }
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "child_session_id": "child-session",
+                "child_subagent_id": "sa-1",
+                "parent_turn_id": "parent-turn-1"
+            }
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    assert!(!has_alignment_alias(&manager, "child-session").await);
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.contains_key("child-session"));
+        assert!(
+            !sessions
+                .get("parent-session")
+                .unwrap()
+                .subagents
+                .contains_key("sa-1")
+        );
+        assert!(
+            sessions
+                .get("child-session")
+                .unwrap()
+                .llms
+                .contains_key("child-session:child-task:1")
+        );
+    }
+
+    manager.close_all("test_shutdown").await.unwrap();
+}
+
+#[tokio::test]
 async fn codex_aliased_hook_llm_routes_to_subagent_scope() {
     let manager = SessionManager::new(session_test_config());
     manager
@@ -1375,6 +1440,7 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-usage");
+    assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(10));
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(5));
     assert_eq!(atif["steps"][1]["metrics"]["cached_tokens"], json!(3));
@@ -1451,6 +1517,7 @@ async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-clean");
+    assert!(atif["subagent_trajectories"].is_null());
     assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
     assert_eq!(atif["steps"][0]["source"], json!("user"));
     assert_eq!(atif["steps"][1]["source"], json!("agent"));
@@ -1503,20 +1570,145 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
-    let steps = atif["steps"].as_array().unwrap();
-    assert_eq!(steps.len(), 1);
-    assert_eq!(steps[0]["source"], json!("system"));
+    assert!(atif["subagent_trajectories"].is_null());
+    let root_steps = atif["steps"].as_array().unwrap();
+    assert_eq!(root_steps.len(), 1);
+    assert_eq!(root_steps[0]["source"], json!("system"));
+    assert_eq!(root_steps[0]["message"], json!("subagent_stop"));
     assert_eq!(
-        steps[0]["message"]["hook_event_name"],
+        root_steps[0]["extra"]["event_payload"]["hook_event_name"],
         json!("subagent_stop")
     );
     assert_eq!(
-        steps[0]["extra"]["ancestry"]["function_name"],
+        root_steps[0]["extra"]["event_payload"]["extra"]["subagent_id"],
+        json!("worker-1")
+    );
+    assert_eq!(
+        root_steps[0]["extra"]["ancestry"]["function_name"],
         json!("subagent_end_without_start")
     );
     assert_eq!(
-        steps[0]["extra"]["ancestry"]["parent_name"],
+        root_steps[0]["extra"]["ancestry"]["parent_name"],
         json!("hermes-turn")
+    );
+}
+
+#[tokio::test]
+async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "parent-session"
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": "parent-session",
+            "extra": {
+                "child_goal": "read plugin yaml",
+                "child_role": "leaf",
+                "child_session_id": "child-session",
+                "child_subagent_id": "sa-1",
+                "parent_turn_id": "parent-turn-1",
+                "telemetry_schema_version": "hermes.observer.v1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "child-session"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "child-session",
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read plugin yaml" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "child-session",
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "name: nemo_flow"
+                    },
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": "child-session"
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": "parent-session",
+            "extra": {
+                "child_session_id": "child-session",
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "parent-session"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "parent-session");
+    assert!(
+        atif["subagent_trajectories"]
+            .as_array()
+            .is_some_and(|trajectories| !trajectories.is_empty()),
+        "parent ATIF must include at least one embedded subagent trajectory: {}",
+        serde_json::to_string_pretty(&atif).unwrap()
+    );
+    let child = &atif["subagent_trajectories"][0];
+    assert_eq!(child["session_id"], json!("child-session"));
+    assert!(
+        !child["steps"].as_array().unwrap().is_empty(),
+        "embedded Hermes child trajectory must contain the child session work: {}",
+        serde_json::to_string_pretty(child).unwrap()
+    );
+    assert_eq!(child["steps"][0]["source"], json!("user"));
+    assert_eq!(child["steps"][1]["source"], json!("agent"));
+    assert!(child["subagent_trajectories"].is_null());
+    assert!(
+        !serde_json::to_string(&atif)
+            .unwrap()
+            .contains("subagent_end_without_start")
     );
 }
 
@@ -1562,6 +1754,7 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "empty-mark");
     assert!(atif["steps"].as_array().unwrap().is_empty());
+    assert!(atif["subagent_trajectories"].is_null());
 }
 
 #[tokio::test]
@@ -2962,6 +3155,178 @@ async fn idle_timeout_closes_codex_session_without_session_end_hook() {
     );
 
     deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn idle_timeout_keeps_recent_claude_subagent_session_open() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-recent", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "claude-recent".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "recent-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + Duration::from_secs(5),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 0);
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("claude-recent").unwrap();
+    assert!(session.turn_scope.is_some());
+    assert!(session.subagents.contains_key("recent-worker"));
+}
+
+#[tokio::test]
+async fn idle_timeout_closes_claude_subagent_with_no_followup_activity() {
+    let subscriber_name = "cli-claude-idle-subagent-close-reason-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let close_statuses = Arc::new(StdMutex::new(Vec::<(String, String)>::new()));
+    let captured = close_statuses.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && (event.name() == "subagent:idle-worker"
+                    || event
+                        .metadata()
+                        .and_then(|metadata| metadata.get("session_id"))
+                        .and_then(Value::as_str)
+                        == Some("claude-idle"))
+            {
+                let status = event
+                    .output()
+                    .and_then(|output| output.get("status"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), status));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-idle", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "claude-idle".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "idle-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 1);
+    {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("claude-idle").unwrap();
+        assert!(session.turn_scope.is_none());
+        assert!(session.subagents.is_empty());
+    }
+
+    let statuses = close_statuses.lock().unwrap().clone();
+    assert!(
+        statuses.contains(&(
+            "subagent:idle-worker".to_string(),
+            "idle_timeout".to_string()
+        )),
+        "expected idle timeout to close the Claude subagent scope, got {statuses:?}"
+    );
+    assert!(
+        statuses.contains(&("claude-code-turn".to_string(), "idle_timeout".to_string())),
+        "expected idle timeout to close the Claude turn scope, got {statuses:?}"
+    );
+
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn idle_timeout_waits_for_active_claude_subagent_tool_call() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-active-tool", "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: "claude-active-tool".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "active-tool-worker".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: "claude-active-tool".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "tool-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("active-tool-worker".into()),
+                    arguments: json!({ "file_path": "README.md" }),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 0);
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("claude-active-tool").unwrap();
+    assert!(session.turn_scope.is_some());
+    assert!(session.subagents.contains_key("active-tool-worker"));
+    assert_eq!(session.tools.len(), 1);
 }
 
 #[tokio::test]
