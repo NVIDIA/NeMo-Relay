@@ -10,6 +10,9 @@ navbar-links:
 - type: github
   value: https://github.com/NVIDIA/NeMo-Relay
 global-theme: nvidia
+announcement:
+  message: "\U0001F514 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and\
+    \ behavior may change with each release."
 experimental:
   mdx-components:
   - ./components
