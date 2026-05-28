@@ -153,28 +153,29 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
                 return Ok(());
             }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
-            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, selected) => {
-                match actions.get(selected).copied() {
-                    Some(MenuAction::ToggleComponent(component_index)) => {
-                        if let Some(component) = components.get_mut(component_index) {
-                            component.set_enabled(false);
-                        }
-                    }
-                    Some(MenuAction::EditField {
-                        component_index,
-                        field_index,
-                    }) => {
-                        if let Some(component) = components.get_mut(component_index)
-                            && let Some(field) = component.fields().get(field_index)
-                        {
-                            component.reset_field(*field)?;
-                        }
-                    }
-                    _ => {
-                        println!("  Select a component or editable field to reset or clear.");
+            MenuResponse::Shortcut(
+                shortcut @ (MenuShortcut::Reset | MenuShortcut::Clear),
+                selected,
+            ) => match actions.get(selected).copied() {
+                Some(MenuAction::ToggleComponent(component_index)) => {
+                    if let Some(component) = components.get_mut(component_index) {
+                        apply_component_enablement_shortcut(component, shortcut);
                     }
                 }
-            }
+                Some(MenuAction::EditField {
+                    component_index,
+                    field_index,
+                }) => {
+                    if let Some(component) = components.get_mut(component_index)
+                        && let Some(field) = component.fields().get(field_index)
+                    {
+                        component.reset_field(*field)?;
+                    }
+                }
+                _ => {
+                    println!("  Select a component or editable field to reset or clear.");
+                }
+            },
             MenuResponse::Cancel => {
                 return Err(CliError::Config(
                     "plugin edit cancelled; no config saved".into(),
@@ -192,18 +193,26 @@ fn edit_component_field(
     match component {
         EditableComponent::Observability(state) => {
             edit_section(theme, &mut state.config, field)?;
-            state.mark_touched();
+            state.mark_config_touched();
         }
         EditableComponent::Adaptive(state) => {
             edit_config_field(theme, &mut state.config, field)?;
-            state.mark_touched();
+            state.mark_config_touched();
         }
         EditableComponent::NemoGuardrails(state) => {
             edit_config_field(theme, &mut state.config, field)?;
-            state.mark_touched();
+            state.mark_config_touched();
         }
     }
     Ok(())
+}
+
+fn apply_component_enablement_shortcut(component: &mut EditableComponent, shortcut: MenuShortcut) {
+    match shortcut {
+        MenuShortcut::Reset => component.reset_enabled(),
+        MenuShortcut::Clear => component.set_enabled(false),
+        _ => {}
+    }
 }
 
 fn menu_response_index(response: &MenuResponse) -> Option<usize> {

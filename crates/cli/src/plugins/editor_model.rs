@@ -25,8 +25,10 @@ pub(super) const POLICY_SECTION: &str = "policy";
 pub(super) struct ComponentEditorState<T> {
     pub(super) config: T,
     pub(super) enabled: bool,
+    default_enabled: bool,
     existing: bool,
     touched: bool,
+    config_touched: bool,
 }
 
 #[derive(Debug)]
@@ -77,6 +79,14 @@ impl EditableComponent {
         }
     }
 
+    pub(super) fn reset_enabled(&mut self) {
+        match self {
+            Self::Observability(state) => state.reset_enabled(),
+            Self::Adaptive(state) => state.reset_enabled(),
+            Self::NemoGuardrails(state) => state.reset_enabled(),
+        }
+    }
+
     pub(super) fn summary(&self) -> String {
         match self {
             Self::Observability(state) => observability_summary(state),
@@ -99,15 +109,15 @@ impl EditableComponent {
         match self {
             Self::Observability(state) => {
                 reset_config_field(&mut state.config, field)?;
-                state.mark_touched();
+                state.mark_config_touched();
             }
             Self::Adaptive(state) => {
                 reset_config_field(&mut state.config, field)?;
-                state.mark_touched();
+                state.mark_config_touched();
             }
             Self::NemoGuardrails(state) => {
                 reset_config_field(&mut state.config, field)?;
-                state.mark_touched();
+                state.mark_config_touched();
             }
         }
         Ok(())
@@ -216,6 +226,11 @@ impl<T> ComponentEditorState<T> {
         self.touched = true;
     }
 
+    pub(super) fn mark_config_touched(&mut self) {
+        self.config_touched = true;
+        self.mark_touched();
+    }
+
     pub(super) fn toggle_enabled(&mut self) {
         self.enabled = !self.enabled;
         self.mark_touched();
@@ -223,6 +238,11 @@ impl<T> ComponentEditorState<T> {
 
     pub(super) fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+        self.mark_touched();
+    }
+
+    pub(super) fn reset_enabled(&mut self) {
+        self.enabled = self.default_enabled;
         self.mark_touched();
     }
 
@@ -249,16 +269,20 @@ where
         return Ok(ComponentEditorState {
             config,
             enabled: component.enabled,
+            default_enabled,
             existing: true,
             touched: false,
+            config_touched: false,
         });
     }
 
     Ok(ComponentEditorState {
         config: T::default(),
         enabled: default_enabled,
+        default_enabled,
         existing: false,
         touched: false,
+        config_touched: false,
     })
 }
 
@@ -346,7 +370,7 @@ pub(super) fn store_nemo_guardrails_state(
     config: &mut PluginConfig,
     state: &ComponentEditorState<NeMoGuardrailsConfig>,
 ) -> Result<(), CliError> {
-    if state.should_store(nemo_guardrails_configured(&state.config)) {
+    if state.should_store(state.config_touched || nemo_guardrails_configured(&state.config)) {
         store_component_editor_config(
             config,
             NEMO_GUARDRAILS_PLUGIN_KIND,

@@ -215,6 +215,23 @@ fn plugin_menu_builds_ordered_component_actions() {
 }
 
 #[test]
+fn component_enablement_shortcuts_clear_and_reset_differ() {
+    let config = PluginConfig::default();
+    let mut components = editable_components(&config).unwrap();
+
+    components[0].set_enabled(false);
+    apply_component_enablement_shortcut(&mut components[0], MenuShortcut::Reset);
+    assert!(components[0].enabled());
+
+    apply_component_enablement_shortcut(&mut components[0], MenuShortcut::Clear);
+    assert!(!components[0].enabled());
+
+    components[1].set_enabled(true);
+    apply_component_enablement_shortcut(&mut components[1], MenuShortcut::Reset);
+    assert!(!components[1].enabled());
+}
+
+#[test]
 fn menu_response_index_tracks_selected_and_shortcut_positions() {
     assert_eq!(menu_response_index(&MenuResponse::Selected(3)), Some(3));
     assert_eq!(
@@ -306,6 +323,37 @@ fn editor_model_reads_missing_nemo_guardrails_component_as_disabled_default() {
         "component disabled, fields none"
     );
     assert!(!guardrails.should_store(nemo_guardrails_configured(&guardrails.config)));
+}
+
+#[test]
+fn editor_save_persists_disabled_nemo_guardrails_policy_only_edits() {
+    let mut config = PluginConfig::default();
+    let mut guardrails = component_nemo_guardrails_state(&config).unwrap();
+    let policy = NeMoGuardrailsConfig::editor_schema()
+        .field("policy")
+        .unwrap();
+
+    set_section_field(
+        &mut guardrails.config,
+        policy,
+        "unknown_field",
+        json!("ignore"),
+    )
+    .unwrap();
+    guardrails.mark_config_touched();
+
+    assert!(!guardrails.enabled);
+    assert!(!nemo_guardrails_configured(&guardrails.config));
+
+    store_nemo_guardrails_state(&mut config, &guardrails).unwrap();
+
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+        .unwrap();
+    assert!(!component.enabled);
+    assert_eq!(component.config["policy"]["unknown_field"], json!("ignore"));
 }
 
 #[test]
