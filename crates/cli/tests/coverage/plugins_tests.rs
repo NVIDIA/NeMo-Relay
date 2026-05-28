@@ -3,8 +3,12 @@
 
 use super::*;
 use crate::config::{global_plugin_config_path, project_plugin_config_path};
-use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay::config_editor::{EditorConfig, EditorSchema};
+use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
+use nemo_relay::plugins::nemo_guardrails::component::{
+    NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig, RemoteBackendConfig,
+};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 
@@ -25,6 +29,20 @@ fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
             "break_chain": false,
             "inject_header": true,
             "inject_body_path": "nvext.agent_hints"
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+fn guardrails_component_config(config_id: &str) -> serde_json::Map<String, Value> {
+    json!({
+        "mode": "remote",
+        "codec": "openai_chat",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": config_id
         }
     })
     .as_object()
@@ -115,6 +133,42 @@ fn typed_editor_model_contains_adaptive_options() {
 }
 
 #[test]
+fn typed_editor_model_contains_nemo_guardrails_options() {
+    let schema = NeMoGuardrailsConfig::editor_schema();
+    assert!(!schema.fields.iter().any(|field| field.name == "version"));
+    assert_eq!(
+        schema.field("mode").unwrap().enum_values,
+        &["remote", "local"]
+    );
+    assert_eq!(schema.field("codec").unwrap().kind, EditorFieldKind::Enum);
+    assert_eq!(
+        schema.field("input").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+    assert_eq!(
+        schema.field("priority").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+
+    let remote = schema.field("remote").unwrap().schema().unwrap();
+    assert_eq!(
+        remote.field("timeout_millis").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    assert_eq!(
+        remote.field("headers").unwrap().kind,
+        EditorFieldKind::StringMap
+    );
+
+    let request_defaults = schema.field("request_defaults").unwrap().schema().unwrap();
+    let rails = request_defaults.field("rails").unwrap().schema().unwrap();
+    assert_eq!(
+        rails.field("tool_input").unwrap().kind,
+        EditorFieldKind::Json
+    );
+}
+
+#[test]
 fn plugin_menu_uses_setup_theme_markers() {
     let theme = ColorfulTheme::default();
     let lines = render_menu(
@@ -130,6 +184,59 @@ fn plugin_menu_uses_setup_theme_markers() {
     assert!(rendered.contains('❯'));
     assert!(rendered.contains("↑/↓"));
     assert!(!rendered.contains("> First"));
+}
+
+#[test]
+fn plugin_menu_builds_ordered_component_actions() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = PluginConfig::default();
+    let components = editable_components(&config).unwrap();
+
+    let (items, actions) = plugin_menu_items(&components, &temp.path().join("plugins.toml"));
+
+    assert_eq!(items.len(), actions.len());
+    assert_eq!(items[0].label, "Toggle Observability component [on]");
+    assert_eq!(items[1].label, "  Edit Observability ATOF");
+    assert!(items.iter().any(|item| {
+        item.label
+            .contains("Toggle NeMo Guardrails component [off]")
+    }));
+    assert!(matches!(actions[0], MenuAction::ToggleComponent(0)));
+    assert!(matches!(
+        actions[1],
+        MenuAction::EditField {
+            component_index: 0,
+            field_index: 0
+        }
+    ));
+    assert!(matches!(actions[actions.len() - 3], MenuAction::Preview));
+    assert!(matches!(actions[actions.len() - 2], MenuAction::Save));
+    assert!(matches!(actions[actions.len() - 1], MenuAction::Cancel));
+}
+
+#[test]
+fn component_enablement_shortcuts_clear_and_reset_differ() {
+    let config = PluginConfig::default();
+    let mut components = editable_components(&config).unwrap();
+
+    let observability = components
+        .iter_mut()
+        .find(|component| component.label() == "Observability")
+        .unwrap();
+    observability.set_enabled(false);
+    apply_component_enablement_shortcut(observability, MenuShortcut::Reset);
+    assert!(observability.enabled());
+
+    apply_component_enablement_shortcut(observability, MenuShortcut::Clear);
+    assert!(!observability.enabled());
+
+    let adaptive = components
+        .iter_mut()
+        .find(|component| component.label() == "Adaptive")
+        .unwrap();
+    adaptive.set_enabled(true);
+    apply_component_enablement_shortcut(adaptive, MenuShortcut::Reset);
+    assert!(!adaptive.enabled());
 }
 
 #[test]
@@ -165,12 +272,24 @@ fn plugin_menu_marks_configured_sections_and_fields() {
 fn editor_model_renders_valid_observability_plugin_config() {
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();
-    let mut observability = component_observability_config(&config).unwrap();
+    let mut observability = component_observability_state(&config).unwrap();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
-    toggle_section(&mut observability, atof);
-    set_section_field(&mut observability, atof, "output_directory", json!("logs")).unwrap();
-    set_section_field(&mut observability, atof, "filename", json!("events.jsonl")).unwrap();
-    store_observability_config(&mut config, &observability).unwrap();
+    toggle_section(&mut observability.config, atof);
+    set_section_field(
+        &mut observability.config,
+        atof,
+        "output_directory",
+        json!("logs"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut observability.config,
+        atof,
+        "filename",
+        json!("events.jsonl"),
+    )
+    .unwrap();
+    store_observability_state(&mut config, &observability).unwrap();
 
     validate_config(&config).unwrap();
 }
@@ -181,11 +300,68 @@ fn editor_model_adds_disabled_adaptive_component() {
 
     ensure_adaptive_component(&mut config).unwrap();
 
-    let component = adaptive_component(&config).unwrap();
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+        .unwrap();
     assert_eq!(component.kind, ADAPTIVE_PLUGIN_KIND);
     assert!(!component.enabled);
     assert!(!component.config.contains_key("version"));
     assert!(component.config.contains_key("policy"));
+}
+
+#[test]
+fn editor_model_reads_missing_nemo_guardrails_component_as_disabled_default() {
+    let config = PluginConfig::default();
+
+    let guardrails = component_nemo_guardrails_state(&config).unwrap();
+
+    assert!(!guardrails.enabled);
+    assert!(
+        !config
+            .components
+            .iter()
+            .any(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+    );
+    assert_eq!(guardrails.config.mode, "remote");
+    assert!(!nemo_guardrails_configured(&guardrails.config));
+    assert_eq!(
+        nemo_guardrails_summary(&guardrails),
+        "component disabled, fields none"
+    );
+    assert!(!guardrails.should_store(nemo_guardrails_configured(&guardrails.config)));
+}
+
+#[test]
+fn editor_save_persists_disabled_nemo_guardrails_policy_only_edits() {
+    let mut config = PluginConfig::default();
+    let mut guardrails = component_nemo_guardrails_state(&config).unwrap();
+    let policy = NeMoGuardrailsConfig::editor_schema()
+        .field("policy")
+        .unwrap();
+
+    set_section_field(
+        &mut guardrails.config,
+        policy,
+        "unknown_field",
+        json!("ignore"),
+    )
+    .unwrap();
+    guardrails.mark_config_touched();
+
+    assert!(!guardrails.enabled);
+    assert!(!nemo_guardrails_configured(&guardrails.config));
+
+    store_nemo_guardrails_state(&mut config, &guardrails).unwrap();
+
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+        .unwrap();
+    assert!(!component.enabled);
+    assert_eq!(component.config["policy"]["unknown_field"], json!("ignore"));
 }
 
 #[test]
@@ -246,14 +422,24 @@ fn editor_save_preserves_unknown_observability_fields() {
         }],
         ..PluginConfig::default()
     };
-    let mut observability = component_observability_config(&config).unwrap();
+    let mut observability = component_observability_state(&config).unwrap();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
-    remove_section_field(&mut observability, atof, "output_directory").unwrap();
-    set_section_field(&mut observability, atof, "filename", json!("events.jsonl")).unwrap();
+    remove_section_field(&mut observability.config, atof, "output_directory").unwrap();
+    set_section_field(
+        &mut observability.config,
+        atof,
+        "filename",
+        json!("events.jsonl"),
+    )
+    .unwrap();
 
-    store_observability_config(&mut config, &observability).unwrap();
+    store_observability_state(&mut config, &observability).unwrap();
 
-    let component = observability_component(&config).unwrap();
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
+        .unwrap();
     assert_eq!(
         component.config.get("future_top_level"),
         Some(&json!("preserve"))
@@ -295,7 +481,7 @@ fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
         }],
         ..PluginConfig::default()
     };
-    let mut adaptive = component_adaptive_config(&config).unwrap();
+    let mut adaptive = component_adaptive_state(&config).unwrap();
     let schema = AdaptiveConfig::editor_schema();
     let state = schema.field("state").unwrap();
     let telemetry = schema.field("telemetry").unwrap();
@@ -303,9 +489,9 @@ fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
     let tool_parallelism = schema.field("tool_parallelism").unwrap();
     let acg = schema.field("acg").unwrap();
 
-    set_struct_field(&mut adaptive, "agent_id", json!("planner")).unwrap();
+    set_struct_field(&mut adaptive.config, "agent_id", json!("planner")).unwrap();
     set_section_field(
-        &mut adaptive,
+        &mut adaptive.config,
         state,
         "backend",
         json!({
@@ -318,36 +504,36 @@ fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
     )
     .unwrap();
     set_section_field(
-        &mut adaptive,
+        &mut adaptive.config,
         telemetry,
         "learners",
         json!(["tool_parallelism", "acg"]),
     )
     .unwrap();
     set_section_field(
-        &mut adaptive,
+        &mut adaptive.config,
         telemetry,
         "subscriber_name",
         json!("adaptive"),
     )
     .unwrap();
     set_section_field(
-        &mut adaptive,
+        &mut adaptive.config,
         adaptive_hints,
         "inject_body_path",
         json!("nvext.agent_hints"),
     )
     .unwrap();
     set_section_field(
-        &mut adaptive,
+        &mut adaptive.config,
         tool_parallelism,
         "mode",
         json!("inject_hints"),
     )
     .unwrap();
-    set_section_field(&mut adaptive, acg, "provider", json!("anthropic")).unwrap();
+    set_section_field(&mut adaptive.config, acg, "provider", json!("anthropic")).unwrap();
     set_section_field(
-        &mut adaptive,
+        &mut adaptive.config,
         acg,
         "stability_thresholds",
         json!({
@@ -358,9 +544,13 @@ fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
     )
     .unwrap();
 
-    store_adaptive_config(&mut config, &adaptive).unwrap();
+    store_adaptive_state(&mut config, &adaptive).unwrap();
 
-    let component = adaptive_component(&config).unwrap();
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
+        .unwrap();
     assert!(!component.config.contains_key("version"));
     assert_eq!(
         component.config.get("future_top_level"),
@@ -388,6 +578,93 @@ fn editor_save_preserves_unknown_adaptive_fields_and_all_sections() {
         component.config["acg"]["stability_thresholds"]["stable_threshold"],
         json!(0.9)
     );
+}
+
+#[test]
+fn editor_save_preserves_unknown_nemo_guardrails_fields_and_sections() {
+    let mut config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "version": 1,
+                "future_top_level": "preserve",
+                "mode": "remote",
+                "codec": "openai_chat",
+                "remote": {
+                    "endpoint": "http://old.example.test",
+                    "config_id": "old",
+                    "future_remote": "preserve"
+                },
+                "request_defaults": {
+                    "future_defaults": "preserve",
+                    "rails": {
+                        "input": true,
+                        "future_rails": "preserve"
+                    }
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+    let mut guardrails = component_nemo_guardrails_state(&config).unwrap();
+    let schema = NeMoGuardrailsConfig::editor_schema();
+    let remote = schema.field("remote").unwrap();
+    let request_defaults = schema.field("request_defaults").unwrap();
+
+    set_struct_field(&mut guardrails.config, "codec", json!("openai_chat")).unwrap();
+    set_section_field(
+        &mut guardrails.config,
+        remote,
+        "endpoint",
+        json!("http://localhost:8000"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut guardrails.config,
+        remote,
+        "config_id",
+        json!("default"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut guardrails.config,
+        request_defaults,
+        "context",
+        json!({"tenant": "docs"}),
+    )
+    .unwrap();
+
+    guardrails.set_enabled(false);
+    store_nemo_guardrails_state(&mut config, &guardrails).unwrap();
+
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+        .unwrap();
+    assert!(!component.enabled);
+    assert!(!component.config.contains_key("version"));
+    assert_eq!(
+        component.config.get("future_top_level"),
+        Some(&json!("preserve"))
+    );
+    let remote = component.config["remote"].as_object().unwrap();
+    assert_eq!(
+        remote.get("endpoint"),
+        Some(&json!("http://localhost:8000"))
+    );
+    assert_eq!(remote.get("future_remote"), Some(&json!("preserve")));
+    let request_defaults = component.config["request_defaults"].as_object().unwrap();
+    assert_eq!(
+        request_defaults.get("future_defaults"),
+        Some(&json!("preserve"))
+    );
+    assert_eq!(request_defaults["context"], json!({"tenant": "docs"}));
+    assert_eq!(request_defaults["rails"]["future_rails"], json!("preserve"));
 }
 
 #[test]
@@ -424,6 +701,48 @@ fn optional_section_without_default(name: &'static str) -> EditorFieldSpec {
         nested_schema: None,
         nested_default: None,
     }
+}
+
+fn depth_root_schema() -> &'static EditorSchema {
+    static FIELDS: [EditorFieldSpec; 1] = [EditorFieldSpec {
+        name: "middle",
+        label: "middle",
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: false,
+        nested_schema: Some(depth_middle_schema),
+        nested_default: None,
+    }];
+    static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
+    &SCHEMA
+}
+
+fn depth_middle_schema() -> &'static EditorSchema {
+    static FIELDS: [EditorFieldSpec; 1] = [EditorFieldSpec {
+        name: "leaf",
+        label: "leaf",
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: false,
+        nested_schema: Some(depth_leaf_schema),
+        nested_default: None,
+    }];
+    static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
+    &SCHEMA
+}
+
+fn depth_leaf_schema() -> &'static EditorSchema {
+    static FIELDS: [EditorFieldSpec; 1] = [EditorFieldSpec {
+        name: "name",
+        label: "name",
+        kind: EditorFieldKind::String,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+    }];
+    static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
+    &SCHEMA
 }
 
 #[test]
@@ -468,6 +787,70 @@ fn nested_edit_empty_optional_section_without_default_clears_field() {
 }
 
 #[test]
+fn recursive_value_defaults_flow_from_parent_objects() {
+    let middle = depth_root_schema().field("middle").unwrap();
+    let leaf = depth_middle_schema().field("leaf").unwrap();
+    let default = json!({
+        "middle": {
+            "leaf": {
+                "name": "from-parent"
+            }
+        }
+    });
+
+    let middle_default = value_field_default(Some(&default), middle).unwrap();
+    assert_eq!(
+        value_field_default(Some(&middle_default), leaf),
+        Some(json!({ "name": "from-parent" }))
+    );
+
+    let mut root_value = json!({ "middle": { "leaf": { "name": "custom" } } });
+    reset_value_field(&mut root_value, middle, Some(&default));
+    assert_eq!(root_value["middle"]["leaf"]["name"], json!("from-parent"));
+
+    let mut middle_value = json!({ "leaf": { "name": "custom" } });
+    reset_value_field(&mut middle_value, leaf, Some(&middle_default));
+    assert_eq!(middle_value["leaf"]["name"], json!("from-parent"));
+}
+
+#[test]
+fn merge_known_editor_object_recurses_through_arbitrary_section_depth() {
+    let schema = depth_root_schema();
+    let mut existing = json!({
+        "middle": {
+            "leaf": {
+                "name": "old",
+                "future_leaf": "preserve"
+            },
+            "future_middle": "preserve"
+        },
+        "future_root": "preserve"
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let edited = json!({
+        "middle": {
+            "leaf": {
+                "name": "new"
+            }
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    merge_known_editor_object(&mut existing, edited, &nested_editor_keys(schema), schema);
+
+    let middle = existing.get("middle").unwrap().as_object().unwrap();
+    let leaf = middle.get("leaf").unwrap().as_object().unwrap();
+    assert_eq!(leaf.get("name"), Some(&json!("new")));
+    assert_eq!(leaf.get("future_leaf"), Some(&json!("preserve")));
+    assert_eq!(middle.get("future_middle"), Some(&json!("preserve")));
+    assert_eq!(existing.get("future_root"), Some(&json!("preserve")));
+}
+
+#[test]
 fn observability_config_field_reset_clears_optional_section() {
     let mut observability = ObservabilityConfig::default();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
@@ -482,45 +865,100 @@ fn observability_config_field_reset_clears_optional_section() {
 fn adaptive_summary_tracks_component_and_configured_fields() {
     let mut config = PluginConfig::default();
     ensure_adaptive_component(&mut config).unwrap();
-    let mut adaptive = component_adaptive_config(&config).unwrap();
+    let mut adaptive = component_adaptive_state(&config).unwrap();
 
     assert_eq!(
-        adaptive_summary(&config, &adaptive),
+        adaptive_summary(&adaptive),
         "component disabled, fields none"
     );
 
-    set_adaptive_component_enabled(&mut config, true);
-    set_struct_field(&mut adaptive, "agent_id", json!("planner")).unwrap();
+    adaptive.set_enabled(true);
+    set_struct_field(&mut adaptive.config, "agent_id", json!("planner")).unwrap();
     let adaptive_hints = AdaptiveConfig::editor_schema()
         .field("adaptive_hints")
         .unwrap();
-    set_section_field(&mut adaptive, adaptive_hints, "inject_header", json!(true)).unwrap();
+    set_section_field(
+        &mut adaptive.config,
+        adaptive_hints,
+        "inject_header",
+        json!(true),
+    )
+    .unwrap();
 
     assert_eq!(
-        adaptive_summary(&config, &adaptive),
+        adaptive_summary(&adaptive),
         "component enabled, fields fallback_agent_id, adaptive_hints"
     );
+}
+
+#[test]
+fn nemo_guardrails_summary_tracks_component_and_configured_fields() {
+    let config = PluginConfig::default();
+    let mut guardrails = component_nemo_guardrails_state(&config).unwrap();
+
+    assert_eq!(
+        nemo_guardrails_summary(&guardrails),
+        "component disabled, fields none"
+    );
+
+    guardrails.set_enabled(true);
+    set_struct_field(&mut guardrails.config, "codec", json!("openai_chat")).unwrap();
+    let remote = NeMoGuardrailsConfig::editor_schema()
+        .field("remote")
+        .unwrap();
+    set_section_field(
+        &mut guardrails.config,
+        remote,
+        "endpoint",
+        json!("http://localhost:8000"),
+    )
+    .unwrap();
+
+    assert!(nemo_guardrails_configured(&guardrails.config));
+    assert_eq!(
+        nemo_guardrails_summary(&guardrails),
+        "component enabled, fields codec, remote"
+    );
+    assert!(guardrails.should_store(nemo_guardrails_configured(&guardrails.config)));
+
+    let existing = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: false,
+            config: guardrails_component_config("existing"),
+        }],
+        ..PluginConfig::default()
+    };
+    let mut existing = component_nemo_guardrails_state(&existing).unwrap();
+    reset_config_field(
+        &mut existing.config,
+        NeMoGuardrailsConfig::editor_schema()
+            .field("remote")
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(existing.should_store(nemo_guardrails_configured(&existing.config)));
 }
 
 #[test]
 fn component_enablement_and_summary_track_config_state() {
     let mut config = PluginConfig::default();
     ensure_observability_component(&mut config).unwrap();
-    let mut observability = component_observability_config(&config).unwrap();
+    let mut observability = component_observability_state(&config).unwrap();
 
-    assert!(component_enabled(&config));
+    assert!(observability.enabled);
     assert_eq!(
-        observability_summary(&config, &observability),
+        observability_summary(&observability),
         "component enabled, sections none"
     );
 
-    set_component_enabled(&mut config, false);
+    observability.set_enabled(false);
     let atif = ObservabilityConfig::editor_schema().field("atif").unwrap();
-    toggle_section(&mut observability, atif);
+    toggle_section(&mut observability.config, atif);
 
-    assert!(!component_enabled(&config));
+    assert!(!observability.enabled);
     assert_eq!(
-        observability_summary(&config, &observability),
+        observability_summary(&observability),
         "component disabled, sections ATIF"
     );
 }
@@ -576,15 +1014,21 @@ fn write_plugin_config_prunes_defaults_and_round_trips() {
         enabled: true,
         config: adaptive_component_config("cli-roundtrip"),
     });
+    config.components.push(PluginComponentSpec {
+        kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+        enabled: false,
+        config: guardrails_component_config("cli-roundtrip"),
+    });
 
     write_plugin_config(&path, &config).unwrap();
 
     let rendered = std::fs::read_to_string(&path).unwrap();
     assert!(rendered.contains("kind = \"observability\""));
     assert!(rendered.contains("kind = \"adaptive\""));
+    assert!(rendered.contains("kind = \"nemo_guardrails\""));
     assert!(!rendered.contains("enabled = true"));
     let round_tripped = read_plugin_config(&path).unwrap();
-    assert_eq!(round_tripped.components.len(), 2);
+    assert_eq!(round_tripped.components.len(), 3);
     assert_eq!(round_tripped.components[0].kind, OBSERVABILITY_PLUGIN_KIND);
     let adaptive = round_tripped
         .components
@@ -603,6 +1047,16 @@ fn write_plugin_config_prunes_defaults_and_round_trips() {
     assert_eq!(
         adaptive_hints.get("inject_body_path"),
         Some(&json!("nvext.agent_hints"))
+    );
+    let guardrails = round_tripped
+        .components
+        .iter()
+        .find(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+        .unwrap();
+    assert!(!guardrails.enabled);
+    assert_eq!(
+        guardrails.config["remote"]["config_id"],
+        json!("cli-roundtrip")
     );
 }
 
@@ -667,6 +1121,38 @@ fn validate_config_accepts_adaptive_component() {
     };
 
     validate_config(&config).unwrap();
+}
+
+#[test]
+fn validate_config_accepts_nemo_guardrails_component() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: guardrails_component_config("cli-validation"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
+fn nemo_guardrails_config_map_prunes_default_version() {
+    let map = nemo_guardrails_config_map(&NeMoGuardrailsConfig {
+        codec: Some("openai_chat".into()),
+        remote: Some(RemoteBackendConfig {
+            endpoint: Some("http://localhost:8000".into()),
+            config_id: Some("default".into()),
+            ..RemoteBackendConfig::default()
+        }),
+        ..NeMoGuardrailsConfig::default()
+    })
+    .unwrap();
+
+    assert!(!map.contains_key("version"));
+    assert_eq!(map.get("codec"), Some(&json!("openai_chat")));
+    assert_eq!(map["remote"]["config_id"], json!("default"));
 }
 
 #[test]

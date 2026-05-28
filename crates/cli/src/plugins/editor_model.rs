@@ -3,9 +3,14 @@
 
 //! Testable plugin editor state helpers.
 
+use std::path::Path;
+
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
+use nemo_relay::plugins::nemo_guardrails::component::{
+    NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig,
+};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use serde::Serialize;
@@ -15,6 +20,271 @@ use serde_json::{Map, Value, json};
 use crate::error::CliError;
 
 pub(super) const POLICY_SECTION: &str = "policy";
+
+#[derive(Debug, Clone)]
+pub(super) struct ComponentEditorState<T> {
+    pub(super) config: T,
+    pub(super) enabled: bool,
+    default_enabled: bool,
+    existing: bool,
+    touched: bool,
+    config_touched: bool,
+}
+
+#[derive(Debug)]
+pub(super) enum EditableComponent {
+    Observability(ComponentEditorState<ObservabilityConfig>),
+    Adaptive(ComponentEditorState<AdaptiveConfig>),
+    NemoGuardrails(ComponentEditorState<NeMoGuardrailsConfig>),
+}
+
+impl EditableComponent {
+    pub(super) fn label(&self) -> &'static str {
+        match self {
+            Self::Observability(_) => "Observability",
+            Self::Adaptive(_) => "Adaptive",
+            Self::NemoGuardrails(_) => "NeMo Guardrails",
+        }
+    }
+
+    pub(super) fn fields(&self) -> &'static [EditorFieldSpec] {
+        match self {
+            Self::Observability(_) => ObservabilityConfig::editor_schema().fields,
+            Self::Adaptive(_) => AdaptiveConfig::editor_schema().fields,
+            Self::NemoGuardrails(_) => NeMoGuardrailsConfig::editor_schema().fields,
+        }
+    }
+
+    pub(super) fn enabled(&self) -> bool {
+        match self {
+            Self::Observability(state) => state.enabled,
+            Self::Adaptive(state) => state.enabled,
+            Self::NemoGuardrails(state) => state.enabled,
+        }
+    }
+
+    pub(super) fn toggle_enabled(&mut self) {
+        match self {
+            Self::Observability(state) => state.toggle_enabled(),
+            Self::Adaptive(state) => state.toggle_enabled(),
+            Self::NemoGuardrails(state) => state.toggle_enabled(),
+        }
+    }
+
+    pub(super) fn set_enabled(&mut self, enabled: bool) {
+        match self {
+            Self::Observability(state) => state.set_enabled(enabled),
+            Self::Adaptive(state) => state.set_enabled(enabled),
+            Self::NemoGuardrails(state) => state.set_enabled(enabled),
+        }
+    }
+
+    pub(super) fn reset_enabled(&mut self) {
+        match self {
+            Self::Observability(state) => state.reset_enabled(),
+            Self::Adaptive(state) => state.reset_enabled(),
+            Self::NemoGuardrails(state) => state.reset_enabled(),
+        }
+    }
+
+    pub(super) fn summary(&self) -> String {
+        match self {
+            Self::Observability(state) => observability_summary(state),
+            Self::Adaptive(state) => adaptive_summary(state),
+            Self::NemoGuardrails(state) => nemo_guardrails_summary(state),
+        }
+    }
+
+    pub(super) fn field_configured(&self, field: EditorFieldSpec) -> bool {
+        match self {
+            Self::Observability(state) => section_configured(&state.config, field),
+            Self::Adaptive(state) => config_field_configured(&state.config, field).unwrap_or(false),
+            Self::NemoGuardrails(state) => {
+                config_field_configured(&state.config, field).unwrap_or(false)
+            }
+        }
+    }
+
+    pub(super) fn reset_field(&mut self, field: EditorFieldSpec) -> Result<(), CliError> {
+        match self {
+            Self::Observability(state) => {
+                reset_config_field(&mut state.config, field)?;
+                state.mark_config_touched();
+            }
+            Self::Adaptive(state) => {
+                reset_config_field(&mut state.config, field)?;
+                state.mark_config_touched();
+            }
+            Self::NemoGuardrails(state) => {
+                reset_config_field(&mut state.config, field)?;
+                state.mark_config_touched();
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn store(&self, config: &mut PluginConfig) -> Result<(), CliError> {
+        match self {
+            Self::Observability(state) => store_observability_state(config, state),
+            Self::Adaptive(state) => store_adaptive_state(config, state),
+            Self::NemoGuardrails(state) => store_nemo_guardrails_state(config, state),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum MenuAction {
+    ToggleComponent(usize),
+    EditField {
+        component_index: usize,
+        field_index: usize,
+    },
+    Preview,
+    Save,
+    Cancel,
+}
+
+pub(super) fn editable_components(
+    config: &PluginConfig,
+) -> Result<Vec<EditableComponent>, CliError> {
+    Ok(vec![
+        EditableComponent::Observability(component_observability_state(config)?),
+        EditableComponent::Adaptive(component_adaptive_state(config)?),
+        EditableComponent::NemoGuardrails(component_nemo_guardrails_state(config)?),
+    ])
+}
+
+pub(super) fn plugin_menu_items(
+    components: &[EditableComponent],
+    path: &Path,
+) -> (Vec<super::MenuItem>, Vec<MenuAction>) {
+    let mut items = Vec::new();
+    let mut actions = Vec::new();
+    for (component_index, component) in components.iter().enumerate() {
+        items.push(super::MenuItem::new(format!(
+            "Toggle {} component [{}]",
+            component.label(),
+            super::status_label(component.enabled())
+        )));
+        actions.push(MenuAction::ToggleComponent(component_index));
+
+        items.extend(component.fields().iter().map(|field| {
+            super::MenuItem::new(super::configured_label(
+                component.field_configured(*field),
+                format!("Edit {} {}", component.label(), field.label),
+            ))
+        }));
+        actions.extend(
+            component
+                .fields()
+                .iter()
+                .enumerate()
+                .map(|(field_index, _)| MenuAction::EditField {
+                    component_index,
+                    field_index,
+                }),
+        );
+    }
+
+    items.push(super::MenuItem::new(super::shortcut_label(
+        "Preview TOML",
+        "p",
+    )));
+    actions.push(MenuAction::Preview);
+    items.push(super::MenuItem::new(super::shortcut_label(
+        format!("Save to {}", path.display()),
+        "s",
+    )));
+    actions.push(MenuAction::Save);
+    items.push(super::MenuItem::new(super::shortcut_label("Cancel", "q")));
+    actions.push(MenuAction::Cancel);
+
+    (items, actions)
+}
+
+pub(super) fn config_with_editable_components(
+    config: &PluginConfig,
+    components: &[EditableComponent],
+) -> Result<PluginConfig, CliError> {
+    let mut config = config.clone();
+    store_editable_components(&mut config, components)?;
+    Ok(config)
+}
+
+pub(super) fn store_editable_components(
+    config: &mut PluginConfig,
+    components: &[EditableComponent],
+) -> Result<(), CliError> {
+    for component in components {
+        component.store(config)?;
+    }
+    Ok(())
+}
+
+impl<T> ComponentEditorState<T> {
+    pub(super) fn mark_touched(&mut self) {
+        self.touched = true;
+    }
+
+    pub(super) fn mark_config_touched(&mut self) {
+        self.config_touched = true;
+        self.mark_touched();
+    }
+
+    pub(super) fn toggle_enabled(&mut self) {
+        self.enabled = !self.enabled;
+        self.mark_touched();
+    }
+
+    pub(super) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        self.mark_touched();
+    }
+
+    pub(super) fn reset_enabled(&mut self) {
+        self.enabled = self.default_enabled;
+        self.mark_touched();
+    }
+
+    pub(super) fn should_store(&self, configured: bool) -> bool {
+        self.existing || (self.touched && (self.enabled || configured))
+    }
+}
+
+fn component_editor_state<T>(
+    config: &PluginConfig,
+    kind: &str,
+    default_enabled: bool,
+) -> Result<ComponentEditorState<T>, CliError>
+where
+    T: Default + DeserializeOwned,
+{
+    if let Some(component) = config
+        .components
+        .iter()
+        .find(|component| component.kind == kind)
+    {
+        let config = serde_json::from_value(Value::Object(component.config.clone()))
+            .map_err(|error| CliError::Config(format!("invalid {kind} plugin config: {error}")))?;
+        return Ok(ComponentEditorState {
+            config,
+            enabled: component.enabled,
+            default_enabled,
+            existing: true,
+            touched: false,
+            config_touched: false,
+        });
+    }
+
+    Ok(ComponentEditorState {
+        config: T::default(),
+        enabled: default_enabled,
+        default_enabled,
+        existing: false,
+        touched: false,
+        config_touched: false,
+    })
+}
 
 pub(super) fn ensure_observability_component(config: &mut PluginConfig) -> Result<(), CliError> {
     if !config
@@ -46,80 +316,93 @@ pub(super) fn ensure_adaptive_component(config: &mut PluginConfig) -> Result<(),
     Ok(())
 }
 
-pub(super) fn component_enabled(config: &PluginConfig) -> bool {
-    observability_component(config)
-        .map(|component| component.enabled)
-        .unwrap_or(true)
-}
-
-pub(super) fn set_component_enabled(config: &mut PluginConfig, enabled: bool) {
-    if let Some(component) = observability_component_mut(config) {
-        component.enabled = enabled;
-    }
-}
-
-pub(super) fn adaptive_component_enabled(config: &PluginConfig) -> bool {
-    adaptive_component(config)
-        .map(|component| component.enabled)
-        .unwrap_or(false)
-}
-
-pub(super) fn set_adaptive_component_enabled(config: &mut PluginConfig, enabled: bool) {
-    if let Some(component) = adaptive_component_mut(config) {
-        component.enabled = enabled;
-    }
-}
-
-pub(super) fn component_observability_config(
+pub(super) fn component_observability_state(
     config: &PluginConfig,
-) -> Result<ObservabilityConfig, CliError> {
-    observability_component(config)
-        .map(|component| serde_json::from_value(Value::Object(component.config.clone())))
-        .transpose()
-        .map_err(|error| CliError::Config(format!("invalid observability plugin config: {error}")))?
-        .ok_or_else(|| CliError::Config("observability plugin component is missing".into()))
+) -> Result<ComponentEditorState<ObservabilityConfig>, CliError> {
+    component_editor_state(config, OBSERVABILITY_PLUGIN_KIND, true)
 }
 
-pub(super) fn component_adaptive_config(config: &PluginConfig) -> Result<AdaptiveConfig, CliError> {
-    adaptive_component(config)
-        .map(|component| serde_json::from_value(Value::Object(component.config.clone())))
-        .transpose()
-        .map_err(|error| CliError::Config(format!("invalid adaptive plugin config: {error}")))?
-        .ok_or_else(|| CliError::Config("adaptive plugin component is missing".into()))
-}
-
-pub(super) fn config_with_components(
+pub(super) fn component_adaptive_state(
     config: &PluginConfig,
-    observability: &ObservabilityConfig,
-    adaptive: &AdaptiveConfig,
-) -> Result<PluginConfig, CliError> {
-    let mut config = config.clone();
-    store_observability_config(&mut config, observability)?;
-    store_adaptive_config(&mut config, adaptive)?;
-    Ok(config)
+) -> Result<ComponentEditorState<AdaptiveConfig>, CliError> {
+    component_editor_state(config, ADAPTIVE_PLUGIN_KIND, false)
 }
 
-pub(super) fn store_observability_config(
+pub(super) fn component_nemo_guardrails_state(
+    config: &PluginConfig,
+) -> Result<ComponentEditorState<NeMoGuardrailsConfig>, CliError> {
+    component_editor_state(config, NEMO_GUARDRAILS_PLUGIN_KIND, false)
+}
+
+pub(super) fn store_observability_state(
     config: &mut PluginConfig,
-    observability: &ObservabilityConfig,
+    state: &ComponentEditorState<ObservabilityConfig>,
 ) -> Result<(), CliError> {
-    if let Some(component) = observability_component_mut(config) {
-        merge_observability_editor_config(
-            &mut component.config,
-            observability_config_map(observability)?,
+    if state.should_store(true) {
+        store_component_editor_config(
+            config,
+            OBSERVABILITY_PLUGIN_KIND,
+            state.enabled,
+            observability_config_map(&state.config)?,
+            merge_observability_editor_config,
         );
     }
     Ok(())
 }
 
-pub(super) fn store_adaptive_config(
+pub(super) fn store_adaptive_state(
     config: &mut PluginConfig,
-    adaptive: &AdaptiveConfig,
+    state: &ComponentEditorState<AdaptiveConfig>,
 ) -> Result<(), CliError> {
-    if let Some(component) = adaptive_component_mut(config) {
-        merge_adaptive_editor_config(&mut component.config, adaptive_config_map(adaptive)?);
+    if state.should_store(true) {
+        store_component_editor_config(
+            config,
+            ADAPTIVE_PLUGIN_KIND,
+            state.enabled,
+            adaptive_config_map(&state.config)?,
+            merge_adaptive_editor_config,
+        );
     }
     Ok(())
+}
+
+pub(super) fn store_nemo_guardrails_state(
+    config: &mut PluginConfig,
+    state: &ComponentEditorState<NeMoGuardrailsConfig>,
+) -> Result<(), CliError> {
+    if state.should_store(state.config_touched || nemo_guardrails_configured(&state.config)) {
+        store_component_editor_config(
+            config,
+            NEMO_GUARDRAILS_PLUGIN_KIND,
+            state.enabled,
+            nemo_guardrails_config_map(&state.config)?,
+            merge_nemo_guardrails_editor_config,
+        );
+    }
+    Ok(())
+}
+
+fn store_component_editor_config(
+    config: &mut PluginConfig,
+    kind: &str,
+    enabled: bool,
+    edited: Map<String, Value>,
+    merge: fn(&mut Map<String, Value>, Map<String, Value>),
+) {
+    if let Some(component) = config
+        .components
+        .iter_mut()
+        .find(|component| component.kind == kind)
+    {
+        component.enabled = enabled;
+        merge(&mut component.config, edited);
+    } else {
+        config.components.push(PluginComponentSpec {
+            kind: kind.to_string(),
+            enabled,
+            config: edited,
+        });
+    }
 }
 
 pub(super) fn ensure_section<T>(config: &mut T, section: EditorFieldSpec)
@@ -379,38 +662,6 @@ where
         .and_then(|config| config.get(field.name).cloned())
 }
 
-pub(super) fn observability_component(config: &PluginConfig) -> Option<&PluginComponentSpec> {
-    config
-        .components
-        .iter()
-        .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
-}
-
-pub(super) fn observability_component_mut(
-    config: &mut PluginConfig,
-) -> Option<&mut PluginComponentSpec> {
-    config
-        .components
-        .iter_mut()
-        .find(|component| component.kind == OBSERVABILITY_PLUGIN_KIND)
-}
-
-pub(super) fn adaptive_component(config: &PluginConfig) -> Option<&PluginComponentSpec> {
-    config
-        .components
-        .iter()
-        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
-}
-
-pub(super) fn adaptive_component_mut(
-    config: &mut PluginConfig,
-) -> Option<&mut PluginComponentSpec> {
-    config
-        .components
-        .iter_mut()
-        .find(|component| component.kind == ADAPTIVE_PLUGIN_KIND)
-}
-
 pub(super) fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
     if !value.is_object() {
         *value = json!({});
@@ -445,6 +696,23 @@ pub(super) fn adaptive_config_map(config: &AdaptiveConfig) -> Result<Map<String,
     }
 }
 
+pub(super) fn nemo_guardrails_config_map(
+    config: &NeMoGuardrailsConfig,
+) -> Result<Map<String, Value>, CliError> {
+    let value = serde_json::to_value(config).map_err(serde_error)?;
+    match value {
+        Value::Object(mut map) => {
+            if is_version_one(map.get("version")) {
+                map.remove("version");
+            }
+            Ok(map)
+        }
+        _ => Err(CliError::Config(
+            "nemo_guardrails config must serialize to an object".into(),
+        )),
+    }
+}
+
 pub(super) fn merge_observability_editor_config(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
@@ -469,6 +737,21 @@ pub(super) fn merge_adaptive_editor_config(
         edited,
         &nested_editor_keys(AdaptiveConfig::editor_schema()),
         AdaptiveConfig::editor_schema(),
+    );
+}
+
+pub(super) fn merge_nemo_guardrails_editor_config(
+    existing: &mut Map<String, Value>,
+    edited: Map<String, Value>,
+) {
+    if is_version_one(existing.get("version")) {
+        existing.remove("version");
+    }
+    merge_known_editor_object(
+        existing,
+        edited,
+        &nested_editor_keys(NeMoGuardrailsConfig::editor_schema()),
+        NeMoGuardrailsConfig::editor_schema(),
     );
 }
 
@@ -562,24 +845,17 @@ pub(super) fn display_value(value: &Value) -> String {
     }
 }
 
-pub(super) fn observability_summary(
-    config: &PluginConfig,
-    observability: &ObservabilityConfig,
-) -> String {
+pub(super) fn observability_summary(state: &ComponentEditorState<ObservabilityConfig>) -> String {
     let enabled_sections = ObservabilityConfig::editor_schema()
         .fields
         .iter()
         .filter(|section| section.name != POLICY_SECTION)
-        .filter(|section| section_enabled(observability, **section).unwrap_or(false))
+        .filter(|section| section_enabled(&state.config, **section).unwrap_or(false))
         .map(|section| section.label)
         .collect::<Vec<_>>();
     format!(
         "component {}, sections {}",
-        if component_enabled(config) {
-            "enabled"
-        } else {
-            "disabled"
-        },
+        if state.enabled { "enabled" } else { "disabled" },
         if enabled_sections.is_empty() {
             "none".into()
         } else {
@@ -588,21 +864,46 @@ pub(super) fn observability_summary(
     )
 }
 
-pub(super) fn adaptive_summary(config: &PluginConfig, adaptive: &AdaptiveConfig) -> String {
+pub(super) fn adaptive_summary(state: &ComponentEditorState<AdaptiveConfig>) -> String {
     let configured_fields = AdaptiveConfig::editor_schema()
         .fields
         .iter()
         .filter(|field| field.name != POLICY_SECTION)
-        .filter(|field| config_field_configured(adaptive, **field).unwrap_or(false))
+        .filter(|field| config_field_configured(&state.config, **field).unwrap_or(false))
         .map(|field| field.label)
         .collect::<Vec<_>>();
     format!(
         "component {}, fields {}",
-        if adaptive_component_enabled(config) {
-            "enabled"
+        if state.enabled { "enabled" } else { "disabled" },
+        if configured_fields.is_empty() {
+            "none".into()
         } else {
-            "disabled"
-        },
+            configured_fields.join(", ")
+        }
+    )
+}
+
+pub(super) fn nemo_guardrails_configured(config: &NeMoGuardrailsConfig) -> bool {
+    NeMoGuardrailsConfig::editor_schema()
+        .fields
+        .iter()
+        .filter(|field| field.name != POLICY_SECTION)
+        .any(|field| config_field_configured(config, *field).unwrap_or(false))
+}
+
+pub(super) fn nemo_guardrails_summary(
+    state: &ComponentEditorState<NeMoGuardrailsConfig>,
+) -> String {
+    let configured_fields = NeMoGuardrailsConfig::editor_schema()
+        .fields
+        .iter()
+        .filter(|field| field.name != POLICY_SECTION)
+        .filter(|field| config_field_configured(&state.config, **field).unwrap_or(false))
+        .map(|field| field.label)
+        .collect::<Vec<_>>();
+    format!(
+        "component {}, fields {}",
+        if state.enabled { "enabled" } else { "disabled" },
         if configured_fields.is_empty() {
             "none".into()
         } else {
