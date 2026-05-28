@@ -237,7 +237,10 @@ events as they are emitted instead of reading a completed JSONL file. The
 streaming exporter connects to a separate local process over TCP and writes one
 canonical ATOF JSON object per JSONL line. The receiver process can then fan the
 events out through HTTP, SSE, WebSocket, stdout, or another local transport
-without changing the ATOF event contract.
+without changing the ATOF event contract. `AtofStreamingExporter` uses a
+per-exporter bounded queue: producers do not block, the newest event is dropped
+when that bounded queue is full, and `stats().events_dropped` records the
+overflow while fatal stream disconnects are still surfaced as errors.
 
 ```rust
 use nemo_relay::observability::atof::{

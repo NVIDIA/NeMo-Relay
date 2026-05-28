@@ -287,6 +287,7 @@ struct AtofStreamingExporterState {
     sender: Option<mpsc::SyncSender<AtofStreamMessage>>,
     writer_thread: Option<JoinHandle<()>>,
     events_sent: u64,
+    events_dropped: u64,
     last_error: Arc<Mutex<Option<String>>>,
 }
 
@@ -295,6 +296,8 @@ struct AtofStreamingExporterState {
 pub struct AtofStreamingExporterStats {
     /// Number of ATOF events observed by the streaming exporter.
     pub events_sent: u64,
+    /// Number of ATOF events dropped because the bounded streaming queue was full.
+    pub events_dropped: u64,
     /// Most recent serialization or exporter state error, if one was recorded.
     pub last_error: Option<String>,
 }
@@ -374,6 +377,7 @@ impl AtofStreamingExporter {
                 sender: Some(sender),
                 writer_thread: Some(writer_thread),
                 events_sent: 0,
+                events_dropped: 0,
                 last_error,
             })),
         })
@@ -417,7 +421,7 @@ impl AtofStreamingExporter {
                     state.events_sent += 1;
                 }
                 Err(mpsc::TrySendError::Full(_)) => {
-                    store_stream_error(&state.last_error, "ATOF stream queue is full".to_string());
+                    state.events_dropped += 1;
                 }
                 Err(mpsc::TrySendError::Disconnected(_)) => {
                     store_stream_error(
@@ -549,6 +553,7 @@ impl AtofStreamingExporter {
         };
         AtofStreamingExporterStats {
             events_sent: state.events_sent,
+            events_dropped: state.events_dropped,
             last_error: stream_last_error(&state.last_error),
         }
     }

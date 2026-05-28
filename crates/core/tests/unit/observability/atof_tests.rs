@@ -18,7 +18,7 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -122,32 +122,70 @@ fn start_atof_socket_sink(
     expected_events: usize,
 ) -> (String, mpsc::Receiver<Vec<serde_json::Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let deadline = Instant::now() + TEST_RECV_TIMEOUT;
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        let _ = sender.send(Vec::new());
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => {
+                    let _ = sender.send(Vec::new());
+                    return;
+                }
+            }
+        };
+        stream.set_read_timeout(Some(TEST_RECV_TIMEOUT)).unwrap();
         let mut reader = BufReader::new(stream);
         let mut events = Vec::with_capacity(expected_events);
         for _ in 0..expected_events {
             let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            events.push(serde_json::from_str(line.trim_end()).unwrap());
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => events.push(serde_json::from_str(line.trim_end()).unwrap()),
+            }
         }
-        sender.send(events).unwrap();
+        let _ = sender.send(events);
     });
     (address, receiver)
 }
 
-fn start_atof_eof_sink() -> (String, mpsc::Receiver<()>) {
+fn start_atof_eof_sink() -> (String, mpsc::Receiver<bool>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
+        let deadline = Instant::now() + TEST_RECV_TIMEOUT;
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        let _ = sender.send(false);
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => {
+                    let _ = sender.send(false);
+                    return;
+                }
+            }
+        };
+        stream.set_read_timeout(Some(TEST_RECV_TIMEOUT)).unwrap();
         let mut reader = BufReader::new(stream);
         let mut buffer = String::new();
-        reader.read_to_string(&mut buffer).unwrap();
-        sender.send(()).unwrap();
+        let saw_eof = reader.read_to_string(&mut buffer).is_ok();
+        let _ = sender.send(saw_eof);
     });
     (address, receiver)
 }
@@ -274,6 +312,37 @@ fn streaming_exporter_writes_canonical_event_json_values_to_socket() {
 }
 
 #[test]
+fn streaming_exporter_drops_when_queue_is_full_without_poisoning_stream() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    assert!(
+        sender
+            .try_send(AtofStreamMessage::Event("{\"queued\":true}".to_string()))
+            .is_ok()
+    );
+    let exporter = AtofStreamingExporter {
+        address: "127.0.0.1:0".to_string(),
+        state: Arc::new(Mutex::new(AtofStreamingExporterState {
+            sender: Some(sender),
+            writer_thread: None,
+            events_sent: 0,
+            events_dropped: 0,
+            last_error: Arc::new(Mutex::new(None)),
+        })),
+    };
+
+    (exporter.subscriber())(&make_mark_event("queue-full"));
+
+    let stats = exporter.stats();
+    assert_eq!(stats.events_sent, 0);
+    assert_eq!(stats.events_dropped, 1);
+    assert_eq!(stats.last_error, None);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        AtofStreamMessage::Event(value) if value == "{\"queued\":true}"
+    ));
+}
+
+#[test]
 fn streaming_exporter_reports_connection_failure() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
@@ -314,7 +383,7 @@ fn streaming_exporter_shutdown_closes_stream_after_stored_error() {
         error,
         AtofExporterError::StoredStreamFailure { .. }
     ));
-    receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    assert!(receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap());
 }
 
 #[test]
