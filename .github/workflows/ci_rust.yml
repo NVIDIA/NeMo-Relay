@@ -44,6 +44,17 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      s3:
+        image: ${{ matrix.s3_service_image }}
+        env:
+          COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: nemo-relay-atif-ci
+        ports:
+          - 9090:9090
+        options: >-
+          --health-cmd "wget --spider -q http://localhost:9090/favicon.ico || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     strategy:
       fail-fast: false
       matrix:
@@ -52,26 +63,31 @@ jobs:
             runner: ubuntu-latest
             run_redis_tests: true
             redis_service_image: redis:7.4.7-alpine
-            run_s3_tests: false
+            run_s3_tests: true
+            s3_service_image: adobe/s3mock:5.0.0
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             run_redis_tests: false
             redis_service_image: ''
+            s3_service_image: ''
             run_s3_tests: false
           - platform: macos-arm64
             runner: macos-15
             run_redis_tests: false
             redis_service_image: ''
+            s3_service_image: ''
             run_s3_tests: false
           - platform: windows-amd64
             runner: windows-2022
             run_redis_tests: false
             redis_service_image: ''
+            s3_service_image: ''
             run_s3_tests: false
           - platform: windows-arm64
             runner: windows-11-arm
             run_redis_tests: false
             redis_service_image: ''
+            s3_service_image: ''
             run_s3_tests: false
 
     steps:
@@ -145,11 +161,15 @@ jobs:
           if [ "${{ matrix.run_redis_tests }}" = "true" ]; then
             export NEMO_RELAY_RUN_REDIS_TESTS=1
           fi
-          # ATIF S3 storage integration tests stay disabled by default. Toggle a
-          # matrix entry's `run_s3_tests` to `true` once a CI-managed bucket and
-          # the AWS_*/NEMO_RELAY_S3_TEST_BUCKET secrets are wired through.
           if [ "${{ matrix.run_s3_tests }}" = "true" ]; then
             export NEMO_RELAY_RUN_S3_TESTS=1
+            export NEMO_RELAY_S3_TEST_BUCKET=nemo-relay-atif-ci
+            export AWS_ACCESS_KEY_ID=nemo-relay
+            export AWS_SECRET_ACCESS_KEY=nemo-relay
+            export AWS_REGION=us-east-1
+            export AWS_ENDPOINT_URL=http://127.0.0.1:9090
+            export AWS_ALLOW_HTTP=true
+            export AWS_VIRTUAL_HOSTED_STYLE_REQUEST=false
           fi
           just "${args[@]}" test-rust
 
