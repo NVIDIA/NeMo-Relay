@@ -28,8 +28,10 @@ def test_subscriber_events_expose_canonical_json_helpers():
         ):
             scope.event("json-mark", data={"mark": True}, metadata={"source": "test"})
     finally:
-        subscribers.flush()
-        subscribers.deregister(name)
+        try:
+            subscribers.flush()
+        finally:
+            subscribers.deregister(name)
 
     scope_event = next(
         event

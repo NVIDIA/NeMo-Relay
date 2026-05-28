@@ -96,13 +96,13 @@ func TestToolEvents(t *testing.T) {
 		}
 		mu.Unlock()
 	})
+	defer func() { _ = DeregisterSubscriber("go_tool_evt") }()
 
 	handle, _ := ToolCall("evt_tool", json.RawMessage(`{}`))
 	ToolCallEnd(handle, json.RawMessage(`{}`))
 	if err := FlushSubscribers(); err != nil {
 		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
-	DeregisterSubscriber("go_tool_evt")
 
 	mu.Lock()
 	if !startSeen {
@@ -690,6 +690,7 @@ func TestToolCallWithToolCallID(t *testing.T) {
 			mu.Unlock()
 		}
 	})
+	defer func() { _ = DeregisterSubscriber("go_tool_call_id_sub") }()
 
 	handle, err := ToolCall("id_tool", json.RawMessage(`{}`), WithToolCallID("call_abc_123"))
 	if err != nil {
@@ -699,7 +700,6 @@ func TestToolCallWithToolCallID(t *testing.T) {
 	if err := FlushSubscribers(); err != nil {
 		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
-	DeregisterSubscriber("go_tool_call_id_sub")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -722,6 +722,7 @@ func TestToolEventInputOutput(t *testing.T) {
 		}
 		mu.Unlock()
 	})
+	defer func() { _ = DeregisterSubscriber("go_tool_io_sub") }()
 
 	_, err := ToolCallExecute("io_tool", json.RawMessage(`{"query": "test"}`),
 		func(args json.RawMessage) (json.RawMessage, error) {
@@ -734,7 +735,6 @@ func TestToolEventInputOutput(t *testing.T) {
 	if err := FlushSubscribers(); err != nil {
 		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
-	DeregisterSubscriber("go_tool_io_sub")
 
 	mu.Lock()
 	defer mu.Unlock()

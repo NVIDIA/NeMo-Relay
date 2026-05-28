@@ -161,13 +161,19 @@ pub fn flush_subscribers() -> Result<()> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, Mutex, OnceLock, mpsc};
     use std::time::Duration;
 
     use serde_json::json;
 
     use super::*;
     use crate::api::event::{BaseEvent, Event, MarkEvent};
+
+    static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+        TEST_MUTEX.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     fn mark(name: &str) -> Event {
         Event::Mark(MarkEvent::new(
@@ -179,6 +185,7 @@ mod tests {
 
     #[test]
     fn dispatch_event_returns_while_subscriber_is_blocked() {
+        let _guard = test_guard();
         flush_subscribers().unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -199,6 +206,7 @@ mod tests {
 
     #[test]
     fn dispatcher_preserves_event_and_subscriber_order() {
+        let _guard = test_guard();
         flush_subscribers().unwrap();
         let observed = Arc::new(Mutex::new(Vec::new()));
         let first_observed = Arc::clone(&observed);
@@ -229,6 +237,7 @@ mod tests {
 
     #[test]
     fn dispatcher_continues_after_subscriber_panic() {
+        let _guard = test_guard();
         flush_subscribers().unwrap();
         let observed = Arc::new(Mutex::new(Vec::new()));
         let observed_after_panic = Arc::clone(&observed);

@@ -414,7 +414,7 @@ fn is_atif_image_source(value: Option<&serde_json::Value>) -> bool {
 #[test]
 fn test_exporter_empty() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
 
     assert_eq!(trajectory.schema_version, ATIF_SCHEMA_VERSION);
     assert_eq!(trajectory.session_id, "session-1");
@@ -458,7 +458,7 @@ fn test_exporter_tool_lifecycle() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     // Tool Start is skipped, only the observation step remains
     assert_eq!(trajectory.steps.len(), 1);
 
@@ -533,7 +533,7 @@ fn test_exporter_llm_lifecycle() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 2);
 
     // First step: user (LLM start — unwrapped LlmRequest, then messages extracted)
@@ -632,7 +632,7 @@ fn test_exporter_llm_lifecycle_plain_input() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 2);
 
     assert_eq!(trajectory.steps[0].message, json!("hello"));
@@ -693,7 +693,7 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 2);
 
     let user_step = &trajectory.steps[0];
@@ -802,7 +802,7 @@ fn test_exporter_openai_responses_function_calls_promoted_and_correlated() {
         state.events.extend([llm_end, tool_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.steps.len(), 1);
 
@@ -857,7 +857,7 @@ fn test_exporter_llm_tool_calls_promoted() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 1);
     let step = &trajectory.steps[0];
 
@@ -956,7 +956,7 @@ fn test_exporter_hermes_wrapper_payload_is_atif_v17_compatible() {
         state.events.extend([llm_start, llm_end, tool_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.steps.len(), 2);
     assert_eq!(trajectory.steps[0].message, json!("Run a terminal command"));
@@ -1049,7 +1049,7 @@ fn test_exporter_full_pipeline() {
         state.events.push(scope_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     // Scope events are skipped and the tool observation attaches to the agent step.
     assert_eq!(trajectory.steps.len(), 2);
 
@@ -1089,7 +1089,7 @@ fn test_exporter_tool_call_id_linking() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     // Only observation step (Tool Start is skipped)
     assert_eq!(trajectory.steps.len(), 1);
     let obs_result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
@@ -1126,7 +1126,7 @@ fn test_exporter_mark_steps_include_hook_name_and_ancestry() {
         state.events.push(mark);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 1);
 
     let step = &trajectory.steps[0];
@@ -1217,7 +1217,7 @@ fn test_exporter_embeds_nested_subagent_trajectory() {
         ]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.schema_version, "ATIF-v1.7");
     assert_eq!(trajectory.session_id, root_uuid.to_string());
@@ -1356,7 +1356,7 @@ fn test_exporter_attaches_subagent_ref_to_delegating_tool_observation() {
         ]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.steps.len(), 2);
     let agent_step = &trajectory.steps[1];
@@ -1471,7 +1471,7 @@ fn test_exporter_synthesizes_tool_call_for_active_subagent_dispatch() {
         ]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.steps.len(), 2);
     let agent_step = &trajectory.steps[1];
@@ -1557,7 +1557,7 @@ fn test_exporter_drops_empty_subagent_trajectory_and_parent_ref() {
             .extend([root_start, child_start, child_end, root_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert!(trajectory.steps.is_empty());
     assert!(trajectory.subagent_trajectories.is_none());
@@ -1629,7 +1629,7 @@ fn test_exporter_renumbers_after_pruning_empty_subagent_ref_step() {
             .extend([root_start, llm_end, child_start, child_end, mark, root_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     assert_eq!(trajectory.steps.len(), 2);
     assert_eq!(trajectory.steps[0].step_id, 1);
@@ -1713,7 +1713,7 @@ fn test_exporter_embeds_recursive_subagent_trajectories() {
         ]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     let child = &trajectory.subagent_trajectories.as_ref().unwrap()[0];
     assert_eq!(child.session_id, "child-session");
@@ -1756,7 +1756,7 @@ fn test_exporter_skips_empty_mark_payloads() {
         );
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert!(trajectory.steps.is_empty());
     assert_eq!(
         trajectory.final_metrics.as_ref().unwrap().total_steps,
@@ -1869,7 +1869,7 @@ fn test_exporter_scope_filtering() {
         state.events.push(e4);
     }
 
-    let traj_all = exporter.export();
+    let traj_all = exporter.export().unwrap();
     assert_eq!(traj_all.steps.len(), 4);
 }
 
@@ -1886,9 +1886,9 @@ fn test_exporter_clear() {
         );
     }
 
-    assert_eq!(exporter.export().steps.len(), 1);
+    assert_eq!(exporter.export().unwrap().steps.len(), 1);
     exporter.clear();
-    assert!(exporter.export().steps.is_empty());
+    assert!(exporter.export().unwrap().steps.is_empty());
 }
 
 #[test]
@@ -1947,7 +1947,7 @@ fn test_exporter_merged_tool_observations() {
         state.events.push(tool2_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     // agent step with attached tool observations
     assert_eq!(trajectory.steps.len(), 1);
 
@@ -2000,7 +2000,7 @@ fn test_exporter_source_call_id_correlation_by_name() {
         state.events.push(tool_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 1);
 
     let obs = trajectory.steps[0].observation.as_ref().unwrap();
@@ -2039,7 +2039,7 @@ fn test_exporter_user_message_extraction() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps[0].message, json!("hello"));
 }
 
@@ -2138,7 +2138,7 @@ fn test_exporter_full_agent_loop() {
         ]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
     // Expected: user, agent+tool_calls+observations, user, agent
     assert_eq!(trajectory.steps.len(), 4);
@@ -2193,7 +2193,7 @@ fn test_reasoning_content_extracted() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = &trajectory.steps[0];
     assert_eq!(agent_step.source, "agent");
     assert_eq!(
@@ -2234,7 +2234,7 @@ fn test_reasoning_effort_propagated() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     // steps: user (LLM Start), agent (LLM End)
     let agent_step = &trajectory.steps[1];
     assert_eq!(agent_step.source, "agent");
@@ -2269,7 +2269,7 @@ fn test_metrics_extra_captures_unknown_token_usage_keys() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
     assert_eq!(metrics.prompt_tokens, Some(20));
     assert_eq!(metrics.completion_tokens, Some(10));
@@ -2310,7 +2310,7 @@ fn test_step_extra_agent_ancestry() {
         state.events.push(llm_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = &trajectory.steps[1];
     assert_eq!(agent_step.source, "agent");
 
@@ -2344,7 +2344,7 @@ fn test_step_extra_invocation_timestamps() {
         state.events.push(llm_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = &trajectory.steps[1];
     let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
 
@@ -2382,7 +2382,7 @@ fn test_step_extra_user_step_has_ancestry_no_invocation() {
         state.events.push(llm_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let user_step = &trajectory.steps[0];
     assert_eq!(user_step.source, "user");
 
@@ -2432,7 +2432,7 @@ fn test_step_extra_tool_ancestry_aligned_with_tool_calls() {
         state.events.push(tool2_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = &trajectory.steps[0];
     let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
 
@@ -2498,7 +2498,7 @@ fn test_step_extra_tool_ancestry_aligned_out_of_order_completion() {
         state.events.push(tool1_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = &trajectory.steps[0];
     let extra: AtifStepExtra = serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
 
@@ -2569,7 +2569,7 @@ fn test_step_extra_tool_ancestry_does_not_bleed_across_turns() {
         state.events.push(tool2_end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     // steps: agent(turn1+obs1), user(turn2), agent(turn2+obs2)
     let agent1 = trajectory
         .steps

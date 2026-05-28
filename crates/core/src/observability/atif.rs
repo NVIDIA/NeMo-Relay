@@ -370,18 +370,21 @@ impl AtifExporter {
     /// # Returns
     /// An [`AtifTrajectory`] synthesized from the events observed so far.
     ///
+    /// # Errors
+    /// Returns an error if queued subscriber delivery cannot be flushed before
+    /// the trajectory is cloned.
+    ///
     /// # Notes
     /// Exporting does not clear the buffered events. Call [`AtifExporter::clear`]
     /// when you need to reset the exporter between trajectories.
-    pub fn export(&self) -> AtifTrajectory {
+    pub fn export(&self) -> Result<AtifTrajectory> {
         self.try_export()
-            .expect("failed to flush subscriber dispatcher before ATIF export")
     }
 
     /// Try to export the collected event history as an [`AtifTrajectory`].
     ///
-    /// Unlike [`AtifExporter::export`], this method returns subscriber flush
-    /// failures to the caller instead of panicking.
+    /// This is equivalent to [`AtifExporter::export`] and is retained for
+    /// callers that prefer an explicitly fallible method name.
     pub fn try_export(&self) -> Result<AtifTrajectory> {
         flush_subscribers()?;
         let (session_id, agent_info, events) = {

@@ -336,7 +336,7 @@ register_subscriber("atif-exporter", exporter.subscriber())?;
 // Run instrumented application work here.
 
 flush_subscribers()?;
-let trajectory = exporter.export();
+let trajectory = exporter.export()?;
 let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
 println!("{trajectory_json}");
 

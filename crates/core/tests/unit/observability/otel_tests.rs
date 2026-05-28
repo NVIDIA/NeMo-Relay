@@ -621,7 +621,7 @@ fn atif_lineage_correlates_with_otel_span_attributes() {
         Some(&agent_uuid.to_string())
     );
 
-    let trajectory = atif_exporter.export();
+    let trajectory = atif_exporter.export().unwrap();
     assert_eq!(trajectory.session_id, agent_uuid.to_string());
     let agent_step = trajectory
         .steps
