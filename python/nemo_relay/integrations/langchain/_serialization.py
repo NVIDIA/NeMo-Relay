@@ -239,11 +239,16 @@ def payload_to_model_request(
 
     model_settings = llm_request.content.get("model_settings")
     if isinstance(model_settings, dict):
-        overrides["model_settings"] = model_settings
+        # Using dict() to ensure we have a copy
+        model_settings_copy = dict(model_settings)
+        extra_headers = model_settings_copy.get("extra_headers")
+        if not isinstance(extra_headers, dict):
+            extra_headers = {}
+        overrides["model_settings"] = model_settings_copy
     else:
         overrides["model_settings"] = {}
+        extra_headers = {}
 
-    extra_headers = overrides["model_settings"].get("extra_headers", {})
     if len(llm_request.headers) > 0:
         extra_headers.update(llm_request.headers)
         overrides["model_settings"]["extra_headers"] = extra_headers
