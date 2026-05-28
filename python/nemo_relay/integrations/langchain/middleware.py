@@ -12,7 +12,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 import nemo_relay
 from nemo_relay.integrations.langchain._serialization import (
-    LangChainModelRequestCodec,
+    LangChainCodec,
     get_model_name,
     model_request_to_payload,
     model_response_from_json,
@@ -72,7 +72,7 @@ class NemoRelayMiddleware(AgentMiddleware):
         object_codec = nemo_relay.typed.BestEffortAnyCodec()
         model_name = get_model_name(request.model)
         llm_request = nemo_relay.LLMRequest({}, model_request_to_payload(model_name, request))
-        model_codec = LangChainModelRequestCodec()
+        model_codec = LangChainCodec()
         return (object_codec, llm_request, model_name, model_codec)
 
     def wrap_model_call(

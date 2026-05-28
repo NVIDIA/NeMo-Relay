@@ -21,6 +21,7 @@ from langchain_core.messages import (
 from langgraph.types import Command, Send
 
 from nemo_relay import AnnotatedLLMRequest, LLMRequest
+from nemo_relay.codecs import LlmCodec
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
@@ -42,7 +43,7 @@ def get_model_name(model: Any) -> str | None:
     return None
 
 
-class LangChainModelRequestCodec:
+class LangChainCodec(LlmCodec):
     """Translate LangChain ``ModelRequest`` payloads for request intercepts."""
 
     @classmethod

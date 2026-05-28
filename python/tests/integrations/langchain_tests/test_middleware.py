@@ -197,9 +197,9 @@ def test_wrap_model_call_routes_through_llm_execute(
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert recording_middleware.calls[0]["model_name"] == "mock-model"
     assert recording_middleware.calls[0]["request"].content["model"] == "mock-model"
-    from nemo_relay.integrations.langchain._serialization import LangChainModelRequestCodec
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
 
-    assert isinstance(recording_middleware.calls[0]["codec"], LangChainModelRequestCodec)
+    assert isinstance(recording_middleware.calls[0]["codec"], LangChainCodec)
     assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
@@ -218,20 +218,20 @@ def test_awrap_model_call_routes_through_llm_execute(
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert recording_middleware.calls[0]["model_name"] == "mock-model"
     assert recording_middleware.calls[0]["request"].content["model"] == "mock-model"
-    from nemo_relay.integrations.langchain._serialization import LangChainModelRequestCodec
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
 
-    assert isinstance(recording_middleware.calls[0]["codec"], LangChainModelRequestCodec)
+    assert isinstance(recording_middleware.calls[0]["codec"], LangChainCodec)
     assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
 def test_langchain_model_request_codec_round_trips_messages(model_request: ModelRequest[Any]):
     from nemo_relay.integrations.langchain._serialization import (
-        LangChainModelRequestCodec,
+        LangChainCodec,
         model_request_to_payload,
         payload_to_model_request,
     )
 
-    codec = LangChainModelRequestCodec()
+    codec = LangChainCodec()
     request = nemo_relay.LLMRequest({}, model_request_to_payload("mock-model", model_request))
 
     annotated = codec.decode(request)
