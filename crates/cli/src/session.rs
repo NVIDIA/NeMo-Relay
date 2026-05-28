@@ -277,27 +277,11 @@ impl SessionManager {
                 continue;
             }
 
-            let mut event = alignment_state.route_event(event);
-            let explicit_subagent_alias = alignment::explicit_subagent_alias(&mut event);
-            let session_id = event.session_id().to_string();
-            let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
-            if event.is_terminal() && !sessions.contains_key(&session_id) {
+            let Some((event, session_id, is_agent_started)) =
+                route_event_for_session(event, &mut sessions, &mut alignment_state)
+            else {
                 continue;
-            }
-            if let Some((child_session_id, alias)) = explicit_subagent_alias {
-                if sessions
-                    .get(&child_session_id)
-                    .is_none_or(|session| session.can_reparent_as_subagent_alias())
-                {
-                    sessions.remove(&child_session_id);
-                    alignment_state.insert_alias(child_session_id, alias);
-                    alignment_state.align_explicit_subagent_end(&mut event);
-                } else {
-                    continue;
-                }
-            } else {
-                alignment_state.align_explicit_subagent_end(&mut event);
-            }
+            };
             let event_kind = event_agent_kind(&event);
             let should_remove_session = apply_event_to_session(
                 &mut sessions,
@@ -754,6 +738,53 @@ async fn close_idle_sessions_from_parts(
         }
     }
     first_error.map_or(Ok(closed_turns), Err)
+}
+
+fn route_event_for_session(
+    event: NormalizedEvent,
+    sessions: &mut HashMap<String, Session>,
+    alignment_state: &mut SessionAlignmentState,
+) -> Option<(NormalizedEvent, String, bool)> {
+    let mut event = alignment_state.route_event(event);
+    let explicit_subagent_alias = alignment::explicit_subagent_alias(&mut event);
+    let session_id = event.session_id().to_string();
+    let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
+
+    if event.is_terminal() && !sessions.contains_key(&session_id) {
+        return None;
+    }
+    if !apply_explicit_subagent_alias(
+        &mut event,
+        sessions,
+        alignment_state,
+        explicit_subagent_alias,
+    ) {
+        return None;
+    }
+    Some((event, session_id, is_agent_started))
+}
+
+fn apply_explicit_subagent_alias(
+    event: &mut NormalizedEvent,
+    sessions: &mut HashMap<String, Session>,
+    alignment_state: &mut SessionAlignmentState,
+    explicit_subagent_alias: Option<(String, SessionAlias)>,
+) -> bool {
+    let Some((child_session_id, alias)) = explicit_subagent_alias else {
+        alignment_state.align_explicit_subagent_end(event);
+        return true;
+    };
+
+    if sessions
+        .get(&child_session_id)
+        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
+    {
+        return false;
+    }
+    sessions.remove(&child_session_id);
+    alignment_state.insert_alias(child_session_id, alias);
+    alignment_state.align_explicit_subagent_end(event);
+    true
 }
 
 impl Session {

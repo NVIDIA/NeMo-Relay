@@ -58,6 +58,28 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
 	})
 	dir := t.TempDir()
+	config := NewAtofAndAtifTestConfig(dir)
+	pluginConfig := PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}
+
+	if report, err := ValidatePluginConfig(pluginConfig); err != nil {
+		t.Fatalf("ValidatePluginConfig failed: %v", err)
+	} else if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+	}
+	if _, err := InitializePlugins(pluginConfig); err != nil {
+		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
+	}
+
+	handle := EmitObservabilityTestTrajectory(t)
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	}
+
+	AssertAtofRecordCount(t, filepath.Join(dir, eventsJSONLFilename), 3)
+	AssertAtifAgentMetadata(t, TrajectoryFilePath(dir, handle))
+}
+
+func NewAtofAndAtifTestConfig(dir string) ObservabilityConfig {
 	config := NewObservabilityConfig()
 	atof := NewObservabilityAtofConfig()
 	atof.Enabled = true
@@ -65,6 +87,7 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 	atof.Filename = eventsJSONLFilename
 	atof.Mode = "overwrite"
 	config.Atof = &atof
+
 	atif := NewObservabilityAtifConfig()
 	atif.Enabled = true
 	atif.AgentName = "go-agent"
@@ -75,40 +98,32 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 	atif.OutputDirectory = dir
 	atif.FilenameTemplate = TrajectoryFilenamePrefix + "{session_id}.json"
 	config.Atif = &atif
+	return config
+}
 
-	if report, err := ValidatePluginConfig(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf("ValidatePluginConfig failed: %v", err)
-	} else if len(report.Diagnostics) != 0 {
-		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
-	}
-	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{ObservabilityComponent(config)}}); err != nil {
-		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
-	}
-
+func EmitObservabilityTestTrajectory(t *testing.T) *ScopeHandle {
+	t.Helper()
 	var handle *ScopeHandle
 	runWithTestScopeStack(t, func() {
 		var err error
 		handle, err = PushScope("go-observability-agent", ScopeTypeAgent, WithInput(json.RawMessage(`{"agent":true}`)))
-		if err != nil {
-			t.Fatalf("PushScope failed: %v", err)
-		}
-		if err := EmitEvent("go-mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))); err != nil {
-			t.Fatalf("EmitEvent failed: %v", err)
-		}
-		if err := PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))); err != nil {
-			t.Fatalf("PopScope failed: %v", err)
-		}
+		requireNoError(t, err, "PushScope failed")
+		requireNoError(t, EmitEvent("go-mark", WithEventParent(handle), WithEventData(json.RawMessage(`{"step":1}`))), "EmitEvent failed")
+		requireNoError(t, PopScope(handle, WithOutput(json.RawMessage(`{"done":true}`))), "PopScope failed")
 	})
-	if err := ClearPluginConfiguration(); err != nil {
-		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
-	}
+	return handle
+}
 
-	jsonl := string(mustReadFile(t, filepath.Join(dir, eventsJSONLFilename)))
-	if got := strings.Count(strings.TrimSpace(jsonl), "\n") + 1; got != 3 {
-		t.Fatalf("expected 3 JSONL records, got %d: %s", got, jsonl)
+func AssertAtofRecordCount(t *testing.T, path string, want int) {
+	t.Helper()
+	jsonl := string(mustReadFile(t, path))
+	if got := strings.Count(strings.TrimSpace(jsonl), "\n") + 1; got != want {
+		t.Fatalf("expected %d JSONL records, got %d: %s", want, got, jsonl)
 	}
+}
 
-	trajectoryPath := TrajectoryFilePath(dir, handle)
+func AssertAtifAgentMetadata(t *testing.T, trajectoryPath string) {
+	t.Helper()
 	var trajectory map[string]any
 	if err := json.Unmarshal(mustReadFile(t, trajectoryPath), &trajectory); err != nil {
 		t.Fatalf("failed to read trajectory: %v", err)

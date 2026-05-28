@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+type otelRequest struct {
+	Path        string
+	ContentType string
+	Body        []byte
+}
+
 func TestNewOpenInferenceConfigDefaults(t *testing.T) {
 	config := NewOpenInferenceConfig()
 
@@ -82,14 +88,28 @@ func TestOpenInferenceSubscriberRejectsInvalidTransport(t *testing.T) {
 }
 
 func TestOpenInferenceSubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
-	type otelRequest struct {
-		Path        string
-		ContentType string
-		Body        []byte
+	requests := make(chan otelRequest, 4)
+	server := NewOtelTestServer(t, requests)
+	defer server.Close()
+
+	subscriber := NewRegisteredOpenInferenceSubscriber(t, server.URL+"/v1/traces")
+	defer subscriber.Close()
+	EmitOpenInferenceScopeLifecycle(t)
+	if err := subscriber.ForceFlush(); err != nil {
+		t.Fatalf("ForceFlush failed: %v", err)
 	}
 
-	requests := make(chan otelRequest, 4)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	select {
+	case request := <-requests:
+		AssertOpenInferenceRequest(t, request)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for OTLP request")
+	}
+}
+
+func NewOtelTestServer(t *testing.T, requests chan<- otelRequest) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("read request body: %v", err)
@@ -101,67 +121,67 @@ func TestOpenInferenceSubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer server.Close()
+}
 
+func NewRegisteredOpenInferenceSubscriber(t *testing.T, endpoint string) *OpenInferenceSubscriber {
+	t.Helper()
 	config := NewOpenInferenceConfig()
-	config.Endpoint = server.URL + "/v1/traces"
+	config.Endpoint = endpoint
 	config.ServiceName = "go-agent"
 
 	subscriber, err := NewOpenInferenceSubscriber(config)
 	if err != nil {
 		t.Fatalf("NewOpenInferenceSubscriber failed: %v", err)
 	}
-	defer subscriber.Close()
-
 	name := "go_openinference_e2e_" + time.Now().Format("150405.000000")
 	if err := subscriber.Register(name); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-	defer func() { _ = subscriber.Deregister(name) }()
+	t.Cleanup(func() { _ = subscriber.Deregister(name) })
+	return subscriber
+}
 
+func EmitOpenInferenceScopeLifecycle(t *testing.T) {
+	t.Helper()
 	runWithTestScopeStack(t, func() {
 		handle, err := PushScope("openinference_scope", ScopeTypeAgent)
 		if err != nil {
 			t.Fatalf("PushScope failed: %v", err)
 		}
-		if err := EmitEvent(
+		requireNoError(t, EmitEvent(
 			"openinference_mark",
 			WithEventParent(handle),
 			WithEventData(json.RawMessage(`{"step":1}`)),
 			WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
-		); err != nil {
-			t.Fatalf("EmitEvent failed: %v", err)
-		}
-		if err := PopScope(handle); err != nil {
-			t.Fatalf("PopScope failed: %v", err)
-		}
+		), "EmitEvent failed")
+		requireNoError(t, PopScope(handle), "PopScope failed")
 	})
-	if err := subscriber.ForceFlush(); err != nil {
-		t.Fatalf("ForceFlush failed: %v", err)
-	}
+}
 
-	select {
-	case request := <-requests:
-		if request.Path != "/v1/traces" {
-			t.Fatalf("expected /v1/traces path, got %q", request.Path)
+func AssertOpenInferenceRequest(t *testing.T, request otelRequest) {
+	t.Helper()
+	if request.Path != "/v1/traces" {
+		t.Fatalf("expected /v1/traces path, got %q", request.Path)
+	}
+	if request.ContentType != "application/x-protobuf" {
+		t.Fatalf("expected protobuf content type, got %q", request.ContentType)
+	}
+	if len(request.Body) == 0 {
+		t.Fatal("expected non-empty OTLP request body")
+	}
+	AssertOpenInferenceBodyContains(t, request.Body)
+}
+
+func AssertOpenInferenceBodyContains(t *testing.T, body []byte) {
+	t.Helper()
+	for _, needle := range [][]byte{
+		[]byte("openinference.span.kind"),
+		[]byte("AGENT"),
+		[]byte("metadata"),
+		[]byte("openinference_mark"),
+	} {
+		if !bytes.Contains(body, needle) {
+			t.Fatalf("expected OTLP request body to contain %q", needle)
 		}
-		if request.ContentType != "application/x-protobuf" {
-			t.Fatalf("expected protobuf content type, got %q", request.ContentType)
-		}
-		if len(request.Body) == 0 {
-			t.Fatal("expected non-empty OTLP request body")
-		}
-		for _, needle := range [][]byte{
-			[]byte("openinference.span.kind"),
-			[]byte("AGENT"),
-			[]byte("metadata"),
-			[]byte("openinference_mark"),
-		} {
-			if !bytes.Contains(request.Body, needle) {
-				t.Fatalf("expected OTLP request body to contain %q", needle)
-			}
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for OTLP request")
 	}
 }

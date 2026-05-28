@@ -1753,99 +1753,15 @@ struct AgentScopeTree {
     agent_uuids: HashSet<Uuid>,
 }
 
+type AgentScopeRoles = HashMap<Uuid, Option<String>>;
+
 impl AgentScopeTree {
     fn from_events(events: &[&Event]) -> Self {
-        let mut scope_parent_map = HashMap::new();
-        let mut agent_scope_roles = HashMap::new();
-
-        for event in events {
-            if is_start_event(event) {
-                if let Some(parent_uuid) = event.parent_uuid() {
-                    scope_parent_map.insert(event.uuid(), parent_uuid);
-                }
-                if event.scope_type() == Some(crate::api::scope::ScopeType::Agent) {
-                    agent_scope_roles
-                        .insert(event.uuid(), agent_scope_role(event).map(str::to_string));
-                }
-            }
-        }
-
-        let mut agent_uuids = HashSet::new();
-        for event in events {
-            if !is_start_event(event)
-                || event.scope_type() != Some(crate::api::scope::ScopeType::Agent)
-            {
-                continue;
-            }
-            if agent_scope_role(event) == Some("turn")
-                && nearest_non_turn_agent_parent(
-                    event.parent_uuid(),
-                    &scope_parent_map,
-                    &agent_scope_roles,
-                    Some(event.uuid()),
-                )
-                .is_some()
-            {
-                continue;
-            }
-            agent_uuids.insert(event.uuid());
-        }
-
-        let mut nodes = HashMap::new();
-        for event in events {
-            if !is_start_event(event)
-                || event.scope_type() != Some(crate::api::scope::ScopeType::Agent)
-                || !agent_uuids.contains(&event.uuid())
-            {
-                continue;
-            }
-            let parent_agent = nearest_agent_parent(
-                event.parent_uuid(),
-                &scope_parent_map,
-                &agent_uuids,
-                Some(event.uuid()),
-            );
-            nodes.insert(
-                event.uuid(),
-                AgentScopeNode {
-                    uuid: event.uuid(),
-                    name: event.name().to_string(),
-                    session_id: event
-                        .metadata()
-                        .and_then(|metadata| metadata.get("session_id"))
-                        .and_then(Json::as_str)
-                        .map(ToString::to_string),
-                    referenced_by_parent: is_subagent_reference_event(event),
-                    parent_agent,
-                    children: Vec::new(),
-                    start_timestamp: *event.timestamp(),
-                },
-            );
-        }
-
-        let mut child_links = Vec::new();
-        let mut roots = Vec::new();
-        for node in nodes.values() {
-            if let Some(parent_agent) = node.parent_agent {
-                child_links.push((parent_agent, node.uuid));
-            } else {
-                roots.push(node.uuid);
-            }
-        }
-        for (parent_agent, child) in child_links {
-            if let Some(parent) = nodes.get_mut(&parent_agent) {
-                parent.children.push(child);
-            }
-        }
-        let start_timestamps = nodes
-            .iter()
-            .map(|(uuid, node)| (*uuid, node.start_timestamp))
-            .collect::<HashMap<_, _>>();
-        roots.sort_by_key(|uuid| start_timestamps.get(uuid).copied());
-        for node in nodes.values_mut() {
-            node.children
-                .sort_by_key(|uuid| start_timestamps.get(uuid).copied());
-        }
+        let (scope_parent_map, agent_scope_roles) = agent_scope_maps(events);
+        let agent_uuids = agent_uuids_from_events(events, &scope_parent_map, &agent_scope_roles);
+        let mut nodes = agent_scope_nodes(events, &scope_parent_map, &agent_uuids);
+        let mut roots = link_agent_children(&mut nodes);
+        sort_agent_tree(&mut roots, &mut nodes);
 
         Self {
             nodes,
@@ -1881,6 +1797,128 @@ impl AgentScopeTree {
         }
         let child = self.nodes.get(&event.uuid())?;
         (child.parent_agent == Some(parent)).then_some(child)
+    }
+}
+
+fn agent_scope_maps(events: &[&Event]) -> (HashMap<Uuid, Uuid>, AgentScopeRoles) {
+    let mut scope_parent_map = HashMap::new();
+    let mut agent_scope_roles = HashMap::new();
+
+    for event in events.iter().copied().filter(|event| is_start_event(event)) {
+        if let Some(parent_uuid) = event.parent_uuid() {
+            scope_parent_map.insert(event.uuid(), parent_uuid);
+        }
+        if event.scope_type() == Some(crate::api::scope::ScopeType::Agent) {
+            agent_scope_roles.insert(event.uuid(), agent_scope_role(event).map(str::to_string));
+        }
+    }
+    (scope_parent_map, agent_scope_roles)
+}
+
+fn agent_uuids_from_events(
+    events: &[&Event],
+    scope_parent_map: &HashMap<Uuid, Uuid>,
+    agent_scope_roles: &AgentScopeRoles,
+) -> HashSet<Uuid> {
+    events
+        .iter()
+        .copied()
+        .filter(|event| should_include_agent_scope(event, scope_parent_map, agent_scope_roles))
+        .map(Event::uuid)
+        .collect()
+}
+
+fn should_include_agent_scope(
+    event: &Event,
+    scope_parent_map: &HashMap<Uuid, Uuid>,
+    agent_scope_roles: &AgentScopeRoles,
+) -> bool {
+    if !is_start_event(event) || event.scope_type() != Some(crate::api::scope::ScopeType::Agent) {
+        return false;
+    }
+    agent_scope_role(event) != Some("turn")
+        || nearest_non_turn_agent_parent(
+            event.parent_uuid(),
+            scope_parent_map,
+            agent_scope_roles,
+            Some(event.uuid()),
+        )
+        .is_none()
+}
+
+fn agent_scope_nodes(
+    events: &[&Event],
+    scope_parent_map: &HashMap<Uuid, Uuid>,
+    agent_uuids: &HashSet<Uuid>,
+) -> HashMap<Uuid, AgentScopeNode> {
+    events
+        .iter()
+        .copied()
+        .filter(|event| is_included_agent_scope(event, agent_uuids))
+        .map(|event| {
+            let uuid = event.uuid();
+            (
+                uuid,
+                AgentScopeNode {
+                    uuid,
+                    name: event.name().to_string(),
+                    session_id: agent_session_id(event),
+                    referenced_by_parent: is_subagent_reference_event(event),
+                    parent_agent: nearest_agent_parent(
+                        event.parent_uuid(),
+                        scope_parent_map,
+                        agent_uuids,
+                        Some(uuid),
+                    ),
+                    children: Vec::new(),
+                    start_timestamp: *event.timestamp(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn is_included_agent_scope(event: &Event, agent_uuids: &HashSet<Uuid>) -> bool {
+    is_start_event(event)
+        && event.scope_type() == Some(crate::api::scope::ScopeType::Agent)
+        && agent_uuids.contains(&event.uuid())
+}
+
+fn agent_session_id(event: &Event) -> Option<String> {
+    event
+        .metadata()
+        .and_then(|metadata| metadata.get("session_id"))
+        .and_then(Json::as_str)
+        .map(ToString::to_string)
+}
+
+fn link_agent_children(nodes: &mut HashMap<Uuid, AgentScopeNode>) -> Vec<Uuid> {
+    let mut child_links = Vec::new();
+    let mut roots = Vec::new();
+    for node in nodes.values() {
+        if let Some(parent_agent) = node.parent_agent {
+            child_links.push((parent_agent, node.uuid));
+        } else {
+            roots.push(node.uuid);
+        }
+    }
+    for (parent_agent, child) in child_links {
+        if let Some(parent) = nodes.get_mut(&parent_agent) {
+            parent.children.push(child);
+        }
+    }
+    roots
+}
+
+fn sort_agent_tree(roots: &mut [Uuid], nodes: &mut HashMap<Uuid, AgentScopeNode>) {
+    let start_timestamps = nodes
+        .iter()
+        .map(|(uuid, node)| (*uuid, node.start_timestamp))
+        .collect::<HashMap<_, _>>();
+    roots.sort_by_key(|uuid| start_timestamps.get(uuid).copied());
+    for node in nodes.values_mut() {
+        node.children
+            .sort_by_key(|uuid| start_timestamps.get(uuid).copied());
     }
 }
 

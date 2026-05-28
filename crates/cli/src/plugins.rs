@@ -14,6 +14,7 @@ use console::{Key, Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 use nemo_relay::config_editor::{EditorFieldKind, EditorFieldSpec};
+use nemo_relay::plugin::PluginConfig;
 use serde_json::{Value, json};
 
 use crate::config::PluginsEditCommand;
@@ -39,6 +40,12 @@ enum MenuResponse {
     Selected(usize),
     Shortcut(MenuShortcut, usize),
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditLoopControl {
+    Continue,
+    Finish,
 }
 
 #[derive(Debug)]
@@ -107,82 +114,152 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
         if let Some(selected) = menu_response_index(&selection) {
             selected_index = selected;
         }
-        match selection {
-            MenuResponse::Selected(selection) => match actions.get(selection).copied() {
-                Some(MenuAction::ToggleComponent(component_index)) => {
-                    if let Some(component) = components.get_mut(component_index) {
-                        component.toggle_enabled();
-                    }
-                }
-                Some(MenuAction::EditField {
-                    component_index,
-                    field_index,
-                }) => {
-                    if let Some(component) = components.get_mut(component_index)
-                        && let Some(field) = component.fields().get(field_index)
-                    {
-                        edit_component_field(&theme, component, *field)?;
-                    }
-                }
-                Some(MenuAction::Preview) => {
-                    let preview_config = config_with_editable_components(&config, &components)?;
-                    print_preview(&preview_config)?;
-                }
-                Some(MenuAction::Save) => {
-                    store_editable_components(&mut config, &components)?;
-                    validate_config(&config)?;
-                    write_plugin_config(&path, &config)?;
-                    print_save_success(&path);
-                    return Ok(());
-                }
-                Some(MenuAction::Cancel) | None => {
-                    return Err(CliError::Config(
-                        "plugin edit cancelled; no config saved".into(),
-                    ));
-                }
-            },
-            MenuResponse::Shortcut(MenuShortcut::Preview, _) => {
-                let preview_config = config_with_editable_components(&config, &components)?;
-                print_preview(&preview_config)?;
-            }
-            MenuResponse::Shortcut(MenuShortcut::Save, _) => {
-                store_editable_components(&mut config, &components)?;
-                validate_config(&config)?;
-                write_plugin_config(&path, &config)?;
-                print_save_success(&path);
-                return Ok(());
-            }
-            MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
-            MenuResponse::Shortcut(
-                shortcut @ (MenuShortcut::Reset | MenuShortcut::Clear),
-                selected,
-            ) => match actions.get(selected).copied() {
-                Some(MenuAction::ToggleComponent(component_index)) => {
-                    if let Some(component) = components.get_mut(component_index) {
-                        apply_component_enablement_shortcut(component, shortcut);
-                    }
-                }
-                Some(MenuAction::EditField {
-                    component_index,
-                    field_index,
-                }) => {
-                    if let Some(component) = components.get_mut(component_index)
-                        && let Some(field) = component.fields().get(field_index)
-                    {
-                        component.reset_field(*field)?;
-                    }
-                }
-                _ => {
-                    println!("  Select a component or editable field to reset or clear.");
-                }
-            },
-            MenuResponse::Cancel => {
-                return Err(CliError::Config(
-                    "plugin edit cancelled; no config saved".into(),
-                ));
-            }
+        if handle_menu_response(
+            &theme,
+            &path,
+            &mut config,
+            &mut components,
+            &actions,
+            selection,
+        )? == EditLoopControl::Finish
+        {
+            return Ok(());
         }
     }
+}
+
+fn handle_menu_response(
+    theme: &ColorfulTheme,
+    path: &Path,
+    config: &mut PluginConfig,
+    components: &mut [EditableComponent],
+    actions: &[MenuAction],
+    selection: MenuResponse,
+) -> Result<EditLoopControl, CliError> {
+    match selection {
+        MenuResponse::Selected(selection) => handle_menu_action(
+            theme,
+            path,
+            config,
+            components,
+            actions.get(selection).copied(),
+        ),
+        MenuResponse::Shortcut(MenuShortcut::Preview, _) => {
+            preview_components(config, components)?;
+            Ok(EditLoopControl::Continue)
+        }
+        MenuResponse::Shortcut(MenuShortcut::Save, _) => save_components(path, config, components),
+        MenuResponse::Shortcut(MenuShortcut::Help, _) => {
+            print_editor_help();
+            Ok(EditLoopControl::Continue)
+        }
+        MenuResponse::Shortcut(
+            shortcut @ (MenuShortcut::Reset | MenuShortcut::Clear),
+            selected,
+        ) => handle_reset_or_clear_shortcut(components, actions.get(selected).copied(), shortcut),
+        MenuResponse::Cancel => Err(cancelled_error()),
+    }
+}
+
+fn handle_menu_action(
+    theme: &ColorfulTheme,
+    path: &Path,
+    config: &mut PluginConfig,
+    components: &mut [EditableComponent],
+    action: Option<MenuAction>,
+) -> Result<EditLoopControl, CliError> {
+    match action {
+        Some(MenuAction::ToggleComponent(component_index)) => {
+            if let Some(component) = components.get_mut(component_index) {
+                component.toggle_enabled();
+            }
+            Ok(EditLoopControl::Continue)
+        }
+        Some(MenuAction::EditField {
+            component_index,
+            field_index,
+        }) => {
+            edit_selected_component_field(theme, components, component_index, field_index)?;
+            Ok(EditLoopControl::Continue)
+        }
+        Some(MenuAction::Preview) => {
+            preview_components(config, components)?;
+            Ok(EditLoopControl::Continue)
+        }
+        Some(MenuAction::Save) => save_components(path, config, components),
+        Some(MenuAction::Cancel) | None => Err(cancelled_error()),
+    }
+}
+
+fn edit_selected_component_field(
+    theme: &ColorfulTheme,
+    components: &mut [EditableComponent],
+    component_index: usize,
+    field_index: usize,
+) -> Result<(), CliError> {
+    if let Some(component) = components.get_mut(component_index)
+        && let Some(field) = component.fields().get(field_index)
+    {
+        edit_component_field(theme, component, *field)?;
+    }
+    Ok(())
+}
+
+fn preview_components(
+    config: &PluginConfig,
+    components: &[EditableComponent],
+) -> Result<(), CliError> {
+    let preview_config = config_with_editable_components(config, components)?;
+    print_preview(&preview_config)
+}
+
+fn save_components(
+    path: &Path,
+    config: &mut PluginConfig,
+    components: &[EditableComponent],
+) -> Result<EditLoopControl, CliError> {
+    store_editable_components(config, components)?;
+    validate_config(config)?;
+    write_plugin_config(path, config)?;
+    print_save_success(path);
+    Ok(EditLoopControl::Finish)
+}
+
+fn handle_reset_or_clear_shortcut(
+    components: &mut [EditableComponent],
+    action: Option<MenuAction>,
+    shortcut: MenuShortcut,
+) -> Result<EditLoopControl, CliError> {
+    match action {
+        Some(MenuAction::ToggleComponent(component_index)) => {
+            if let Some(component) = components.get_mut(component_index) {
+                apply_component_enablement_shortcut(component, shortcut);
+            }
+        }
+        Some(MenuAction::EditField {
+            component_index,
+            field_index,
+        }) => reset_selected_component_field(components, component_index, field_index)?,
+        _ => println!("  Select a component or editable field to reset or clear."),
+    }
+    Ok(EditLoopControl::Continue)
+}
+
+fn reset_selected_component_field(
+    components: &mut [EditableComponent],
+    component_index: usize,
+    field_index: usize,
+) -> Result<(), CliError> {
+    if let Some(component) = components.get_mut(component_index)
+        && let Some(field) = component.fields().get(field_index)
+    {
+        component.reset_field(*field)?;
+    }
+    Ok(())
+}
+
+fn cancelled_error() -> CliError {
+    CliError::Config("plugin edit cancelled; no config saved".into())
 }
 
 fn edit_component_field(

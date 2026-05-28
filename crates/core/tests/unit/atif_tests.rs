@@ -264,59 +264,14 @@ fn assert_atif_v17_shape(trajectory: &AtifTrajectory) {
         .collect();
 
     for (index, step) in trajectory.steps.iter().enumerate() {
-        assert_eq!(step.step_id, index + 1);
-        assert!(
-            matches!(step.source.as_str(), "system" | "user" | "agent"),
-            "invalid source {}",
-            step.source
+        assert_atif_step_shape(step, index);
+        let step_tool_call_ids = assert_atif_step_tool_calls(step);
+        assert_atif_step_observation_refs(
+            step,
+            &step_tool_call_ids,
+            &embedded_child_ids,
+            trajectory.subagent_trajectories.is_some(),
         );
-        assert_atif_message_value(&step.message);
-        if let Some(llm_call_count) = step.llm_call_count {
-            assert_eq!(step.source, "agent");
-            if llm_call_count == 0 {
-                assert!(step.metrics.is_none());
-                assert!(step.reasoning_content.is_none());
-            }
-        }
-        let step_tool_call_ids: HashSet<&str> = step
-            .tool_calls
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .map(|tool_call| {
-                assert!(!tool_call.tool_call_id.is_empty());
-                assert!(!tool_call.function_name.is_empty());
-                assert!(tool_call.arguments.is_object());
-                tool_call.tool_call_id.as_str()
-            })
-            .collect();
-        if let Some(observation) = &step.observation {
-            for result in &observation.results {
-                if let Some(content) = &result.content {
-                    assert_atif_message_value(content);
-                }
-                if let Some(source_call_id) = result.source_call_id.as_deref() {
-                    assert!(
-                        step_tool_call_ids.contains(source_call_id),
-                        "unmatched source_call_id {source_call_id}"
-                    );
-                }
-                for reference in result
-                    .subagent_trajectory_ref
-                    .as_deref()
-                    .unwrap_or_default()
-                {
-                    if let Some(trajectory_id) = reference.trajectory_id.as_deref()
-                        && trajectory.subagent_trajectories.is_some()
-                    {
-                        assert!(
-                            embedded_child_ids.contains(trajectory_id),
-                            "unresolved embedded subagent reference {trajectory_id}"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     for child in trajectory
@@ -325,6 +280,95 @@ fn assert_atif_v17_shape(trajectory: &AtifTrajectory) {
         .unwrap_or_default()
     {
         assert_atif_v17_shape(child);
+    }
+}
+
+fn assert_atif_step_shape(step: &AtifStep, index: usize) {
+    assert_eq!(step.step_id, index + 1);
+    assert!(
+        matches!(step.source.as_str(), "system" | "user" | "agent"),
+        "invalid source {}",
+        step.source
+    );
+    assert_atif_message_value(&step.message);
+    if let Some(llm_call_count) = step.llm_call_count {
+        assert_eq!(step.source, "agent");
+        if llm_call_count == 0 {
+            assert!(step.metrics.is_none());
+            assert!(step.reasoning_content.is_none());
+        }
+    }
+}
+
+fn assert_atif_step_tool_calls(step: &AtifStep) -> HashSet<&str> {
+    step.tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|tool_call| {
+            assert!(!tool_call.tool_call_id.is_empty());
+            assert!(!tool_call.function_name.is_empty());
+            assert!(tool_call.arguments.is_object());
+            tool_call.tool_call_id.as_str()
+        })
+        .collect()
+}
+
+fn assert_atif_step_observation_refs(
+    step: &AtifStep,
+    step_tool_call_ids: &HashSet<&str>,
+    embedded_child_ids: &HashSet<&str>,
+    has_embedded_children: bool,
+) {
+    let Some(observation) = &step.observation else {
+        return;
+    };
+    for result in &observation.results {
+        assert_atif_observation_result_refs(
+            result,
+            step_tool_call_ids,
+            embedded_child_ids,
+            has_embedded_children,
+        );
+    }
+}
+
+fn assert_atif_observation_result_refs(
+    result: &AtifObservationResult,
+    step_tool_call_ids: &HashSet<&str>,
+    embedded_child_ids: &HashSet<&str>,
+    has_embedded_children: bool,
+) {
+    if let Some(content) = &result.content {
+        assert_atif_message_value(content);
+    }
+    if let Some(source_call_id) = result.source_call_id.as_deref() {
+        assert!(
+            step_tool_call_ids.contains(source_call_id),
+            "unmatched source_call_id {source_call_id}"
+        );
+    }
+    assert_atif_subagent_refs(result, embedded_child_ids, has_embedded_children);
+}
+
+fn assert_atif_subagent_refs(
+    result: &AtifObservationResult,
+    embedded_child_ids: &HashSet<&str>,
+    has_embedded_children: bool,
+) {
+    for reference in result
+        .subagent_trajectory_ref
+        .as_deref()
+        .unwrap_or_default()
+    {
+        if let Some(trajectory_id) = reference.trajectory_id.as_deref()
+            && has_embedded_children
+        {
+            assert!(
+                embedded_child_ids.contains(trajectory_id),
+                "unresolved embedded subagent reference {trajectory_id}"
+            );
+        }
     }
 }
 
