@@ -99,8 +99,8 @@ the wrapper. Start the gateway manually:
 nemo-relay --bind 127.0.0.1:4040
 ```
 
-Then configure local Codex to use a gateway provider alias instead of
-overriding the reserved built-in `openai` provider:
+Then edit `~/.codex/config.toml` and configure local Codex to use a gateway
+provider alias instead of overriding the reserved built-in `openai` provider:
 
 ```toml
 model_provider = "nemo-relay-openai"
@@ -112,6 +112,18 @@ wire_api = "responses"
 requires_openai_auth = true
 supports_websockets = false
 ```
+
+After saving the file, restart the Codex GUI or app so it reloads the provider
+configuration. For CLI usage, start a new `codex` process.
+
+Some Codex GUI or app versions appear to scope visible conversation history by
+the active provider configuration. If existing conversations disappear after
+switching `model_provider` to `nemo-relay-openai`, the history has not been
+removed if it returns after restoring the previous provider configuration. Use
+this standalone provider alias only while capturing gateway telemetry, or prefer
+the transparent wrapper for CLI sessions. See the upstream Codex
+[history visibility discussion](https://github.com/openai/codex/issues/15494#issuecomment-4164170537)
+for context.
 
 ## Verify
 
