@@ -464,8 +464,8 @@ fn atif_content_value(value: &Json) -> Json {
     }
 }
 
-fn observation_content_value(value: &Json) -> Json {
-    value.clone()
+fn observation_content_value(value: &Json) -> Option<Json> {
+    (!value.is_null()).then(|| value.clone())
 }
 
 fn is_atif_content_parts(value: &Json) -> bool {
@@ -1109,10 +1109,15 @@ struct LlmToolCallRecord {
 
 fn build_tool_call_correlations(events: &[&Event]) -> HashMap<Uuid, String> {
     let (mut correlations, executions, tool_calls) = collect_tool_correlation_inputs(events);
+    let consumed_tool_call_ids = consumed_tool_call_ids(&correlations);
     let executions_by_key = group_unmatched_executions_by_key(executions, &correlations);
-    let tool_calls_by_key = group_tool_calls_by_key(tool_calls);
+    let tool_calls_by_key = group_tool_calls_by_key(tool_calls, &consumed_tool_call_ids);
     apply_keyed_tool_correlations(&mut correlations, executions_by_key, &tool_calls_by_key);
     correlations
+}
+
+fn consumed_tool_call_ids(correlations: &HashMap<Uuid, String>) -> HashSet<String> {
+    correlations.values().cloned().collect()
 }
 
 fn collect_tool_correlation_inputs(
@@ -1213,9 +1218,13 @@ fn group_unmatched_executions_by_key(
 
 fn group_tool_calls_by_key(
     tool_calls: Vec<LlmToolCallRecord>,
+    consumed_tool_call_ids: &HashSet<String>,
 ) -> HashMap<ToolCallMatchKey, Vec<String>> {
     let mut grouped: HashMap<ToolCallMatchKey, Vec<String>> = HashMap::new();
     for tool_call in tool_calls {
+        if consumed_tool_call_ids.contains(&tool_call.tool_call_id) {
+            continue;
+        }
         if let Some(key) = tool_call.key {
             grouped.entry(key).or_default().push(tool_call.tool_call_id);
         }
@@ -1734,12 +1743,46 @@ impl StepConversionState {
             .map(ToOwned::to_owned)
             .or_else(|| self.tool_scope_call_ids.get(&event.uuid()).cloned())
             .or_else(|| lookups.tool_call_ids.get(&event.uuid()).cloned())
-            .or_else(|| self.last_tool_call_map.get(event.name()).cloned())
-            .or_else(|| {
-                self.current_agent
-                    .has_active_step()
-                    .then(|| event.uuid().to_string())
-            })
+            .or_else(|| self.current_step_tool_call_id_by_name(event.name()))
+            .or_else(|| self.synthetic_tool_call_id_for_start(event))
+    }
+
+    fn current_step_tool_call_id_by_name(&self, name: &str) -> Option<String> {
+        let step_idx = self.current_agent.step_idx?;
+        let matches = self.current_step_tool_call_ids_by_name(step_idx, name);
+        match matches.as_slice() {
+            [tool_call_id] => Some(tool_call_id.clone()),
+            _ => None,
+        }
+    }
+
+    fn current_step_tool_call_ids_by_name(&self, step_idx: usize, name: &str) -> Vec<String> {
+        self.steps
+            .get(step_idx)
+            .and_then(|step| step.tool_calls.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .filter(|tool_call| tool_call.function_name == name)
+            .map(|tool_call| tool_call.tool_call_id.clone())
+            .collect()
+    }
+
+    fn synthetic_tool_call_id_for_start(&self, event: &Event) -> Option<String> {
+        if self.current_step_has_duplicate_tool_name(event.name()) {
+            return None;
+        }
+        self.current_agent
+            .has_active_step()
+            .then(|| event.uuid().to_string())
+    }
+
+    fn current_step_has_duplicate_tool_name(&self, name: &str) -> bool {
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return false;
+        };
+        self.current_step_tool_call_ids_by_name(step_idx, name)
+            .len()
+            > 1
     }
 
     fn ensure_tool_call_on_current_agent(&mut self, event: &Event, source_call_id: &str) -> bool {
@@ -1792,7 +1835,7 @@ impl StepConversionState {
             return Some(tool_call_id.clone());
         }
 
-        let candidate = self.last_tool_call_map.get(event.name()).cloned()?;
+        let candidate = self.current_step_tool_call_id_by_name(event.name())?;
 
         if self.current_agent.has_tool_call_id(&candidate)
             || self
@@ -1816,7 +1859,7 @@ impl StepConversionState {
             }
             self.pending_observations.push(AtifObservationResult {
                 source_call_id: source_call_id.clone(),
-                content: Some(observation_content_value(output)),
+                content: observation_content_value(output),
                 subagent_trajectory_ref: None,
                 extra: Some(event_extra(event)),
             });
@@ -2028,10 +2071,14 @@ fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
     let mut keep = vec![true; steps.len()];
 
     for (idx, step) in steps.iter().enumerate().rev() {
+        if step.source != "agent" {
+            observed_later.clear();
+            continue;
+        }
         if projected_tool_call_duplicate(step, &observed_later) {
             keep[idx] = false;
         }
-        extend_observed_tool_call_ids(&mut observed_later, step);
+        extend_observed_tool_call_keys(&mut observed_later, step);
     }
 
     let mut idx = 0;
@@ -2042,15 +2089,25 @@ fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
     });
 }
 
-fn projected_tool_call_duplicate(step: &AtifStep, observed_later: &HashSet<String>) -> bool {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ToolCallDedupeKey {
+    tool_call_id: String,
+    function_name: String,
+    arguments: String,
+}
+
+fn projected_tool_call_duplicate(
+    step: &AtifStep,
+    observed_later: &HashSet<ToolCallDedupeKey>,
+) -> bool {
     if !projected_tool_call_candidate(step) {
         return false;
     }
-    let tool_call_ids = step_tool_call_ids(step);
-    !tool_call_ids.is_empty()
-        && tool_call_ids
+    let tool_call_keys = step_tool_call_dedupe_keys(step);
+    !tool_call_keys.is_empty()
+        && tool_call_keys
             .iter()
-            .all(|tool_call_id| observed_later.contains(tool_call_id))
+            .all(|tool_call_key| observed_later.contains(tool_call_key))
 }
 
 fn projected_tool_call_candidate(step: &AtifStep) -> bool {
@@ -2066,33 +2123,61 @@ fn projected_tool_call_candidate(step: &AtifStep) -> bool {
             .is_some_and(|tool_calls| !tool_calls.is_empty())
 }
 
-fn extend_observed_tool_call_ids(observed_later: &mut HashSet<String>, step: &AtifStep) {
-    for tool_call_id in observed_tool_call_ids(step) {
-        observed_later.insert(tool_call_id);
+fn extend_observed_tool_call_keys(
+    observed_later: &mut HashSet<ToolCallDedupeKey>,
+    step: &AtifStep,
+) {
+    for tool_call_key in observed_tool_call_keys(step) {
+        observed_later.insert(tool_call_key);
     }
 }
 
-fn observed_tool_call_ids(step: &AtifStep) -> Vec<String> {
-    let step_tool_call_ids = step_tool_call_ids(step);
+fn observed_tool_call_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
+    let step_tool_call_keys = step_tool_call_dedupe_keys(step);
     step.observation
         .as_ref()
-        .map(|observation| matching_observation_source_ids(observation, &step_tool_call_ids))
+        .map(|observation| matching_observation_tool_call_keys(observation, &step_tool_call_keys))
         .unwrap_or_default()
 }
 
-fn matching_observation_source_ids(
+fn matching_observation_tool_call_keys(
     observation: &AtifObservation,
-    step_tool_call_ids: &[String],
-) -> Vec<String> {
+    step_tool_call_keys: &[ToolCallDedupeKey],
+) -> Vec<ToolCallDedupeKey> {
     observation
         .results
         .iter()
         .filter_map(|result| result.source_call_id.as_ref())
-        .filter(|source_call_id| step_tool_call_ids.contains(source_call_id))
+        .flat_map(|source_call_id| matching_tool_call_keys(source_call_id, step_tool_call_keys))
+        .collect()
+}
+
+fn matching_tool_call_keys(
+    source_call_id: &str,
+    step_tool_call_keys: &[ToolCallDedupeKey],
+) -> Vec<ToolCallDedupeKey> {
+    step_tool_call_keys
+        .iter()
+        .filter(|tool_call_key| tool_call_key.tool_call_id == source_call_id)
         .cloned()
         .collect()
 }
 
+fn step_tool_call_dedupe_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
+    step.tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|tool_call| !tool_call.tool_call_id.is_empty())
+        .map(|tool_call| ToolCallDedupeKey {
+            tool_call_id: tool_call.tool_call_id.clone(),
+            function_name: tool_call.function_name.clone(),
+            arguments: json_to_string(&tool_call.arguments),
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn step_tool_call_ids(step: &AtifStep) -> Vec<String> {
     step.tool_calls
         .as_deref()
