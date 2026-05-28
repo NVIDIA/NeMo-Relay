@@ -79,4 +79,4 @@ applications should prefer the supported packages for those languages.
 
 ## Documentation
 
-NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay
+NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay

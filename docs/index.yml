@@ -3,7 +3,7 @@
 
 navigation:
   - folder: ./about-nemo-relay
-    title: "About NeMo Relay"
+    title: "About NVIDIA NeMo Relay"
     slug: about-nemo-relay
     title-source: frontmatter
   - folder: ./getting-started
@@ -11,7 +11,7 @@ navigation:
     slug: getting-started
     title-source: frontmatter
   - folder: ./nemo-relay-cli
-    title: "NeMo Relay CLI"
+    title: "NVIDIA NeMo Relay CLI"
     slug: nemo-relay-cli
     title-source: frontmatter
   - folder: ./supported-integrations

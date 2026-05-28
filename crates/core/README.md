@@ -113,4 +113,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Documentation
 
-NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay
+NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay

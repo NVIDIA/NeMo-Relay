@@ -175,7 +175,7 @@ do not use, or set their `enabled` fields to `false`.
 Fields inside `config.plugins` are NeMo Relay generic plugin configuration, so
 they use `snake_case` regardless of language. For the full exporter field list,
 see the NeMo Relay Observability Plugin schema in the top-level NeMo Relay
-documentation at [nvidia.github.io/NeMo-Relay](https://nvidia.github.io/NeMo-Relay/).
+documentation at [docs.nvidia.com/nemo/relay](https://docs.nvidia.com/nemo/relay).
 
 ## Verify the Integration
 

@@ -14,9 +14,13 @@ navbar-links:
 
 global-theme: nvidia
 
+announcement:
+  message: "🔔 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and behavior may change with each release."
+
 experimental:
   mdx-components:
   - ./components
+
 products:
 - display-name: "NeMo Relay"
   slug: /

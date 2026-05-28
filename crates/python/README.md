@@ -78,4 +78,4 @@ with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
 
 ## Documentation
 
-NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay
+NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay
