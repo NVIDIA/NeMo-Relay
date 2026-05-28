@@ -3,6 +3,8 @@
 
 """Tests for NeMo Relay subscriber and event handling."""
 
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -39,14 +41,46 @@ class TestSubscribers:
         subscribers.register("py_test_sub", lambda e: events.append(e))
         handle = scope.push("sub_test", ScopeType.Function)
         scope.pop(handle)
+        subscribers.flush()
         assert subscribers.deregister("py_test_sub")
         assert len(events) >= 2
 
+    def test_event_emission_does_not_wait_for_blocked_subscriber(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def block(_event: Any) -> None:
+            started.set()
+            assert release.wait(timeout=5)
+
+        subscribers.register("py_blocked_sub", block)
+        try:
+            before = time.perf_counter()
+            scope.event("py_nonblocking_mark")
+            elapsed = time.perf_counter() - before
+            assert started.wait(timeout=2)
+            assert elapsed < 1.0
+        finally:
+            release.set()
+            subscribers.flush()
+            subscribers.deregister("py_blocked_sub")
+
+    def test_flush_waits_for_queued_subscriber_delivery(self):
+        events = []
+        subscribers.register("py_flush_sub", events.append)
+        try:
+            scope.event("py_flush_mark")
+            subscribers.flush()
+            assert any(isinstance(event, MarkEvent) and event.name == "py_flush_mark" for event in events)
+        finally:
+            subscribers.deregister("py_flush_sub")
+
     def test_subscriber_receives_event_objects(self):
         events = []
-        subscribers.register("py_evt_sub", lambda e: events.append(e))
+        subscribers.register("py_evt_sub", events.append)
         handle = scope.push("evt_obj_test", ScopeType.Agent)
         scope.pop(handle)
+        subscribers.flush()
         subscribers.deregister("py_evt_sub")
 
         assert len(events) >= 2
@@ -71,6 +105,7 @@ class TestSubscriberEventDetails:
         subscribers.register("py_detail_sub", lambda e: events.append(e))
         handle = scope.push("detail_test", ScopeType.Evaluator)
         scope.pop(handle)
+        subscribers.flush()
         subscribers.deregister("py_detail_sub")
 
         assert len(events) >= 2
@@ -86,6 +121,7 @@ class TestSubscriberEventDetails:
         subscribers.register("py_tool_evt", lambda e: events.append(e))
         handle = tools.call("evt_tool", {"x": 1})
         tools.call_end(handle, {"y": 2})
+        subscribers.flush()
         subscribers.deregister("py_tool_evt")
 
         start_events = [
@@ -103,6 +139,7 @@ class TestSubscriberEventDetails:
         request = make_request()
         handle = llm.call("evt_llm", request)
         llm.call_end(handle, {"done": True})
+        subscribers.flush()
         subscribers.deregister("py_llm_evt")
 
         start_events = [
@@ -118,6 +155,7 @@ class TestSubscriberEventDetails:
         events = []
         subscribers.register("py_mark_evt", lambda e: events.append(e))
         scope.event("test_mark", data={"info": "test"})
+        subscribers.flush()
         subscribers.deregister("py_mark_evt")
 
         mark_events = [e for e in events if isinstance(e, MarkEvent)]
@@ -136,6 +174,7 @@ class TestSubscriberEventDetails:
         llm_handle = llm.call("py_ts_llm", make_request(), timestamp=timestamps[4])
         llm.call_end(llm_handle, {"ok": True}, timestamp=timestamps[5])
         scope.pop(scope_handle, timestamp=timestamps[6])
+        subscribers.flush()
         subscribers.deregister("py_timestamp_evt")
 
         observed = [
@@ -243,6 +282,7 @@ class TestHandleProperties:
         events = []
         subscribers.register("py_prop_evt", lambda e: events.append(e))
         scope.event("prop_mark", data={"key": "val"}, metadata={"meta": "data"})
+        subscribers.flush()
         subscribers.deregister("py_prop_evt")
 
         assert len(events) >= 1

@@ -3,6 +3,7 @@
 
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::current_scope_stack;
+use crate::api::runtime::flush_subscribers as flush_runtime_subscribers;
 use crate::api::runtime::global_context;
 use crate::api::shared::ensure_runtime_owner;
 use crate::error::{FlowError, Result};
@@ -25,6 +26,8 @@ use crate::error::{FlowError, Result};
 ///
 /// # Notes
 /// Global subscribers remain active across scopes until explicitly removed.
+/// Native event-producing APIs enqueue subscriber work and return without
+/// waiting for callbacks.
 pub fn register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()> {
     ensure_runtime_owner()?;
     let context = global_context();
@@ -55,7 +58,9 @@ pub fn register_subscriber(name: &str, callback: EventSubscriberFn) -> Result<()
 /// Returns an error when the global registry lock cannot be acquired safely.
 ///
 /// # Notes
-/// Deregistration affects only future event delivery.
+/// Deregistration affects only future event delivery. Already emitted events
+/// carry a subscriber snapshot, so queued callbacks from that snapshot may
+/// still run after deregistration.
 pub fn deregister_subscriber(name: &str) -> Result<bool> {
     ensure_runtime_owner()?;
     let context = global_context();
@@ -63,6 +68,17 @@ pub fn deregister_subscriber(name: &str) -> Result<bool> {
         .write()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
     Ok(state.event_subscribers.remove(name).is_some())
+}
+
+/// Wait for all subscriber callbacks queued before this call to finish.
+///
+/// Native targets deliver subscriber callbacks on a background dispatcher so
+/// event-producing APIs do not wait for observer work. Call this helper from
+/// tests, shutdown paths, or exporter lifecycle code when callers need a
+/// deterministic observation barrier.
+pub fn flush_subscribers() -> Result<()> {
+    ensure_runtime_owner()?;
+    flush_runtime_subscribers()
 }
 
 /// Register a scope-local lifecycle event subscriber.
@@ -86,7 +102,8 @@ pub fn deregister_subscriber(name: &str) -> Result<bool> {
 ///
 /// # Notes
 /// Scope-local subscribers are removed automatically when the owning scope is
-/// popped.
+/// popped. Native event-producing APIs enqueue subscriber work and return
+/// without waiting for callbacks.
 pub fn scope_register_subscriber(
     scope_uuid: &uuid::Uuid,
     name: &str,
@@ -127,7 +144,9 @@ pub fn scope_register_subscriber(
 /// stack.
 ///
 /// # Notes
-/// Deregistration affects only future event delivery for that scope.
+/// Deregistration affects only future event delivery for that scope. Already
+/// emitted events carry a subscriber snapshot, so queued callbacks from that
+/// snapshot may still run after deregistration.
 pub fn scope_deregister_subscriber(scope_uuid: &uuid::Uuid, name: &str) -> Result<bool> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();

@@ -54,7 +54,7 @@ The example below creates a scope and records a mark event from Rust.
 use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -83,6 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build(),
     )?;
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+    flush_subscribers()?;
     let _ = deregister_subscriber("quickstart-printer")?;
     Ok(())
 }
@@ -91,6 +92,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## What Success Looks Like
 
 The script should exit cleanly and print lifecycle lines from the subscriber.
+Native subscriber delivery is asynchronous, so examples flush before checking
+subscriber output.
 You should see one line for the scope start event, one for the `initialized`
 mark, and one for the scope end event.
 

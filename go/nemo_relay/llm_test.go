@@ -115,6 +115,9 @@ func TestLlmEvents(t *testing.T) {
 	request := makeRequest()
 	handle, _ := LlmCall("evt_llm", request)
 	LlmCallEnd(handle, json.RawMessage(`{}`))
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 	DeregisterSubscriber("go_llm_evt")
 
 	mu.Lock()
@@ -205,15 +208,25 @@ func llmRequestResponseCodec() CodecFunc {
 func registerLlmCodecEventCollector(t *testing.T) (func() []Event, func()) {
 	t.Helper()
 
-	var events []Event
+	var (
+		events []Event
+		mu     sync.Mutex
+	)
 	if err := RegisterSubscriber("go_llm_codec_events", func(event Event) {
+		mu.Lock()
+		defer mu.Unlock()
 		events = append(events, event)
 	}); err != nil {
 		t.Fatalf("RegisterSubscriber failed: %v", err)
 	}
 
 	return func() []Event {
-			return events
+			if err := FlushSubscribers(); err != nil {
+				t.Fatalf("FlushSubscribers failed: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]Event(nil), events...)
 		}, func() {
 			DeregisterSubscriber("go_llm_codec_events")
 		}
@@ -579,6 +592,9 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -711,6 +727,9 @@ func TestLlmCallWithModelName(t *testing.T) {
 		t.Fatalf(llmCallFailed, err)
 	}
 	LlmCallEnd(handle, json.RawMessage(`{}`))
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 	DeregisterSubscriber("go_llm_model_sub")
 
 	mu.Lock()
@@ -745,6 +764,9 @@ func TestLlmEventInputOutput(t *testing.T) {
 		t.Fatalf(llmCallExecuteFailed, err)
 	}
 	_ = result
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 	DeregisterSubscriber("go_llm_io_sub")
 
 	mu.Lock()

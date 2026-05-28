@@ -351,7 +351,7 @@ fn test_atif_exporter_methods_cover_register_export_and_clear() {
 
         let exported = py_to_json(exporter.export(py).unwrap().bind(py)).unwrap();
         let exported_json: serde_json::Value =
-            serde_json::from_str(&exporter.export_json().unwrap()).unwrap();
+            serde_json::from_str(&exporter.export_json(py).unwrap()).unwrap();
         assert_eq!(exported["session_id"], json!("session-types-rust"));
         assert_eq!(exported["agent"]["name"], json!("py-agent"));
         assert_eq!(
@@ -408,8 +408,8 @@ fn test_open_telemetry_config_and_subscriber_cover_lifecycle() {
         subscriber.register(subscriber_name.clone()).unwrap();
         assert!(subscriber.deregister(subscriber_name.clone()).unwrap());
         assert!(!subscriber.deregister(subscriber_name).unwrap());
-        subscriber.force_flush().unwrap();
-        subscriber.shutdown().unwrap();
+        subscriber.force_flush(py).unwrap();
+        subscriber.shutdown(py).unwrap();
         assert_eq!(subscriber.__repr__(), "<OpenTelemetrySubscriber>");
     });
 }
@@ -461,8 +461,8 @@ fn test_open_inference_config_and_subscriber_cover_lifecycle() {
         subscriber.register(subscriber_name.clone()).unwrap();
         assert!(subscriber.deregister(subscriber_name.clone()).unwrap());
         assert!(!subscriber.deregister(subscriber_name).unwrap());
-        subscriber.force_flush().unwrap();
-        subscriber.shutdown().unwrap();
+        subscriber.force_flush(py).unwrap();
+        subscriber.shutdown(py).unwrap();
         assert_eq!(subscriber.__repr__(), "<OpenInferenceSubscriber>");
     });
 }
@@ -1480,7 +1480,7 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
             (
                 FORCE_ATIF_EXPORT_JSON_SERIALIZATION_ERROR,
                 "forced serialization failure",
-                |_, exporter, _, _| exporter.export_json().map(|_| ()),
+                |py, exporter, _, _| exporter.export_json(py).map(|_| ()),
             ),
             (
                 FORCE_ANNOTATED_REQUEST_MESSAGES_SERIALIZATION_ERROR,
@@ -1950,6 +1950,7 @@ def run(types, api):
 
     api.event("mark", handle=child, data={"step": 1}, metadata={"source": "py"})
     api.pop_scope(child)
+    api.flush_subscribers()
     api.deregister_subscriber("types_py_visible_subscriber")
 
     chat_codec = types.OpenAIChatCodec()

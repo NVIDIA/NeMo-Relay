@@ -29,6 +29,9 @@ from nemo_relay._native import (
     deregister_subscriber as _native_deregister,
 )
 from nemo_relay._native import (
+    flush_subscribers as _native_flush,
+)
+from nemo_relay._native import (
     register_subscriber as _native_register,
 )
 
@@ -70,7 +73,8 @@ def deregister(name: str) -> bool:
 
     Notes:
         Deregistering a subscriber affects only future event delivery. Events
-        already emitted before removal are not replayed or withdrawn.
+        already emitted before removal carry a subscriber snapshot, so queued
+        callbacks from that snapshot may still run.
 
     Example::
 
@@ -83,4 +87,14 @@ def deregister(name: str) -> bool:
     return _native_deregister(name)
 
 
-__all__ = ["register", "deregister"]
+def flush() -> None:
+    """Wait for subscriber callbacks already queued by native event emission.
+
+    Native NeMo Relay event APIs enqueue subscriber callbacks and return without
+    waiting for observer work. Use this barrier in tests and shutdown paths when
+    captured subscriber output must be complete before continuing.
+    """
+    return _native_flush()
+
+
+__all__ = ["deregister", "flush", "register"]

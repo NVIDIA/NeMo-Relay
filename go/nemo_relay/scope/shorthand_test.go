@@ -56,6 +56,9 @@ func TestScopeShorthands(t *testing.T) {
 	if err := scope.Pop(handle); err != nil {
 		t.Fatalf("Pop failed: %v", err)
 	}
+	if err := nemo_relay.FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 
 	mu.Lock()
 	if !sawMark {
@@ -101,6 +104,9 @@ func TestScopeShorthandsForwardTimestamps(t *testing.T) {
 	}
 	if err := scope.Pop(handle, nemo_relay.WithScopeEndTimestamp(timestamps[2])); err != nil {
 		t.Fatalf("Pop failed: %v", err)
+	}
+	if err := nemo_relay.FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
 
 	expected := []capturedScopeEvent{

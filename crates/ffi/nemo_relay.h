@@ -847,6 +847,11 @@ NemoRelayStatus nemo_relay_register_subscriber(const char *name,
 NemoRelayStatus nemo_relay_deregister_subscriber(const char *name);
 
 /**
+ * Wait for subscriber callbacks queued before this call to finish.
+ */
+NemoRelayStatus nemo_relay_flush_subscribers(void);
+
+/**
  * Return the built-in observability plugin kind.
  *
  * The caller owns the returned string and must free it with `nemo_relay_string_free`.

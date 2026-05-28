@@ -37,6 +37,8 @@ use uuid::Uuid;
 
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
+use crate::api::subscriber::flush_subscribers;
+use crate::error::Result;
 use crate::json::Json;
 
 /// The ATIF schema version string embedded in all exported trajectories.
@@ -372,6 +374,16 @@ impl AtifExporter {
     /// Exporting does not clear the buffered events. Call [`AtifExporter::clear`]
     /// when you need to reset the exporter between trajectories.
     pub fn export(&self) -> AtifTrajectory {
+        self.try_export()
+            .expect("failed to flush subscriber dispatcher before ATIF export")
+    }
+
+    /// Try to export the collected event history as an [`AtifTrajectory`].
+    ///
+    /// Unlike [`AtifExporter::export`], this method returns subscriber flush
+    /// failures to the caller instead of panicking.
+    pub fn try_export(&self) -> Result<AtifTrajectory> {
+        flush_subscribers()?;
         let (session_id, agent_info, events) = {
             let state = self.state.lock().unwrap();
             (
@@ -381,7 +393,11 @@ impl AtifExporter {
             )
         };
         let collected_events: Vec<&Event> = events.iter().collect();
-        events_to_trajectory(&session_id, agent_info, &collected_events)
+        Ok(events_to_trajectory(
+            &session_id,
+            agent_info,
+            &collected_events,
+        ))
     }
 
     /// Clear all collected events from the internal buffer.

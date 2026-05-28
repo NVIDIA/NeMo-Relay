@@ -680,6 +680,7 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
         assert_eq!(executed_json["intercepted"], json!(true));
         assert_eq!(executed_json["executed"], json!(true));
 
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
         assert!(events.iter().any(|event| event["name"] == "ffi_tool"));
         assert!(events.iter().any(|event| {
@@ -710,6 +711,7 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
             ),
             NemoRelayStatus::Ok
         );
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
         assert!(events.iter().any(|event| {
             event["name"] == "ffi_mark"
@@ -870,6 +872,7 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
             NemoRelayStatus::Ok
         );
 
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
         let observed: Vec<_> = events
             .iter()

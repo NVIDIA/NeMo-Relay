@@ -24,7 +24,7 @@ use crate::api::event::Event;
 use crate::api::event::ScopeCategory;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
-use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::error::FlowError;
 use chrono::{DateTime, Utc};
 use opentelemetry::trace::{
@@ -278,6 +278,7 @@ impl OpenTelemetrySubscriber {
 
     /// Flushes finished spans through the underlying tracer provider.
     pub fn force_flush(&self) -> Result<()> {
+        flush_subscribers()?;
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
         })?;
@@ -288,6 +289,7 @@ impl OpenTelemetrySubscriber {
     ///
     /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
     pub fn shutdown(&self) -> Result<()> {
+        flush_subscribers()?;
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
         })?;

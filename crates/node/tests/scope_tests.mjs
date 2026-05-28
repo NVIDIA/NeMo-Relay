@@ -8,13 +8,30 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
 
-const { getHandle, pushScope, popScope, event, withScope, registerSubscriber, deregisterSubscriber, ScopeType } = lib;
+const {
+  getHandle,
+  pushScope,
+  popScope,
+  event,
+  withScope,
+  registerSubscriber,
+  deregisterSubscriber,
+  flushSubscribers,
+  ScopeType,
+} = lib;
 
 const SCOPE_ATTR_PARALLEL = 0b01;
 const SCOPE_ATTR_RELOCATABLE = 0b10;
 
 function rejectWithPrimitive(value) {
   return Promise.reject(value);
+}
+
+async function flushSubscriberCallbacks() {
+  flushSubscribers();
+  for (let i = 0; i < 10; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 // ===========================================================================
@@ -233,13 +250,24 @@ describe('Subscribers', () => {
     try {
       const scope = pushScope('sub_test', ScopeType.Agent, null, null);
       popScope(scope);
-      const deadline = Date.now() + 2000;
-      while (events.length < 1 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscriberCallbacks();
       assert.ok(events.length > 0, 'Expected at least one event');
     } finally {
       deregisterSubscriber('node_event_collector');
+    }
+  });
+
+  it('flushSubscribers is a native barrier before JS event-loop delivery', async () => {
+    const events = [];
+    registerSubscriber('node_flush_collector', (e) => events.push(e));
+    try {
+      event('node_flush_mark', null, null, null);
+      flushSubscribers();
+      assert.equal(events.length, 0);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(events.some((e) => e.kind === 'mark' && e.name === 'node_flush_mark'));
+    } finally {
+      deregisterSubscriber('node_flush_collector');
     }
   });
 
@@ -251,10 +279,7 @@ describe('Subscribers', () => {
     try {
       const scope = pushScope('prop_test', ScopeType.Function, null, null);
       popScope(scope);
-      const deadline = Date.now() + 2000;
-      while (!captured && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscriberCallbacks();
       assert.ok(captured, 'Expected an event');
       assert.ok(typeof captured.uuid === 'string');
       assert.ok(typeof captured.timestamp === 'string');
@@ -277,10 +302,7 @@ describe('Subscribers', () => {
         },
         null,
       );
-      const deadline = Date.now() + 2000;
-      while (!events.some((e) => e.kind === 'mark') && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscriberCallbacks();
       const found = events.some((e) => e.kind === 'mark');
       assert.ok(found, 'Expected a Mark event');
     } finally {

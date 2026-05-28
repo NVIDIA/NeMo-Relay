@@ -72,6 +72,9 @@ func TestManualLifecycleTimestamps(t *testing.T) {
 	if err := PopScope(scopeHandle, WithScopeEndTimestamp(timestamps[6])); err != nil {
 		t.Fatalf("PopScope failed: %v", err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 
 	expected := []capturedTimestampEvent{
 		{name: "go_ts_scope", timestamp: timestamps[0]},
@@ -130,6 +133,9 @@ func TestManualLifecycleTimestampNormalizesToUnixMicroseconds(t *testing.T) {
 
 	if err := EmitEvent("go_ts_normalized", WithEventTimestamp(source)); err != nil {
 		t.Fatalf("EmitEvent failed: %v", err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
 
 	mu.Lock()

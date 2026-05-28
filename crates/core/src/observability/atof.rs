@@ -17,7 +17,7 @@ use chrono::Utc;
 
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
-use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::error::FlowError;
 
 /// Result type for the ATOF JSONL exporter.
@@ -199,6 +199,7 @@ impl AtofExporter {
 
     /// Flush the underlying file and report any stored write error.
     pub fn force_flush(&self) -> Result<()> {
+        flush_subscribers()?;
         let mut state = self
             .state
             .lock()

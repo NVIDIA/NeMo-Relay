@@ -25,7 +25,7 @@ use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::request::MessageContent;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
@@ -53,6 +53,11 @@ fn reset_global() {
 fn setup_isolated_thread() {
     let stack = create_scope_stack();
     set_thread_scope_stack(stack);
+}
+
+fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
+    flush_subscribers().unwrap();
+    events.lock().unwrap().clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -935,7 +940,7 @@ async fn test_response_codec_populates_annotated_response() {
     .await
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let end_event = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
@@ -947,7 +952,6 @@ async fn test_response_codec_populates_annotated_response() {
     assert_eq!(ann.id, Some("mock-resp-id".into()));
     assert_eq!(ann.response_text(), Some("mock response text"));
 
-    drop(captured);
     deregister_subscriber("resp_codec_sub").unwrap();
 }
 
@@ -979,7 +983,7 @@ async fn test_response_codec_none_when_no_codec() {
     .await
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let end_event = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
@@ -990,7 +994,6 @@ async fn test_response_codec_none_when_no_codec() {
         "annotated_response should be None when no response codec"
     );
 
-    drop(captured);
     deregister_subscriber("no_resp_codec_sub").unwrap();
 }
 
@@ -1029,7 +1032,7 @@ async fn test_response_codec_failure_non_fatal() {
         "Pipeline should succeed even when response codec fails"
     );
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let end_event = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
@@ -1044,7 +1047,6 @@ async fn test_response_codec_failure_non_fatal() {
         "raw output should still be present"
     );
 
-    drop(captured);
     deregister_subscriber("fail_resp_codec_sub").unwrap();
 }
 
@@ -1079,7 +1081,7 @@ async fn test_request_codec_populates_annotated_request() {
     .await
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let start_event = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::Start))
@@ -1090,7 +1092,6 @@ async fn test_request_codec_populates_annotated_request() {
         .expect("annotated_request should be Some when request codec is active");
     assert_eq!(ann.model, Some("req_codec_test".into()));
 
-    drop(captured);
     deregister_subscriber("req_codec_ann_sub").unwrap();
 }
 
@@ -1133,7 +1134,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
     // Drain the stream to trigger finalization and END event
     while let Some(_chunk) = stream.next().await {}
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let end_event = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
@@ -1145,6 +1146,5 @@ async fn test_stream_response_codec_populates_annotated_response() {
     assert_eq!(ann.id, Some("mock-resp-id".into()));
     assert_eq!(ann.response_text(), Some("mock response text"));
 
-    drop(captured);
     deregister_subscriber("stream_resp_codec_sub").unwrap();
 }

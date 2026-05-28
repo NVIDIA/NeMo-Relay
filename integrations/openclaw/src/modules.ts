@@ -41,6 +41,7 @@ export type NemoRelayRuntimeModule = Omit<Pick<typeof NemoRelayRuntime, NemoRela
         Agent?: Parameters<typeof NemoRelayRuntime.pushScope>[1];
       }
     | undefined;
+  flushSubscribers?: typeof NemoRelayRuntime.flushSubscribers;
 };
 
 /**

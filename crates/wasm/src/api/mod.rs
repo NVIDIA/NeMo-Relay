@@ -1396,6 +1396,15 @@ pub fn deregister_subscriber(name: &str) -> Result<bool, JsValue> {
     relay_subscriber_api::deregister_subscriber(name).map_err(to_js_err)
 }
 
+/// Wait for subscriber callbacks queued before this call to finish.
+///
+/// WebAssembly delivers subscriber callbacks synchronously, so this is a no-op
+/// success barrier.
+#[wasm_bindgen(js_name = "flushSubscribers")]
+pub fn flush_subscribers() -> Result<(), JsValue> {
+    relay_subscriber_api::flush_subscribers().map_err(to_js_err)
+}
+
 // ---------------------------------------------------------------------------
 // Scope-local guardrail registrations — Tool
 // ---------------------------------------------------------------------------
@@ -2042,7 +2051,10 @@ impl AtifExporter {
     /// Exports collected events as an ATIF trajectory JSON string.
     #[wasm_bindgen(js_name = "exportJson")]
     pub fn export_json(&self) -> Result<String, JsValue> {
-        let trajectory = self.inner.export();
+        let trajectory = self
+            .inner
+            .try_export()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         serde_json::to_string(&trajectory).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 

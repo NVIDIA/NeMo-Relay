@@ -42,6 +42,12 @@ func Deregister(name string) error {
 	return nemo_relay.DeregisterSubscriber(name)
 }
 
+// Flush waits for subscriber callbacks queued before this call to finish. This
+// is a shorthand for [nemo_relay.FlushSubscribers].
+func Flush() error {
+	return nemo_relay.FlushSubscribers()
+}
+
 // ScopeRegister registers a scope-local event subscriber that will be called
 // for lifecycle events within the given scope. This is a shorthand for
 // [nemo_relay.ScopeRegisterSubscriber].

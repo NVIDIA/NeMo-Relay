@@ -907,6 +907,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
             ptr::null_mut(),
             None,
         ));
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         assert_eq!(
             nemo_relay_deregister_subscriber(subscriber.as_ptr()),
             NemoRelayStatus::Ok
@@ -1575,6 +1576,7 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
         let execute_json = returned_json(execute_out);
         assert_eq!(execute_json["content"], json!("hello from ffi"));
         assert_eq!(execute_json["model_seen"], json!("ffi-model"));
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
         assert!(
             events

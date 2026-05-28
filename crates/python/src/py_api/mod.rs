@@ -1243,6 +1243,13 @@ fn deregister_subscriber(name: &str) -> PyResult<bool> {
     core_subscriber_api::deregister_subscriber(name).map_err(to_py_err)
 }
 
+/// Wait for subscriber callbacks queued before this call to finish.
+#[pyfunction]
+fn flush_subscribers(py: Python<'_>) -> PyResult<()> {
+    py.detach(core_subscriber_api::flush_subscribers)
+        .map_err(to_py_err)
+}
+
 // ---------------------------------------------------------------------------
 // Scope-local guardrail registrations (macro-generated)
 // ---------------------------------------------------------------------------
@@ -1681,6 +1688,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Subscribers
     m.add_function(wrap_pyfunction!(register_subscriber, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_subscriber, m)?)?;
+    m.add_function(wrap_pyfunction!(flush_subscribers, m)?)?;
 
     // Scope-local tool guardrails
     m.add_function(wrap_pyfunction!(

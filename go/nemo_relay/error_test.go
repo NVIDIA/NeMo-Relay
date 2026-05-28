@@ -304,6 +304,9 @@ func TestSanitizeGuardrailAffectsEventInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolCallExecute failed: %v", err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

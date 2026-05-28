@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
-use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::response::Usage;
 use crate::error::FlowError;
 use crate::json::Json;
@@ -280,6 +280,7 @@ impl OpenInferenceSubscriber {
 
     /// Flushes finished spans through the underlying tracer provider.
     pub fn force_flush(&self) -> Result<()> {
+        flush_subscribers()?;
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenInferenceError::Provider("the subscriber state lock was poisoned".to_string())
         })?;
@@ -290,6 +291,7 @@ impl OpenInferenceSubscriber {
     ///
     /// Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
     pub fn shutdown(&self) -> Result<()> {
+        flush_subscribers()?;
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenInferenceError::Provider("the subscriber state lock was poisoned".to_string())
         })?;

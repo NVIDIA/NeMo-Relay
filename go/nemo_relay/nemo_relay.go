@@ -163,6 +163,7 @@ extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* 
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
 extern int32_t nemo_relay_register_subscriber(const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_subscriber(const char* name);
+extern int32_t nemo_relay_flush_subscribers(void);
 
 // Scope-local tool guardrails
 extern int32_t nemo_relay_scope_register_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -1448,8 +1449,9 @@ func DeregisterLlmStreamExecutionIntercept(name string) error {
 // ---------------------------------------------------------------------------
 
 // RegisterSubscriber registers a named event subscriber that will be called for
-// every lifecycle event (Start, End, Mark) emitted by the runtime. Subscribers
-// are identified by a unique name; registering a duplicate returns an
+// every lifecycle event (Start, End, Mark) emitted by the runtime. Native event
+// calls enqueue subscriber delivery and return without waiting for callbacks.
+// Subscribers are identified by a unique name; registering a duplicate returns an
 // AlreadyExists error. The callback receives an owned [Event] snapshot that is
 // safe to retain after the callback returns.
 func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
@@ -1464,12 +1466,20 @@ func RegisterSubscriber(name string, fn EventSubscriberFunc) error {
 	))
 }
 
-// DeregisterSubscriber removes a named event subscriber. Returns a NotFound
-// error if no subscriber with the given name is registered.
+// DeregisterSubscriber removes a named event subscriber for future emissions.
+// Already queued snapshots may still run. Returns a NotFound error if no
+// subscriber with the given name is registered.
 func DeregisterSubscriber(name string) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	return checkStatus(C.nemo_relay_deregister_subscriber(cName))
+}
+
+// FlushSubscribers waits for subscriber callbacks queued before this call to
+// finish. Native event-producing APIs enqueue subscriber work and return
+// without waiting for observer callbacks.
+func FlushSubscribers() error {
+	return checkStatus(C.nemo_relay_flush_subscribers())
 }
 
 // ---------------------------------------------------------------------------

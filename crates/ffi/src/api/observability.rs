@@ -245,7 +245,10 @@ pub unsafe extern "C" fn nemo_relay_atif_exporter_export(
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
     }
-    let trajectory = unsafe { &*exporter }.0.export();
+    let trajectory = match unsafe { &*exporter }.0.try_export() {
+        Ok(trajectory) => trajectory,
+        Err(e) => return status_from_error(&e),
+    };
     match serde_json::to_string(&trajectory) {
         Ok(json_str) => {
             unsafe { *out = str_to_c_string(&json_str) };

@@ -134,3 +134,13 @@ test('WebAssembly withScope supports async callbacks', async () => {
     stack.free();
   }
 });
+
+test('WebAssembly flushSubscribers succeeds as an API-parity no-op', () => {
+  const stack = resetScopeStack();
+
+  try {
+    assert.equal(wasm.flushSubscribers(), undefined);
+  } finally {
+    stack.free();
+  }
+});

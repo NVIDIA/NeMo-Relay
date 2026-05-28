@@ -134,7 +134,7 @@ async fn remote_initialization_installs_non_streaming_execution_intercept() {
         json!(true)
     );
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     let mark_names: Vec<_> = captured_events
         .iter()
         .filter(|event| event.kind() == "mark")
@@ -479,7 +479,7 @@ async fn remote_initialization_installs_stream_execution_intercept() {
         json!("safety-default")
     );
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     let start_mark = captured_events
         .iter()
         .find(|event| event.name() == "nemo_guardrails.remote.start")
@@ -556,7 +556,7 @@ async fn remote_non_streaming_http_errors_are_reported_and_marked() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     assert!(
         captured_events
             .iter()
@@ -651,7 +651,7 @@ async fn remote_streaming_http_errors_are_reported_and_marked() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     assert!(
         captured_events
             .iter()
@@ -727,7 +727,7 @@ async fn remote_non_streaming_invalid_json_is_reported_and_marked() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     let error_mark = captured_events
         .iter()
         .find(|event| event.name() == "nemo_guardrails.remote.error")
@@ -808,7 +808,7 @@ async fn remote_streaming_malformed_chunk_is_reported_and_marked() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     let error_mark = captured_events
         .iter()
         .find(|event| event.name() == "nemo_guardrails.remote.error")
@@ -876,7 +876,7 @@ async fn remote_preflight_tool_choice_failure_is_reported_and_marked() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     assert!(
         captured_events
             .iter()
@@ -940,7 +940,7 @@ async fn remote_transport_failure_is_reported_and_marked() {
         other => panic!("unexpected error: {other}"),
     }
 
-    let captured_events = events.lock().unwrap().clone();
+    let captured_events = captured_events_snapshot(&events);
     let error_mark = captured_events
         .iter()
         .find(|event| event.name() == "nemo_guardrails.remote.error")

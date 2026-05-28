@@ -349,6 +349,7 @@ class TestConcreteEvents:
             scope.event("event_mark", handle=parent, data={"mark": True}, metadata={"mark_meta": True})
         finally:
             scope.pop(parent)
+            subscribers.flush()
             subscribers.deregister("py_event_types_sub")
 
         tool_start = _scope_event(events, "event_tool", "tool", "start")
@@ -390,6 +391,7 @@ class TestConcreteEvents:
             scope.pop(child)
         finally:
             scope.pop(parent)
+            subscribers.flush()
             subscribers.deregister("py_scope_type_contract_sub")
 
         scope_start = _scope_event(events, "scope_contract_child", "function", "start")

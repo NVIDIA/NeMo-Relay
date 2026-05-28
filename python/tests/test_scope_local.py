@@ -177,6 +177,7 @@ class TestScopeLocalAutoCleanup:
         subscribers.register("sl_after_sub", lambda e: global_events.append(e))
         outer_handle = tools.call("outer_tool", {})
         tools.call_end(outer_handle, {})
+        subscribers.flush()
         subscribers.deregister("sl_after_sub")
 
         assert len(events_inside) >= 1
@@ -266,6 +267,7 @@ class TestScopeLocalSubscriber:
             scope_local.register_subscriber(handle, "sl_sub", lambda e: events.append(e))
             tool_handle = tools.call("sub_test_tool", {"arg": "value"})
             tools.call_end(tool_handle, {"result": "ok"})
+        subscribers.flush()
 
         # Should have received at least tool start and end events
         assert len(events) >= 2
@@ -280,6 +282,7 @@ class TestScopeLocalSubscriber:
         with scope.scope("mark_sub_scope", ScopeType.Agent) as handle:
             scope_local.register_subscriber(handle, "sl_mark_sub", lambda e: events.append(e))
             scope.event("test_mark", data={"info": "hello"})
+        subscribers.flush()
 
         mark_events = [e for e in events if isinstance(e, MarkEvent)]
         assert len(mark_events) >= 1

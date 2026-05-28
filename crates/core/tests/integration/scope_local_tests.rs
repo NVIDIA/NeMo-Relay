@@ -26,7 +26,7 @@ use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{
-    deregister_subscriber, register_subscriber, scope_register_subscriber,
+    deregister_subscriber, flush_subscribers, register_subscriber, scope_register_subscriber,
 };
 use nemo_relay::api::tool::{tool_call, tool_call_end, tool_call_execute};
 use nemo_relay::error::FlowError;
@@ -53,6 +53,11 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
             .build(),
     )
     .unwrap()
+}
+
+fn captured_snapshot<T: Clone>(items: &Arc<Mutex<Vec<T>>>) -> Vec<T> {
+    flush_subscribers().unwrap();
+    items.lock().unwrap().clone()
 }
 
 // -----------------------------------------------------------------------
@@ -105,13 +110,11 @@ fn test_scope_local_guardrail_registration_and_execution() {
     .unwrap();
 
     // The Start event's input should contain the sanitized args.
-    {
-        let captured = events.lock().unwrap();
-        let start_event = &captured[0];
-        let input = start_event.input().unwrap();
-        assert_eq!(input["scope_sanitized"], true);
-        assert_eq!(input["input"], "data");
-    }
+    let captured = captured_snapshot(&events);
+    let start_event = &captured[0];
+    let input = start_event.input().unwrap();
+    assert_eq!(input["scope_sanitized"], true);
+    assert_eq!(input["input"], "data");
 
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
@@ -640,12 +643,10 @@ fn test_scope_local_subscriber() {
     )
     .unwrap();
 
-    {
-        let captured = events.lock().unwrap();
-        assert_eq!(captured.len(), 2);
-        assert_eq!(captured[0], "start");
-        assert_eq!(captured[1], "end");
-    }
+    let captured = captured_snapshot(&events);
+    assert_eq!(captured.len(), 2);
+    assert_eq!(captured[0], "start");
+    assert_eq!(captured[1], "end");
 
     // Pop the scope that owns the subscriber.
     // The End event for this scope is emitted *before* removal, so the
@@ -657,12 +658,10 @@ fn test_scope_local_subscriber() {
     )
     .unwrap();
 
-    {
-        let captured = events.lock().unwrap();
-        // 3 events: Start(child), End(child), End(handle)
-        assert_eq!(captured.len(), 3);
-        assert_eq!(captured[2], "end");
-    }
+    let captured = captured_snapshot(&events);
+    // 3 events: Start(child), End(child), End(handle)
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[2], "end");
 
     // After pop, push another scope — the subscriber should NOT fire
     let another = push_scope(
@@ -679,7 +678,7 @@ fn test_scope_local_subscriber() {
     )
     .unwrap();
 
-    let captured2 = events.lock().unwrap();
+    let captured2 = captured_snapshot(&events);
     // Still only 3 events (the subscriber was cleaned up with the scope)
     assert_eq!(captured2.len(), 3);
 }

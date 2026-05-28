@@ -13,7 +13,7 @@ use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::error::FlowError;
 use nemo_relay::error::Result;
 use nemo_relay::json::Json;
@@ -44,6 +44,11 @@ fn make_llm_handle(name: &str) -> LlmHandle {
 
 fn make_stream(items: Vec<Result<Json>>) -> Pin<Box<dyn Stream<Item = Result<Json>> + Send>> {
     Box::pin(tokio_stream::iter(items))
+}
+
+fn captured_snapshot<T: Clone>(items: &Arc<Mutex<Vec<T>>>) -> Vec<T> {
+    flush_subscribers().unwrap();
+    items.lock().unwrap().clone()
 }
 
 /// Helper that creates a collector/finalizer pair backed by a shared `Vec<Json>`.
@@ -193,14 +198,13 @@ async fn test_stream_wrapper_emits_end_event() {
     // Consume the stream
     while let Some(_item) = wrapper.next().await {}
 
-    let captured = events.lock().unwrap();
+    let captured = captured_snapshot(&events);
     // Should have: START (from llm_call) + END (from stream wrapper exhaustion)
     assert!(captured.len() >= 2);
     assert_eq!(captured[0].0, "start");
     // The last event should be END
     assert_eq!(captured.last().unwrap().0, "end");
 
-    drop(captured);
     deregister_subscriber("stream_end_test").unwrap();
 }
 
@@ -245,14 +249,13 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
     );
     drop(wrapper);
 
-    let events = events.lock().unwrap();
+    let events = captured_snapshot(&events);
     let end_event = events
         .iter()
         .find(|event| is_llm_end(event))
         .expect("expected END event when a partial stream is dropped");
     assert_eq!(end_event.output(), Some(&json!([{"token": "partial"}])));
 
-    drop(events);
     deregister_subscriber("stream_drop_end_test").unwrap();
 }
 
@@ -426,14 +429,13 @@ async fn test_stream_wrapper_error_emits_end_event_on_first_error_poll() {
     let result = wrapper.next().await.unwrap();
     assert!(result.is_err());
 
-    let events = events.lock().unwrap();
+    let events = captured_snapshot(&events);
     let end_event = events
         .iter()
         .find(|event| is_llm_end(event))
         .expect("expected END event on first error poll");
     assert_eq!(end_event.output(), Some(&json!({"partial": true})));
 
-    drop(events);
     deregister_subscriber("stream_error_end_test").unwrap();
 }
 
@@ -475,7 +477,7 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     while let Some(_item) = wrapper.next().await {}
 
     // The END event output should contain the finalizer's aggregated response
-    let captured = events.lock().unwrap();
+    let captured = captured_snapshot(&events);
     let end_event = captured.iter().find(|e| is_llm_end(e)).unwrap();
     let output = end_event.output().unwrap();
     // The default finalizer collects chunks into an array
@@ -485,7 +487,6 @@ async fn test_stream_wrapper_end_event_contains_intercepted_response() {
     assert_eq!(arr[0]["token"], "a");
     assert_eq!(arr[1]["token"], "b");
 
-    drop(captured);
     deregister_subscriber("end_event_test").unwrap();
 }
 

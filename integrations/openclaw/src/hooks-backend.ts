@@ -376,6 +376,7 @@ export class HookReplayBackend {
   private async closeSession(session: SessionState, summary: JsonRecord): Promise<void> {
     drainSession(this.sessionManager(), session);
     closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary);
+    this.flushSubscriberDelivery('session_close');
     deleteSession(this.stateValue, session);
   }
 
@@ -396,6 +397,18 @@ export class HookReplayBackend {
   private async closeAllSessions(summary: JsonRecord): Promise<void> {
     for (const session of [...this.stateValue.sessions.values()]) {
       await this.closeSession(session, summary);
+    }
+  }
+
+  /** Wait for native subscriber/exporter delivery after a replay closure boundary. */
+  private flushSubscriberDelivery(label: string): void {
+    try {
+      this.nf.flushSubscribers?.();
+    } catch (error) {
+      this.logBoundedWarn(
+        `flush-subscribers:${label}`,
+        `nemo-relay subscriber flush failed: label=${label} error=${toMessage(error)}`,
+      );
     }
   }
 

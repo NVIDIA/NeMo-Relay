@@ -155,6 +155,7 @@ class TestToolGuardrails:
         subscribers.register("py_san_req_sub", lambda e: events.append(e))
         handle = tools.call("guarded_tool", {"input": "data"})
         tools.call_end(handle, {})
+        subscribers.flush()
         subscribers.deregister("py_san_req_sub")
         guardrails.deregister_tool_sanitize_request("py_san_req")
 
@@ -205,6 +206,7 @@ class TestToolGuardrails:
             tools.call_end(handle, {"ok": True})
         finally:
             guardrails.deregister_tool_sanitize_request("py_tool_sanitize_req_fail")
+            subscribers.flush()
             subscribers.deregister("py_tool_sanitize_req_sub")
 
         start = _tool_event(events, "tool_sanitize_req_fail", "start")
@@ -223,6 +225,7 @@ class TestToolGuardrails:
             tools.call_end(handle, {"ok": True})
         finally:
             guardrails.deregister_tool_sanitize_response("py_tool_sanitize_resp_bad")
+            subscribers.flush()
             subscribers.deregister("py_tool_sanitize_resp_sub")
 
         end = _tool_event(events, "tool_sanitize_resp_bad", "end")

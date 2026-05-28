@@ -239,6 +239,9 @@ func TestScopeLocalToolSanitizeRequestGuardrail(t *testing.T) {
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
+		}
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -300,6 +303,9 @@ func TestScopeLocalToolSanitizeResponseGuardrail(t *testing.T) {
 		)
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
 		}
 
 		mu.Lock()
@@ -738,6 +744,9 @@ func TestScopeLocalSubscriberReceivesEvents(t *testing.T) {
 		child, _ := PushScope("child_scope", ScopeTypeFunction)
 		PopScope(child)
 		PopScope(handle)
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if len(eventNames) < 2 {
@@ -924,6 +933,9 @@ func TestScopeLocalLlmSanitizeRequestGuardrailAffectsEvent(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("LlmCallExecute failed: %v", err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
 		}
 
 		mu.Lock()
@@ -1207,6 +1219,9 @@ func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
 		if err := EmitEvent("llm_scope_sub_event_before"); err != nil {
 			t.Fatalf("EmitEvent before subscriber deregister failed: %v", err)
 		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
+		}
 		if subscriberCalls == 0 {
 			t.Fatal("expected scope-local subscriber to receive an event")
 		}
@@ -1216,6 +1231,9 @@ func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
 		callsAfterDeregister := subscriberCalls
 		if err := EmitEvent("llm_scope_sub_event_after"); err != nil {
 			t.Fatalf("EmitEvent after subscriber deregister failed: %v", err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
 		}
 		if subscriberCalls != callsAfterDeregister {
 			t.Fatalf("scope-local subscriber still fired after deregister: %d -> %d", callsAfterDeregister, subscriberCalls)

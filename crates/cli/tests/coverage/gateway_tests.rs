@@ -890,6 +890,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
         .await
         .unwrap();
 
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
     nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
 }

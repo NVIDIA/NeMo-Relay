@@ -853,9 +853,10 @@ impl AtifDispatcher {
         let callback = atif_scope_subscriber(state, agent_uuid, storage);
         // Attach the scoped subscriber to the trajectory root rather than the
         // global registry so sibling top-level trajectories never share events.
-        if let Err(err) = scope_register_subscriber(&agent_uuid, &name, callback) {
-            self.fatal_error = Some(format!("failed to register ATIF scope subscriber: {err}"));
-        } else {
+        // With async subscriber delivery, the root scope may already be closed
+        // when the dispatcher observes this start event; global routing still
+        // handles descendant events by parent UUID in that case.
+        if scope_register_subscriber(&agent_uuid, &name, callback).is_ok() {
             self.scope_subscribers.insert(agent_uuid, name);
         }
         None
@@ -1086,7 +1087,10 @@ fn prepare_atif_file(
     agent_uuid: Uuid,
     agent: &mut ManagedAtifExporter,
 ) -> std::io::Result<PendingAtifWrite> {
-    let trajectory = agent.exporter.export();
+    let trajectory = agent
+        .exporter
+        .try_export()
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
         object.insert(

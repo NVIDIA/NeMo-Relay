@@ -50,7 +50,7 @@ use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::scope::{event, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{
-    deregister_subscriber, register_subscriber, scope_deregister_subscriber,
+    deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
     scope_register_subscriber,
 };
 use nemo_relay::api::tool::ToolAttributes;
@@ -98,6 +98,11 @@ fn capture_events(name: &str) -> Arc<Mutex<Vec<Event>>> {
     )
     .unwrap();
     events
+}
+
+fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
+    flush_subscribers().unwrap();
+    events.lock().unwrap().clone()
 }
 
 fn expect_already_exists(error: FlowError, needle: &str) {
@@ -187,7 +192,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     )
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let observed: Vec<_> = captured
         .iter()
         .map(|event| (event.name().to_owned(), *event.timestamp()))
@@ -204,8 +209,6 @@ fn test_manual_lifecycle_timestamp_overrides() {
             ("timestamp-scope".to_string(), scope_end),
         ]
     );
-    drop(captured);
-
     deregister_subscriber("timestamp-api-events").unwrap();
 }
 
@@ -267,7 +270,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     )
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let observed: Vec<_> = captured
         .iter()
         .filter(|event| event.name().starts_with("default_ts_"))
@@ -288,8 +291,6 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
             ),
         ]
     );
-    drop(captured);
-
     deregister_subscriber("default-end-timestamp-events").unwrap();
 }
 
@@ -445,6 +446,40 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     );
     assert!(deregister_subscriber("global-subscriber").unwrap());
     assert!(!deregister_subscriber("global-subscriber").unwrap());
+}
+
+#[test]
+fn test_deregister_after_emit_preserves_queued_subscriber_snapshot() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_clone = Arc::clone(&observed);
+    register_subscriber(
+        "snapshot-subscriber",
+        Arc::new(move |event| {
+            observed_clone
+                .lock()
+                .unwrap()
+                .push(event.name().to_string())
+        }),
+    )
+    .unwrap();
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("queued-before-deregister")
+            .build(),
+    )
+    .unwrap();
+    assert!(deregister_subscriber("snapshot-subscriber").unwrap());
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        ["queued-before-deregister"]
+    );
 }
 
 #[test]
@@ -702,7 +737,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     )
     .unwrap();
 
-    let captured = events.lock().unwrap().clone();
+    let captured = captured_events_snapshot(&events);
     assert_eq!(captured[0].kind(), "scope");
     assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
     assert_eq!(captured[0].category().unwrap().as_str(), "tool");
@@ -719,8 +754,6 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         json!(true)
     );
     assert_eq!(captured[1].tool_call_id(), Some("tool-call-id"));
-    drop(captured);
-
     deregister_tool_sanitize_request_guardrail("tool-sanitize-request").unwrap();
     deregister_tool_sanitize_response_guardrail("tool-sanitize-response").unwrap();
 
@@ -764,7 +797,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         .await,
         Err(FlowError::GuardrailRejected(reason)) if reason == "tool denied"
     ));
-    let rejection_events = events.lock().unwrap().clone();
+    let rejection_events = captured_events_snapshot(&events);
     let mark = rejection_events.last().unwrap();
     assert_eq!(mark.kind(), "mark");
     assert_eq!(mark.data().unwrap()["rejected"], json!(true));
@@ -772,10 +805,9 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         mark.data().unwrap()["rejection_reason"],
         json!("tool denied")
     );
-    drop(rejection_events);
     deregister_tool_conditional_execution_guardrail("tool-reject").unwrap();
 
-    let baseline = events.lock().unwrap().len();
+    let baseline = captured_events_snapshot(&events).len();
     assert!(matches!(
         tool_call_execute(
             nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -788,7 +820,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         .await,
         Err(FlowError::Internal(message)) if message == "tool execution failed"
     ));
-    let failed_events = events.lock().unwrap();
+    let failed_events = captured_events_snapshot(&events);
     assert_eq!(failed_events[baseline].kind(), "scope");
     assert_eq!(
         failed_events[baseline].scope_category(),
@@ -808,8 +840,6 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         failed_events[baseline + 1].output().unwrap(),
         &json!({"request": "failed"})
     );
-    drop(failed_events);
-
     deregister_subscriber("tool-api-events").unwrap();
 }
 
@@ -865,7 +895,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
     )
     .unwrap();
 
-    let captured = events.lock().unwrap().clone();
+    let captured = captured_events_snapshot(&events);
     assert_eq!(captured[0].kind(), "scope");
     assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
     assert_eq!(captured[0].category().unwrap().as_str(), "llm");
@@ -882,8 +912,6 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         json!(true)
     );
     assert_eq!(captured[1].model_name(), Some("test-model"));
-    drop(captured);
-
     deregister_llm_sanitize_request_guardrail("llm-sanitize-request").unwrap();
     deregister_llm_sanitize_response_guardrail("llm-sanitize-response").unwrap();
 
@@ -928,7 +956,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         .await,
         Err(FlowError::GuardrailRejected(reason)) if reason == "llm denied"
     ));
-    let rejection_events = events.lock().unwrap().clone();
+    let rejection_events = captured_events_snapshot(&events);
     let mark = rejection_events.last().unwrap();
     assert_eq!(mark.kind(), "mark");
     assert_eq!(mark.data().unwrap()["rejected"], json!(true));
@@ -936,10 +964,9 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         mark.data().unwrap()["rejection_reason"],
         json!("llm denied")
     );
-    drop(rejection_events);
     deregister_llm_conditional_execution_guardrail("llm-reject").unwrap();
 
-    let baseline = events.lock().unwrap().len();
+    let baseline = captured_events_snapshot(&events).len();
     assert!(matches!(
         llm_call_execute(
             LlmCallExecuteParams::builder()
@@ -953,7 +980,7 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         .await,
         Err(FlowError::Internal(message)) if message == "llm execution failed"
     ));
-    let failed_events = events.lock().unwrap();
+    let failed_events = captured_events_snapshot(&events);
     assert_eq!(failed_events[baseline].kind(), "scope");
     assert_eq!(
         failed_events[baseline].scope_category(),
@@ -977,8 +1004,6 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         failed_events[baseline + 1].model_name(),
         Some("error-model")
     );
-    drop(failed_events);
-
     deregister_subscriber("llm-api-events").unwrap();
 }
 
@@ -1028,7 +1053,7 @@ async fn test_llm_stream_chunk_marks_track_successful_chunks() {
     }
     assert_eq!(yielded, raw_chunks);
 
-    let captured = events.lock().unwrap().clone();
+    let captured = captured_events_snapshot(&events);
     assert_eq!(captured.len(), 4);
     assert_eq!(captured[0].kind(), "scope");
     assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
@@ -1098,7 +1123,7 @@ async fn test_llm_stream_chunk_mark_survives_collector_failure() {
     ));
     assert!(stream.next().await.is_none());
 
-    let captured = events.lock().unwrap().clone();
+    let captured = captured_events_snapshot(&events);
     assert_eq!(captured.len(), 3);
     assert_eq!(captured[0].kind(), "scope");
     assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
@@ -1164,7 +1189,7 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
         vec![json!({"messages": [{"role": "user", "content": "hello"}]})]
     );
 
-    let success_events = events.lock().unwrap().clone();
+    let success_events = captured_events_snapshot(&events);
     assert_eq!(success_events[0].kind(), "scope");
     assert_eq!(
         success_events[0].scope_category(),
@@ -1184,8 +1209,6 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
         success_events.last().unwrap().output().unwrap(),
         &json!([{"messages": [{"role": "user", "content": "hello"}]}])
     );
-    drop(success_events);
-
     register_llm_conditional_execution_guardrail(
         "llm-stream-reject",
         1,
@@ -1210,13 +1233,13 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
         .await,
         Err(FlowError::GuardrailRejected(reason)) if reason == "stream denied"
     ));
-    let rejection_events = events.lock().unwrap().clone();
+    let rejection_events = captured_events_snapshot(&events);
     assert_eq!(rejection_events.last().unwrap().kind(), "mark");
     deregister_llm_conditional_execution_guardrail("llm-stream-reject").unwrap();
 
     let error_collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_chunk| Ok(()));
     let error_finalizer: Box<dyn FnOnce() -> Json + Send> = Box::new(|| json!(null));
-    let baseline = events.lock().unwrap().len();
+    let baseline = captured_events_snapshot(&events).len();
     assert!(matches!(
         llm_stream_call_execute(
             LlmStreamCallExecuteParams::builder()
@@ -1233,7 +1256,7 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
         .await,
         Err(FlowError::Internal(message)) if message == "llm stream execution failed"
     ));
-    let failed_events = events.lock().unwrap();
+    let failed_events = captured_events_snapshot(&events);
     assert_eq!(failed_events[baseline].kind(), "scope");
     assert_eq!(
         failed_events[baseline].scope_category(),
@@ -1257,8 +1280,6 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
         failed_events[baseline + 1].model_name(),
         Some("stream-error-model")
     );
-    drop(failed_events);
-
     event(
         nemo_relay::api::scope::EmitMarkEventParams::builder()
             .name("standalone-mark")
@@ -1266,10 +1287,8 @@ async fn test_llm_stream_api_covers_success_rejection_and_execution_error_paths(
             .build(),
     )
     .unwrap();
-    let marked_events = events.lock().unwrap();
+    let marked_events = captured_events_snapshot(&events);
     assert_eq!(marked_events.last().unwrap().name(), "standalone-mark");
     assert_eq!(marked_events.last().unwrap().kind(), "mark");
-    drop(marked_events);
-
     deregister_subscriber("llm-stream-events").unwrap();
 }

@@ -36,6 +36,7 @@ export {
   deregisterToolSanitizeRequestGuardrail,
   deregisterToolSanitizeResponseGuardrail,
   event,
+  flushSubscribers,
   getHandle,
   getLastCallbackError,
   initializePlugins,

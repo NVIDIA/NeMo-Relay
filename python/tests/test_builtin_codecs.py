@@ -221,6 +221,7 @@ class TestResponseCodecObjectParam:
                 },
                 response_codec=OpenAIChatCodec(),
             )
+            subscribers.flush()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"
@@ -257,6 +258,7 @@ class TestResponseCodecObjectParam:
                     "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
                 },
             )
+            subscribers.flush()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"
@@ -301,6 +303,7 @@ class TestResponseCodecObjectParam:
                 LLMRequest({}, {"model": "gpt-4", "messages": []}),
             )
             llm.call_end(handle, "raw response", response_codec=OpenAIChatCodec())
+            subscribers.flush()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"
@@ -332,6 +335,7 @@ class TestResponseCodecObjectParam:
             )
             with pytest.raises(RuntimeError, match="OpenAI Chat response decode"):
                 llm.call_end(handle, "malformed response", response_codec=OpenAIChatCodec())
+            subscribers.flush()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"

@@ -57,6 +57,12 @@ timestamp for integrations that are replaying events or mirroring an upstream
 framework clock. Use explicit timestamps only when the caller owns a reliable
 event time; otherwise prefer the runtime-generated timestamp.
 
+Native Rust, Python, Node.js, and FFI event-producing APIs construct canonical
+events synchronously, enqueue subscriber delivery, and return without waiting
+for subscriber callbacks, exporter work, file writes, or tracing processors.
+Use the binding flush API when a test or shutdown path must wait for queued
+subscriber work. WebAssembly keeps synchronous subscriber delivery.
+
 ## Semantic Meaning
 
 These sections describe how event shapes and relationships should be interpreted by
@@ -96,4 +102,5 @@ Scope APIs emit `scope` start and end events and can also emit named `mark`
 events. Managed tool and LLM helpers emit `scope` events with `category` set to
 `tool` or `llm`. Conditional-execution rejections and explicit mark points let
 the runtime record important state transitions even when there is no full nested
-callback to wrap.
+callback to wrap. Subscriber delivery is downstream from event construction and
+does not block the emitting call on native bindings.

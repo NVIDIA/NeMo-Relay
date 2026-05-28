@@ -12,9 +12,9 @@ use crate::api::event::Event;
 use crate::api::llm::LlmRequest;
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept, RequestIntercept};
 use crate::api::runtime::EventSubscriberFn;
-use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::ScopeStack;
 use crate::api::runtime::global_context;
+use crate::api::runtime::{NemoRelayContextState, flush_subscribers};
 use crate::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::CreateToolHandleParams;
 use crate::context::registries::{
@@ -220,6 +220,7 @@ fn conditional_guardrail_snapshots_keep_names_and_callbacks_after_deregister() {
     .unwrap();
 
     assert_eq!(rejection.as_deref(), Some("snapshot_target blocked"));
+    flush_subscribers().unwrap();
     let events = events.lock().unwrap();
     assert_eq!(
         events.iter().map(Event::name).collect::<Vec<_>>(),
@@ -300,6 +301,7 @@ fn context_state_supports_extensions_events_and_builders() {
     assert_eq!(event.uuid().get_version(), Some(Version::SortRand));
     let subscribers = state.collect_event_subscribers(&[]);
     NemoRelayContextState::emit_event(&event, &subscribers);
+    flush_subscribers().unwrap();
     assert_eq!(events.lock().unwrap().as_slice(), ["mark"]);
 }
 

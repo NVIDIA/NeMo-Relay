@@ -16,7 +16,7 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay::codec::response::AnnotatedLlmResponse;
@@ -388,6 +388,7 @@ async fn runtime_integration_response_codec_decode_failure_keeps_annotations_opt
 
     assert_eq!(response["response"], json!("ok"));
 
+    flush_subscribers().unwrap();
     let end_event = captured_events
         .lock()
         .unwrap()

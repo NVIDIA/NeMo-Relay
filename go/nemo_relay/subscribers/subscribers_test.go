@@ -36,6 +36,9 @@ func countScopedMarks(t *testing.T, handle *nemo_relay.ScopeHandle) int {
 	if err := nemo_relay.EmitEvent("first-mark"); err != nil {
 		t.Fatalf("EmitEvent failed: %v", err)
 	}
+	if err := nemo_relay.FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 	if err := subscriberspkg.ScopeDeregister(handle.UUID(), "subs_local"); err != nil {
 		t.Fatalf("ScopeDeregister failed: %v", err)
 	}
@@ -71,6 +74,9 @@ func TestSubscriberShorthands(t *testing.T) {
 	}
 	if err := subscriberspkg.Deregister("subs_global"); err != nil {
 		t.Fatalf("Deregister failed: %v", err)
+	}
+	if err := nemo_relay.FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
 
 	mu.Lock()

@@ -27,4 +27,5 @@ def subscribed_events_fixture() -> Iterator[list[nemo_relay.Event]]:
     subscriber_name = f"test-{uuid4()}"
     nemo_relay.subscribers.register(subscriber_name, event_recorder)
     yield events
+    nemo_relay.subscribers.flush()
     nemo_relay.subscribers.deregister(subscriber_name)

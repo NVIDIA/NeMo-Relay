@@ -43,6 +43,7 @@ const {
   ScopeType,
   registerSubscriber,
   deregisterSubscriber,
+  flushSubscribers,
   LlmRequest,
   withScope,
   event,
@@ -83,6 +84,8 @@ async function main() {
     console.log(llmResult);
   });
 
+  flushSubscribers();
+  await new Promise((resolve) => setImmediate(resolve));
   deregisterSubscriber("quickstart-printer");
 }
 

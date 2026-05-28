@@ -1750,9 +1750,9 @@ def register_subscriber(name: str, callback: Callable[[ScopeEvent | MarkEvent], 
     Returns:
         ``None``.
 
-    Exceptional flow:
-        Subscriber callback exceptions propagate from the lifecycle operation
-        that emitted the event.
+    Notes:
+        Native event emission queues subscriber callbacks and does not wait for
+        observer work before returning.
     """
     ...
 
@@ -1762,6 +1762,10 @@ def deregister_subscriber(name: str) -> bool:
     Returns:
         ``True`` if a subscriber was removed, otherwise ``False``.
     """
+    ...
+
+def flush_subscribers() -> None:
+    """Wait for subscriber callbacks already queued by native event emission."""
     ...
 
 def scope_register_tool_sanitize_request_guardrail(

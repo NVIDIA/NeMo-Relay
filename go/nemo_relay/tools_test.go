@@ -99,6 +99,9 @@ func TestToolEvents(t *testing.T) {
 
 	handle, _ := ToolCall("evt_tool", json.RawMessage(`{}`))
 	ToolCallEnd(handle, json.RawMessage(`{}`))
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 	DeregisterSubscriber("go_tool_evt")
 
 	mu.Lock()
@@ -467,6 +470,9 @@ func TestToolSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf(toolCallExecuteFailed, err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -690,6 +696,9 @@ func TestToolCallWithToolCallID(t *testing.T) {
 		t.Fatalf(toolCallFailed, err)
 	}
 	ToolCallEnd(handle, json.RawMessage(`{}`))
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
 	DeregisterSubscriber("go_tool_call_id_sub")
 
 	mu.Lock()
@@ -721,6 +730,9 @@ func TestToolEventInputOutput(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf(toolCallExecuteFailed, err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
 	}
 	DeregisterSubscriber("go_tool_io_sub")
 

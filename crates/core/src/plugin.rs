@@ -984,6 +984,8 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
 /// Clearing active configuration does not remove plugin kinds from the global
 /// registry.
 pub fn clear_plugin_configuration() -> Result<()> {
+    crate::api::runtime::flush_subscribers()
+        .map_err(|error| PluginError::Internal(error.to_string()))?;
     let previous = {
         let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
             PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))

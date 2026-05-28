@@ -25,6 +25,7 @@ use crate::api::runtime::callbacks::{
     LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
+use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{CreateToolHandleParams, EndToolHandleParams};
@@ -176,9 +177,7 @@ impl NemoRelayContextState {
     /// - `event`: Fully constructed lifecycle event to deliver.
     /// - `subscribers`: Subscribers that should observe the event.
     pub(crate) fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
-        for subscriber in subscribers {
-            subscriber(event);
-        }
+        subscriber_dispatcher::dispatch_event(event, subscribers);
     }
 
     /// Build a standalone mark event.

@@ -35,6 +35,9 @@ func captureEndEventOutput(t *testing.T, subscriberName, eventName string) (func
 	}
 
 	getOutput := func() json.RawMessage {
+		if err := nemo_relay.FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		return append(json.RawMessage(nil), output...)

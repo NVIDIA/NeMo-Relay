@@ -94,7 +94,9 @@ impl PyAtifExporter {
     /// Returns:
     ///     A dict representing the ATIF trajectory.
     pub(crate) fn export(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let trajectory = self.inner.export();
+        let trajectory = py
+            .detach(|| self.inner.try_export())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         let value = to_python_json_value(
             &trajectory,
             "Serialization error",
@@ -108,8 +110,10 @@ impl PyAtifExporter {
     ///
     /// Returns:
     ///     A JSON string representing the ATIF trajectory.
-    pub(crate) fn export_json(&self) -> PyResult<String> {
-        let trajectory = self.inner.export();
+    pub(crate) fn export_json(&self, py: Python<'_>) -> PyResult<String> {
+        let trajectory = py
+            .detach(|| self.inner.try_export())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         to_python_json_string(
             &trajectory,
             "Serialization error",
@@ -237,16 +241,14 @@ impl PyAtofExporter {
     }
 
     /// Flush the output file.
-    pub(crate) fn force_flush(&self) -> PyResult<()> {
-        self.inner
-            .force_flush()
+    pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.force_flush())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Shut down the exporter by flushing output.
-    pub(crate) fn shutdown(&self) -> PyResult<()> {
-        self.inner
-            .shutdown()
+    pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.shutdown())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -425,16 +427,14 @@ impl PyOpenTelemetrySubscriber {
     }
 
     /// Force a flush of finished spans through the exporter.
-    pub(crate) fn force_flush(&self) -> PyResult<()> {
-        self.inner
-            .force_flush()
+    pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.force_flush())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Shut down the underlying tracer provider.
-    pub(crate) fn shutdown(&self) -> PyResult<()> {
-        self.inner
-            .shutdown()
+    pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.shutdown())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
@@ -626,19 +626,23 @@ impl PyOpenInferenceSubscriber {
         })
     }
 
-    pub(crate) fn force_flush(&self) -> PyResult<()> {
-        self.with_runtime_context(|| {
-            self.inner
-                .force_flush()
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| {
+            self.with_runtime_context(|| {
+                self.inner
+                    .force_flush()
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
         })
     }
 
-    pub(crate) fn shutdown(&self) -> PyResult<()> {
-        self.with_runtime_context(|| {
-            self.inner
-                .shutdown()
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| {
+            self.with_runtime_context(|| {
+                self.inner
+                    .shutdown()
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
         })
     }
 

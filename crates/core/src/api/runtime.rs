@@ -7,6 +7,7 @@ pub mod callbacks;
 pub mod global;
 pub mod scope_stack;
 pub mod state;
+pub mod subscriber_dispatcher;
 
 pub use callbacks::{
     EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
@@ -22,3 +23,4 @@ pub use scope_stack::{
     sync_thread_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
 pub use state::NemoRelayContextState;
+pub use subscriber_dispatcher::flush_subscribers;

@@ -40,7 +40,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::scope::{pop_scope, push_scope};
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,
@@ -78,6 +78,11 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
             .build(),
     )
     .unwrap()
+}
+
+fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
+    flush_subscribers().unwrap();
+    events.lock().unwrap().clone()
 }
 
 // =========================================================================
@@ -735,7 +740,7 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
     deregister_tool_conditional_execution_guardrail("tool_scope_allow").unwrap();
     deregister_subscriber("tool_guardrail_scope_capture").unwrap();
 
-    let events = events.lock().unwrap();
+    let events = captured_events_snapshot(&events);
     let guardrail_events = events
         .iter()
         .filter(|event| event.scope_type() == Some(ScopeType::Guardrail))
@@ -1066,7 +1071,7 @@ fn test_scope_local_and_global_guardrail_merge_priority() {
     );
 
     // Verify both guardrails applied their transformations
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let start_event = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Tool, ScopeCategory::Start))
@@ -1341,7 +1346,7 @@ fn test_sanitize_guardrails_pipe_data() {
     )
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let start = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Tool, ScopeCategory::Start))
@@ -1406,7 +1411,7 @@ fn test_response_sanitize_guardrails_pipe() {
     )
     .unwrap();
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let end = captured
         .iter()
         .find(|e| is_scope_event(e, ScopeType::Tool, ScopeCategory::End))
@@ -1931,7 +1936,7 @@ async fn test_llm_conditional_guardrail_emits_guardrail_scope() {
     deregister_llm_conditional_execution_guardrail("llm_scope_allow").unwrap();
     deregister_subscriber("llm_guardrail_scope_capture").unwrap();
 
-    let events = events.lock().unwrap();
+    let events = captured_events_snapshot(&events);
     let guardrail_events = events
         .iter()
         .filter(|event| event.scope_type() == Some(ScopeType::Guardrail))
@@ -2061,7 +2066,7 @@ async fn test_llm_execution_intercept_chain() {
     deregister_llm_execution_intercept("llm_exec_1").unwrap();
 }
 
-/// LLM start is emitted after request intercepts and before execution intercepts,
+/// LLM start is queued after request intercepts and before execution intercepts,
 /// even when an execution intercept replaces the callback.
 #[tokio::test]
 async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
@@ -2093,27 +2098,15 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
     )
     .unwrap();
 
-    let events_for_intercept = events.clone();
     register_llm_execution_intercept(
         "llm_short_circuit_exec",
         1,
         Arc::new(move |_name, mut req, _next| {
-            let events = events_for_intercept.clone();
             Box::pin(async move {
                 req.content
                     .as_object_mut()
                     .unwrap()
                     .insert("phase".into(), json!("execution"));
-                let start_emitted = {
-                    let captured = events.lock().unwrap();
-                    captured
-                        .iter()
-                        .any(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::Start))
-                };
-                assert!(
-                    start_emitted,
-                    "LLM start should be emitted before execution intercepts run"
-                );
                 Ok(json!({"response": "short-circuited"}))
             })
         }),
@@ -2148,7 +2141,7 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
         "Original callable should not be invoked"
     );
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let llm_events = captured
         .iter()
         .filter(|e| e.scope_type() == Some(ScopeType::Llm))
@@ -2160,8 +2153,6 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
         json!("request")
     );
     assert_eq!(llm_events[1].scope_category(), Some(ScopeCategory::End));
-    drop(captured);
-
     deregister_llm_execution_intercept("llm_short_circuit_exec").unwrap();
     deregister_llm_request_intercept("llm_short_circuit_request").unwrap();
     deregister_subscriber("llm_short_circuit_start_observer").unwrap();
@@ -2199,27 +2190,15 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
     )
     .unwrap();
 
-    let events_for_intercept = events.clone();
     register_llm_stream_execution_intercept(
         "llm_stream_short_circuit_exec",
         1,
         Arc::new(move |_name, mut req, _next| {
-            let events = events_for_intercept.clone();
             Box::pin(async move {
                 req.content
                     .as_object_mut()
                     .unwrap()
                     .insert("phase".into(), json!("execution"));
-                let start_emitted = {
-                    let captured = events.lock().unwrap();
-                    captured
-                        .iter()
-                        .any(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::Start))
-                };
-                assert!(
-                    start_emitted,
-                    "LLM stream start should be emitted before execution intercepts run"
-                );
                 let stream = tokio_stream::iter(vec![Ok(json!({"chunk": "short-circuited"}))]);
                 Ok(Box::pin(stream) as LlmJsonStream)
             })
@@ -2263,7 +2242,7 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
         "Original stream callable should not be invoked"
     );
 
-    let captured = events.lock().unwrap();
+    let captured = captured_events_snapshot(&events);
     let llm_events = captured
         .iter()
         .filter(|e| e.scope_type() == Some(ScopeType::Llm))
@@ -2275,8 +2254,6 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
         json!("request")
     );
     assert_eq!(llm_events[1].scope_category(), Some(ScopeCategory::End));
-    drop(captured);
-
     deregister_llm_stream_execution_intercept("llm_stream_short_circuit_exec").unwrap();
     deregister_llm_request_intercept("llm_stream_short_circuit_request").unwrap();
     deregister_subscriber("llm_stream_short_circuit_start_observer").unwrap();

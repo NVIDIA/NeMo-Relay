@@ -3,7 +3,7 @@
 
 use axum::http::HeaderMap;
 use nemo_relay::api::event::ScopeCategory;
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use serde_json::json;
 use std::path::Path;
@@ -39,6 +39,7 @@ async fn install_test_atif_plugin(output_directory: &Path) {
 }
 
 fn read_atif_for_session(output_directory: &Path, session_id: &str) -> Value {
+    flush_subscribers().unwrap();
     std::fs::read_dir(output_directory)
         .unwrap()
         .filter_map(Result::ok)
@@ -388,6 +389,7 @@ async fn turn_output_uses_last_root_owned_llm_response() {
         .await
         .unwrap();
 
+    flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
     deregister_subscriber(subscriber_name).unwrap();
 }
@@ -3144,6 +3146,7 @@ async fn idle_timeout_closes_codex_session_without_session_end_hook() {
         assert!(session.subagents.is_empty());
     }
 
+    flush_subscribers().unwrap();
     let statuses = close_statuses.lock().unwrap().clone();
     assert!(
         statuses.contains(&("subagent:worker".to_string(), "idle_timeout".to_string())),
@@ -3262,6 +3265,7 @@ async fn idle_timeout_closes_claude_subagent_with_no_followup_activity() {
         assert!(session.subagents.is_empty());
     }
 
+    flush_subscribers().unwrap();
     let statuses = close_statuses.lock().unwrap().clone();
     assert!(
         statuses.contains(&(
@@ -3420,6 +3424,7 @@ async fn gateway_shutdown_attempts_remaining_sessions_after_close_error() {
         .unwrap_err();
     assert!(error.to_string().contains("scope handle not found"));
 
+    flush_subscribers().unwrap();
     let closed = closed_sessions.lock().unwrap().clone();
     assert!(
         closed.contains(&"good-shutdown".to_string()),
