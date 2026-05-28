@@ -62,9 +62,9 @@ jobs:
           - platform: linux-amd64
             runner: ubuntu-latest
             run_redis_tests: true
-            redis_service_image: redis:7.4.7-alpine
+            redis_service_image: redis:7.4.7-alpine@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
             run_s3_tests: true
-            s3_service_image: adobe/s3mock:5.0.0
+            s3_service_image: adobe/s3mock:5.0.0@sha256:c461c8f4234bd63540d2f3a3cabce69d814c78dc890a5af08727525a028e23da
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             run_redis_tests: false
