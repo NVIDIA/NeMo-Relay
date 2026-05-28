@@ -21,7 +21,7 @@ pkg-fmt = "bin"
 workspace = true
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["openinference"] }
+nemo-relay = { workspace = true, features = ["guardrails-remote", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 async-stream = "0.3"
 axum = "0.8"

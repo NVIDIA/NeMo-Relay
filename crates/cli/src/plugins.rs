@@ -13,9 +13,7 @@ use std::path::Path;
 use console::{Key, Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
-use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
-use nemo_relay::observability::plugin_component::ObservabilityConfig;
-use nemo_relay_adaptive::AdaptiveConfig;
+use nemo_relay::config_editor::{EditorFieldKind, EditorFieldSpec};
 use serde_json::{Value, json};
 
 use crate::config::PluginsEditCommand;
@@ -91,8 +89,7 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     let mut config = read_plugin_config(&path)?;
     ensure_observability_component(&mut config)?;
     ensure_adaptive_component(&mut config)?;
-    let mut observability = component_observability_config(&config)?;
-    let mut adaptive = component_adaptive_config(&config)?;
+    let mut components = editable_components(&config)?;
 
     let theme = ColorfulTheme::default();
     crate::banner::print_intro();
@@ -101,101 +98,55 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     println!();
     let mut selected_index = 0;
     loop {
-        let summary = observability_summary(&config, &observability);
-        let adaptive_summary = adaptive_summary(&config, &adaptive);
-        let observability_fields = ObservabilityConfig::editor_schema().fields;
-        let adaptive_fields = AdaptiveConfig::editor_schema().fields;
-        let mut items = vec![MenuItem::new(format!(
-            "Toggle Observability component [{}]",
-            status_label(component_enabled(&config))
-        ))];
-        items.extend(observability_fields.iter().map(|section| {
-            MenuItem::new(configured_label(
-                section_configured(&observability, *section),
-                format!("Edit {}", section.label),
-            ))
-        }));
-        items.push(MenuItem::new(format!(
-            "Toggle Adaptive component [{}]",
-            status_label(adaptive_component_enabled(&config))
-        )));
-        items.extend(adaptive_fields.iter().map(|field| {
-            MenuItem::new(configured_label(
-                config_field_configured(&adaptive, *field).unwrap_or(false),
-                format!("Edit Adaptive {}", field.label),
-            ))
-        }));
-        items.push(MenuItem::new(shortcut_label("Preview TOML", "p")));
-        items.push(MenuItem::new(shortcut_label(
-            format!("Save to {}", path.display()),
-            "s",
-        )));
-        items.push(MenuItem::new(shortcut_label("Cancel", "q")));
+        let (items, actions) = plugin_menu_items(&components, &path);
         println!();
-        println!("Observability: {summary}");
-        println!("Adaptive: {adaptive_summary}");
-        let observability_start_index = 1;
-        let observability_end_index = observability_start_index + observability_fields.len();
-        let adaptive_toggle_index = observability_end_index;
-        let adaptive_start_index = adaptive_toggle_index + 1;
-        let preview_index = adaptive_start_index + adaptive_fields.len();
-        let save_index = preview_index + 1;
-        let cancel_index = preview_index + 2;
+        for component in &components {
+            println!("{}: {}", component.label(), component.summary());
+        }
         let selection = prompt_menu(&theme, "plugins.toml", &items, selected_index)?;
         if let Some(selected) = menu_response_index(&selection) {
             selected_index = selected;
         }
         match selection {
-            MenuResponse::Selected(0) => {
-                let enabled = !component_enabled(&config);
-                set_component_enabled(&mut config, enabled);
-            }
-            MenuResponse::Selected(selection)
-                if (observability_start_index..observability_end_index).contains(&selection) =>
-            {
-                edit_section(
-                    &theme,
-                    &mut observability,
-                    observability_fields[selection - observability_start_index],
-                )?
-            }
-            MenuResponse::Selected(selection) if selection == adaptive_toggle_index => {
-                let enabled = !adaptive_component_enabled(&config);
-                set_adaptive_component_enabled(&mut config, enabled);
-            }
-            MenuResponse::Selected(selection)
-                if (adaptive_start_index..preview_index).contains(&selection) =>
-            {
-                edit_config_field(
-                    &theme,
-                    &mut adaptive,
-                    adaptive_fields[selection - adaptive_start_index],
-                )?
-            }
-            MenuResponse::Selected(selection) if selection == preview_index => {
-                let preview_config = config_with_components(&config, &observability, &adaptive)?;
-                print_preview(&preview_config)?;
-            }
-            MenuResponse::Selected(selection) if selection == save_index => {
-                store_observability_config(&mut config, &observability)?;
-                store_adaptive_config(&mut config, &adaptive)?;
-                validate_config(&config)?;
-                write_plugin_config(&path, &config)?;
-                print_save_success(&path);
-                return Ok(());
-            }
-            MenuResponse::Selected(selection) if selection == cancel_index => {
-                return Err(CliError::Config(
-                    "plugin edit cancelled; no config saved".into(),
-                ));
-            }
+            MenuResponse::Selected(selection) => match actions.get(selection).copied() {
+                Some(MenuAction::ToggleComponent(component_index)) => {
+                    if let Some(component) = components.get_mut(component_index) {
+                        component.toggle_enabled();
+                    }
+                }
+                Some(MenuAction::EditField {
+                    component_index,
+                    field_index,
+                }) => {
+                    if let Some(component) = components.get_mut(component_index)
+                        && let Some(field) = component.fields().get(field_index)
+                    {
+                        edit_component_field(&theme, component, *field)?;
+                    }
+                }
+                Some(MenuAction::Preview) => {
+                    let preview_config = config_with_editable_components(&config, &components)?;
+                    print_preview(&preview_config)?;
+                }
+                Some(MenuAction::Save) => {
+                    store_editable_components(&mut config, &components)?;
+                    validate_config(&config)?;
+                    write_plugin_config(&path, &config)?;
+                    print_save_success(&path);
+                    return Ok(());
+                }
+                Some(MenuAction::Cancel) | None => {
+                    return Err(CliError::Config(
+                        "plugin edit cancelled; no config saved".into(),
+                    ));
+                }
+            },
             MenuResponse::Shortcut(MenuShortcut::Preview, _) => {
-                let preview_config = config_with_components(&config, &observability, &adaptive)?;
+                let preview_config = config_with_editable_components(&config, &components)?;
                 print_preview(&preview_config)?;
             }
             MenuResponse::Shortcut(MenuShortcut::Save, _) => {
-                store_observability_config(&mut config, &observability)?;
-                store_adaptive_config(&mut config, &adaptive)?;
+                store_editable_components(&mut config, &components)?;
                 validate_config(&config)?;
                 write_plugin_config(&path, &config)?;
                 print_save_success(&path);
@@ -203,29 +154,56 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
             }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
             MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, selected) => {
-                if (observability_start_index..observability_end_index).contains(&selected) {
-                    reset_config_field(
-                        &mut observability,
-                        observability_fields[selected - observability_start_index],
-                    )?;
-                } else if (adaptive_start_index..preview_index).contains(&selected) {
-                    reset_config_field(
-                        &mut adaptive,
-                        adaptive_fields[selected - adaptive_start_index],
-                    )?;
-                } else {
-                    println!(
-                        "  Select an Observability or Adaptive field, or a section field, to reset or clear."
-                    );
+                match actions.get(selected).copied() {
+                    Some(MenuAction::ToggleComponent(component_index)) => {
+                        if let Some(component) = components.get_mut(component_index) {
+                            component.set_enabled(false);
+                        }
+                    }
+                    Some(MenuAction::EditField {
+                        component_index,
+                        field_index,
+                    }) => {
+                        if let Some(component) = components.get_mut(component_index)
+                            && let Some(field) = component.fields().get(field_index)
+                        {
+                            component.reset_field(*field)?;
+                        }
+                    }
+                    _ => {
+                        println!("  Select a component or editable field to reset or clear.");
+                    }
                 }
             }
-            MenuResponse::Cancel | MenuResponse::Selected(_) => {
+            MenuResponse::Cancel => {
                 return Err(CliError::Config(
                     "plugin edit cancelled; no config saved".into(),
                 ));
             }
         }
     }
+}
+
+fn edit_component_field(
+    theme: &ColorfulTheme,
+    component: &mut EditableComponent,
+    field: EditorFieldSpec,
+) -> Result<(), CliError> {
+    match component {
+        EditableComponent::Observability(state) => {
+            edit_section(theme, &mut state.config, field)?;
+            state.mark_touched();
+        }
+        EditableComponent::Adaptive(state) => {
+            edit_config_field(theme, &mut state.config, field)?;
+            state.mark_touched();
+        }
+        EditableComponent::NemoGuardrails(state) => {
+            edit_config_field(theme, &mut state.config, field)?;
+            state.mark_touched();
+        }
+    }
+    Ok(())
 }
 
 fn menu_response_index(response: &MenuResponse) -> Option<usize> {
@@ -681,21 +659,26 @@ where
     T: SerializeConfig,
 {
     let mut value = section_field_value(config, section, field.name)?
-        .or_else(|| field.default_value())
+        .or_else(|| section_field_default(section, field))
         .unwrap_or_else(|| json!({}));
     let schema = field
         .schema()
         .ok_or_else(|| CliError::Config(format!("{} is not an editable section", field.name)))?;
+    let default = section_field_default(section, field);
     if edit_value_section(
         theme,
         &format!("{}.{}", section.name, field.name),
         &mut value,
         schema,
-        field.default_value(),
+        default,
     )? {
         store_edited_section_field(config, section, field, value)?;
     }
     Ok(())
+}
+
+fn section_field_default(section: EditorFieldSpec, field: EditorFieldSpec) -> Option<Value> {
+    default_field_value(section, field).or_else(|| field.default_value())
 }
 
 fn store_edited_config_section<T>(
@@ -796,9 +779,9 @@ fn value_field_menu_item(
 ) -> Result<MenuItem, CliError> {
     let configured = value_field_configured(value, field, default);
     let rendered = value_field_value(value, field.name)
-        .map(|value| display_value_with_default(&value, default_object_field_value(default, field)))
+        .map(|value| display_value_with_default(&value, value_field_default(default, field)))
         .or_else(|| {
-            default_object_field_value(default, field)
+            value_field_default(default, field)
                 .map(|value| format!("{} (default)", display_value(&value)))
         })
         .unwrap_or_else(|| "(default)".to_string());
@@ -837,8 +820,9 @@ fn edit_value_field(
     default: Option<&Value>,
 ) -> Result<(), CliError> {
     if field.kind == EditorFieldKind::Section {
+        let nested_default = value_field_default(default, field);
         let mut nested_value = value_field_value(value, field.name)
-            .or_else(|| field.default_value())
+            .or_else(|| nested_default.clone())
             .unwrap_or_else(|| json!({}));
         let nested_schema = field.schema().ok_or_else(|| {
             CliError::Config(format!("{} is not an editable section", field.name))
@@ -848,7 +832,7 @@ fn edit_value_field(
             &format!("{prompt}.{}", field.name),
             &mut nested_value,
             nested_schema,
-            field.default_value(),
+            nested_default,
         )? {
             store_edited_value_section(value, field, nested_value);
         }
@@ -872,10 +856,10 @@ fn edit_value_field(
             current
                 .as_ref()
                 .map(|value| {
-                    display_value_with_default(value, default_object_field_value(default, field))
+                    display_value_with_default(value, value_field_default(default, field))
                 })
                 .or_else(|| {
-                    default_object_field_value(default, field)
+                    value_field_default(default, field)
                         .map(|value| format!("{} (default)", display_value(&value)))
                 })
                 .unwrap_or_else(|| "(default)".to_string())
@@ -934,7 +918,7 @@ fn value_field_configured(value: &Value, field: EditorFieldSpec, default: Option
     if field.optional {
         return true;
     }
-    default_object_field_value(default, field)
+    value_field_default(default, field)
         .as_ref()
         .is_none_or(|default| default != &current)
 }
@@ -953,6 +937,10 @@ fn default_object_field_value(default: Option<&Value>, field: EditorFieldSpec) -
         .and_then(|object| object.get(field.name))
         .filter(|value| !value.is_null())
         .cloned()
+}
+
+fn value_field_default(default: Option<&Value>, field: EditorFieldSpec) -> Option<Value> {
+    default_object_field_value(default, field).or_else(|| field.default_value())
 }
 
 fn set_value_field(target: &mut Value, field: &str, field_value: Value) {
@@ -974,7 +962,7 @@ fn remove_value_field(target: &mut Value, field: &str) {
 }
 
 fn reset_value_field(value: &mut Value, field: EditorFieldSpec, default: Option<&Value>) {
-    if let Some(default) = default_object_field_value(default, field) {
+    if let Some(default) = value_field_default(default, field) {
         set_value_field(value, field.name, default);
     } else {
         remove_value_field(value, field.name);
