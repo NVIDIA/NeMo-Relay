@@ -92,7 +92,8 @@ fn gateway_session_id_uses_explicit_claude_then_codex_fallbacks() {
     let mut headers = HeaderMap::new();
     let codex_body = json!({
         "prompt_cache_key": "codex-thread",
-        "client_metadata": { "x-codex-installation-id": "install-1" }
+        "client_metadata": { "x-codex-installation-id": "install-1" },
+        "session_id": "body-thread"
     });
 
     assert_eq!(
@@ -116,6 +117,45 @@ fn gateway_session_id_uses_explicit_claude_then_codex_fallbacks() {
     assert_eq!(
         gateway_session_id(&headers, &codex_body, GatewayRouteKind::OpenAiResponses).as_deref(),
         Some("explicit-thread")
+    );
+}
+
+#[test]
+fn gateway_session_id_accepts_openai_body_session_id_fallback() {
+    let headers = HeaderMap::new();
+
+    assert_eq!(
+        gateway_session_id(
+            &headers,
+            &json!({ "session_id": " body-session " }),
+            GatewayRouteKind::OpenAiChatCompletions,
+        )
+        .as_deref(),
+        Some("body-session")
+    );
+    assert_eq!(
+        gateway_session_id(
+            &headers,
+            &json!({ "session_id": "body-session" }),
+            GatewayRouteKind::AnthropicMessages,
+        ),
+        None
+    );
+    assert_eq!(
+        gateway_session_id(
+            &headers,
+            &json!({ "session_id": "" }),
+            GatewayRouteKind::OpenAiChatCompletions,
+        ),
+        None
+    );
+    assert_eq!(
+        gateway_session_id(
+            &headers,
+            &json!({ "session_id": 42 }),
+            GatewayRouteKind::OpenAiResponses,
+        ),
+        None
     );
 }
 
