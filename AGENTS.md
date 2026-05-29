@@ -227,10 +227,12 @@ Use the stable root-level wrappers:
 `apply-patches.sh` expects clean third-party checkouts. After editing an integration checkout, run `./scripts/generate-patches.sh` to regenerate patch files and verify they apply to a clean detached checkout.
 
 ### Public API-based Integrations
-Some integrations can be implemented using public APIs without patching. Currently the Python based integrations are located under `python/nemo_relay/integrations/` with their own README files and test suites.
+Some integrations can be implemented using public APIs without patching. The Python integrations live under `python/nemo_relay/integrations/`, are documented in `docs/supported-integrations/`, and have test suites under `python/tests/integrations/`.
 
 Current public API-based integrations include:
 - LangChain: `python/nemo_relay/integrations/langchain`
+- LangGraph: `python/nemo_relay/integrations/langgraph`
+- Deep Agents: `python/nemo_relay/integrations/deepagents`
 
 ## Documentation And Contribution Workflow
 

@@ -32,8 +32,6 @@ environment variables, or shared TOML config.
 - Hermes does not require a static bundle in this directory. The setup wizard
   (`nemo-relay config`) merges hook commands into `.hermes/config.yaml` when
   hermes is selected.
-- `hermes/` contains a native Hermes Python plugin prototype that writes ATIF
-  from Hermes plugin middleware without running the gateway HTTP process.
 
 ## Transparent Setup
 
