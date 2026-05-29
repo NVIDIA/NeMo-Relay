@@ -1890,7 +1890,7 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
             .extend([hook_start, gateway_start, gateway_end, hook_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 2);
     assert_eq!(
         trajectory.steps[0].message,
@@ -1991,7 +1991,7 @@ fn test_exporter_prefers_gateway_span_over_non_exact_hook_summary() {
             .extend([hook_start, gateway_start, gateway_end, hook_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 2);
     assert_eq!(
         trajectory.steps[0].message,
@@ -2065,7 +2065,7 @@ fn test_exporter_keeps_sequential_same_content_llm_spans() {
             .extend([hook_start, hook_end, gateway_start, gateway_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     assert_eq!(trajectory.steps.len(), 4);
     assert!(trajectory.steps.iter().any(|step| {
         step.extra
