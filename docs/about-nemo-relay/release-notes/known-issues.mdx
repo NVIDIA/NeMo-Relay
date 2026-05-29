@@ -11,7 +11,8 @@ documentation set.
 
 ## NeMo Relay 0.3
 
-These notes apply to the NeMo Relay 0.3 release.
+These notes apply to the NeMo Relay 0.3 release. The following known issues
+and limitations apply to NeMo Relay 0.3:
 
 - Go, WebAssembly, and the raw C FFI surface are experimental and source-first.
 - Generated API pages cover Rust, Python, and Node.js. Experimental bindings do
@@ -35,7 +36,7 @@ These notes apply to the NeMo Relay 0.3 release.
   exporter output. Deregistering a subscriber affects future emissions, but
   callbacks from already-queued event snapshots may still run.
 
-### Fixed In NeMo Relay 0.3
+### Fixed in NeMo Relay 0.3
 
 - Managed LLM start events are emitted before execution intercepts.
 - Coding-agent trace scopes are aligned with NeMo Relay agent scope semantics.
@@ -43,7 +44,7 @@ These notes apply to the NeMo Relay 0.3 release.
 - OpenClaw tool call replay visibility is preserved.
 - LangChain serialization handles wrapped integration payloads more reliably.
 
-### Fixed In Earlier Releases
+### Fixed in Earlier Releases
 
 - Enabled TLS support for OTLP HTTP export.
 - Preserved Go scope stacks across OS threads.
