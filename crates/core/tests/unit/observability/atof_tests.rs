@@ -121,13 +121,6 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
 struct AtofSocketSink {
     address: String,
     events: mpsc::Receiver<Vec<serde_json::Value>>,
-    release: mpsc::Sender<()>,
-}
-
-impl AtofSocketSink {
-    fn release_after_shutdown(&self) {
-        let _ = self.release.send(());
-    }
 }
 
 fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
@@ -135,7 +128,6 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let (sender, receiver) = mpsc::channel();
-    let (release_sender, release_receiver) = mpsc::channel();
     thread::spawn(move || {
         let deadline = Instant::now() + TEST_RECV_TIMEOUT;
         let stream = loop {
@@ -165,12 +157,13 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
             }
         }
         let _ = sender.send(events);
-        let _ = release_receiver.recv_timeout(TEST_RECV_TIMEOUT);
+        let _ = reader.get_ref().set_read_timeout(None);
+        let mut drain = String::new();
+        let _ = reader.read_to_string(&mut drain);
     });
     AtofSocketSink {
         address,
         events: receiver,
-        release: release_sender,
     }
 }
 
@@ -321,7 +314,6 @@ fn streaming_exporter_writes_canonical_event_json_values_to_socket() {
 
     (exporter.subscriber())(&event);
     exporter.shutdown().unwrap();
-    sink.release_after_shutdown();
 
     let delivered = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     assert_eq!(delivered[0], event.try_to_json_value().unwrap());
@@ -477,7 +469,6 @@ fn streaming_exporter_registers_with_runtime_events() {
     assert!(exporter.deregister(&name).unwrap());
     assert!(!exporter.deregister(&name).unwrap());
     exporter.shutdown().unwrap();
-    sink.release_after_shutdown();
 
     let events = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     let scope_start = &events[0];
