@@ -16,16 +16,16 @@ exclude = [".tmp", ".uv-cache"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/NVIDIA/NeMo-Relay"
 
 [workspace.dependencies]
-nemo-relay = { version = "0.3.0", path = "crates/core", default-features = false }
-nemo-relay-adaptive = { version = "0.3.0", path = "crates/adaptive" }
-nemo-relay-ffi = { version = "0.3.0", path = "crates/ffi" }
-nemo-relay-cli = { version = "0.3.0", path = "crates/cli" }
+nemo-relay = { version = "0.4.0", path = "crates/core", default-features = false }
+nemo-relay-adaptive = { version = "0.4.0", path = "crates/adaptive" }
+nemo-relay-ffi = { version = "0.4.0", path = "crates/ffi" }
+nemo-relay-cli = { version = "0.4.0", path = "crates/cli" }
 uuid = "=1.18.1"
 
 [workspace.lints.rust]

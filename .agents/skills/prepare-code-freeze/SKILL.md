@@ -40,19 +40,34 @@ This workflow assumes `upstream` is the NVIDIA repository remote
    branch.
 6. Run `just set-version <next-version>` to bump all release-versioned package
    surfaces on `main`.
-7. Validate with targeted checks:
+7. Search documentation source for references to the old version and update
+   current-version install commands, package examples, and configuration
+   examples to `<next-version>` where appropriate:
+
+   ```bash
+   rg -n '<old-version>' README.md docs fern --glob '!docs/_build/**' || true
+   ```
+
+   Review matches before changing them. Leave intentional historical references
+   alone, such as release notes, changelogs, generated build output, and
+   third-party dependency attribution entries.
+8. Validate with targeted checks:
 
    ```bash
    ruby -e 'require "yaml"; YAML.load_file(".github/nightly-alpha-branches.yaml"); YAML.load_file(".github/workflows/nightly-alpha-tag.yaml")'
    just set-version <next-version>
+   rg -n '<old-version>' README.md docs fern --glob '!docs/_build/**' || true
    git diff --check
    ```
 
-8. Open a PR targeting `main` using `.github/pull_request_template.md`. The PR
+   Any remaining documentation matches for `<old-version>` should be intentional
+   and called out in the PR description.
+9. Open a PR targeting `main` using `.github/pull_request_template.md`. The PR
    must mention:
    - the new release branch
    - the nightly alpha branch config update
    - the `just set-version <next-version>` bump
+   - documentation old-version reference updates or intentional leftovers
    - that release-bound PRs now target the new `release/*` branch
 
 ## Guardrails
