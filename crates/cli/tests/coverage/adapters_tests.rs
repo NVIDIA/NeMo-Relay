@@ -286,9 +286,9 @@ fn maps_hermes_shell_hook_tool_payload() {
             "hook_event_name": "pre_tool_call",
             "tool_name": "terminal",
             "tool_input": { "command": "pwd" },
-            "session_id": "",
+            "session_id": "hermes-session",
             "extra": {
-                "task_id": "hermes-session",
+                "task_id": "task-1",
                 "tool_call_id": "tool-1"
             }
         }),
@@ -305,6 +305,23 @@ fn maps_hermes_shell_hook_tool_payload() {
         }
         event => panic!("unexpected event: {event:?}"),
     }
+    assert_eq!(outcome.response, json!({}));
+}
+
+#[test]
+fn drops_uncorrelatable_hermes_pre_tool_call() {
+    let headers = HeaderMap::new();
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "task_id": "task-1",
+            "tool_name": "terminal",
+            "tool_input": { "command": "pwd" }
+        }),
+        &headers,
+    );
+
+    assert!(outcome.events.is_empty());
     assert_eq!(outcome.response, json!({}));
 }
 
