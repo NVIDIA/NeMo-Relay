@@ -153,6 +153,8 @@ fn start_atof_socket_sink(
                 Ok(_) => events.push(serde_json::from_str(line.trim_end()).unwrap()),
             }
         }
+        let mut drain = String::new();
+        let _ = reader.read_to_string(&mut drain);
         let _ = sender.send(events);
     });
     (address, receiver)
