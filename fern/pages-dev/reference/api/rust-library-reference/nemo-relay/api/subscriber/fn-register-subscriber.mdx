@@ -2,7 +2,7 @@
 title: "Function register_subscriber"
 sidebar-title: "register_subscriber"
 description: "Register a global lifecycle event subscriber."
-position: 2
+position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -30,4 +30,4 @@ Returns [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-
 
 ## Notes
 
-Global subscribers remain active across scopes until explicitly removed.
+Global subscribers remain active across scopes until explicitly removed. Native event-producing APIs enqueue subscriber work and return without waiting for callbacks.

@@ -87,6 +87,7 @@ async def main():
         print(tool_result)
         print(llm_result)
 
+    nemo_relay.subscribers.flush()
     nemo_relay.subscribers.deregister("quickstart-printer")
 
 asyncio.run(main())
@@ -100,9 +101,10 @@ You should see:
 - `{'echo': 'hello'}` from the tool call
 - A final object containing `ok: True` and the echoed message payload from the LLM callback
 
-If you only see the returned values and no event lines, the callbacks ran but
-you did not verify instrumentation. The subscriber output is the fast check that
-NeMo Relay actually emitted lifecycle events.
+Native subscriber delivery is asynchronous, so flush before checking subscriber
+output. If you only see the returned values and no event lines, the callbacks
+ran but you did not verify instrumentation. The subscriber output is the fast
+check that NeMo Relay actually emitted lifecycle events.
 
 ## Where the Python Surface Lives
 

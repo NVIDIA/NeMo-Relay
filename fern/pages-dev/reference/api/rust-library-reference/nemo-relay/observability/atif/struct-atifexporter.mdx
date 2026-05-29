@@ -52,7 +52,7 @@ An [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/ru
 
 #### `export`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn export(&amp;self) -&gt; <a href=\"struct-atiftrajectory\">AtifTrajectory</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn export(&amp;self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
 
 Export the collected event history as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory).
 
@@ -60,9 +60,21 @@ Export the collected event history as an [`AtifTrajectory`](/reference/api/rust-
 
 An [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory) synthesized from the events observed so far.
 
+##### Errors
+
+Returns an error if queued subscriber delivery cannot be flushed before the trajectory is cloned.
+
 ##### Notes
 
 Exporting does not clear the buffered events. Call [`AtifExporter::clear`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) when you need to reset the exporter between trajectories.
+
+#### `try_export`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_export(&amp;self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+
+Try to export the collected event history as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory).
+
+This is equivalent to [`AtifExporter::export`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) and is retained for callers that prefer an explicitly fallible method name.
 
 #### `clear`
 

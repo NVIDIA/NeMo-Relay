@@ -124,6 +124,7 @@ sequenceDiagram
     participant Exec as Execution Intercepts
     participant Callback as Real Callback
     participant San as Sanitize Guardrails
+    participant Dispatch as Async Subscriber Dispatcher
     participant Subs as Subscribers
 
     Caller->>Runtime: managed tool or LLM call
@@ -134,13 +135,15 @@ sequenceDiagram
     else allowed
         Runtime->>Req: rewrite the real request
         Runtime->>San: sanitize emitted start payload
-        Runtime->>Subs: emit start event before execution
+        Runtime->>Dispatch: enqueue start event before execution
+        Dispatch-->>Subs: deliver start event later
         Runtime->>Exec: wrap execution
         Exec->>Callback: invoke callback
         Callback-->>Exec: return real result
         Exec-->>Runtime: continue
         Runtime->>San: sanitize emitted end payload
-        Runtime->>Subs: emit end event
+        Runtime->>Dispatch: enqueue end event
+        Dispatch-->>Subs: deliver end event later
         Runtime-->>Caller: return real result
     end
 ```
@@ -203,6 +206,7 @@ flowchart TB
             SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
             StartEvent[Emit Start Event]
             EndEvent[Emit End Event]
+            Dispatcher[["Async Subscriber Dispatcher"]]
             EventSubscribers[["Event Subscribers"]]
         end
     end
@@ -211,11 +215,12 @@ flowchart TB
 
     Request --> ConditionalExecutionGuardrails
     RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
-    ConditionalExecutionGuardrails -->|"(rejected)"| EventSubscribers
+    ConditionalExecutionGuardrails -->|"(rejected event)"| Dispatcher
     ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
     ConditionalExecutionGuardrails -->|"(passed)"| RequestIntercepts
     SanitizeRequestGuardrails -->|Sanitized Start Payload| StartEvent
-    StartEvent --> EventSubscribers
+    StartEvent --> Dispatcher
+    Dispatcher --> EventSubscribers
     StartEvent -->|Before Execution Intercepts| HasExecutionIntercept
     RequestIntercepts -.->|Real Request| HasExecutionIntercept
 
@@ -235,10 +240,10 @@ flowchart TB
     Finalizer o--o|shared state| Collector
 
     SanitizeResponseGuardrails -->|Sanitized End Payload| EndEvent
-    EndEvent --> EventSubscribers
+    EndEvent --> Dispatcher
 
     class Execution,Invocation,Streaming,Observability,Request,Response grey-lightest;
-    class EventSubscribers,StartEvent,EndEvent teal-lightest;
+    class Dispatcher,EventSubscribers,StartEvent,EndEvent teal-lightest;
     class RequestIntercepts,HasExecutionIntercept,ExecutionIntercepts yellow-lightest;
     class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails green-lightest;
     class RaiseException red-lightest;

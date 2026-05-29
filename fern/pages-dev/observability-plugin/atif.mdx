@@ -318,7 +318,7 @@ try {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 
 let exporter = AtifExporter::new(
@@ -335,7 +335,8 @@ register_subscriber("atif-exporter", exporter.subscriber())?;
 
 // Run instrumented application work here.
 
-let trajectory = exporter.export();
+flush_subscribers()?;
+let trajectory = exporter.export()?;
 let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
 println!("{trajectory_json}");
 

@@ -82,6 +82,7 @@ async def main() -> None:
             )
             print(result)
     finally:
+        nemo_relay.subscribers.flush()
         nemo_relay.subscribers.deregister("llm-check")
 
 asyncio.run(main())
@@ -95,6 +96,7 @@ const {
   LlmRequest,
   ScopeType,
   deregisterSubscriber,
+  flushSubscribers,
   llmCallExecute,
   registerSubscriber,
   withScope,
@@ -128,6 +130,8 @@ async function main() {
       console.log(result);
     });
   } finally {
+    flushSubscribers();
+    await new Promise((resolve) => setImmediate(resolve));
     deregisterSubscriber("llm-check");
   }
 }
@@ -146,7 +150,7 @@ use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::api::scope::{
     self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
-use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -192,6 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{result}");
 
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+    flush_subscribers()?;
     let _ = deregister_subscriber("llm-check")?;
     Ok(())
 }
@@ -208,6 +213,10 @@ Check both behavior and instrumentation:
 - The provider result matches what the application returned before the wrapper was added.
 - The subscriber prints an agent or request scope event.
 - The subscriber prints LLM start and LLM end events for `demo-provider`.
+
+Native subscriber delivery is asynchronous. Flush subscribers before validating
+printed output. In Node.js, also wait one event-loop tick after
+`flushSubscribers()` so JavaScript callbacks can run.
 - LLM start input contains the request after request intercepts and
   sanitize-request guardrails.
 - LLM end output contains the provider response after response guardrails.

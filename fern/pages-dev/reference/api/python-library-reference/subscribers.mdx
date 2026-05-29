@@ -31,3 +31,11 @@ def deregister(name: str) -> bool
 
 Remove a previously registered global subscriber.
 
+### `flush`
+
+```python
+def flush() -> None
+```
+
+Wait for subscriber callbacks already queued by native event emission.
+

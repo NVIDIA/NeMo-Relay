@@ -42,6 +42,7 @@ flowchart TB
         end
 
         Events[Event Stream]
+        Dispatcher[Async Subscriber Dispatcher]
     end
 
     subgraph ObsLayer[Subscribers and Observability Backends]
@@ -60,7 +61,8 @@ flowchart TB
     Core -->|updates| Scope
     Core -->|resolves| Registry
     Core -->|emits| Events
-    Events -->|fan out to| Subs
+    Events -->|enqueue snapshots| Dispatcher
+    Dispatcher -->|deliver FIFO| Subs
     Subs -->|export to| Backends
 
     class AppLayer grey-hint;
@@ -92,6 +94,7 @@ NeMo Relay combines a small number of runtime pieces into one shared execution m
 - The **middleware registries** answer what should happen around that work
 - The **plugin system** installs reusable runtime behavior from configuration
 - The **event stream** records what happened
+- The **async subscriber dispatcher** delivers event snapshots after emission
 - **subscribers** consume those events
 
 Every emitted scope, tool, LLM, or mark event attaches to the active scope stack. Every managed tool or LLM call resolves the currently visible middleware before it executes.
@@ -119,11 +122,11 @@ The plugin system installs reusable runtime components from configuration. A plu
 
 ### Event Emission
 
-The runtime emits structured events for scopes, tools, LLMs, and named marks. Those events are the canonical record of runtime behavior.
+The runtime emits structured events for scopes, tools, LLMs, and named marks. Those events are the canonical record of runtime behavior. Native Rust, Python, Node.js, and FFI event-producing APIs enqueue subscriber work and return without waiting for subscriber callbacks or exporter work.
 
 ### Subscribers and Exporters
 
-Subscribers consume the event stream. Some subscribers stay in-process. Others export that stream into files or tracing systems.
+Subscribers consume the event stream through the background dispatcher. Some subscribers stay in-process. Others export that stream into files or tracing systems. Use the binding flush API when a test or shutdown path must wait for already-queued subscriber work.
 
 ## Two Axes of Runtime State
 

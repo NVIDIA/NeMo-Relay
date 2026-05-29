@@ -52,6 +52,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_deregister_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-request-guardrail): Deregister a tool request sanitization guardrail by name.
 - [nemo_relay_deregister_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-response-guardrail): Deregister a tool response sanitization guardrail by name.
 - [nemo_relay_event](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-event): Emit a named lifecycle event.
+- [nemo_relay_flush_subscribers](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-flush-subscribers): Wait for subscriber callbacks queued before this call to finish.
 - [nemo_relay_get_handle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-get-handle): Retrieve the current scope handle from the thread-local scope stack.
 - [nemo_relay_initialize_plugins](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-plugins): Initialize the active global plugin components and return the resulting diagnostics report.
 - [nemo_relay_list_plugin_kinds_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-plugin-kinds-json): Return the registered plugin kinds as JSON.

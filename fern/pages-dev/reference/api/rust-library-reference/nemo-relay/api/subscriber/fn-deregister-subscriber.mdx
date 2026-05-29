@@ -29,4 +29,4 @@ Returns an error when the global registry lock cannot be acquired safely.
 
 ## Notes
 
-Deregistration affects only future event delivery.
+Deregistration affects only future event delivery. Already emitted events carry a subscriber snapshot, so queued callbacks from that snapshot may still run after deregistration.
