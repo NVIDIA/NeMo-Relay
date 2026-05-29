@@ -23,7 +23,9 @@ paths.
 Use these practices when applying the concept in application or integration code.
 
 - Prefer scope-local middleware for request-specific behavior so cleanup happens when the scope closes.
-- Keep subscriber callbacks lightweight or move expensive export work out of the hot path.
+- Keep subscriber callbacks lightweight. Expensive export work no longer blocks
+  managed execution directly, but it can still delay queued subscriber delivery,
+  flushes, and shutdown.
 - Use execution intercepts when you need to wrap real execution and sanitize guardrails when you only need to change emitted observability payloads.
 - Use binding-native typed wrappers and codecs when provider payload conversion would otherwise be repeated at many call sites.
 

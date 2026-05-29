@@ -6,9 +6,70 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This page summarizes the notable capabilities in the current release documentation set.
+This page summarizes the notable capabilities in the current release
+documentation set.
 
 ## NeMo Relay 0.3
 
-This release of NeMo Relay release introduces several new components and capabilities.
-The complete changelog and release notes can be viewed on [GitHub](https://github.com/NVIDIA/NeMo-Relay/releases).
+NeMo Relay 0.3 adds first-party guardrails, richer trajectory export, adaptive
+plugin workflows, and clearer integration support for agent runtimes.
+
+### Breaking Changes
+
+- The project was renamed to NeMo Relay across documentation, package guidance,
+  and CLI-facing surfaces.
+- The core runtime registry surface was narrowed. Applications should use the
+  documented middleware, intercept, subscriber, and plugin APIs instead of broad
+  registry access.
+- Native subscriber delivery is now non-blocking. Event construction remains
+  synchronous, but subscriber callbacks and exporter work are queued on a
+  process-wide background dispatcher. Applications and tests that depend on
+  subscriber side effects must call the subscriber flush API before reading
+  captured events, files, or exported trace output.
+
+### Guardrails
+
+- Added the built-in `nemo_guardrails` plugin contract for installing NeMo
+  Guardrails behavior through NeMo Relay plugin configuration.
+- Added a remote NeMo Guardrails backend for deployments that call an external
+  guardrails service.
+- Added CLI editor support for guardrails plugin configuration.
+- Added guardrail scopes for conditional guardrails so trace output shows
+  guardrail execution boundaries more clearly.
+- Integrated security guardrails around managed agent calls.
+
+### Observability
+
+- Exposed canonical ATOF event JSON across bindings so applications can consume
+  the same event shape from Rust, Python, and Node.js.
+- Upgraded ATIF exporters to ATIF v1.7 with nested subagent support.
+- Added first-class S3-compatible storage export for ATIF traces.
+- Added streaming LLM chunk marks for more precise streaming trace inspection.
+- Fixed LLM start event ordering so managed LLM start events are emitted before
+  execution intercepts.
+- Fixed ATIF tool-observation correlation.
+
+### Plugins And Adaptive Runtime
+
+- Enabled the adaptive plugin for the CLI and OpenClaw workflows.
+- Added CLI editor support for adaptive plugin configuration.
+- Added a Python context manager for plugin initialization and teardown.
+
+### Integrations
+
+- Improved LangChain serialization for wrapped requests and responses.
+- Preserved OpenClaw tool call replay visibility with the upgrade to OpenClaw 2026.5.26
+- Updated the launch banner to use `NEMO RELAY`.
+
+### Documentation And Tooling
+
+- Switched the documentation site to Fern and consolidated Fern publishing.
+- Added broken-link validation for Fern documentation.
+- Added agent runtime primer, trace incident runbook, plugin-building, migration,
+  and adaptive tuning guidance.
+- Added built-in guardrails plugin documentation.
+- Added CI path filters, CLI draft release assets, dependency updates, and ATIF
+  S3 storage test coverage.
+
+The complete changelog and release artifacts can be viewed on
+[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).

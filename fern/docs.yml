@@ -13,6 +13,9 @@ global-theme: nvidia
 announcement:
   message: "\U0001F514 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and\
     \ behavior may change with each release."
+redirects:
+- source: /nemo/relay/about-nemo-relay/release-notes/related-topics
+  destination: /nemo/relay/about-nemo-relay/release-notes
 experimental:
   mdx-components:
   - ./components
