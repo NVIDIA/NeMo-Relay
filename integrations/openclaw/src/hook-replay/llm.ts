@@ -451,12 +451,14 @@ export function buildReplayLlmResponse(
   config: NemoRelayHookBackendConfig,
 ): JsonValue {
   const usage = mapUsage(event.usage);
-  const assistantToolCallNames = toolCallNames(event.assistantToolCalls);
+  const assistantToolCalls = assistantToolCallsForOutput(event, config);
+  const assistantToolCallNames = toolCallNames(assistantToolCalls);
   return toJsonValue({
     role: 'assistant',
     content: config.capture.includeResponses
       ? responseContent(event.assistantTexts, assistantToolCallNames)
       : undefined,
+    tool_calls: assistantToolCalls.length > 0 ? assistantToolCalls : undefined,
     assistant_texts_count: event.assistantTexts.length,
     resolved_ref: event.resolvedRef,
     harness_id: event.harnessId,
@@ -473,6 +475,17 @@ export function buildReplayLlmResponse(
       assistant_tool_call_names: assistantToolCallNames,
     },
   });
+}
+
+/** Return assistant tool calls from the current OpenClaw llm_output contract. */
+function assistantToolCallsForOutput(
+  event: PluginHookLlmOutputEvent,
+  config: NemoRelayHookBackendConfig,
+): unknown[] {
+  const explicit = Array.isArray(event.assistantToolCalls) ? event.assistantToolCalls : [];
+  const inferred = explicit.length > 0 || !isRecord(event.lastAssistant) ? explicit : extractToolCalls(event.lastAssistant);
+  const snapshot = snapshotMessages(inferred);
+  return config.capture.stripToolArgs ? snapshot.map(stripToolCallArgs) : snapshot;
 }
 
 /** Replay an output whose matching input never arrived before the grace timeout. */
@@ -855,6 +868,9 @@ function stripToolCallArgs(value: unknown): unknown {
       stripped[key] = { stripped: true };
     }
   }
+  if (isRecord(stripped.function) && stripped.function.arguments !== undefined) {
+    stripped.function = { ...stripped.function, arguments: { stripped: true } };
+  }
   return stripped;
 }
 
@@ -969,6 +985,8 @@ function isToolCallLike(value: unknown): boolean {
   return (
     isRecord(value) &&
     (value.type === 'toolCall' ||
+      value.type === 'toolcall' ||
+      value.type === 'function_call' ||
       value.type === 'tool_use' ||
       value.type === 'tool-call' ||
       value.toolName !== undefined ||
@@ -987,12 +1005,21 @@ function toolCallNames(toolCalls: unknown[] | undefined): string[] {
       continue;
     }
     const name =
-      stringField(toolCall, 'name') ?? stringField(toolCall, 'toolName') ?? stringField(toolCall, 'functionName');
+      stringField(toolCall, 'name') ??
+      stringField(toolCall, 'toolName') ??
+      stringField(toolCall, 'functionName') ??
+      functionToolCallName(toolCall);
     if (name) {
       names.push(name);
     }
   }
   return names;
+}
+
+/** Read OpenAI-style nested function tool-call names. */
+function functionToolCallName(toolCall: Record<string, unknown>): string | undefined {
+  const fn = toolCall.function;
+  return isRecord(fn) ? stringField(fn, 'name') : undefined;
 }
 
 /** Convert stored message-write usage back into the llm_output usage contract. */
