@@ -1810,6 +1810,271 @@ fn test_exporter_skips_llm_chunk_marks() {
 }
 
 #[test]
+fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let parent_uuid = Uuid::now_v7();
+    let hook_uuid = Uuid::now_v7();
+    let gateway_uuid = Uuid::now_v7();
+    let request = json!({
+        "messages": [{"role": "user", "content": "Reply with exactly dedupe_ok"}],
+        "model": "test-model"
+    });
+
+    let mut hook_start = event_builder(hook_uuid, EventType::Start)
+        .name("openrouter")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({
+            "hook_event_name": "pre_api_request",
+            "api_call_id": "session:task:abcd:api:1",
+            "provider_payload_exact": true
+        }))
+        .input(json!({"content": request.clone(), "headers": {}}))
+        .build();
+    let mut gateway_start = event_builder(gateway_uuid, EventType::Start)
+        .name("openai.chat_completions")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({
+            "gateway_path": "/v1/chat/completions",
+            "llm_correlation_source": "pre_llm_call"
+        }))
+        .input(request.clone())
+        .build();
+    let mut gateway_end = event_builder(gateway_uuid, EventType::End)
+        .name("openai.chat_completions")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({
+            "gateway_path": "/v1/chat/completions",
+            "llm_correlation_source": "pre_llm_call"
+        }))
+        .output(json!({
+            "choices": [{"message": {"content": "dedupe_ok"}}],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+        }))
+        .build();
+    let mut hook_end = event_builder(hook_uuid, EventType::End)
+        .name("openrouter")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({
+            "hook_event_name": "post_api_request",
+            "api_call_id": "session:task:abcd:api:1",
+            "provider_payload_exact": true
+        }))
+        .output(json!({"content": "dedupe_ok"}))
+        .build();
+
+    for (idx, event) in [
+        &mut hook_start,
+        &mut gateway_start,
+        &mut gateway_end,
+        &mut hook_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([hook_start, gateway_start, gateway_end, hook_end]);
+    }
+
+    let trajectory = exporter.export();
+    assert_eq!(trajectory.steps.len(), 2);
+    assert_eq!(
+        trajectory.steps[0].message,
+        json!("Reply with exactly dedupe_ok")
+    );
+    assert_eq!(trajectory.steps[1].message, json!("dedupe_ok"));
+    assert_eq!(
+        trajectory.steps[0].extra.as_ref().unwrap()["ancestry"]["function_name"],
+        "openrouter"
+    );
+    assert_eq!(
+        trajectory.steps[1].extra.as_ref().unwrap()["ancestry"]["function_name"],
+        "openrouter"
+    );
+    assert!(!trajectory.steps.iter().any(|step| {
+        step.extra
+            .as_ref()
+            .is_some_and(|extra| extra["ancestry"]["function_name"] == "openai.chat_completions")
+    }));
+    let metrics = trajectory.steps[1].metrics.as_ref().unwrap();
+    assert_eq!(metrics.prompt_tokens, Some(7));
+    assert_eq!(metrics.completion_tokens, Some(3));
+    assert_eq!(metrics.extra.as_ref().unwrap()["total_tokens"], json!(10));
+}
+
+#[test]
+fn test_exporter_prefers_gateway_span_over_non_exact_hook_summary() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let parent_uuid = Uuid::now_v7();
+    let hook_uuid = Uuid::now_v7();
+    let gateway_uuid = Uuid::now_v7();
+    let request = json!({
+        "messages": [{"role": "user", "content": "Reply with exactly gateway_ok"}],
+        "model": "test-model"
+    });
+
+    let mut hook_start = event_builder(hook_uuid, EventType::Start)
+        .name("openrouter")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({
+            "hook_event_name": "pre_api_request",
+            "fidelity_source": "agent_api_hooks",
+            "provider_payload_exact": false
+        }))
+        .input(json!({
+            "content": {"message_count": 2, "request_char_count": 128},
+            "headers": {}
+        }))
+        .build();
+    let mut gateway_start = event_builder(gateway_uuid, EventType::Start)
+        .name("openai.chat_completions")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({"gateway_path": "/v1/chat/completions"}))
+        .input(json!({"content": request.clone(), "headers": {}}))
+        .build();
+    let mut gateway_end = event_builder(gateway_uuid, EventType::End)
+        .name("openai.chat_completions")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({"gateway_path": "/v1/chat/completions"}))
+        .output(json!({"choices": [{"message": {"content": "gateway_ok"}}]}))
+        .build();
+    let mut hook_end = event_builder(hook_uuid, EventType::End)
+        .name("openrouter")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .metadata(json!({
+            "hook_event_name": "post_api_request",
+            "fidelity_source": "agent_api_hooks",
+            "provider_payload_exact": false
+        }))
+        .output(json!({"assistant_content_chars": 10, "finish_reason": "stop"}))
+        .build();
+
+    for (idx, event) in [
+        &mut hook_start,
+        &mut gateway_start,
+        &mut gateway_end,
+        &mut hook_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([hook_start, gateway_start, gateway_end, hook_end]);
+    }
+
+    let trajectory = exporter.export();
+    assert_eq!(trajectory.steps.len(), 2);
+    assert_eq!(
+        trajectory.steps[0].message,
+        json!("Reply with exactly gateway_ok")
+    );
+    assert_eq!(trajectory.steps[1].message, json!("gateway_ok"));
+    assert!(trajectory.steps.iter().all(|step| {
+        step.extra
+            .as_ref()
+            .is_some_and(|extra| extra["ancestry"]["function_name"] == "openai.chat_completions")
+    }));
+}
+
+#[test]
+fn test_exporter_keeps_sequential_same_content_llm_spans() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let parent_uuid = Uuid::now_v7();
+    let hook_uuid = Uuid::now_v7();
+    let gateway_uuid = Uuid::now_v7();
+    let request = json!({
+        "messages": [{"role": "user", "content": "Reply with exactly repeat_ok"}],
+        "model": "test-model"
+    });
+
+    let mut hook_start = event_builder(hook_uuid, EventType::Start)
+        .name("openrouter")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .metadata(json!({"hook_event_name": "pre_api_request"}))
+        .input(request.clone())
+        .build();
+    let mut hook_end = event_builder(hook_uuid, EventType::End)
+        .name("openrouter")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .metadata(json!({"hook_event_name": "post_api_request"}))
+        .output(json!({"content": "repeat_ok"}))
+        .build();
+    let mut gateway_start = event_builder(gateway_uuid, EventType::Start)
+        .name("openai.chat_completions")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .metadata(json!({"gateway_path": "/v1/chat/completions"}))
+        .input(request)
+        .build();
+    let mut gateway_end = event_builder(gateway_uuid, EventType::End)
+        .name("openai.chat_completions")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .metadata(json!({"gateway_path": "/v1/chat/completions"}))
+        .output(json!({"choices": [{"message": {"content": "repeat_ok"}}]}))
+        .build();
+
+    for (idx, event) in [
+        &mut hook_start,
+        &mut hook_end,
+        &mut gateway_start,
+        &mut gateway_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([hook_start, hook_end, gateway_start, gateway_end]);
+    }
+
+    let trajectory = exporter.export();
+    assert_eq!(trajectory.steps.len(), 4);
+    assert!(trajectory.steps.iter().any(|step| {
+        step.extra
+            .as_ref()
+            .is_some_and(|extra| extra["ancestry"]["function_name"] == "openai.chat_completions")
+    }));
+}
+
+#[test]
 fn test_trajectory_serde_roundtrip() {
     let trajectory = AtifTrajectory {
         schema_version: ATIF_SCHEMA_VERSION.to_string(),
