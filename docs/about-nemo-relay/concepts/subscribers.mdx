@@ -124,7 +124,7 @@ shape for their target backend.
 
 Native subscribers are invoked by one process-wide worker thread in FIFO event
 order and subscriber snapshot order. WebAssembly keeps its current synchronous
-delivery behavior because this ticket does not add thread-based dispatch there.
+delivery behavior because it does not use thread-based dispatch.
 
 ## Waiting for Delivery
 

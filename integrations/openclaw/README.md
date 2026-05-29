@@ -12,10 +12,11 @@ observability component can export as ATIF JSON, OpenTelemetry spans, and
 OpenInference/Phoenix spans. The same generic plugin config path can initialize
 Adaptive components for hook-backed telemetry learning.
 
-This public OpenClaw plugin package uses OpenClaw public hooks. It does not
-rewrite OpenClaw tool execution, provider routing, policy decisions, or model
-requests. For middleware-backed behavior that changes execution, use the
-patch-based OpenClaw integration from the NeMo Relay repository.
+This public OpenClaw plugin package uses OpenClaw public hooks. It can run
+pre-tool conditional guardrails when OpenClaw invokes the before-tool hook, but
+it does not rewrite provider routing or model requests. For middleware-backed
+behavior that changes execution, use the patch-based OpenClaw integration from
+the NeMo Relay repository.
 
 ## Why Use It?
 
@@ -204,11 +205,10 @@ openclaw gateway call nemoRelay.status --json
 
 ## Current Limits
 
-The plugin maps supported OpenClaw hook events into NeMo Relay telemetry without
-changing OpenClaw execution behavior.
+The plugin maps supported OpenClaw hook events into NeMo Relay telemetry and can
+run pre-tool conditional guardrail checks.
 
-It does not change OpenClaw tool execution, provider routing, policy decisions,
-or provider request payloads.
+It does not rewrite provider routing or provider request payloads.
 
 Current OpenClaw public hooks expose request, response, message-write, and
 provider timing details through separate event streams. The plugin correlates

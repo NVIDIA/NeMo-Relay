@@ -14,10 +14,11 @@ Agent Trajectory Interchange Format (ATIF) JSON, OpenTelemetry spans,
 OpenInference/Phoenix spans, and adaptive telemetry inputs.
 
 This public OpenClaw plugin uses OpenClaw public hooks. It can initialize
-generic NeMo Relay plugin components such as `observability` and `adaptive`, but
-hook-backed mode does not rewrite OpenClaw tool execution, provider routing, or
-model requests. For middleware-backed behavior that changes execution, use the
-patch-based OpenClaw integration from the NeMo Relay repository.
+generic NeMo Relay plugin components such as `observability` and `adaptive`, and
+it can run pre-tool conditional guardrails when OpenClaw invokes the before-tool
+hook. Hook-backed mode does not rewrite provider routing or model requests. For
+middleware-backed behavior that changes execution, use the patch-based OpenClaw
+integration from the NeMo Relay repository.
 
 Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
 outputs, verify exported traces, and understand current LLM replay fidelity.
@@ -26,7 +27,7 @@ outputs, verify exported traces, and understand current LLM replay fidelity.
 
 Required:
 
-- OpenClaw `2026.5.6` or newer.
+- OpenClaw `2026.5.26` or newer.
 - The OpenClaw CLI available as `openclaw`.
 
 Optional:
@@ -248,11 +249,12 @@ reason when present.
 
 ## Runtime Mapping
 
-The plugin maps supported OpenClaw hook events into NeMo Relay telemetry and
-adaptive inputs without changing OpenClaw execution behavior.
+The plugin maps supported OpenClaw hook events into NeMo Relay telemetry,
+adaptive inputs, and pre-tool conditional guardrail checks.
 
-It does not change OpenClaw tool execution, provider routing, policy decisions,
-or provider request payloads.
+It does not rewrite provider routing or provider request payloads. Hook-backed
+adaptive telemetry can learn from replayed events, while request-rewrite
+features such as adaptive hints require a managed execution path.
 
 | OpenClaw hook | NeMo Relay behavior |
 | --- | --- |

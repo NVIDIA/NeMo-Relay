@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ## What Is NeMo Relay?
 
-NeMo Relay is a portable execution runtime for agent systems that already have a
+NVIDIA NeMo Relay is a portable execution runtime for agent systems that already have a
 framework, model provider, policy layer, or observability backend. It gives those
 systems one consistent way to describe, control, and observe what happens when an
 agent crosses a request, tool, or LLM boundary.
@@ -27,7 +27,7 @@ agent crosses a request, tool, or LLM boundary.
 Agent applications rarely live inside one clean abstraction. A production stack
 might combine NeMo Agent Toolkit, LangChain, LangGraph, provider SDKs, custom
 harness code, NeMo Guardrails, tracing systems, and evaluation pipelines. NeMo
-Flow sits underneath those choices as the shared runtime contract for scopes,
+Relay sits underneath those choices as the shared runtime contract for scopes,
 middleware, plugins, lifecycle events, adaptive behavior, and observability.
 
 Built as a Rust core with primary Rust, Python, and Node.js bindings, NeMo Relay
@@ -43,7 +43,7 @@ consistent across frameworks and languages.
   observability payloads, transform requests, or wrap execution without
   rewriting every call site.
 - 📡 **Emit one lifecycle stream**: Subscribers consume canonical runtime events
-  in-process or export them as [ATIF v1.6](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
+  in-process or export them as [ATIF v1.7](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
   trajectories, OpenTelemetry traces, or OpenInference-compatible traces.
 - 🧩 **Integrate without a framework migration**: NeMo Relay can sit below NeMo
   ecosystem components, third-party agent frameworks, provider adapters, or
@@ -67,6 +67,10 @@ consistent across frameworks and languages.
 - ✅ **Built-in observability plugin**: Configure Agent Trajectory Observability
   Format (ATOF), ATIF, OpenTelemetry, and OpenInference exporters without
   registering subscribers by hand.
+- ✅ **Non-blocking subscriber delivery**: Keep managed execution moving while
+  subscriber callbacks and exporters drain in the background. Flush subscribers
+  before relying on callback side effects or exported files in tests and
+  shutdown paths.
 - ✅ **Extension points for framework authors**: Wrap stable tool and provider
   callbacks while preserving framework-owned scheduling, retries, memory, and
   result handling.
@@ -108,10 +112,20 @@ uv add nemo-relay
 npm install nemo-relay-node
 ```
 
+The Node.js package requires Node.js 24 or newer.
+
+### CLI Installation
+
 The NeMo Relay CLI is offered as a separate crate:
 
 ```bash
 cargo install nemo-relay-cli
+```
+
+If `cargo-binstall` is available on your machine:
+
+```bash
+cargo binstall nemo-relay-cli
 ```
 
 For source builds, testing, and contribution workflow, see [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -148,10 +162,10 @@ Below is our support matrix for agent harnesses.
 
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
-| Claude Code | ✅ Yes | ❌ No |  ❌ No | Observability only; no known issues |
-| Codex | ✅ Yes | ❌ No |  ❌ No | Observability only; missing some necessary hooks for full features |
-| Hermes Agent | ✅ Yes | ❌ No |  ❌ No | Observability only; no known issues |
-| Cursor | ✅ Yes | ❌ No |  ❌ No | Observability only; not feature-rich, missing hooks under `cursor-agent` |
+| Claude Code | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. |
+| Codex | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. Missing some necessary hooks for full feature parity. |
+| Hermes Agent | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. |
+| Cursor | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. Not feature-rich, missing hooks under `cursor-agent` |
 
 ## Third-Party Integrations
 
@@ -171,7 +185,7 @@ Below is the support matrix for our public API integrations.
 | LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
 | LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
 | Deep Agents | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
-| OpenClaw | ✅ Yes | ❌ No |  ❌ No | Observability support; missing middleware for wrapped execution |
+| OpenClaw | ✅ Yes | ⚠️ Partial | ❌ No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
 
 #### LangChain
 
@@ -218,4 +232,4 @@ The following roadmap outlines planned features and integrations for upcoming re
 
 ## License
 
-NeMo Relay is licensed under the [Apache License 2.0](LICENSE).
+NVIDIA NeMo Relay is licensed under the Apache License 2.0.

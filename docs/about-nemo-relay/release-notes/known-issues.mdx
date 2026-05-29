@@ -6,17 +6,44 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
-This page lists current limitations and support notes for the release documentation set.
+This page lists current limitations and support notes for the release
+documentation set.
 
 ## NeMo Relay 0.3
 
-These notes apply to the NeMo Relay 0.3 Release.
+These notes apply to the NeMo Relay 0.3 release.
 
 - Go, WebAssembly, and the raw C FFI surface are experimental and source-first.
-- Generated API pages cover Rust, Python, and Node.js. Experimental bindings do not yet have the same generated documentation depth.
-- The NeMo Relay CLI is experimental. Coding agent observability support varies due to capabilities of hooks. Any encountered problems should be filed as bugs.
+- Generated API pages cover Rust, Python, and Node.js. Experimental bindings do
+  not yet have the same generated documentation depth.
+- The NeMo Relay CLI is experimental. Coding agent observability support varies
+  due to capabilities of hooks. Any encountered problems should be filed as
+  bugs.
+- Node.js 24 or newer is required for Node.js binding and package workflows.
+- OpenClaw support uses public hook-backed telemetry with partial security and
+  optimization support. Security is limited to pre-tool conditional guardrails,
+  and optimization is limited to adaptive telemetry unless the integration owns
+  a managed execution path.
+- The NeMo Guardrails plugin remote backend depends on the availability,
+  latency, and policy behavior of the configured remote service.
+- S3-compatible ATIF export requires valid storage credentials and endpoint
+  configuration in the runtime environment.
+- `LLMRequest` objects in the Python binding should be treated as immutable.
+  Request middleware that changes content should return a new request object.
+- Native subscriber callbacks are delivered asynchronously. Flush subscribers
+  before relying on callback side effects, captured event lists, files, or
+  exporter output. Deregistering a subscriber affects future emissions, but
+  callbacks from already-queued event snapshots may still run.
 
-### Fixed issues from NeMo Relay 0.1:
+### Fixed In NeMo Relay 0.3
+
+- Managed LLM start events are emitted before execution intercepts.
+- Coding-agent trace scopes are aligned with NeMo Relay agent scope semantics.
+- ATIF tool observations are correlated with their matching tool calls.
+- OpenClaw tool call replay visibility is preserved.
+- LangChain serialization handles wrapped integration payloads more reliably.
+
+### Fixed In Earlier Releases
+
 - Enabled TLS support for OTLP HTTP export.
 - Preserved Go scope stacks across OS threads.
