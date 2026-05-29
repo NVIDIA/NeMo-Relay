@@ -27,7 +27,7 @@ agent crosses a request, tool, or LLM boundary.
 Agent applications rarely live inside one clean abstraction. A production stack
 might combine NeMo Agent Toolkit, LangChain, LangGraph, provider SDKs, custom
 harness code, NeMo Guardrails, tracing systems, and evaluation pipelines. NeMo
-Flow sits underneath those choices as the shared runtime contract for scopes,
+Relay sits underneath those choices as the shared runtime contract for scopes,
 middleware, plugins, lifecycle events, adaptive behavior, and observability.
 
 Built as a Rust core with primary Rust, Python, and Node.js bindings, NeMo Relay
