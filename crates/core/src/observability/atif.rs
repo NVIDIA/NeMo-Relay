@@ -1194,6 +1194,7 @@ struct LlmSpanCandidate {
     start_ts: DateTime<Utc>,
     end_ts: DateTime<Utc>,
     request_signature: String,
+    request_correlation_keys: HashSet<String>,
     response_signature: String,
     model_name: Option<String>,
     fidelity_score: u8,
@@ -1248,6 +1249,7 @@ impl LlmSpanCandidate {
             start_ts: *start.timestamp(),
             end_ts: *end.timestamp(),
             request_signature,
+            request_correlation_keys: llm_request_correlation_keys(start, end),
             response_signature,
             model_name: start
                 .model_name()
@@ -1274,6 +1276,61 @@ fn llm_response_signature(output: &Json) -> String {
     json_to_string(&extract_llm_response_message(output))
 }
 
+fn llm_request_correlation_keys(start: &Event, end: &Event) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    collect_llm_request_correlation_keys(start, &mut keys);
+    collect_llm_request_correlation_keys(end, &mut keys);
+    keys
+}
+
+fn collect_llm_request_correlation_keys(event: &Event, keys: &mut HashSet<String>) {
+    if let Some(metadata) = event.metadata() {
+        collect_request_correlation_values(metadata, keys);
+    }
+    if let Some(data) = event.data() {
+        collect_request_correlation_values(data, keys);
+        collect_request_correlation_values(&unwrap_llm_request(data), keys);
+    }
+}
+
+fn collect_request_correlation_values(value: &Json, keys: &mut HashSet<String>) {
+    for path in [
+        &["api_call_id"][..],
+        &["apiCallId"],
+        &["request_id"],
+        &["requestId"],
+        &["request", "id"],
+        &["metadata", "request_id"],
+        &["metadata", "requestId"],
+        &["extra", "api_call_id"],
+        &["extra", "apiCallId"],
+        &["extra", "request_id"],
+        &["extra", "requestId"],
+        &["llm_correlation_request_id"],
+    ] {
+        insert_correlation_key(keys, "request", json_string_at(value, path));
+    }
+
+    for path in [
+        &["generation_id"][..],
+        &["generationId"],
+        &["generation", "id"],
+        &["metadata", "generation_id"],
+        &["metadata", "generationId"],
+        &["extra", "generation_id"],
+        &["extra", "generationId"],
+        &["llm_correlation_generation_id"],
+    ] {
+        insert_correlation_key(keys, "generation", json_string_at(value, path));
+    }
+}
+
+fn insert_correlation_key(keys: &mut HashSet<String>, kind: &str, value: Option<String>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        keys.insert(format!("{kind}:{value}"));
+    }
+}
+
 fn same_physical_llm_request(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
     same_parent(left, right)
         && compatible_model_names(left, right)
@@ -1288,10 +1345,22 @@ fn same_llm_payload_signatures(left: &LlmSpanCandidate, right: &LlmSpanCandidate
 }
 
 fn complementary_hook_and_gateway_spans(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
-    (left.non_exact_provider_payload && left.hook_instrumentation && right.gateway_instrumentation)
+    let complementary_polarity = (left.non_exact_provider_payload
+        && left.hook_instrumentation
+        && right.gateway_instrumentation)
         || (right.non_exact_provider_payload
             && right.hook_instrumentation
-            && left.gateway_instrumentation)
+            && left.gateway_instrumentation);
+
+    complementary_polarity
+        && (left.request_signature == right.request_signature
+            || shared_llm_request_correlation_key(left, right))
+}
+
+fn shared_llm_request_correlation_key(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
+    !left
+        .request_correlation_keys
+        .is_disjoint(&right.request_correlation_keys)
 }
 
 fn same_parent(left: &LlmSpanCandidate, right: &LlmSpanCandidate) -> bool {
