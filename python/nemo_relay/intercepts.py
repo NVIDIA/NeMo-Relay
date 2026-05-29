@@ -10,9 +10,15 @@ Example::
 
     import nemo_relay
 
-    def add_header(name, request, annotated):
-        request.headers["X-Trace"] = "demo"
-        return request, annotated
+    def add_header(
+        name: str,
+        request: nemo_relay.LLMRequest,
+        annotated: nemo_relay.AnnotatedLLMRequest | None
+    ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+        # The request object is immutable, however we can return a new instance with updated headers.
+        headers = request.headers.copy()
+        headers["X-Trace"] = "demo"
+        return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
     nemo_relay.intercepts.register_llm_request("trace-header", 10, False, add_header)
 """
@@ -177,9 +183,13 @@ def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmReq
 
         import nemo_relay
 
-        def add_header(name, request, annotated):
-            request.headers["X-Trace"] = "req-123"
-            return request, annotated
+        def add_header(
+            name: str, request: nemo_relay.LLMRequest,
+            annotated: nemo_relay.AnnotatedLLMRequest | None
+        ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+            headers = request.headers.copy()
+            headers["X-Trace"] = "req-123"
+            return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
         nemo_relay.intercepts.register_llm_request(
             "trace-header",

@@ -89,6 +89,9 @@ def add_system_message(_name, request, annotated):
     if annotated is None:
         return request, annotated
 
+    # Attributes of the annotated request can be re-assigned, but cannot be modified in-place.
+    # For example `annotated.messages.append(...)` would not work, but re-assigning
+    # `annotated.messages = annotated.messages + [...]` does work.
     annotated.messages = [
         {"role": "system", "content": "Answer with concise technical detail."},
         *annotated.messages,

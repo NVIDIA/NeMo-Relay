@@ -483,6 +483,10 @@ fn atif_content_value(value: &Json) -> Json {
     }
 }
 
+fn observation_content_value(value: &Json) -> Option<Json> {
+    (!value.is_null()).then(|| value.clone())
+}
+
 fn is_atif_content_parts(value: &Json) -> bool {
     let Some(parts) = value.as_array() else {
         return false;
@@ -1066,10 +1070,27 @@ fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
 struct EventLookupMaps {
     name_map: std::collections::HashMap<Uuid, String>,
     start_ts_map: std::collections::HashMap<Uuid, DateTime<Utc>>,
+    tool_call_ids: std::collections::HashMap<Uuid, String>,
 }
 
 impl EventLookupMaps {
     fn from_events(events: &[&Event]) -> Self {
+        Self::from_events_with_correlation_events(events, events)
+    }
+
+    fn from_events_for_agent(events: &[&Event], tree: &AgentScopeTree, agent_uuid: Uuid) -> Self {
+        let correlation_events = events
+            .iter()
+            .copied()
+            .filter(|event| tree.owner_agent(event) == Some(agent_uuid))
+            .collect::<Vec<_>>();
+        Self::from_events_with_correlation_events(events, &correlation_events)
+    }
+
+    fn from_events_with_correlation_events(
+        events: &[&Event],
+        correlation_events: &[&Event],
+    ) -> Self {
         let mut name_map = std::collections::HashMap::new();
         let mut start_ts_map = std::collections::HashMap::new();
         for event in events {
@@ -1081,8 +1102,195 @@ impl EventLookupMaps {
         Self {
             name_map,
             start_ts_map,
+            tool_call_ids: build_tool_call_correlations(correlation_events),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ToolCallMatchKey {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Clone)]
+struct ToolExecutionRecord {
+    uuid: Uuid,
+    explicit_call_id: Option<String>,
+    key: Option<ToolCallMatchKey>,
+}
+
+#[derive(Debug, Clone)]
+struct LlmToolCallRecord {
+    tool_call_id: String,
+    key: Option<ToolCallMatchKey>,
+}
+
+fn build_tool_call_correlations(events: &[&Event]) -> HashMap<Uuid, String> {
+    let (mut correlations, executions, tool_calls) = collect_tool_correlation_inputs(events);
+    let consumed_tool_call_ids = consumed_tool_call_ids(&correlations);
+    let executions_by_key = group_unmatched_executions_by_key(executions, &correlations);
+    let tool_calls_by_key = group_tool_calls_by_key(tool_calls, &consumed_tool_call_ids);
+    apply_keyed_tool_correlations(&mut correlations, executions_by_key, &tool_calls_by_key);
+    correlations
+}
+
+fn consumed_tool_call_ids(correlations: &HashMap<Uuid, String>) -> HashSet<String> {
+    correlations.values().cloned().collect()
+}
+
+fn collect_tool_correlation_inputs(
+    events: &[&Event],
+) -> (
+    HashMap<Uuid, String>,
+    Vec<ToolExecutionRecord>,
+    Vec<LlmToolCallRecord>,
+) {
+    let mut explicit = HashMap::new();
+    let mut executions = Vec::new();
+    let mut tool_calls = Vec::new();
+
+    for event in events {
+        collect_tool_correlation_event(event, &mut explicit, &mut executions, &mut tool_calls);
+    }
+
+    (explicit, executions, tool_calls)
+}
+
+fn collect_tool_correlation_event(
+    event: &Event,
+    explicit: &mut HashMap<Uuid, String>,
+    executions: &mut Vec<ToolExecutionRecord>,
+    tool_calls: &mut Vec<LlmToolCallRecord>,
+) {
+    match event_signature(event) {
+        ("scope", Some(crate::api::event::ScopeCategory::Start), Some("tool")) => {
+            collect_tool_execution_start(event, explicit, executions)
+        }
+        ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
+            collect_explicit_tool_call_id(event, explicit)
+        }
+        ("scope", Some(crate::api::event::ScopeCategory::End), Some("llm")) => {
+            collect_llm_tool_calls(event, tool_calls)
+        }
+        _ => {}
+    }
+}
+
+fn event_signature(
+    event: &Event,
+) -> (&str, Option<crate::api::event::ScopeCategory>, Option<&str>) {
+    (
+        event.kind(),
+        event.scope_category(),
+        event.category().map(|category| category.as_str()),
+    )
+}
+
+fn collect_tool_execution_start(
+    event: &Event,
+    explicit: &mut HashMap<Uuid, String>,
+    executions: &mut Vec<ToolExecutionRecord>,
+) {
+    let record = ToolExecutionRecord {
+        uuid: event.uuid(),
+        explicit_call_id: event.tool_call_id().map(ToOwned::to_owned),
+        key: tool_execution_match_key(event),
+    };
+    if let Some(tool_call_id) = &record.explicit_call_id {
+        explicit.insert(record.uuid, tool_call_id.clone());
+    }
+    executions.push(record);
+}
+
+fn collect_explicit_tool_call_id(event: &Event, explicit: &mut HashMap<Uuid, String>) {
+    if let Some(tool_call_id) = event.tool_call_id() {
+        explicit.insert(event.uuid(), tool_call_id.to_string());
+    }
+}
+
+fn collect_llm_tool_calls(event: &Event, tool_calls: &mut Vec<LlmToolCallRecord>) {
+    let Some(calls) = event.data().and_then(extract_tool_calls) else {
+        return;
+    };
+    tool_calls.extend(calls.into_iter().map(|tool_call| LlmToolCallRecord {
+        key: tool_call_match_key(&tool_call.function_name, &tool_call.arguments),
+        tool_call_id: tool_call.tool_call_id,
+    }));
+}
+
+fn group_unmatched_executions_by_key(
+    executions: Vec<ToolExecutionRecord>,
+    correlations: &HashMap<Uuid, String>,
+) -> HashMap<ToolCallMatchKey, Vec<Uuid>> {
+    let mut grouped: HashMap<ToolCallMatchKey, Vec<Uuid>> = HashMap::new();
+    for execution in executions {
+        if correlations.contains_key(&execution.uuid) {
+            continue;
+        }
+        if let Some(key) = execution.key {
+            grouped.entry(key).or_default().push(execution.uuid);
+        }
+    }
+    grouped
+}
+
+fn group_tool_calls_by_key(
+    tool_calls: Vec<LlmToolCallRecord>,
+    consumed_tool_call_ids: &HashSet<String>,
+) -> HashMap<ToolCallMatchKey, Vec<String>> {
+    let mut grouped: HashMap<ToolCallMatchKey, Vec<String>> = HashMap::new();
+    for tool_call in tool_calls {
+        if consumed_tool_call_ids.contains(&tool_call.tool_call_id) {
+            continue;
+        }
+        if let Some(key) = tool_call.key {
+            grouped.entry(key).or_default().push(tool_call.tool_call_id);
+        }
+    }
+    grouped
+}
+
+fn apply_keyed_tool_correlations(
+    correlations: &mut HashMap<Uuid, String>,
+    executions_by_key: HashMap<ToolCallMatchKey, Vec<Uuid>>,
+    tool_calls_by_key: &HashMap<ToolCallMatchKey, Vec<String>>,
+) {
+    for (key, execution_uuids) in executions_by_key {
+        let Some(tool_call_ids) = tool_calls_by_key.get(&key) else {
+            continue;
+        };
+        if execution_uuids.len() == tool_call_ids.len() {
+            insert_keyed_tool_correlations(correlations, execution_uuids, tool_call_ids);
+        }
+    }
+}
+
+fn insert_keyed_tool_correlations(
+    correlations: &mut HashMap<Uuid, String>,
+    execution_uuids: Vec<Uuid>,
+    tool_call_ids: &[String],
+) {
+    for (uuid, tool_call_id) in execution_uuids.into_iter().zip(tool_call_ids) {
+        correlations.insert(uuid, tool_call_id.clone());
+    }
+}
+
+fn tool_execution_match_key(event: &Event) -> Option<ToolCallMatchKey> {
+    let arguments = event
+        .data()
+        .map(|data| normalize_tool_arguments(Some(data)))?;
+    tool_call_match_key(event.name(), &arguments)
+}
+
+fn tool_call_match_key(name: &str, arguments: &Json) -> Option<ToolCallMatchKey> {
+    if name.is_empty() {
+        return None;
+    }
+    Some(ToolCallMatchKey {
+        name: name.to_string(),
+        arguments: json_to_string(arguments),
+    })
 }
 
 #[derive(Default)]
@@ -1195,8 +1403,15 @@ struct StepConversionState {
     active_tool_call_id: Option<String>,
     pending_observations: Vec<AtifObservationResult>,
     pending_obs_timestamp: Option<String>,
+    deferred_observations: HashMap<String, Vec<DeferredToolObservation>>,
+    deferred_tool_metadata: HashMap<String, Vec<(AtifAncestry, AtifInvocationInfo)>>,
     current_reasoning_effort: Option<Json>,
     current_agent: PendingAgentStep,
+}
+
+struct DeferredToolObservation {
+    result: AtifObservationResult,
+    timestamp: Option<String>,
 }
 
 impl StepConversionState {
@@ -1213,7 +1428,7 @@ impl StepConversionState {
                 self.handle_llm_end(event, lookups)
             }
             ("scope", Some(crate::api::event::ScopeCategory::Start), Some("tool")) => {
-                self.handle_tool_start(event)
+                self.handle_tool_start(event, lookups)
             }
             ("scope", Some(crate::api::event::ScopeCategory::End), Some("tool")) => {
                 self.handle_tool_end(event, lookups)
@@ -1229,46 +1444,83 @@ impl StepConversionState {
         }
 
         let timestamp = self.pending_obs_timestamp.take();
-        let mut observations = std::mem::take(&mut self.pending_observations);
+        let observations = std::mem::take(&mut self.pending_observations);
+        let (attached, standalone) = self.route_observations(observations, timestamp.clone());
+        self.attach_observations_to_current_step(attached);
+        self.push_standalone_observation_step(standalone, timestamp);
+    }
 
-        if let Some(step_idx) = self.current_agent.step_idx
-            && let Some(step) = self.steps.get_mut(step_idx)
-        {
-            let mut attached = Vec::new();
-            let mut standalone = Vec::new();
-            for mut result in observations {
-                let matches_current_tool_call =
-                    result.source_call_id.as_deref().is_some_and(|id| {
-                        step.tool_calls
-                            .as_deref()
-                            .unwrap_or_default()
-                            .iter()
-                            .any(|tool_call| tool_call.tool_call_id == id)
-                    });
-                if matches_current_tool_call {
-                    attached.push(result);
-                } else {
+    fn route_observations(
+        &mut self,
+        observations: Vec<AtifObservationResult>,
+        timestamp: Option<String>,
+    ) -> (Vec<AtifObservationResult>, Vec<AtifObservationResult>) {
+        let mut attached = Vec::new();
+        let mut standalone = Vec::new();
+        for mut result in observations {
+            match result.source_call_id.clone() {
+                Some(source_call_id) => {
+                    self.route_correlated_observation(
+                        source_call_id,
+                        result,
+                        timestamp.clone(),
+                        &mut attached,
+                    );
+                }
+                None => {
                     result.source_call_id = None;
                     standalone.push(result);
                 }
             }
-            if !attached.is_empty() {
-                let observation = step.observation.get_or_insert_with(|| AtifObservation {
-                    results: Vec::new(),
-                });
-                for result in attached {
-                    merge_observation_result(observation, result);
-                }
-            }
-            observations = standalone;
         }
+        (attached, standalone)
+    }
 
+    fn route_correlated_observation(
+        &mut self,
+        source_call_id: String,
+        result: AtifObservationResult,
+        timestamp: Option<String>,
+        attached: &mut Vec<AtifObservationResult>,
+    ) {
+        if self.current_step_has_tool_call(&source_call_id) {
+            attached.push(result);
+        } else {
+            self.defer_observation(source_call_id, result, timestamp);
+        }
+    }
+
+    fn attach_observations_to_current_step(&mut self, attached: Vec<AtifObservationResult>) {
+        if attached.is_empty() {
+            return;
+        }
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return;
+        };
+        let Some(step) = self.steps.get_mut(step_idx) else {
+            return;
+        };
+        let observation = step.observation.get_or_insert_with(|| AtifObservation {
+            results: Vec::new(),
+        });
+        for result in attached {
+            merge_observation_result(observation, result);
+        }
+    }
+
+    fn push_standalone_observation_step(
+        &mut self,
+        mut observations: Vec<AtifObservationResult>,
+        timestamp: Option<String>,
+    ) {
         if observations.is_empty() {
             return;
         }
 
         for result in &mut observations {
-            result.source_call_id = None;
+            if result.source_call_id.is_some() {
+                result.source_call_id = None;
+            }
         }
 
         self.steps.push(AtifStep {
@@ -1292,6 +1544,116 @@ impl StepConversionState {
 
     fn finalize_agent_extra(&mut self) {
         self.current_agent.finalize_into(&mut self.steps);
+    }
+
+    fn current_step_has_tool_call(&self, source_call_id: &str) -> bool {
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return false;
+        };
+        self.steps
+            .get(step_idx)
+            .and_then(|step| step.tool_calls.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .any(|tool_call| tool_call.tool_call_id == source_call_id)
+    }
+
+    fn defer_observation(
+        &mut self,
+        source_call_id: String,
+        result: AtifObservationResult,
+        timestamp: Option<String>,
+    ) {
+        self.deferred_observations
+            .entry(source_call_id)
+            .or_default()
+            .push(DeferredToolObservation { result, timestamp });
+    }
+
+    fn attach_deferred_to_current_agent(&mut self) {
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return;
+        };
+        let tool_call_ids = self.tool_call_ids_for_step(step_idx);
+
+        for source_call_id in tool_call_ids {
+            self.attach_deferred_observations(step_idx, &source_call_id);
+            self.attach_deferred_tool_metadata(&source_call_id);
+        }
+    }
+
+    fn tool_call_ids_for_step(&self, step_idx: usize) -> Vec<String> {
+        self.steps
+            .get(step_idx)
+            .and_then(|step| step.tool_calls.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .map(|tool_call| tool_call.tool_call_id.clone())
+            .collect()
+    }
+
+    fn attach_deferred_observations(&mut self, step_idx: usize, source_call_id: &str) {
+        let Some(observations) = self.deferred_observations.remove(source_call_id) else {
+            return;
+        };
+        let Some(step) = self.steps.get_mut(step_idx) else {
+            return;
+        };
+        let observation = step.observation.get_or_insert_with(|| AtifObservation {
+            results: Vec::new(),
+        });
+        for deferred in observations {
+            merge_observation_result(observation, deferred.result);
+        }
+    }
+
+    fn attach_deferred_tool_metadata(&mut self, source_call_id: &str) {
+        let Some(metadata) = self.deferred_tool_metadata.remove(source_call_id) else {
+            return;
+        };
+        for (ancestry, invocation) in metadata {
+            self.current_agent.push_tool_metadata(ancestry, invocation);
+        }
+    }
+
+    fn flush_deferred_observations_as_standalone(&mut self) {
+        if self.deferred_observations.is_empty() {
+            return;
+        }
+        let mut deferred = std::mem::take(&mut self.deferred_observations)
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        deferred.sort_by_key(|entry| entry.timestamp.clone());
+        let timestamp = deferred.iter().find_map(|entry| entry.timestamp.clone());
+        let mut observations = deferred
+            .into_iter()
+            .map(|mut entry| {
+                entry.result.source_call_id = None;
+                entry.result
+            })
+            .collect::<Vec<_>>();
+        if observations.is_empty() {
+            return;
+        }
+        self.deferred_tool_metadata.clear();
+        self.steps.push(AtifStep {
+            step_id: 0,
+            source: "system".to_string(),
+            message: empty_message(),
+            timestamp,
+            model_name: None,
+            reasoning_effort: None,
+            reasoning_content: None,
+            tool_calls: None,
+            observation: Some(AtifObservation {
+                results: std::mem::take(&mut observations),
+            }),
+            metrics: None,
+            llm_call_count: None,
+            is_copied_context: None,
+            extra: None,
+        });
     }
 
     fn handle_llm_start(&mut self, event: &Event, lookups: &EventLookupMaps) {
@@ -1372,29 +1734,74 @@ impl StepConversionState {
             tool_call_order,
             output.clone(),
         );
+        self.attach_deferred_to_current_agent();
     }
 
-    fn handle_tool_start(&mut self, event: &Event) {
-        let Some(source_call_id) = self.source_call_id_for_tool_start(event) else {
+    fn handle_tool_start(&mut self, event: &Event, lookups: &EventLookupMaps) {
+        let Some(source_call_id) = self.source_call_id_for_tool_start(event, lookups) else {
             return;
         };
+        self.tool_scope_call_ids
+            .insert(event.uuid(), source_call_id.clone());
+        if !self.current_agent.has_active_step() {
+            return;
+        }
         if !self.ensure_tool_call_on_current_agent(event, &source_call_id) {
             return;
         }
-        self.tool_scope_call_ids
-            .insert(event.uuid(), source_call_id.clone());
         self.active_tool_call_id = Some(source_call_id);
     }
 
-    fn source_call_id_for_tool_start(&self, event: &Event) -> Option<String> {
-        if !self.current_agent.has_active_step() {
-            return None;
-        }
+    fn source_call_id_for_tool_start(
+        &self,
+        event: &Event,
+        lookups: &EventLookupMaps,
+    ) -> Option<String> {
         event
             .tool_call_id()
             .map(ToOwned::to_owned)
-            .or_else(|| self.last_tool_call_map.get(event.name()).cloned())
-            .or_else(|| Some(event.uuid().to_string()))
+            .or_else(|| self.tool_scope_call_ids.get(&event.uuid()).cloned())
+            .or_else(|| lookups.tool_call_ids.get(&event.uuid()).cloned())
+            .or_else(|| self.current_step_tool_call_id_by_name(event.name()))
+            .or_else(|| self.synthetic_tool_call_id_for_start(event))
+    }
+
+    fn current_step_tool_call_id_by_name(&self, name: &str) -> Option<String> {
+        let step_idx = self.current_agent.step_idx?;
+        let matches = self.current_step_tool_call_ids_by_name(step_idx, name);
+        match matches.as_slice() {
+            [tool_call_id] => Some(tool_call_id.clone()),
+            _ => None,
+        }
+    }
+
+    fn current_step_tool_call_ids_by_name(&self, step_idx: usize, name: &str) -> Vec<String> {
+        self.steps
+            .get(step_idx)
+            .and_then(|step| step.tool_calls.as_deref())
+            .unwrap_or_default()
+            .iter()
+            .filter(|tool_call| tool_call.function_name == name)
+            .map(|tool_call| tool_call.tool_call_id.clone())
+            .collect()
+    }
+
+    fn synthetic_tool_call_id_for_start(&self, event: &Event) -> Option<String> {
+        if self.current_step_has_duplicate_tool_name(event.name()) {
+            return None;
+        }
+        self.current_agent
+            .has_active_step()
+            .then(|| event.uuid().to_string())
+    }
+
+    fn current_step_has_duplicate_tool_name(&self, name: &str) -> bool {
+        let Some(step_idx) = self.current_agent.step_idx else {
+            return false;
+        };
+        self.current_step_tool_call_ids_by_name(step_idx, name)
+            .len()
+            > 1
     }
 
     fn ensure_tool_call_on_current_agent(&mut self, event: &Event, source_call_id: &str) -> bool {
@@ -1436,18 +1843,26 @@ impl StepConversionState {
         true
     }
 
-    fn resolve_source_call_id(&self, event: &Event) -> Option<String> {
-        let candidate = event
-            .tool_call_id()
-            .map(ToOwned::to_owned)
-            .or_else(|| self.tool_scope_call_ids.get(&event.uuid()).cloned())
-            .or_else(|| self.last_tool_call_map.get(event.name()).cloned())?;
+    fn resolve_source_call_id(&self, event: &Event, lookups: &EventLookupMaps) -> Option<String> {
+        if let Some(tool_call_id) = event.tool_call_id() {
+            return Some(tool_call_id.to_string());
+        }
+        if let Some(tool_call_id) = self.tool_scope_call_ids.get(&event.uuid()) {
+            return Some(tool_call_id.clone());
+        }
+        if let Some(tool_call_id) = lookups.tool_call_ids.get(&event.uuid()) {
+            return Some(tool_call_id.clone());
+        }
+
+        let candidate = self.current_step_tool_call_id_by_name(event.name())?;
 
         if self.current_agent.has_tool_call_id(&candidate)
             || self
                 .last_tool_call_map
                 .values()
                 .any(|known_id| known_id == &candidate)
+            || self.deferred_observations.contains_key(&candidate)
+            || self.deferred_tool_metadata.contains_key(&candidate)
         {
             Some(candidate)
         } else {
@@ -1456,14 +1871,14 @@ impl StepConversionState {
     }
 
     fn handle_tool_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
-        let source_call_id = self.resolve_source_call_id(event);
+        let source_call_id = self.resolve_source_call_id(event, lookups);
         if let Some(output) = event.data() {
             if self.pending_obs_timestamp.is_none() {
                 self.pending_obs_timestamp = Some(event.timestamp().to_rfc3339());
             }
             self.pending_observations.push(AtifObservationResult {
                 source_call_id: source_call_id.clone(),
-                content: Some(atif_content_value(output)),
+                content: observation_content_value(output),
                 subagent_trajectory_ref: None,
                 extra: Some(event_extra(event)),
             });
@@ -1473,14 +1888,27 @@ impl StepConversionState {
             self.active_tool_call_id = None;
         }
 
-        if !self.current_agent.has_active_step() || source_call_id.is_none() {
+        let Some(source_call_id) = source_call_id else {
             return;
-        }
+        };
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();
-        let invocation =
-            build_invocation_info(start_ts, *event.timestamp(), source_call_id, "nemo_relay");
-        self.current_agent
-            .push_tool_metadata(build_ancestry(event, &lookups.name_map), invocation);
+        let invocation = build_invocation_info(
+            start_ts,
+            *event.timestamp(),
+            Some(source_call_id.clone()),
+            "nemo_relay",
+        );
+        let ancestry = build_ancestry(event, &lookups.name_map);
+        if self.current_agent.has_active_step()
+            && self.current_agent.has_tool_call_id(&source_call_id)
+        {
+            self.current_agent.push_tool_metadata(ancestry, invocation);
+        } else {
+            self.deferred_tool_metadata
+                .entry(source_call_id)
+                .or_default()
+                .push((ancestry, invocation));
+        }
     }
 
     fn resolve_subagent_source_call_id(&self, event: &Event) -> Option<String> {
@@ -1566,6 +1994,9 @@ impl StepConversionState {
     }
 
     fn handle_mark(&mut self, mark: &Event, lookups: &EventLookupMaps) {
+        if is_llm_chunk_mark(mark) {
+            return;
+        }
         self.flush_observations();
         let Some(data) = mark.data() else {
             return;
@@ -1646,10 +2077,134 @@ impl StepConversionState {
 
     fn finish(mut self) -> Vec<AtifStep> {
         self.flush_observations();
+        self.flush_deferred_observations_as_standalone();
         self.finalize_agent_extra();
+        remove_projected_tool_call_duplicates(&mut self.steps);
         renumber_steps(&mut self.steps);
         self.steps
     }
+}
+
+fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
+    let mut observed_later = HashSet::new();
+    let mut keep = vec![true; steps.len()];
+
+    for (idx, step) in steps.iter().enumerate().rev() {
+        if step.source != "agent" {
+            observed_later.clear();
+            continue;
+        }
+        if projected_tool_call_duplicate(step, &observed_later) {
+            keep[idx] = false;
+        }
+        extend_observed_tool_call_keys(&mut observed_later, step);
+    }
+
+    let mut idx = 0;
+    steps.retain(|_| {
+        let retain_step = keep[idx];
+        idx += 1;
+        retain_step
+    });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ToolCallDedupeKey {
+    tool_call_id: String,
+    function_name: String,
+    arguments: String,
+}
+
+fn projected_tool_call_duplicate(
+    step: &AtifStep,
+    observed_later: &HashSet<ToolCallDedupeKey>,
+) -> bool {
+    if !projected_tool_call_candidate(step) {
+        return false;
+    }
+    let tool_call_keys = step_tool_call_dedupe_keys(step);
+    !tool_call_keys.is_empty()
+        && tool_call_keys
+            .iter()
+            .all(|tool_call_key| observed_later.contains(tool_call_key))
+}
+
+fn projected_tool_call_candidate(step: &AtifStep) -> bool {
+    step.source == "agent"
+        && step.message == empty_message()
+        && step.observation.is_none()
+        && step.reasoning_content.is_none()
+        && step.reasoning_effort.is_none()
+        && step.llm_call_count == Some(1)
+        && step
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tool_calls| !tool_calls.is_empty())
+}
+
+fn extend_observed_tool_call_keys(
+    observed_later: &mut HashSet<ToolCallDedupeKey>,
+    step: &AtifStep,
+) {
+    for tool_call_key in observed_tool_call_keys(step) {
+        observed_later.insert(tool_call_key);
+    }
+}
+
+fn observed_tool_call_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
+    let step_tool_call_keys = step_tool_call_dedupe_keys(step);
+    step.observation
+        .as_ref()
+        .map(|observation| matching_observation_tool_call_keys(observation, &step_tool_call_keys))
+        .unwrap_or_default()
+}
+
+fn matching_observation_tool_call_keys(
+    observation: &AtifObservation,
+    step_tool_call_keys: &[ToolCallDedupeKey],
+) -> Vec<ToolCallDedupeKey> {
+    observation
+        .results
+        .iter()
+        .filter_map(|result| result.source_call_id.as_ref())
+        .flat_map(|source_call_id| matching_tool_call_keys(source_call_id, step_tool_call_keys))
+        .collect()
+}
+
+fn matching_tool_call_keys(
+    source_call_id: &str,
+    step_tool_call_keys: &[ToolCallDedupeKey],
+) -> Vec<ToolCallDedupeKey> {
+    step_tool_call_keys
+        .iter()
+        .filter(|tool_call_key| tool_call_key.tool_call_id == source_call_id)
+        .cloned()
+        .collect()
+}
+
+fn step_tool_call_dedupe_keys(step: &AtifStep) -> Vec<ToolCallDedupeKey> {
+    step.tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|tool_call| !tool_call.tool_call_id.is_empty())
+        .map(|tool_call| ToolCallDedupeKey {
+            tool_call_id: tool_call.tool_call_id.clone(),
+            function_name: tool_call.function_name.clone(),
+            arguments: json_to_string(&tool_call.arguments),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn step_tool_call_ids(step: &AtifStep) -> Vec<String> {
+    step.tool_calls
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|tool_call| tool_call.tool_call_id.clone())
+        .filter(|tool_call_id| !tool_call_id.is_empty())
+        .collect()
 }
 
 fn merge_observation_result(observation: &mut AtifObservation, mut result: AtifObservationResult) {
@@ -2142,7 +2697,7 @@ fn events_to_steps_for_agent(
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
 ) -> Vec<AtifStep> {
-    let lookups = EventLookupMaps::from_events(events);
+    let lookups = EventLookupMaps::from_events_for_agent(events, tree, agent_uuid);
     let mut state = StepConversionState::default();
 
     for event in events {
@@ -2194,6 +2749,16 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
 
 fn is_empty_mark_payload(data: &Json) -> bool {
     data.is_null() || data.as_object().is_some_and(|object| object.is_empty())
+}
+
+fn is_llm_chunk_mark(mark: &Event) -> bool {
+    mark.name() == "llm.chunk"
+        || mark
+            .metadata()
+            .and_then(Json::as_object)
+            .and_then(|metadata| metadata.get("hook_event_name"))
+            .and_then(Json::as_str)
+            == Some("llm.chunk")
 }
 
 // A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent

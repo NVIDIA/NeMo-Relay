@@ -118,7 +118,7 @@ For source builds, testing, and contribution workflow, see [CONTRIBUTING.md](CON
 
 ## Documentation
 
-End-user documentation lives at [nvidia.github.io/NeMo-Relay](https://nvidia.github.io/NeMo-Relay/).
+End-user documentation lives at [docs.nvidia.com/nemo/relay](https://docs.nvidia.com/nemo/relay).
 
 The primary documentation track covers Rust, Python, and Node.js.
 

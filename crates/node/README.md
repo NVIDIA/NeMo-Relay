@@ -95,4 +95,4 @@ are available at `nemo-relay-node/typed`, `nemo-relay-node/plugin`,
 
 ## Documentation
 
-NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay
+NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay

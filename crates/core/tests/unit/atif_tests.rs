@@ -340,7 +340,7 @@ fn assert_atif_observation_result_refs(
     has_embedded_children: bool,
 ) {
     if let Some(content) = &result.content {
-        assert_atif_message_value(content);
+        assert_atif_observation_content_value(content);
     }
     if let Some(source_call_id) = result.source_call_id.as_deref() {
         assert!(
@@ -382,6 +382,13 @@ fn assert_atif_message_value(value: &serde_json::Value) {
         return;
     }
     panic!("ATIF message/content must be a string or content-part array: {value}");
+}
+
+fn assert_atif_observation_content_value(value: &serde_json::Value) {
+    assert!(
+        !value.is_null(),
+        "ATIF observation content must not be null"
+    );
 }
 
 fn is_atif_content_part(part: &serde_json::Value) -> bool {
@@ -468,14 +475,43 @@ fn test_exporter_tool_lifecycle() {
     let obs = step1.observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 1);
     assert_eq!(obs.results[0].source_call_id, None);
-    let content = obs.results[0].content.as_ref().unwrap().as_str().unwrap();
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(content).unwrap(),
-        json!({"results": ["result1"]})
+        obs.results[0].content,
+        Some(json!({"results": ["result1"]}))
     );
     assert_eq!(
         obs.results[0].extra.as_ref().unwrap()["event_name"],
         json!("web_search")
+    );
+}
+
+#[test]
+fn test_exporter_omits_null_tool_observation_content() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+
+    let end = event_builder(tool_uuid, EventType::End)
+        .name("noop")
+        .scope_type(ScopeType::Tool)
+        .output(json!(null))
+        .tool_call_id("call_123")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export();
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+
+    assert_eq!(result.content, None);
+    assert!(
+        !serde_json::to_value(result)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("content")
     );
 }
 
@@ -817,13 +853,7 @@ fn test_exporter_openai_responses_function_calls_promoted_and_correlated() {
 
     let result = &agent_step.observation.as_ref().unwrap().results[0];
     assert_eq!(result.source_call_id.as_deref(), Some("call_terminal_1"));
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            result.content.as_ref().unwrap().as_str().unwrap()
-        )
-        .unwrap(),
-        json!({"stdout": "/workspace"})
-    );
+    assert_eq!(result.content, Some(json!({"stdout": "/workspace"})));
 }
 
 #[test]
@@ -984,15 +1014,9 @@ fn test_exporter_hermes_wrapper_payload_is_atif_v17_compatible() {
         observation.results[0].source_call_id,
         Some("call_terminal_1".to_string())
     );
-    let content = observation.results[0]
-        .content
-        .as_ref()
-        .unwrap()
-        .as_str()
-        .unwrap();
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(content).unwrap(),
-        json!({"stdout": "hi", "exit_code": 0})
+        observation.results[0].content,
+        Some(json!({"stdout": "hi", "exit_code": 0}))
     );
 }
 
@@ -1368,13 +1392,7 @@ fn test_exporter_attaches_subagent_ref_to_delegating_tool_observation() {
 
     let result = &agent_step.observation.as_ref().unwrap().results[0];
     assert_eq!(result.source_call_id.as_deref(), Some("call_delegate"));
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            result.content.as_ref().unwrap().as_str().unwrap()
-        )
-        .unwrap(),
-        json!({"status": "launched"})
-    );
+    assert_eq!(result.content, Some(json!({"status": "launched"})));
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
@@ -1487,13 +1505,7 @@ fn test_exporter_synthesizes_tool_call_for_active_subagent_dispatch() {
         result.source_call_id.as_deref(),
         Some(tool_call_id.as_str())
     );
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            result.content.as_ref().unwrap().as_str().unwrap()
-        )
-        .unwrap(),
-        json!({"status": "completed"})
-    );
+    assert_eq!(result.content, Some(json!({"status": "completed"})));
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
@@ -1765,6 +1777,39 @@ fn test_exporter_skips_empty_mark_payloads() {
 }
 
 #[test]
+fn test_exporter_skips_llm_chunk_marks() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("llm.chunk")
+                .data(json!({"delta": "partial"}))
+                .build(),
+        );
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("hook_mark")
+                .metadata(json!({"hook_event_name": "llm.chunk"}))
+                .data(json!({"delta": "partial"}))
+                .build(),
+        );
+        state.events.push(
+            event_builder(Uuid::now_v7(), EventType::Mark)
+                .name("agent.status")
+                .data(json!({"status": "ok"}))
+                .build(),
+        );
+    }
+
+    let trajectory = exporter.export();
+
+    assert_eq!(trajectory.steps.len(), 1);
+    assert_eq!(trajectory.steps[0].message, json!("agent.status"));
+}
+
+#[test]
 fn test_trajectory_serde_roundtrip() {
     let trajectory = AtifTrajectory {
         schema_version: ATIF_SCHEMA_VERSION.to_string(),
@@ -2006,6 +2051,509 @@ fn test_exporter_source_call_id_correlation_by_name() {
     let obs = trajectory.steps[0].observation.as_ref().unwrap();
     // Correlated by function name "search" → "call_xyz"
     assert_eq!(obs.results[0].source_call_id, Some("call_xyz".to_string()));
+}
+
+#[test]
+fn test_exporter_correlates_hermes_style_tool_outputs_before_llm_calls() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let search_uuid = Uuid::now_v7();
+    let read_uuid = Uuid::now_v7();
+    let patch_uuid = Uuid::now_v7();
+    let llm1_uuid = Uuid::now_v7();
+    let llm2_uuid = Uuid::now_v7();
+    let llm3_uuid = Uuid::now_v7();
+
+    let mut search_start = event_builder(search_uuid, EventType::Start)
+        .name("search_files")
+        .scope_type(ScopeType::Tool)
+        .input(json!({"path": ".", "pattern": "ReadOnlyPasswordHashField", "target": "content"}))
+        .build();
+    let mut search_end = event_builder(search_uuid, EventType::End)
+        .name("search_files")
+        .scope_type(ScopeType::Tool)
+        .output(json!({"total_count": 6}))
+        .build();
+    let mut mark1 = event_builder(Uuid::now_v7(), EventType::Mark)
+        .name("hermes_step")
+        .data(json!({"iteration": 2, "previous_tools": ["search_files"]}))
+        .build();
+    let mut read_start = event_builder(read_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .input(json!({"path": "./django/contrib/auth/forms.py", "offset": 50, "limit": 20}))
+        .build();
+    let mut read_end = event_builder(read_uuid, EventType::End)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .output(json!({"content": "class ReadOnlyPasswordHashField", "total_lines": 453}))
+        .build();
+    let mut patch_start = event_builder(patch_uuid, EventType::Start)
+        .name("patch")
+        .scope_type(ScopeType::Tool)
+        .input(json!({
+            "path": "./django/contrib/auth/forms.py",
+            "old_string": "kwargs.setdefault(\"required\", False)",
+            "new_string": "kwargs.setdefault(\"disabled\", True)"
+        }))
+        .build();
+    let mut patch_end = event_builder(patch_uuid, EventType::End)
+        .name("patch")
+        .scope_type(ScopeType::Tool)
+        .output(json!({"success": true, "files_modified": ["./django/contrib/auth/forms.py"]}))
+        .build();
+
+    let mut llm1_start = event_builder(llm1_uuid, EventType::Start)
+        .name("hermes_assistant_message")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [], "model": "policy_model", "projection_index": 0}))
+        .build();
+    let mut llm1_end = event_builder(llm1_uuid, EventType::End)
+        .name("hermes_assistant_message")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call-search",
+                "type": "function",
+                "function": {
+                    "name": "search_files",
+                    "arguments": "{\"path\":\".\",\"pattern\":\"ReadOnlyPasswordHashField\",\"target\":\"content\"}"
+                }
+            }]
+        }))
+        .build();
+    let mut llm2_start = event_builder(llm2_uuid, EventType::Start)
+        .name("hermes_assistant_message")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [], "model": "policy_model", "projection_index": 2}))
+        .build();
+    let mut llm2_end = event_builder(llm2_uuid, EventType::End)
+        .name("hermes_assistant_message")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call-read",
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "{\"path\":\"./django/contrib/auth/forms.py\",\"offset\":50,\"limit\":20}"
+                }
+            }]
+        }))
+        .build();
+    let mut llm3_start = event_builder(llm3_uuid, EventType::Start)
+        .name("hermes_assistant_message")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [], "model": "policy_model", "projection_index": 4}))
+        .build();
+    let mut llm3_end = event_builder(llm3_uuid, EventType::End)
+        .name("hermes_assistant_message")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call-patch",
+                "type": "function",
+                "function": {
+                    "name": "patch",
+                    "arguments": "{\"path\":\"./django/contrib/auth/forms.py\",\"old_string\":\"kwargs.setdefault(\\\"required\\\", False)\",\"new_string\":\"kwargs.setdefault(\\\"disabled\\\", True)\"}"
+                }
+            }]
+        }))
+        .build();
+
+    for (idx, event) in [
+        &mut search_start,
+        &mut search_end,
+        &mut mark1,
+        &mut read_start,
+        &mut read_end,
+        &mut patch_start,
+        &mut patch_end,
+        &mut llm1_start,
+        &mut llm1_end,
+        &mut llm2_start,
+        &mut llm2_end,
+        &mut llm3_start,
+        &mut llm3_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            search_start,
+            search_end,
+            mark1,
+            read_start,
+            read_end,
+            patch_start,
+            patch_end,
+            llm1_start,
+            llm1_end,
+            llm2_start,
+            llm2_end,
+            llm3_start,
+            llm3_end,
+        ]);
+    }
+
+    let trajectory = exporter.export();
+    let agent_steps = trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "agent" && step.tool_calls.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(agent_steps.len(), 3);
+
+    let expected = [
+        ("call-search", json!({"total_count": 6})),
+        (
+            "call-read",
+            json!({"content": "class ReadOnlyPasswordHashField", "total_lines": 453}),
+        ),
+        (
+            "call-patch",
+            json!({"success": true, "files_modified": ["./django/contrib/auth/forms.py"]}),
+        ),
+    ];
+    for (step, (source_call_id, content)) in agent_steps.into_iter().zip(expected) {
+        let observation = step.observation.as_ref().unwrap();
+        assert_eq!(observation.results.len(), 1);
+        assert_eq!(
+            observation.results[0].source_call_id,
+            Some(source_call_id.to_string())
+        );
+        assert_eq!(observation.results[0].content, Some(content));
+    }
+
+    assert!(!trajectory.steps.iter().any(|step| {
+        step.source == "system"
+            && step
+                .observation
+                .as_ref()
+                .is_some_and(|observation| !observation.results.is_empty())
+    }));
+}
+
+#[test]
+fn test_exporter_correlates_repeated_identical_tool_calls_by_ordinal() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let tool1_uuid = Uuid::now_v7();
+    let tool2_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+
+    let mut tool1_start = event_builder(tool1_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .input(json!({"path": "./same.py", "offset": 0, "limit": 10}))
+        .build();
+    let mut tool1_end = event_builder(tool1_uuid, EventType::End)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .output(json!("first"))
+        .build();
+    let mut tool2_start = event_builder(tool2_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .input(json!({"path": "./same.py", "offset": 0, "limit": 10}))
+        .build();
+    let mut tool2_end = event_builder(tool2_uuid, EventType::End)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .output(json!("second"))
+        .build();
+    let mut llm_end = event_builder(llm_uuid, EventType::End)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"./same.py\",\"offset\":0,\"limit\":10}"}},
+                {"id": "c2", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"./same.py\",\"offset\":0,\"limit\":10}"}}
+            ]
+        }))
+        .build();
+
+    for (idx, event) in [
+        &mut tool1_start,
+        &mut tool1_end,
+        &mut tool2_start,
+        &mut tool2_end,
+        &mut llm_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([tool1_start, tool1_end, tool2_start, tool2_end, llm_end]);
+    }
+
+    let trajectory = exporter.export();
+    let observation = trajectory.steps[0].observation.as_ref().unwrap();
+    assert_eq!(observation.results.len(), 2);
+    assert_eq!(
+        observation.results[0].source_call_id,
+        Some("c1".to_string())
+    );
+    assert_eq!(observation.results[0].content, Some(json!("first")));
+    assert_eq!(
+        observation.results[1].source_call_id,
+        Some("c2".to_string())
+    );
+    assert_eq!(observation.results[1].content, Some(json!("second")));
+}
+
+#[test]
+fn test_exporter_correlates_mixed_explicit_implicit_duplicate_tool_calls() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let tool1_uuid = Uuid::now_v7();
+    let tool2_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+    let args = json!({"path": "./same.py", "offset": 0, "limit": 10});
+
+    let mut tool1_start = event_builder(tool1_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .input(args.clone())
+        .tool_call_id("c1")
+        .build();
+    let mut tool1_end = event_builder(tool1_uuid, EventType::End)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .output(json!("first"))
+        .build();
+    let mut tool2_start = event_builder(tool2_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .input(args)
+        .build();
+    let mut tool2_end = event_builder(tool2_uuid, EventType::End)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .output(json!("second"))
+        .build();
+    let mut llm_end = event_builder(llm_uuid, EventType::End)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"./same.py\",\"offset\":0,\"limit\":10}"}}
+            ]
+        }))
+        .build();
+
+    for (idx, event) in [
+        &mut tool1_start,
+        &mut tool1_end,
+        &mut tool2_start,
+        &mut tool2_end,
+        &mut llm_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([tool1_start, tool1_end, tool2_start, tool2_end, llm_end]);
+    }
+
+    let trajectory = exporter.export();
+    let results = trajectory
+        .steps
+        .iter()
+        .filter_map(|step| step.observation.as_ref())
+        .flat_map(|observation| observation.results.iter())
+        .collect::<Vec<_>>();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results
+            .iter()
+            .find(|result| result.content == Some(json!("first")))
+            .unwrap()
+            .source_call_id,
+        Some("c1".to_string())
+    );
+    assert_eq!(
+        results
+            .iter()
+            .find(|result| result.content == Some(json!("second")))
+            .unwrap()
+            .source_call_id,
+        None
+    );
+}
+
+#[test]
+fn test_exporter_does_not_guess_ambiguous_tool_calls_without_arguments() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let tool1_uuid = Uuid::now_v7();
+    let tool2_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+
+    let mut tool1_start = event_builder(tool1_uuid, EventType::Start)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .build();
+    let mut tool1_end = event_builder(tool1_uuid, EventType::End)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .output(json!("first"))
+        .build();
+    let mut tool2_start = event_builder(tool2_uuid, EventType::Start)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .build();
+    let mut tool2_end = event_builder(tool2_uuid, EventType::End)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .output(json!("second"))
+        .build();
+    let mut llm_end = event_builder(llm_uuid, EventType::End)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}},
+                {"id": "c2", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+            ]
+        }))
+        .build();
+
+    for (idx, event) in [
+        &mut tool1_start,
+        &mut tool1_end,
+        &mut tool2_start,
+        &mut tool2_end,
+        &mut llm_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([tool1_start, tool1_end, tool2_start, tool2_end, llm_end]);
+    }
+
+    let trajectory = exporter.export();
+    let agent_step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .unwrap();
+    assert!(agent_step.observation.is_none());
+
+    let standalone = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "system" && step.observation.is_some())
+        .unwrap();
+    let observation = standalone.observation.as_ref().unwrap();
+    assert_eq!(observation.results.len(), 2);
+    assert!(
+        observation
+            .results
+            .iter()
+            .all(|result| result.source_call_id.is_none())
+    );
+}
+
+#[test]
+fn test_exporter_does_not_guess_by_name_for_active_duplicate_tool_names() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    let tool1_uuid = Uuid::now_v7();
+    let tool2_uuid = Uuid::now_v7();
+
+    let llm_end = event_builder(llm_uuid, EventType::End)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}},
+                {"id": "c2", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+            ]
+        }))
+        .build();
+    let tool1_start = event_builder(tool1_uuid, EventType::Start)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .build();
+    let tool1_end = event_builder(tool1_uuid, EventType::End)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .output(json!("first"))
+        .build();
+    let tool2_start = event_builder(tool2_uuid, EventType::Start)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .build();
+    let tool2_end = event_builder(tool2_uuid, EventType::End)
+        .name("lookup")
+        .scope_type(ScopeType::Tool)
+        .output(json!("second"))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([llm_end, tool1_start, tool1_end, tool2_start, tool2_end]);
+    }
+
+    let trajectory = exporter.export();
+    let agent_step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .unwrap();
+    assert!(agent_step.observation.is_none());
+
+    let standalone = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "system" && step.observation.is_some())
+        .unwrap();
+    let observation = standalone.observation.as_ref().unwrap();
+    assert_eq!(observation.results.len(), 2);
+    assert!(
+        observation
+            .results
+            .iter()
+            .all(|result| result.source_call_id.is_none())
+    );
 }
 
 #[test]
@@ -2592,4 +3140,150 @@ fn test_step_extra_tool_ancestry_does_not_bleed_across_turns() {
     // Turn 2 agent step has only lookup — no bleed from turn 1
     assert_eq!(extra2.tool_ancestry.len(), 1);
     assert_eq!(extra2.tool_ancestry[0].function_name, "lookup");
+}
+
+fn cleanup_test_agent_step(
+    message: serde_json::Value,
+    tool_call_ids: &[&str],
+    observation_source_ids: &[&str],
+) -> AtifStep {
+    let observation = (!observation_source_ids.is_empty()).then(|| AtifObservation {
+        results: observation_source_ids
+            .iter()
+            .map(|source_call_id| AtifObservationResult {
+                source_call_id: Some((*source_call_id).to_string()),
+                content: Some(json!("done")),
+                subagent_trajectory_ref: None,
+                extra: None,
+            })
+            .collect(),
+    });
+
+    AtifStep {
+        step_id: 0,
+        source: "agent".to_string(),
+        message,
+        timestamp: None,
+        model_name: None,
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: Some(
+            tool_call_ids
+                .iter()
+                .map(|tool_call_id| AtifToolCall {
+                    tool_call_id: (*tool_call_id).to_string(),
+                    function_name: "terminal".to_string(),
+                    arguments: json!({"command": "pwd"}),
+                    extra: None,
+                })
+                .collect(),
+        ),
+        observation,
+        metrics: None,
+        llm_call_count: Some(1),
+        is_copied_context: None,
+        extra: None,
+    }
+}
+
+fn cleanup_test_user_step() -> AtifStep {
+    AtifStep {
+        step_id: 0,
+        source: "user".to_string(),
+        message: json!("next turn"),
+        timestamp: None,
+        model_name: None,
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: None,
+        llm_call_count: None,
+        is_copied_context: None,
+        extra: None,
+    }
+}
+
+#[test]
+fn test_projected_duplicate_tool_call_step_is_removed() {
+    let mut steps = vec![
+        cleanup_test_agent_step(empty_message(), &["call_dup"], &[]),
+        cleanup_test_agent_step(empty_message(), &["call_dup"], &["call_dup"]),
+    ];
+
+    remove_projected_tool_call_duplicates(&mut steps);
+
+    assert_eq!(steps.len(), 1);
+    assert_eq!(step_tool_call_ids(&steps[0]), vec!["call_dup"]);
+    assert_eq!(
+        steps[0]
+            .observation
+            .as_ref()
+            .unwrap()
+            .results
+            .first()
+            .unwrap()
+            .source_call_id
+            .as_deref(),
+        Some("call_dup")
+    );
+}
+
+#[test]
+fn test_projected_duplicate_tool_call_step_with_metrics_is_removed() {
+    let mut steps = vec![
+        cleanup_test_agent_step(empty_message(), &["call_dup"], &[]),
+        cleanup_test_agent_step(empty_message(), &["call_dup"], &["call_dup"]),
+    ];
+    steps[0].metrics = Some(AtifMetrics {
+        prompt_tokens: Some(10),
+        completion_tokens: Some(5),
+        ..Default::default()
+    });
+
+    remove_projected_tool_call_duplicates(&mut steps);
+
+    assert_eq!(steps.len(), 1);
+    assert_eq!(step_tool_call_ids(&steps[0]), vec!["call_dup"]);
+    assert!(steps[0].observation.is_some());
+}
+
+#[test]
+fn test_projected_duplicate_cleanup_keeps_same_id_across_turn_boundary() {
+    let mut steps = vec![
+        cleanup_test_agent_step(empty_message(), &["terminal:1"], &[]),
+        cleanup_test_user_step(),
+        cleanup_test_agent_step(empty_message(), &["terminal:1"], &["terminal:1"]),
+    ];
+
+    remove_projected_tool_call_duplicates(&mut steps);
+
+    assert_eq!(steps.len(), 3);
+    assert_eq!(step_tool_call_ids(&steps[0]), vec!["terminal:1"]);
+}
+
+#[test]
+fn test_projected_duplicate_cleanup_preserves_meaningful_agent_content() {
+    let mut steps = vec![
+        cleanup_test_agent_step(json!("I will run terminal."), &["call_dup"], &[]),
+        cleanup_test_agent_step(empty_message(), &["call_dup"], &["call_dup"]),
+    ];
+
+    remove_projected_tool_call_duplicates(&mut steps);
+
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0].message, json!("I will run terminal."));
+}
+
+#[test]
+fn test_projected_duplicate_cleanup_preserves_partial_multi_call_step() {
+    let mut steps = vec![
+        cleanup_test_agent_step(empty_message(), &["call_a", "call_b"], &[]),
+        cleanup_test_agent_step(empty_message(), &["call_a"], &["call_a"]),
+    ];
+
+    remove_projected_tool_call_duplicates(&mut steps);
+
+    assert_eq!(steps.len(), 2);
+    assert_eq!(step_tool_call_ids(&steps[0]), vec!["call_a", "call_b"]);
 }

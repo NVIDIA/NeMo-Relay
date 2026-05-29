@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import nemo_relay
-from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
@@ -198,8 +197,10 @@ def test_wrap_model_call_routes_through_llm_execute(
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert recording_middleware.calls[0]["model_name"] == "mock-model"
     assert recording_middleware.calls[0]["request"].content["model"] == "mock-model"
-    assert recording_middleware.calls[0]["codec"] is None
-    assert recording_middleware.calls[0]["response_codec"] is None
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    assert isinstance(recording_middleware.calls[0]["codec"], LangChainCodec)
+    assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
 
 
 def test_awrap_model_call_routes_through_llm_execute(
@@ -217,8 +218,73 @@ def test_awrap_model_call_routes_through_llm_execute(
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert recording_middleware.calls[0]["model_name"] == "mock-model"
     assert recording_middleware.calls[0]["request"].content["model"] == "mock-model"
-    assert recording_middleware.calls[0]["codec"] is None
-    assert recording_middleware.calls[0]["response_codec"] is None
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    assert isinstance(recording_middleware.calls[0]["codec"], LangChainCodec)
+    assert recording_middleware.calls[0]["response_codec"] is recording_middleware.calls[0]["codec"]
+
+
+def test_langchain_model_request_codec_round_trips_messages(model_request: ModelRequest[Any]):
+    from nemo_relay.integrations.langchain._serialization import (
+        LangChainCodec,
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    codec = LangChainCodec()
+    request = nemo_relay.LLMRequest({}, model_request_to_payload("mock-model", model_request))
+
+    annotated = codec.decode(request)
+    assert annotated.messages == [{"role": "user", "content": "hello"}]
+
+    annotated.messages = [{"role": "user", "content": "hello from intercept"}]
+    encoded = codec.encode(annotated, request)
+    round_tripped = payload_to_model_request(model_request, encoded)
+
+    assert round_tripped.messages[0].content == "hello from intercept"
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_model_call_applies_annotated_llm_request_intercept(
+    use_async: bool,
+    nemo_relay_middleware: NemoRelayMiddleware,
+    model_request: ModelRequest[Any],
+    model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
+    async_model_request_handler: tuple[
+        Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]], dict[str, ModelRequest[Any]]
+    ],
+):
+    captured: dict[str, Any] = {}
+
+    def change_request(name: str, request: nemo_relay.LLMRequest, annotated: Any):
+        assert name == "mock-model"
+        assert annotated is not None
+        captured["before"] = annotated.messages
+        annotated.messages = [
+            {
+                **message,
+                "content": str(message["content"]).replace("hello", "hello from intercept"),
+            }
+            if message.get("role") == "user"
+            else message
+            for message in annotated.messages
+        ]
+        return request, annotated
+
+    nemo_relay.intercepts.register_llm_request("test_langchain_change_request", 1, False, change_request)
+    try:
+        if use_async:
+            (handler, seen_request) = async_model_request_handler
+            response = asyncio.run(nemo_relay_middleware.awrap_model_call(model_request, handler))
+        else:
+            (handler, seen_request) = model_request_handler
+            response = nemo_relay_middleware.wrap_model_call(model_request, handler)
+    finally:
+        nemo_relay.intercepts.deregister_llm_request("test_langchain_change_request")
+
+    assert response.result[0].content == "done"
+    assert captured["before"] == [{"role": "user", "content": "hello"}]
+    assert seen_request["request"].messages[0].content == "hello from intercept"
 
 
 def test_wrap_tool_call_routes_through_tool_execute(
@@ -273,32 +339,6 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert kwargs["handle"] is parent_handle
     assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
     assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
-
-
-def test_infer_codec_from_supported_model_classes(monkeypatch: pytest.MonkeyPatch):
-    from nemo_relay.integrations.langchain import _serialization
-
-    MockChatAnthropic = MagicMock(spec=type("MockChatAnthropic", (), {}))
-    MockChatOpenAI = MagicMock(spec=type("MockChatOpenAI", (), {}))
-    MockChatOpenAIResponses = MagicMock(spec=MockChatOpenAI.__class__)
-    MockChatOpenAIResponses.use_responses_api = True
-    MockChatNVIDIA = MagicMock(spec=type("MockChatNVIDIA", (), {}))
-
-    monkeypatch.setattr(_serialization, "ChatAnthropic", MockChatAnthropic.__class__, raising=False)
-    monkeypatch.setattr(_serialization, "ChatOpenAI", MockChatOpenAI.__class__, raising=False)
-    monkeypatch.setattr(_serialization, "ChatNVIDIA", MockChatNVIDIA.__class__, raising=False)
-    monkeypatch.setattr(_serialization, "_HAS_ANTHROPIC", True)
-    monkeypatch.setattr(_serialization, "_HAS_OPENAI", True)
-    monkeypatch.setattr(_serialization, "_HAS_NVIDIA", True)
-
-    assert isinstance(_serialization.infer_codec_from_model(MockChatAnthropic), AnthropicMessagesCodec)
-    assert isinstance(_serialization.infer_codec_from_model(MockChatOpenAI), OpenAIChatCodec)
-    assert isinstance(
-        _serialization.infer_codec_from_model(MockChatOpenAIResponses),
-        OpenAIResponsesCodec,
-    )
-    assert isinstance(_serialization.infer_codec_from_model(MockChatNVIDIA), OpenAIChatCodec)
-    assert _serialization.infer_codec_from_model(object()) is None
 
 
 @pytest.mark.parametrize("use_async", [False, True])

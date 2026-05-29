@@ -112,4 +112,4 @@ are available at `nemo-relay-wasm/typed`, `nemo-relay-wasm/plugin`,
 
 ## Documentation
 
-NeMo Relay Documentation: https://nvidia.github.io/NeMo-Relay
+NeMo Relay Documentation: https://docs.nvidia.com/nemo/relay

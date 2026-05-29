@@ -5,11 +5,14 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import ModelResponse
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
+    HumanMessage,
     SystemMessage,
     ToolMessage,
     messages_from_dict,
@@ -17,39 +20,18 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command, Send
 
-from nemo_relay.codecs import AnthropicMessagesCodec, LlmCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_relay import AnnotatedLLMRequest, LLMRequest
+from nemo_relay.codecs import LlmCodec
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest
 
-
-# In order to infer codec support from LangChain chat model types, we need to import them here.
-# However these may not be installed in the user's environment.
-_HAS_ANTHROPIC = False
-_HAS_OPENAI = False
-_HAS_NVIDIA = False
-try:
-    from langchain_anthropic import ChatAnthropic
-
-    _HAS_ANTHROPIC = True
-except ImportError:
-    pass
-
-try:
-    from langchain_openai import ChatOpenAI
-
-    _HAS_OPENAI = True
-except ImportError:
-    pass
-
-try:
-    from langchain_nvidia_ai_endpoints import ChatNVIDIA
-
-    _HAS_NVIDIA = True
-except ImportError:
-    pass
-
 LANGCHAIN_MODEL_RESPONSE_KEY = "__nemo_relay_integrations_langchain_model_response"
+_LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
+_LC_TO_RELAY_MESSAGE_ROLE = {
+    "human": "user",
+    "ai": "assistant",
+}
 
 
 def get_model_name(model: Any) -> str | None:
@@ -61,24 +43,156 @@ def get_model_name(model: Any) -> str | None:
     return None
 
 
-def infer_codec_from_model(model: Any) -> LlmCodec | None:
-    """Infer a NeMo Relay codec name from a LangChain chat model."""
-    if _HAS_ANTHROPIC:
-        if isinstance(model, ChatAnthropic):
-            return AnthropicMessagesCodec()
+class LangChainCodec(LlmCodec):
+    """Translate LangChain ``ModelRequest`` payloads for request intercepts."""
 
-    if _HAS_NVIDIA:
-        if isinstance(model, ChatNVIDIA):
-            return OpenAIChatCodec()
+    @classmethod
+    def _langchain_tool_calls_to_annotated(cls, tool_calls: list[Any]) -> list[dict[str, Any]]:
+        annotated_tool_calls = []
+        for tool_call in tool_calls:
+            args = tool_call["args"]
+            arguments = args if isinstance(args, str) else json.dumps(args)
+            annotated_tool_calls.append(
+                {
+                    "id": tool_call.get("id") or "",
+                    "type": "function",
+                    "function": {
+                        "name": tool_call["name"],
+                        "arguments": arguments,
+                    },
+                }
+            )
 
-    if _HAS_OPENAI:
-        if isinstance(model, ChatOpenAI):
-            if getattr(model, "use_responses_api", None) is True:
-                return OpenAIResponsesCodec()
+        return annotated_tool_calls
 
-            return OpenAIChatCodec()
+    @classmethod
+    def _annotated_tool_calls_to_langchain(cls, tool_calls: Any) -> list[dict[str, Any]] | None:
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return None
 
-    return None
+        langchain_tool_calls = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if isinstance(function, dict):
+                name = str(function.get("name") or "")
+                arguments = function.get("arguments", {})
+            else:
+                name = str(tool_call.get("name") or "")
+                arguments = tool_call.get("args", {})
+
+            if isinstance(arguments, str):
+                try:
+                    args = json.loads(arguments)
+                except json.JSONDecodeError:
+                    args = {"arguments": arguments}
+            elif isinstance(arguments, dict):
+                args = arguments
+            else:
+                args = {}
+
+            langchain_tool_calls.append(
+                {
+                    "name": name,
+                    "args": args,
+                    "id": str(tool_call.get("id") or ""),
+                    "type": "tool_call",
+                }
+            )
+
+        return langchain_tool_calls or None
+
+    @classmethod
+    def _langchain_message_to_annotated(cls, message: BaseMessage) -> list[dict[str, Any]]:
+        content = message.content
+        if content is None:
+            content = []
+        elif isinstance(content, str):
+            content = [content]
+
+        name = message.name
+        role = _LC_TO_RELAY_MESSAGE_ROLE.get(message.type, message.type)
+
+        messages = []
+        for msg in content:
+            relay_message: dict[str, Any] = {"role": role}
+            if isinstance(msg, str):
+                relay_message["content"] = msg
+            elif isinstance(msg, dict):
+                relay_message.update(msg)
+                if "content" not in relay_message:
+                    relay_message["content"] = relay_message.pop("text", "")
+            else:
+                raise ValueError(f"Unsupported LangChain message content type: {type(content)}")
+
+            if name is not None:
+                relay_message["name"] = name
+
+            # Using getattr as we are inferring subclasses of BaseMessage based upon the role
+            if role == "assistant":
+                tool_calls = getattr(message, "tool_calls", [])
+                relay_message["tool_calls"] = cls._langchain_tool_calls_to_annotated(tool_calls)
+            elif role == "tool":
+                relay_message["tool_call_id"] = getattr(message, "tool_call_id", "")
+
+            messages.append(relay_message)
+
+        return messages
+
+    @classmethod
+    def _annotated_message_to_langchain(cls, message: dict[str, Any]) -> BaseMessage:
+        role = message.get("role")
+        content = message.get("content", "")
+        name = message.get("name")
+
+        if role == "system":
+            return SystemMessage(content=content, name=name)
+        if role == "user":
+            return HumanMessage(content=content, name=name)
+        if role == "assistant":
+            tool_calls = cls._annotated_tool_calls_to_langchain(message.get("tool_calls"))
+            return AIMessage(content=content, name=name, tool_calls=tool_calls or [])
+        if role == "tool":
+            return ToolMessage(content=content, name=name, tool_call_id=str(message.get("tool_call_id") or ""))
+        raise ValueError(f"Unsupported annotated LangChain message role: {role!r}")
+
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a LangChain-shaped request payload into an annotated request."""
+        payload = request.content
+        raw_messages = payload.get("messages", [])
+        messages: list[dict[str, Any]] = []
+        if isinstance(raw_messages, list):
+            for message in messages_from_dict(raw_messages):
+                messages.extend(self._langchain_message_to_annotated(message))
+
+        model = payload.get("model")
+        tools = payload.get("tools")
+        tool_choice = payload.get("tool_choice")
+        extra = {key: value for key, value in payload.items() if key not in _LANGCHAIN_MODELED_REQUEST_KEYS}
+
+        return AnnotatedLLMRequest(
+            messages,
+            model=model if isinstance(model, str) else None,
+            tools=tools if isinstance(tools, list) else None,
+            tool_choice=tool_choice if isinstance(tool_choice, str | dict) else None,
+            extra=extra or None,
+        )
+
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode annotated request edits back into a LangChain-shaped payload."""
+        payload = dict(original.content)
+        payload.update(annotated.extra)
+        payload["messages"] = messages_to_dict(
+            [self._annotated_message_to_langchain(message) for message in annotated.messages]
+        )
+        if annotated.model is not None:
+            payload["model"] = annotated.model
+        if annotated.tools is not None:
+            payload["tools"] = annotated.tools
+        if annotated.tool_choice is not None:
+            payload["tool_choice"] = annotated.tool_choice
+        return LLMRequest(dict(original.headers), payload)
 
 
 def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | None, list[BaseMessage]]:
@@ -109,12 +223,12 @@ def model_request_to_payload(model_name: str | None, request: ModelRequest[Any])
 
 def payload_to_model_request(
     original: ModelRequest[Any],
-    payload: dict[str, Any],
+    llm_request: LLMRequest,
 ) -> ModelRequest[Any]:
     """Apply supported NeMo Relay request-intercept edits back to ``ModelRequest``."""
     overrides: dict[str, Any] = {}
 
-    raw_messages = payload.get("messages")
+    raw_messages = llm_request.content.get("messages")
     if isinstance(raw_messages, list) and len(raw_messages) > 0:
         try:
             system_message, messages = split_system_message(messages_from_dict(raw_messages))
@@ -123,12 +237,24 @@ def payload_to_model_request(
         except Exception:
             pass
 
-    model_settings = payload.get("model_settings")
+    model_settings = llm_request.content.get("model_settings")
     if isinstance(model_settings, dict):
-        overrides["model_settings"] = model_settings
+        # Using dict() to ensure we have a copy
+        model_settings_copy = dict(model_settings)
+        extra_headers = model_settings_copy.get("extra_headers")
+        if not isinstance(extra_headers, dict):
+            extra_headers = {}
+        overrides["model_settings"] = model_settings_copy
+    else:
+        overrides["model_settings"] = {}
+        extra_headers = {}
 
-    if "tool_choice" in payload:
-        overrides["tool_choice"] = payload["tool_choice"]
+    if len(llm_request.headers) > 0:
+        extra_headers.update(llm_request.headers)
+        overrides["model_settings"]["extra_headers"] = extra_headers
+
+    if "tool_choice" in llm_request.content:
+        overrides["tool_choice"] = llm_request.content["tool_choice"]
 
     return original.override(**overrides) if overrides else original
 

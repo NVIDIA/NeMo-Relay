@@ -13,13 +13,17 @@ This page collects concrete examples for the surrounding guide area.
 
 Use an LLM request intercept when a plugin needs to inject tenant or routing metadata into every provider request.
 
+LLM request intercepts receive three arguments: `name`, `request`, and `annotated`. The `request` object is immutable, however it is possible to return a new instance of the request with edits, the exception to this is when the intercept is written in Rust.
+
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+from typing import Any
+
 import nemo_relay
 
 class HeaderPlugin:
-    def validate(self, plugin_config):
+    def validate(self, plugin_config: dict[str, Any]) -> list[dict[str, str]]:
         if "header_name" not in plugin_config or "value" not in plugin_config:
             return [{
                 "level": "error",
@@ -28,10 +32,16 @@ class HeaderPlugin:
             }]
         return []
 
-    def register(self, plugin_config, context):
-        def add_header(name, request, annotated):
-            request.headers[plugin_config["header_name"]] = plugin_config["value"]
-            return request, annotated
+    def register(self, plugin_config: dict[str, Any], context: nemo_relay.plugin.PluginContext):
+        def add_header(
+            name: str,
+            request: nemo_relay.LLMRequest,
+            annotated: nemo_relay.AnnotatedLLMRequest | None
+        ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+            # The request object is immutable, however we can return a new instance with updated headers.
+            headers = request.headers.copy()
+            headers[plugin_config["header_name"]] = plugin_config["value"]
+            return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
         context.register_llm_request_intercept("inject-header", 100, False, add_header)
 

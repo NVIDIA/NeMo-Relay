@@ -37,9 +37,15 @@ Example::
     def redact_args(tool_name, args):
         return {**args, "api_key": "***"}
 
-    def add_header(name, request, annotated):
-        request.headers["Authorization"] = "Bearer test-token"
-        return request, annotated
+    def add_header(
+        name: str,
+        request: nemo_relay.LLMRequest,
+        annotated: nemo_relay.AnnotatedLLMRequest | None
+    ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+        # The request object is immutable, however we can return a new instance with updated headers.
+        headers = request.headers.copy()
+        headers["Authorization"] = "Bearer test-token"
+        return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
 
     async def tool_impl(args):
         return {"echo": args["query"]}
