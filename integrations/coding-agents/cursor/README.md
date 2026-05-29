@@ -9,6 +9,18 @@ This package is a Cursor hook bundle, not an official Cursor plugin package. It
 contains `.cursor/hooks.json` entries that forward canonical Cursor hook JSON to
 `nemo-relay` at `/hooks/cursor`.
 
+> [!CAUTION]
+> Cursor support is highly experimental and limited. NeMo Relay can install or
+> temporarily patch Cursor hooks, but it cannot automatically route Cursor model
+> traffic through the gateway. Complete LLM observability requires manual Cursor
+> provider/proxy configuration, including any required API keys, and that
+> configuration is outside NeMo Relay's control.
+>
+> Cursor subagents may choose or inherit models independently from the top-level
+> session. If those subagent calls bypass the NeMo Relay gateway, their LLM
+> requests and responses will not appear in NeMo Relay events even when hook
+> events are present.
+
 Cursor GUI or IDE sessions can provide agent, subagent, tool, shell, MCP, file,
 and response lifecycle events through `.cursor/hooks.json`. Complete LLM
 lifecycle observability additionally requires Cursor model traffic to route

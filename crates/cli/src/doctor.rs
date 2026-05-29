@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
+use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::time::timeout;
@@ -592,6 +593,14 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             return checks;
         }
     };
+    if let Err(error) = register_adaptive_component() {
+        checks.push(Check {
+            name: "Adaptive plugin",
+            status: Status::Fail,
+            details: format!("registration failed: {error}"),
+        });
+        return checks;
+    }
     let report = validate_plugin_config(&plugin_config);
     if report.diagnostics.is_empty() {
         checks.push(Check {
