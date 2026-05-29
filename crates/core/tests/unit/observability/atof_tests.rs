@@ -13,7 +13,7 @@ use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, Sc
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::{Map, json};
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -118,6 +118,17 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn is_expected_stream_termination(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+            | ErrorKind::UnexpectedEof
+    )
+}
+
 struct AtofSocketSink {
     address: String,
     events: mpsc::Receiver<Vec<serde_json::Value>>,
@@ -150,6 +161,7 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
                 }
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream.set_read_timeout(Some(TEST_RECV_TIMEOUT)).unwrap();
         let mut reader = BufReader::new(stream);
         let mut events = Vec::with_capacity(expected_events);
@@ -163,7 +175,11 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
         let _ = sender.send(events);
         let _ = reader.get_ref().set_read_timeout(None);
         let mut drain = String::new();
-        let _ = eof_sender.send(reader.read_to_string(&mut drain).is_ok());
+        let saw_termination = match reader.read_to_string(&mut drain) {
+            Ok(_) => true,
+            Err(error) => is_expected_stream_termination(&error),
+        };
+        let _ = eof_sender.send(saw_termination);
     });
     AtofSocketSink {
         address,
@@ -195,11 +211,15 @@ fn start_atof_eof_sink() -> (String, mpsc::Receiver<bool>) {
                 }
             }
         };
+        stream.set_nonblocking(false).unwrap();
         stream.set_read_timeout(Some(TEST_RECV_TIMEOUT)).unwrap();
         let mut reader = BufReader::new(stream);
         let mut buffer = String::new();
-        let saw_eof = reader.read_to_string(&mut buffer).is_ok();
-        let _ = sender.send(saw_eof);
+        let saw_termination = match reader.read_to_string(&mut buffer) {
+            Ok(_) => true,
+            Err(error) => is_expected_stream_termination(&error),
+        };
+        let _ = sender.send(saw_termination);
     });
     (address, receiver)
 }
@@ -318,9 +338,10 @@ fn streaming_exporter_writes_canonical_event_json_values_to_socket() {
     let event = make_annotated_llm_event("streamed-llm-start");
 
     (exporter.subscriber())(&event);
-    exporter.shutdown().unwrap();
 
     let delivered = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    exporter.shutdown().unwrap();
+
     assert_eq!(delivered[0], event.try_to_json_value().unwrap());
     assert_eq!(exporter.stats().events_sent, 1);
     assert!(sink.saw_eof.recv_timeout(TEST_RECV_TIMEOUT).unwrap());
@@ -474,9 +495,10 @@ fn streaming_exporter_registers_with_runtime_events() {
 
     assert!(exporter.deregister(&name).unwrap());
     assert!(!exporter.deregister(&name).unwrap());
-    exporter.shutdown().unwrap();
 
     let events = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    exporter.shutdown().unwrap();
+
     let scope_start = &events[0];
     let mark = &events[1];
     let scope_end = &events[2];
