@@ -1,0 +1,16 @@
+---
+title: "Function flush_subscribers"
+sidebar-title: "flush_subscribers"
+description: "Wait for all subscriber callbacks queued before this call to finish."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn flush_subscribers() -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Wait for all subscriber callbacks queued before this call to finish.
+
+Native targets deliver subscriber callbacks on a background dispatcher so event-producing APIs do not wait for observer work. Call this helper from tests, shutdown paths, or exporter lifecycle code when callers need a deterministic observation barrier.

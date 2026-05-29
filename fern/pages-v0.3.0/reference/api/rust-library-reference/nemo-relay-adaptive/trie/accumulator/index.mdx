@@ -1,0 +1,18 @@
+---
+title: "Module accumulator"
+sidebar-title: "accumulator"
+description: "Streaming statistics accumulator using Welford's algorithm and TDigest."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Streaming statistics accumulator using Welford's algorithm and TDigest.
+
+## Structs
+
+- [AccumulatorState](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/accumulator/struct-accumulatorstate): Maps trie path strings to their node accumulators.
+- [NodeAccumulators](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/accumulator/struct-nodeaccumulators): Per-node accumulators for all metric types, keyed by call index.
+- [RunningStats](/reference/api/rust-library-reference/nemo-relay-adaptive/trie/accumulator/struct-runningstats): Streaming statistics tracker combining Welford's online algorithm for mean/variance with a TDigest for streaming percentile estimation.

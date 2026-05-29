@@ -1,0 +1,14 @@
+---
+title: "Type Alias Nemo Relay Finalizer Cb"
+sidebar-title: "NemoRelayFinalizerCb"
+description: "Callback for finalizing a collected stream. Invoked once when the stream is exhausted. Must return a JSON C string representing the aggregated response. The returned string must be allocated with `malloc` or equivalent; the runtime will free it."
+position: 25
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayFinalizerCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>;"}} /></pre>
+
+Callback for finalizing a collected stream. Invoked once when the stream is exhausted. Must return a JSON C string representing the aggregated response. The returned string must be allocated with `malloc` or equivalent; the runtime will free it.

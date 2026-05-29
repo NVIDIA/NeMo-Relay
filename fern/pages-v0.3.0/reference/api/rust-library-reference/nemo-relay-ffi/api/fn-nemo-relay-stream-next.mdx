@@ -1,0 +1,24 @@
+---
+title: "Function nemo_relay_stream_next"
+sidebar-title: "nemo_relay_stream_next"
+description: "Poll the next chunk from a streaming LLM response. Blocks until a chunk is available."
+position: 114
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_stream_next(\n    stream: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"struct-ffistream\">FfiStream</a>,\n    out_chunk: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>"}} /></pre>
+
+Poll the next chunk from a streaming LLM response. Blocks until a chunk is available.
+
+## Returns
+
+- `1`: A chunk was written to `*out_chunk`. Caller must free with `nemo_relay_string_free`.
+- `0`: The stream is complete (no more chunks).
+- `-1`: An error occurred. Call `nemo_relay_last_error` for details.
+
+## Safety
+
+`stream` and `out_chunk` must be valid, non-null pointers.

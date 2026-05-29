@@ -1,0 +1,33 @@
+---
+title: "Function llm_request_intercepts"
+sidebar-title: "llm_request_intercepts"
+description: "Run only the LLM request-intercept chain."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm_request_intercepts(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
+
+Run only the LLM request-intercept chain.
+
+This applies the currently active global and scope-local request intercepts without emitting lifecycle events or invoking provider execution.
+
+## Parameters
+
+- `name`: Logical provider or model family name used when resolving the intercept chain.
+- `request`: Raw [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) to transform.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the transformed [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest).
+
+## Errors
+
+Returns any error raised by the request-intercept chain.
+
+## Notes
+
+Conditional guardrails, codecs, and execution intercepts are not run by this helper.

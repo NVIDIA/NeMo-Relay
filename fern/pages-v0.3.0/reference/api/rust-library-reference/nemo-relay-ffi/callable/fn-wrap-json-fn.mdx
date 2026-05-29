@@ -1,0 +1,14 @@
+---
+title: "Function wrap_json_fn"
+sidebar-title: "wrap_json_fn"
+description: "Wrap a generic C JSON callback into a Rust closure."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn wrap_json_fn(\n    cb: <a href=\"type-nemorelayjsoncb\">NemoRelayJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;"}} /></pre>
+
+Wrap a generic C JSON callback into a Rust closure.

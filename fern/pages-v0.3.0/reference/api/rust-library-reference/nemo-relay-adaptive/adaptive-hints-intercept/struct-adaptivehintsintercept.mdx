@@ -1,0 +1,39 @@
+---
+title: "Struct Adaptive Hints Intercept"
+sidebar-title: "AdaptiveHintsIntercept"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept/struct-adaptivehintsintercept"
+description: "Opt-in LLM request intercept that injects `AgentHints` into request headers from the prediction trie in `HotCache`."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct AdaptiveHintsIntercept { /* private fields */ }
+```
+
+Opt-in LLM request intercept that injects [`AgentHints`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/metadata/struct-agenthints) into request headers from the prediction trie in [`HotCache`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/cache/struct-hotcache).
+
+Constructed via [`AdaptiveHintsIntercept::new`](/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept/struct-adaptivehintsintercept) and converted to an [`LlmRequestInterceptFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmrequestinterceptfn) via [`AdaptiveHintsIntercept::into_request_fn`](/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept/struct-adaptivehintsintercept) for registration with the NeMo Relay runtime.
+
+## Implementations
+
+### `impl AdaptiveHintsIntercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-adaptivehintsintercept\">AdaptiveHintsIntercept</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(hot_cache: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/sync/poison/rwlock/struct.RwLock.html\">RwLock</a>&lt;<a href=\"../types/cache/struct-hotcache\">HotCache</a>&gt;&gt;, agent_id: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>) -&gt; Self"}} /></pre>
+
+Creates a new `AdaptiveHintsIntercept`.
+
+#### `into_request_fn`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_request_fn(self) -&gt; <a href=\"../../nemo-relay/api/runtime/callbacks/type-llmrequestinterceptfn\">LlmRequestInterceptFn</a>"}} /></pre>
+
+Converts this intercept into an [`LlmRequestInterceptFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmrequestinterceptfn) suitable for registration with [`register_llm_request_intercept`].
+
+The returned closure reads the HotCache trie, builds AgentHints, injects them into the request headers and body, and returns the transformed request.

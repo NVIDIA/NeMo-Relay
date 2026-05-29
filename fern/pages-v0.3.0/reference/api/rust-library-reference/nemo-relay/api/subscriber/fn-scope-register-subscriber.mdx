@@ -1,0 +1,34 @@
+---
+title: "Function scope_register_subscriber"
+sidebar-title: "scope_register_subscriber"
+description: "Register a scope-local lifecycle event subscriber."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_register_subscriber(\n    scope_uuid: &amp;<a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    callback: <a href=\"../runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register a scope-local lifecycle event subscriber.
+
+The subscriber remains active only while the target scope is still present on the active scope stack.
+
+## Parameters
+
+- `scope_uuid`: UUID of the owning scope.
+- `name`: Unique subscriber name within the owning scope.
+- `callback`: Subscriber callback invoked for events emitted under that scope hierarchy.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the subscriber was registered.
+
+## Errors
+
+Returns [`FlowError::NotFound`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the scope does not exist on the active stack and [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the scope already owns a subscriber with the same name.
+
+## Notes
+
+Scope-local subscribers are removed automatically when the owning scope is popped. Native event-producing APIs enqueue subscriber work and return without waiting for callbacks.

@@ -1,0 +1,24 @@
+---
+title: "Function list_plugin_kinds"
+sidebar-title: "list_plugin_kinds"
+description: "Lists registered plugin kinds in sorted order."
+position: 17
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn list_plugin_kinds() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Lists registered plugin kinds in sorted order.
+
+This returns the currently registered plugin kinds without inspecting the active runtime configuration.
+
+## Returns
+
+A sorted [`Vec<String>`](https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html) of registered plugin kinds.
+
+## Notes
+
+Disabled or inactive components still appear here when their plugin kind is registered.

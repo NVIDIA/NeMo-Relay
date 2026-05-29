@@ -1,0 +1,33 @@
+---
+title: "Module capability"
+sidebar-title: "capability"
+description: "Capability registry tracking per-backend and per-model-family supported features."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Capability registry tracking per-backend and per-model-family supported features.
+
+The registry provides feature discovery so the policy engine knows which optimization intents can be expressed on which backend/model combinations.
+
+## Two-Level Feature Lookup
+
+[`BackendCapabilities`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-backendcapabilities) stores backend-level defaults plus per-model-family overrides via [`ModelFamilyCapabilities`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-modelfamilycapabilities). Feature lookups check the model family first, falling back to backend-level if the family is not registered.
+
+## Built-in Defaults
+
+[`CapabilityRegistry::with_defaults()`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-capabilityregistry) returns a registry pre-populated with known Anthropic and OpenAI capabilities.
+
+## Structs
+
+- [BackendCapabilities](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-backendcapabilities): Capabilities of a specific backend provider.
+- [CacheEconomics](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-cacheeconomics): Provider/model-specific cache economics used by the internal planner.
+- [CapabilityRegistry](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-capabilityregistry): Registry holding capabilities for all known backends.
+- [ModelFamilyCapabilities](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/struct-modelfamilycapabilities): Per-model-family capability overrides within a backend.
+
+## Enums
+
+- [ProviderFeature](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/capability/enum-providerfeature): Feature that a backend or model family may support.

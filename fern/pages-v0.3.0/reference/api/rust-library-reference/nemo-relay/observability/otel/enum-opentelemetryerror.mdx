@@ -1,0 +1,114 @@
+---
+title: "Enum Open Telemetry Error"
+sidebar-title: "OpenTelemetryError"
+description: "Errors produced while configuring or operating the OpenTelemetry subscriber."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenTelemetryError &#123;\n    MissingTokioRuntime,\n    UnsupportedTransport &#123;\n        transport: &amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    &#125;,\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+
+Errors produced while configuring or operating the OpenTelemetry subscriber.
+
+## Variants
+
+### `MissingTokioRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingTokioRuntime"}} /></pre>
+
+The tonic gRPC exporter requires an active Tokio runtime.
+
+### `UnsupportedTransport`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedTransport"}} /></pre>
+
+The requested transport is not available on this target.
+
+#### Fields
+
+### `transport: &'static str`
+
+Human-readable transport label used in the error message.
+
+### `InvalidGrpcHeader`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidGrpcHeader"}} /></pre>
+
+Failed to parse a configured gRPC metadata header.
+
+#### Fields
+
+### `key: String`
+
+Header name that failed to parse.
+
+### `message: String`
+
+Parser failure message.
+
+### `ExporterBuild(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ExporterBuild(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+Failed to build the OTLP exporter.
+
+### `Provider(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+The underlying tracer provider returned an error.
+
+### `Core(FlowError)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Core(<a href=\"../../error/enum-flowerror\">FlowError</a>)"}} /></pre>
+
+Registration errors from the core runtime.
+
+## Trait Implementations
+
+### `impl Debug for OpenTelemetryError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Display for OpenTelemetryError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Error for OpenTelemetryError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a> for <a href=\"enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
+
+#### `source`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
+
+#### `description`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `cause`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
+
+#### `provide`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+
+### `impl From<FlowError> for OpenTelemetryError`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"../../error/enum-flowerror\">FlowError</a>&gt; for <a href=\"enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"../../error/enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>

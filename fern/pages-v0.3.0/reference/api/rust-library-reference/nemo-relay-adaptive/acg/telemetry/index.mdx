@@ -1,0 +1,27 @@
+---
+title: "Module telemetry"
+sidebar-title: "telemetry"
+description: "Cache performance telemetry types for the Adaptive Cache Governor (ACG) system."
+position: 16
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Cache performance telemetry types for the Adaptive Cache Governor (ACG) system.
+
+These types normalize provider-specific cache metrics (Anthropic `cache_read_input_tokens`/`cache_creation_input_tokens`, OpenAI `cached_tokens`) into a common schema for uniform measurement. Populated by provider-specific normalization logic in Phase 9.
+
+## Structs
+
+- [CacheHitRate](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/struct-cachehitrate): Aggregated cache hit rate over a time window.
+- [CacheMissDiagnosis](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/struct-cachemissdiagnosis): Structured diagnosis for a cache miss.
+- [CacheRequestFacts](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/struct-cacherequestfacts): Request-time facts used to classify a cache miss without leaking prompt text.
+- [CacheTelemetryEvent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/struct-cachetelemetryevent): Per-call cache telemetry event.
+
+## Enums
+
+- [CacheMissEvidence](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/enum-cachemissevidence): Typed evidence for a cache miss diagnosis.
+- [CacheMissReason](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/enum-cachemissreason): Reason why a cache miss occurred.
+- [CacheTelemetryProvider](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/telemetry/enum-cachetelemetryprovider): Cache telemetry provider identity for canonical `Usage` normalization.

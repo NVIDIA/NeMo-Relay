@@ -1,0 +1,32 @@
+---
+title: "Function nemo_relay_event"
+sidebar-title: "nemo_relay_event"
+description: "Emit a named lifecycle event."
+position: 31
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_event(\n    name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    parent: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i64.html\">i64</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Emit a named lifecycle event.
+
+This creates a point-in-time Mark event without pushing or popping a scope.
+
+## Parameters
+
+- `name`: Null-terminated event name.
+- `parent`: Optional parent scope handle, or null to use the current top of stack.
+- `data_json`: Optional null-terminated JSON data payload recorded on the mark event, or null.
+- `metadata_json`: Optional null-terminated JSON metadata payload recorded on the mark event, or null.
+- `timestamp_unix_micros`: Optional Unix microseconds timestamp for the mark event, or null to use the current UTC time.
+
+## Errors
+
+Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when `timestamp_unix_micros` is outside the supported timestamp range.
+
+## Safety
+
+`name` must be a valid C string. Other pointer args may be null; when non-null, optional pointers must be valid for reads for the duration of the call.

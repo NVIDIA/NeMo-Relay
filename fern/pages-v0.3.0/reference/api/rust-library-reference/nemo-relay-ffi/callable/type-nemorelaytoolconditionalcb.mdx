@@ -1,0 +1,14 @@
+---
+title: "Type Alias Nemo Relay Tool Conditional Cb"
+sidebar-title: "NemoRelayToolConditionalCb"
+description: "Callback for tool conditional execution guardrails. Receives tool name and arguments as JSON. Returns NULL to allow execution, or an error message string to reject."
+position: 36
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayToolConditionalCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>, name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>, args_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>;"}} /></pre>
+
+Callback for tool conditional execution guardrails. Receives tool name and arguments as JSON. Returns NULL to allow execution, or an error message string to reject.

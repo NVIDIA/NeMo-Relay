@@ -1,0 +1,87 @@
+---
+title: "Struct Atif Exporter"
+sidebar-title: "AtifExporter"
+description: "Collects lifecycle events and exports them as ATIF trajectories."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct AtifExporter { /* private fields */ }
+```
+
+Collects lifecycle events and exports them as ATIF trajectories.
+
+Register this exporter as an event subscriber via [`AtifExporter::subscriber`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter), then call [`AtifExporter::export`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) to produce an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory).
+
+## Implementations
+
+### `impl AtifExporter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-atifexporter\">AtifExporter</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(session_id: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, agent_info: <a href=\"struct-atifagentinfo\">AtifAgentInfo</a>) -&gt; Self"}} /></pre>
+
+Create a new exporter with the given session metadata.
+
+##### Parameters
+
+- `session_id`: Stable identifier for the trajectory being collected.
+- `agent_info`: Metadata describing the emitting agent.
+
+##### Returns
+
+A new [`AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) with an empty in-memory event buffer.
+
+#### `subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>
+
+Return an event subscriber function that records NeMo Relay events.
+
+The returned callback can be registered with [`register_subscriber`](/reference/api/rust-library-reference/nemo-relay/api/subscriber/fn-register-subscriber).
+
+##### Returns
+
+An [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn) that appends each observed event to this exporter's internal buffer.
+
+#### `export`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn export(&amp;self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+
+Export the collected event history as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory).
+
+##### Returns
+
+An [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory) synthesized from the events observed so far.
+
+##### Errors
+
+Returns an error if queued subscriber delivery cannot be flushed before the trajectory is cloned.
+
+##### Notes
+
+Exporting does not clear the buffered events. Call [`AtifExporter::clear`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) when you need to reset the exporter between trajectories.
+
+#### `try_export`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_export(&amp;self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-atiftrajectory\">AtifTrajectory</a>&gt;"}} /></pre>
+
+Try to export the collected event history as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory).
+
+This is equivalent to [`AtifExporter::export`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) and is retained for callers that prefer an explicitly fallible method name.
+
+#### `clear`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn clear(&amp;self)"}} /></pre>
+
+Clear all collected events from the internal buffer.
+
+##### Returns
+
+`()`.

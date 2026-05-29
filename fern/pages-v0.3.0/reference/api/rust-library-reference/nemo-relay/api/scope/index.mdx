@@ -1,0 +1,34 @@
+---
+title: "Module scope"
+sidebar-title: "scope"
+description: "Scope stack lifecycle and mark-event entry points."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Scope stack lifecycle and mark-event entry points.
+
+## Structs
+
+- [CreateScopeHandleParams](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-createscopehandleparams): Builder parameters for [`NemoRelayContextState::create_scope_handle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+- [EmitMarkEventParams](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-emitmarkeventparams): Builder parameters for [`event`](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-event).
+- [EndScopeHandleParams](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-endscopehandleparams): Builder parameters for [`NemoRelayContextState::build_scope_end_event`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+- [PopScopeParams](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-popscopeparams): Builder parameters for [`pop_scope`](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-pop-scope).
+- [PushScopeParams](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-pushscopeparams): Builder parameters for [`push_scope`](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-push-scope).
+- [ScopeAttributes](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopeattributes): Bitflags that modify scope behavior and observability.
+- [ScopeHandle](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle): Runtime-owned handle identifying an active or completed scope.
+
+## Enums
+
+- [HandleAttributes](/reference/api/rust-library-reference/nemo-relay/api/scope/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.
+- [ScopeType](/reference/api/rust-library-reference/nemo-relay/api/scope/enum-scopetype): Semantic category attached to a scope lifecycle span.
+
+## Functions
+
+- [event](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-event): Emit a standalone mark event under the current or provided scope.
+- [get_handle](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-get-handle): Return the current scope at the top of the active stack.
+- [pop_scope](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-pop-scope): Pop the current scope from the active scope stack.
+- [push_scope](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-push-scope): Push a new scope onto the active scope stack.

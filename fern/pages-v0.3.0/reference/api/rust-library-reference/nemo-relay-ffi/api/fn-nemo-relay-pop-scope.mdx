@@ -1,0 +1,30 @@
+---
+title: "Function nemo_relay_pop_scope"
+sidebar-title: "nemo_relay_pop_scope"
+description: "Pop a scope from the scope stack by its handle."
+position: 69
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_pop_scope(\n    handle: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    output_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i64.html\">i64</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Pop a scope from the scope stack by its handle.
+
+This emits a scope End event and removes scope-local registrations owned by the popped scope.
+
+## Parameters
+
+- `handle`: The current top-of-stack scope handle to pop.
+- `output_json`: Optional null-terminated JSON string exported as semantic scope output on the end event, or null.
+- `timestamp_unix_micros`: Optional Unix microseconds timestamp for the end event, or null to use the runtime default end timestamp.
+
+## Errors
+
+Returns `InvalidJson` for invalid output JSON, `InvalidArg` when `timestamp_unix_micros` is outside the supported timestamp range, or an error status when `handle` is not the current top scope.
+
+## Safety
+
+`handle` must be a valid, non-null `FfiScopeHandle` pointer. `output_json` and `timestamp_unix_micros` may be null; when non-null, optional pointers must be valid for reads for the duration of the call.

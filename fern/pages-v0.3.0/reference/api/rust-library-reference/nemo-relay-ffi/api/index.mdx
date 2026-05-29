@@ -1,0 +1,143 @@
+---
+title: "Module api"
+sidebar-title: "api"
+description: "Top-level FFI API functions exported as `extern \"C\"`."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Top-level FFI API functions exported as `extern "C"`.
+
+Each function clears the thread-local error before executing and returns an [`NemoRelayStatus`](/reference/api/rust-library-reference/nemo-relay-ffi/error/enum-nemorelaystatus). On failure, call [`nemo_relay_last_error`] to retrieve the error message.
+
+## Re-exports
+
+- `pub use crate::types::nemo_relay_openinference_subscriber_free;`
+- `pub use crate::types::nemo_relay_otel_subscriber_free;`
+
+## Structs
+
+- [FfiStream](/reference/api/rust-library-reference/nemo-relay-ffi/api/struct-ffistream): Opaque stream handle for consuming LLM streaming responses chunk by chunk. Use `nemo_relay_stream_next` to poll and `nemo_relay_stream_free` to release.
+
+## Functions
+
+- [nemo_relay_active_plugin_report_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-active-plugin-report-json): Return the last successfully configured plugin report as JSON.
+- [nemo_relay_anthropic_messages_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-anthropic-messages-codec-new): Create a new Anthropic Messages API codec handle.
+- [nemo_relay_atif_exporter_clear](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-clear): Clears all collected events from the exporter.
+- [nemo_relay_atif_exporter_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-create): Creates a new ATIF exporter.
+- [nemo_relay_atif_exporter_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-deregister): Deregisters the exporter subscriber.
+- [nemo_relay_atif_exporter_export](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-export): Exports collected events as an ATIF trajectory JSON string.
+- [nemo_relay_atif_exporter_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-register): Registers the exporter as an event subscriber.
+- [nemo_relay_atof_exporter_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-create): Creates a new filesystem-backed ATOF JSONL exporter.
+- [nemo_relay_atof_exporter_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-deregister): Deregisters the ATOF exporter subscriber.
+- [nemo_relay_atof_exporter_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-force-flush): Flushes the ATOF exporter output file.
+- [nemo_relay_atof_exporter_path](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-path): Returns the ATOF exporter output path as a string.
+- [nemo_relay_atof_exporter_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-register): Registers the ATOF exporter as an event subscriber.
+- [nemo_relay_atof_exporter_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-shutdown): Shuts down the ATOF exporter by flushing output.
+- [nemo_relay_clear_plugin_configuration](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-clear-plugin-configuration): Clear the active global plugin configuration.
+- [nemo_relay_deregister_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-conditional-execution-guardrail): Deregister an LLM conditional execution guardrail by name.
+- [nemo_relay_deregister_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-execution-intercept): Deregister an LLM execution intercept by name.
+- [nemo_relay_deregister_llm_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-request-intercept): Deregister an LLM request intercept by name.
+- [nemo_relay_deregister_llm_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-sanitize-request-guardrail): Deregister an LLM request sanitization guardrail by name.
+- [nemo_relay_deregister_llm_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-sanitize-response-guardrail): Deregister an LLM response sanitization guardrail by name.
+- [nemo_relay_deregister_llm_stream_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-llm-stream-execution-intercept): Deregister an LLM streaming execution intercept by name.
+- [nemo_relay_deregister_plugin](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-plugin): Deregister a plugin by kind.
+- [nemo_relay_deregister_subscriber](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-subscriber): Deregister an event subscriber by name.
+- [nemo_relay_deregister_tool_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-conditional-execution-guardrail): Deregister a tool conditional execution guardrail by name.
+- [nemo_relay_deregister_tool_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-execution-intercept): Deregister a tool execution intercept by name.
+- [nemo_relay_deregister_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-request-intercept): Deregister a tool request intercept by name.
+- [nemo_relay_deregister_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-request-guardrail): Deregister a tool request sanitization guardrail by name.
+- [nemo_relay_deregister_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-response-guardrail): Deregister a tool response sanitization guardrail by name.
+- [nemo_relay_event](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-event): Emit a named lifecycle event.
+- [nemo_relay_flush_subscribers](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-flush-subscribers): Wait for subscriber callbacks queued before this call to finish.
+- [nemo_relay_get_handle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-get-handle): Retrieve the current scope handle from the thread-local scope stack.
+- [nemo_relay_initialize_plugins](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-plugins): Initialize the active global plugin components and return the resulting diagnostics report.
+- [nemo_relay_list_plugin_kinds_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-plugin-kinds-json): Return the registered plugin kinds as JSON.
+- [nemo_relay_llm_call](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call): Begin a manual LLM call lifecycle span.
+- [nemo_relay_llm_call_end](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call-end): End a manual LLM call lifecycle span.
+- [nemo_relay_llm_call_execute](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call-execute): Execute an LLM call end-to-end: run conditional-execution guardrails (on raw request), then request intercepts, sanitize-request guardrails, execution intercepts, the callback, and sanitize-response guardrails. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks the calling thread until completion.
+- [nemo_relay_llm_conditional_execution](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-conditional-execution): Run the registered LLM conditional execution guardrail chain.
+- [nemo_relay_llm_request_intercepts](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-request-intercepts): Run the registered LLM request intercept chain on the given request.
+- [nemo_relay_llm_stream_call_execute](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-stream-call-execute): Execute a streaming LLM call end-to-end. Conditional-execution guardrails run first on the raw request. Returns a stream handle that can be polled with `nemo_relay_stream_next`. Blocks until the stream is set up.
+- [nemo_relay_observability_component_spec_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-observability-component-spec-json): Wrap an observability config JSON object as a top-level plugin component.
+- [nemo_relay_observability_default_config_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-observability-default-config-json): Return the default observability plugin config as JSON.
+- [nemo_relay_observability_plugin_kind](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-observability-plugin-kind): Return the built-in observability plugin kind.
+- [nemo_relay_openai_chat_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openai-chat-codec-new): Create a new OpenAI Chat Completions codec handle.
+- [nemo_relay_openai_responses_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openai-responses-codec-new): Create a new OpenAI Responses API codec handle.
+- [nemo_relay_openinference_subscriber_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openinference-subscriber-create): Creates a new OpenInference subscriber.
+- [nemo_relay_openinference_subscriber_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openinference-subscriber-deregister): Deregisters the OpenInference subscriber by name.
+- [nemo_relay_openinference_subscriber_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openinference-subscriber-force-flush): Forces a flush of finished spans through the exporter.
+- [nemo_relay_openinference_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openinference-subscriber-register): Registers the OpenInference subscriber as an event subscriber.
+- [nemo_relay_openinference_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openinference-subscriber-shutdown): Shuts down the underlying tracer provider.
+- [nemo_relay_otel_subscriber_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-create): Creates a new OpenTelemetry subscriber.
+- [nemo_relay_otel_subscriber_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-deregister): Deregisters the OpenTelemetry subscriber by name.
+- [nemo_relay_otel_subscriber_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-force-flush): Forces a flush of finished spans through the exporter.
+- [nemo_relay_otel_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-register): Registers the OpenTelemetry subscriber as an event subscriber.
+- [nemo_relay_otel_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-shutdown): Shuts down the underlying tracer provider.
+- [nemo_relay_plugin_context_register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-conditional-execution-guardrail): Register an LLM conditional-execution guardrail into the plugin registration context.
+- [nemo_relay_plugin_context_register_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-execution-intercept): Register an LLM execution intercept into the plugin registration context.
+- [nemo_relay_plugin_context_register_llm_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-request-intercept): Register an LLM request intercept into the plugin registration context.
+- [nemo_relay_plugin_context_register_llm_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-sanitize-request-guardrail): Register an LLM sanitize-request guardrail into the plugin registration context.
+- [nemo_relay_plugin_context_register_llm_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-sanitize-response-guardrail): Register an LLM sanitize-response guardrail into the plugin registration context.
+- [nemo_relay_plugin_context_register_llm_stream_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-stream-execution-intercept): Register an LLM stream execution intercept into the plugin registration context.
+- [nemo_relay_plugin_context_register_subscriber](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-subscriber): Register an event subscriber into the plugin registration context.
+- [nemo_relay_plugin_context_register_tool_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-conditional-execution-guardrail): Register a tool conditional-execution guardrail into the plugin registration context.
+- [nemo_relay_plugin_context_register_tool_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-execution-intercept): Register a tool execution intercept into the plugin registration context.
+- [nemo_relay_plugin_context_register_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-request-intercept): Register a tool request intercept into the plugin registration context.
+- [nemo_relay_plugin_context_register_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-sanitize-request-guardrail): Register a tool sanitize-request guardrail into the plugin registration context.
+- [nemo_relay_plugin_context_register_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-tool-sanitize-response-guardrail): Register a tool sanitize-response guardrail into the plugin registration context.
+- [nemo_relay_pop_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-pop-scope): Pop a scope from the scope stack by its handle.
+- [nemo_relay_push_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-push-scope): Push a new scope onto the scope stack.
+- [nemo_relay_register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-llm-conditional-execution-guardrail): Register an LLM conditional execution guardrail. The callback decides whether an LLM call should proceed.
+- [nemo_relay_register_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-llm-execution-intercept): Register an LLM execution intercept following the middleware chain pattern. The callback receives `(request, next_fn, next_ctx)` - call `next_fn(request, next_ctx)` to invoke the next intercept or the original LLM call, or skip calling it to short-circuit.
+- [nemo_relay_register_llm_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-llm-request-intercept): Register an LLM request intercept. The callback can transform the `LlmRequest` before it reaches the LLM provider.
+- [nemo_relay_register_llm_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-llm-sanitize-request-guardrail): Register an LLM request sanitization guardrail. The callback can modify or replace the LLM request before it is sent.
+- [nemo_relay_register_llm_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-llm-sanitize-response-guardrail): Register an LLM response sanitization guardrail. The callback can inspect and modify the LLM response after it is received.
+- [nemo_relay_register_llm_stream_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-llm-stream-execution-intercept): Register an LLM streaming execution intercept following the middleware chain pattern. The callback receives `(request, next_fn, next_ctx)` - call `next_fn(request, next_ctx)` to invoke the next intercept or the original streaming LLM call, or skip calling it to short-circuit.
+- [nemo_relay_register_plugin](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-plugin): Register a plugin backed by foreign callbacks.
+- [nemo_relay_register_subscriber](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-subscriber): Register an event subscriber. The callback is invoked for every lifecycle event emitted by the runtime.
+- [nemo_relay_register_tool_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-tool-conditional-execution-guardrail): Register a tool conditional execution guardrail. The callback decides whether a tool call should proceed. Returns an error message to reject, or null to allow.
+- [nemo_relay_register_tool_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-tool-execution-intercept): Register a tool execution intercept following the middleware chain pattern. The callback receives `(args, next_fn, next_ctx)` - call `next_fn(args, next_ctx)` to invoke the next intercept or the original tool function, or skip calling it to short-circuit.
+- [nemo_relay_register_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-tool-request-intercept): Register a tool request intercept. The callback can transform tool arguments before execution. Runs after request guardrails in the middleware pipeline.
+- [nemo_relay_register_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-tool-sanitize-request-guardrail): Register a tool request sanitization guardrail. The callback can inspect and modify tool arguments before the tool executes.
+- [nemo_relay_register_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-register-tool-sanitize-response-guardrail): Register a tool response sanitization guardrail. The callback can inspect and modify tool results after the tool executes.
+- [nemo_relay_scope_deregister_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-llm-conditional-execution-guardrail): Deregister a scope-local LLM conditional execution guardrail by name.
+- [nemo_relay_scope_deregister_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-llm-execution-intercept): Deregister a scope-local LLM execution intercept by name.
+- [nemo_relay_scope_deregister_llm_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-llm-request-intercept): Deregister a scope-local LLM request intercept by name.
+- [nemo_relay_scope_deregister_llm_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-llm-sanitize-request-guardrail): Deregister a scope-local LLM request sanitization guardrail by name.
+- [nemo_relay_scope_deregister_llm_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-llm-sanitize-response-guardrail): Deregister a scope-local LLM response sanitization guardrail by name.
+- [nemo_relay_scope_deregister_llm_stream_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-llm-stream-execution-intercept): Deregister a scope-local LLM streaming execution intercept by name.
+- [nemo_relay_scope_deregister_subscriber](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-subscriber): Deregister a scope-local event subscriber by name.
+- [nemo_relay_scope_deregister_tool_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-tool-conditional-execution-guardrail): Deregister a scope-local tool conditional execution guardrail by name.
+- [nemo_relay_scope_deregister_tool_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-tool-execution-intercept): Deregister a scope-local tool execution intercept by name.
+- [nemo_relay_scope_deregister_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-tool-request-intercept): Deregister a scope-local tool request intercept by name.
+- [nemo_relay_scope_deregister_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-tool-sanitize-request-guardrail): Deregister a scope-local tool request sanitization guardrail by name.
+- [nemo_relay_scope_deregister_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-deregister-tool-sanitize-response-guardrail): Deregister a scope-local tool response sanitization guardrail by name.
+- [nemo_relay_scope_register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-llm-conditional-execution-guardrail): Register a scope-local LLM conditional execution guardrail.
+- [nemo_relay_scope_register_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-llm-execution-intercept): Register a scope-local LLM execution intercept following the middleware chain pattern.
+- [nemo_relay_scope_register_llm_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-llm-request-intercept): Register a scope-local LLM request intercept.
+- [nemo_relay_scope_register_llm_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-llm-sanitize-request-guardrail): Register a scope-local LLM request sanitization guardrail.
+- [nemo_relay_scope_register_llm_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-llm-sanitize-response-guardrail): Register a scope-local LLM response sanitization guardrail.
+- [nemo_relay_scope_register_llm_stream_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-llm-stream-execution-intercept): Register a scope-local LLM streaming execution intercept following the middleware chain pattern.
+- [nemo_relay_scope_register_subscriber](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-subscriber): Register a scope-local event subscriber.
+- [nemo_relay_scope_register_tool_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-tool-conditional-execution-guardrail): Register a scope-local tool conditional execution guardrail.
+- [nemo_relay_scope_register_tool_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-tool-execution-intercept): Register a scope-local tool execution intercept following the middleware chain pattern.
+- [nemo_relay_scope_register_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-tool-request-intercept): Register a scope-local tool request intercept.
+- [nemo_relay_scope_register_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-tool-sanitize-request-guardrail): Register a scope-local tool request sanitization guardrail.
+- [nemo_relay_scope_register_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-register-tool-sanitize-response-guardrail): Register a scope-local tool response sanitization guardrail.
+- [nemo_relay_scope_stack_active](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-active): Returns whether the current execution context has an explicitly-initialized scope stack.
+- [nemo_relay_scope_stack_capture_thread](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-capture-thread): Capture the current thread-local scope stack binding.
+- [nemo_relay_scope_stack_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-create): Create a new isolated scope stack with its own root scope.
+- [nemo_relay_scope_stack_restore_thread](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-restore-thread): Restore and free a captured thread-local scope stack binding.
+- [nemo_relay_scope_stack_set_thread](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-set-thread): Bind an isolated scope stack to the current OS thread.
+- [nemo_relay_stream_free](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-free): Free a stream handle and release its resources.
+- [nemo_relay_stream_next](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-next): Poll the next chunk from a streaming LLM response. Blocks until a chunk is available.
+- [nemo_relay_tool_call](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-call): Begin a manual tool call lifecycle span.
+- [nemo_relay_tool_call_end](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-call-end): End a manual tool call lifecycle span.
+- [nemo_relay_tool_call_execute](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-call-execute): Execute a tool call end-to-end: run conditional-execution guardrails (on raw args), then request intercepts, sanitize-request guardrails, execution intercepts, the callback, and sanitize-response guardrails. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks the calling thread until completion.
+- [nemo_relay_tool_conditional_execution](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-conditional-execution): Run the registered tool conditional execution guardrail chain.
+- [nemo_relay_tool_request_intercepts](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-request-intercepts): Run the registered tool request intercept chain on the given arguments.
+- [nemo_relay_validate_plugin_config](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-validate-plugin-config): Validate a generic plugin config document and return the diagnostics report as JSON.

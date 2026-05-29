@@ -1,0 +1,14 @@
+---
+title: "Type Alias Nemo Relay LlmRequest Intercept Cb"
+sidebar-title: "NemoRelayLlmRequestInterceptCb"
+description: "C callback type for LLM request intercepts with unified annotated-aware signature. Receives the intercept name, the opaque `FfiLLMRequest`, and optionally the annotated request as a JSON C string (null if no Codec resolved). Writes transformed outputs to `out_request` and `out_annotated_json`. Returns `NemoRelayStatus`."
+position: 33
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayLlmRequestInterceptCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>, name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>, request: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>, annotated_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>, out_request: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>, out_annotated_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>;"}} /></pre>
+
+C callback type for LLM request intercepts with unified annotated-aware signature. Receives the intercept name, the opaque `FfiLLMRequest`, and optionally the annotated request as a JSON C string (null if no Codec resolved). Writes transformed outputs to `out_request` and `out_annotated_json`. Returns `NemoRelayStatus`.

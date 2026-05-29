@@ -1,0 +1,35 @@
+---
+title: "Type Alias Tool Intercept Fn"
+sidebar-title: "ToolInterceptFn"
+description: "Rewrite tool arguments before execution."
+position: 16
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type ToolInterceptFn = <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, <a href=\"../../../json/type-json\">Json</a>) -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;;"}} /></pre>
+
+Rewrite tool arguments before execution.
+
+Tool request intercepts run in priority order and can transform the JSON payload that is eventually passed into the tool execution callback.
+
+## Parameters
+
+- First argument: Tool name associated with the request.
+- Second argument: JSON argument payload to transform.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the transformed JSON argument payload.
+
+## Errors
+
+The callback can return any [`FlowError`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) to abort the request-intercept chain.
+
+## Aliased Type
+
+```rust
+pub struct ToolInterceptFn { /* private fields */ }
+```

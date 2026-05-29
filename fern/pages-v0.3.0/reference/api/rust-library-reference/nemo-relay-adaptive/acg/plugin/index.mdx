@@ -1,0 +1,30 @@
+---
+title: "Module plugin"
+sidebar-title: "plugin"
+description: "Provider plugin trait and input/output types for the Adaptive Cache Governor (ACG) system."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Provider plugin trait and input/output types for the Adaptive Cache Governor (ACG) system.
+
+The [`ProviderPlugin`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/trait-providerplugin) trait defines the contract between ACG's provider-agnostic optimization pipeline and backend-specific translation logic. Plugins receive a [`PluginInput`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/struct-plugininput) containing the original request, Prompt IR, intent bundle, and agent identity, and produce a [`PluginOutput`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/struct-pluginoutput) with the translated request and a [`TranslationReport`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-translationreport).
+
+## Design
+
+- **Synchronous**: `translate` is a pure data transform (JSON restructuring), not an I/O operation. This matches the `LlmCodec` pattern in `crates/core/src/codec/traits.rs`.
+- **Compatibility facade**: provider plugins keep their existing synchronous trait surface, but can internally split translation into semantic hint planning plus request-surface application.
+- **`Send + Sync`**: Required for storage as `Arc<dyn ProviderPlugin>` in concurrent contexts.
+- **Object-safe**: The trait is designed to be used as a trait object.
+
+## Structs
+
+- [PluginInput](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/struct-plugininput): Input data provided to a plugin for translation.
+- [PluginOutput](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/struct-pluginoutput): Output produced by a plugin after translation.
+
+## Traits
+
+- [ProviderPlugin](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin/trait-providerplugin): Provider plugin trait for backend-specific translation.

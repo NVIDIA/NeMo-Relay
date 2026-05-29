@@ -1,0 +1,35 @@
+---
+title: "Python Library Reference"
+description: "Generated Python API reference for the nemo_relay package."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from the local `python/nemo_relay` package source.
+
+## Modules
+
+- [`nemo_relay`](/reference/api/python-library-reference/nemo-relay): Python bindings for the NeMo Relay runtime.
+- [`adaptive`](/reference/api/python-library-reference/adaptive): Adaptive plugin configuration helpers.
+- [`codecs`](/reference/api/python-library-reference/codecs): Protocol definitions for request and response codecs used by `nemo_relay.llm`.
+- [`guardrails`](/reference/api/python-library-reference/guardrails): Global guardrail registration for tools and LLMs.
+- [`integrations`](/reference/api/python-library-reference/integrations): Optional integrations for NeMo Relay.
+  - [`deepagents`](/reference/api/python-library-reference/integrations/deepagents): NeMo Relay integrations for Deep Agents.
+    - [`callbacks`](/reference/api/python-library-reference/integrations/deepagents/callbacks): Deep Agents callback handler for NeMo Relay observability.
+    - [`middleware`](/reference/api/python-library-reference/integrations/deepagents/middleware): Deep Agents middleware for NeMo Relay observability.
+  - [`langchain`](/reference/api/python-library-reference/integrations/langchain): NeMo Relay integrations for LangChain.
+    - [`callbacks`](/reference/api/python-library-reference/integrations/langchain/callbacks): LangChain callback handler that maps run hierarchy to NeMo Relay scopes.
+    - [`middleware`](/reference/api/python-library-reference/integrations/langchain/middleware): LangChain AgentMiddleware implementation for NeMo Relay.
+  - [`langgraph`](/reference/api/python-library-reference/integrations/langgraph): NeMo Relay integrations for LangGraph.
+    - [`callbacks`](/reference/api/python-library-reference/integrations/langgraph/callbacks): LangGraph callback handler that reuses the LangChain NeMo Relay integration.
+- [`intercepts`](/reference/api/python-library-reference/intercepts): Global middleware intercept registration for tools and LLMs.
+- [`llm`](/reference/api/python-library-reference/llm): LLM lifecycle helpers for non-streaming and streaming calls.
+- [`observability`](/reference/api/python-library-reference/observability): Observability plugin configuration helpers.
+- [`plugin`](/reference/api/python-library-reference/plugin): Generic plugin configuration and registration helpers.
+- [`scope`](/reference/api/python-library-reference/scope): Scope stack operations.
+- [`scope_local`](/reference/api/python-library-reference/scope-local): Scope-local middleware and subscriber registration.
+- [`subscribers`](/reference/api/python-library-reference/subscribers): Global event subscriber registration.
+- [`tools`](/reference/api/python-library-reference/tools): Tool lifecycle helpers.
+- [`typed`](/reference/api/python-library-reference/typed): Typed wrappers around the JSON-based NeMo Relay execution APIs.
+- [`utils`](/reference/api/python-library-reference/utils)

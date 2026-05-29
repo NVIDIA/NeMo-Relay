@@ -1,0 +1,64 @@
+---
+title: "Struct LlmCall Params"
+sidebar-title: "LlmCallParams"
+description: "Builder parameters for `llm_call`."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LlmCallParams&lt;'a&gt; &#123;\n    pub name: &amp;'a <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    pub request: &amp;'a <a href=\"struct-llmrequest\">LlmRequest</a>,\n    pub parent: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;'a <a href=\"../scope/struct-scopehandle\">ScopeHandle</a>&gt;,\n    pub attributes: <a href=\"struct-llmattributes\">LlmAttributes</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub model_name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub annotated_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>
+
+Builder parameters for [`llm_call`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call).
+
+## Fields
+
+### `name: &'a str`
+
+Logical provider or model family name recorded on the span.
+
+### `request: &'a LlmRequest`
+
+Raw request associated with the span.
+
+### `parent: Option<&'a ScopeHandle>`
+
+Optional explicit parent scope.
+
+### `attributes: LlmAttributes`
+
+LLM attribute bitflags applied to the span.
+
+### `data: Option<Json>`
+
+Optional application payload stored on the handle but not emitted as Agent Trajectory Observability Format (ATOF) data.
+
+### `metadata: Option<Json>`
+
+Optional JSON metadata recorded on the start event.
+
+### `model_name: Option<String>`
+
+Optional normalized model name recorded separately from the request payload.
+
+### `annotated_request: Option<Arc<AnnotatedLlmRequest>>`
+
+Optional normalized request annotation produced by a codec.
+
+### `timestamp: Option<DateTime<Utc>>`
+
+Optional timestamp captured as the handle start time and reused by the emitted start event. When omitted, the current UTC time is used.
+
+## Implementations
+
+### `impl<'a> LlmCallParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-llmcallparams\">LlmCallParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `builder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; LlmCallParamsBuilder&lt;'a, (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+
+Create a builder for building `LlmCallParams`. On the builder, call `.name(...)`, `.request(...)`, `.parent(...)`(optional), `.attributes(...)`(optional), `.data(...)`(optional), `.metadata(...)`(optional), `.model_name(...)`(optional), `.annotated_request(...)`(optional), `.timestamp(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `LlmCallParams`.

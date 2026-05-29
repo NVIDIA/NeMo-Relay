@@ -1,0 +1,39 @@
+---
+title: "Struct Variable Pattern"
+sidebar-title: "VariablePattern"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/variable_extractor/struct-variablepattern"
+description: "Regex-based pattern used to detect variable content."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct VariablePattern &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub regex: Regex,\n    pub category: <a href=\"enum-variablecategory\">VariableCategory</a>,\n&#125;"}} /></pre>
+
+Regex-based pattern used to detect variable content.
+
+## Fields
+
+### `name: String`
+
+Stable placeholder name inserted into the template.
+
+### `regex: Regex`
+
+Regex used to detect matching content.
+
+### `category: VariableCategory`
+
+Semantic category assigned to matches from this pattern.
+
+## Trait Implementations
+
+### `impl Debug for VariablePattern`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-variablepattern\">VariablePattern</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>

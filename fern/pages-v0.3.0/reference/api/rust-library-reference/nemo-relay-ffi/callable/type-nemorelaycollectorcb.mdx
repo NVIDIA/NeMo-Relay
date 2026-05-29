@@ -1,0 +1,14 @@
+---
+title: "Type Alias Nemo Relay Collector Cb"
+sidebar-title: "NemoRelayCollectorCb"
+description: "Callback for collecting intercepted stream chunks. Invoked with each chunk (after stream execution intercepts have been applied) as a null-terminated C string. The string is only valid for the duration of the call."
+position: 23
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayCollectorCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>(chunk: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>);"}} /></pre>
+
+Callback for collecting intercepted stream chunks. Invoked with each chunk (after stream execution intercepts have been applied) as a null-terminated C string. The string is only valid for the duration of the call.
