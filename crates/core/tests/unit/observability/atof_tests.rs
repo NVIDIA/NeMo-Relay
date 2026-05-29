@@ -121,6 +121,7 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
 struct AtofSocketSink {
     address: String,
     events: mpsc::Receiver<Vec<serde_json::Value>>,
+    saw_eof: mpsc::Receiver<bool>,
 }
 
 fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
@@ -128,6 +129,7 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let (sender, receiver) = mpsc::channel();
+    let (eof_sender, eof_receiver) = mpsc::channel();
     thread::spawn(move || {
         let deadline = Instant::now() + TEST_RECV_TIMEOUT;
         let stream = loop {
@@ -136,12 +138,14 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if Instant::now() >= deadline {
                         let _ = sender.send(Vec::new());
+                        let _ = eof_sender.send(false);
                         return;
                     }
                     thread::sleep(Duration::from_millis(10));
                 }
                 Err(_) => {
                     let _ = sender.send(Vec::new());
+                    let _ = eof_sender.send(false);
                     return;
                 }
             }
@@ -159,11 +163,12 @@ fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
         let _ = sender.send(events);
         let _ = reader.get_ref().set_read_timeout(None);
         let mut drain = String::new();
-        let _ = reader.read_to_string(&mut drain);
+        let _ = eof_sender.send(reader.read_to_string(&mut drain).is_ok());
     });
     AtofSocketSink {
         address,
         events: receiver,
+        saw_eof: eof_receiver,
     }
 }
 
@@ -318,6 +323,7 @@ fn streaming_exporter_writes_canonical_event_json_values_to_socket() {
     let delivered = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     assert_eq!(delivered[0], event.try_to_json_value().unwrap());
     assert_eq!(exporter.stats().events_sent, 1);
+    assert!(sink.saw_eof.recv_timeout(TEST_RECV_TIMEOUT).unwrap());
 }
 
 #[test]
@@ -492,6 +498,7 @@ fn streaming_exporter_registers_with_runtime_events() {
             .all(|event| event["name"] != "pre_atof_streaming_mark")
     );
     assert_eq!(exporter.stats().events_sent, 3);
+    assert!(sink.saw_eof.recv_timeout(TEST_RECV_TIMEOUT).unwrap());
 }
 
 #[test]
