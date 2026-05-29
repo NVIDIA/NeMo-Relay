@@ -63,6 +63,47 @@ describe('LLM replay', () => {
     assert.equal('token_usage' in response, false);
   });
 
+  it('preserves tool calls from llm output lastAssistant for ATIF and OpenInference', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    backend.onLlmInput(llmInput(), { runId: 'run-1', sessionId: 'session-1' });
+    backend.onLlmOutput(
+      {
+        ...llmOutput(),
+        assistantTexts: [],
+        lastAssistant: {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: 'call-search-1',
+              type: 'function',
+              function: {
+                name: 'web_search',
+                arguments: { query: 'private search' },
+              },
+            },
+          ],
+        },
+      },
+      { runId: 'run-1', sessionId: 'session-1' },
+    );
+
+    const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
+    assert.equal(response.content, 'tool calls: web_search');
+    assert.deepEqual(response.tool_calls, [
+      {
+        id: 'call-search-1',
+        type: 'function',
+        function: {
+          name: 'web_search',
+          arguments: { stripped: true },
+        },
+      },
+    ]);
+    assert.deepEqual((response.openclaw as ResponseOpenClaw).assistant_tool_call_names, ['web_search']);
+  });
+
   it('uses the observed input time as the fallback llm span start time', () => {
     const now = Date.now;
     const nf = createNemoRelayRuntime();
@@ -781,6 +822,7 @@ type ReplayRequest = {
 
 type ReplayResponse = {
   content?: string;
+  tool_calls?: unknown[];
   assistant_texts_count?: number;
   usage?: Record<string, number>;
   openclaw: Record<string, unknown>;
