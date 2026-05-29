@@ -245,9 +245,10 @@ impl SessionAlignmentState {
 }
 
 // Resolves the session id for a gateway request in precedence order:
-// explicit NeMo Relay header, agent-native headers, then agent-specific body fallbacks. Keeping the
-// provider fallbacks behind one function makes a new agent integration add one small alignment
-// adapter instead of threading bespoke checks through gateway request construction.
+// explicit NeMo Relay header, agent-native headers, agent-specific body fallbacks, then the
+// generic OpenAI-compatible `session_id` body field. Keeping the provider fallbacks behind one
+// function makes a new agent integration add one small alignment adapter instead of threading
+// bespoke checks through gateway request construction.
 pub(crate) fn gateway_session_id(
     headers: &HeaderMap,
     body: &Value,
@@ -256,6 +257,21 @@ pub(crate) fn gateway_session_id(
     header_string(headers, "x-nemo-relay-session-id")
         .or_else(|| claude_code::session_id_from_headers(headers))
         .or_else(|| codex::prompt_cache_session_id(body, route))
+        .or_else(|| openai_body_session_id(body, route))
+}
+
+fn openai_body_session_id(body: &Value, route: GatewayRouteKind) -> Option<String> {
+    if !matches!(
+        route,
+        GatewayRouteKind::OpenAiChatCompletions | GatewayRouteKind::OpenAiResponses
+    ) {
+        return None;
+    }
+    body.get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 // Gives provider adapters a chance to select an agent-native upstream before the gateway falls
