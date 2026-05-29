@@ -1452,6 +1452,53 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 }
 
 #[tokio::test]
+async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-main"
+        }),
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "task_id": "task-1",
+            "tool_name": "terminal",
+            "tool_input": { "command": "pwd" }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-main"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    manager.close_all("gateway_shutdown").await.unwrap();
+    clear_plugin_configuration().unwrap();
+
+    let trajectories: Vec<Value> = std::fs::read_dir(&atif_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap())
+        .collect();
+    let serialized = serde_json::to_string(&trajectories).unwrap();
+    assert!(serialized.contains("hermes-main"));
+    assert!(!serialized.contains("task-1"));
+    assert!(!serialized.contains("gateway_shutdown"));
+}
+
+#[tokio::test]
 async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();

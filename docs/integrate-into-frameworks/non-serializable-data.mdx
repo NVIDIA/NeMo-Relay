@@ -28,7 +28,7 @@ NeMo Relay middleware surfaces operate on JSON-compatible data. Frameworks do no
 ## Recommended Strategies
 
 These strategies keep provider and framework data JSON-compatible before it reaches NeMo
-Flow.
+Relay.
 
 - Convert provider payloads into a stable request shape before NeMo Relay sees them.
 - Preserve opaque framework objects outside the middleware path and pass only the serializable projection into the runtime.
