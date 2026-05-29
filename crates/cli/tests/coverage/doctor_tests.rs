@@ -620,6 +620,43 @@ async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() 
     assert!(!missing.exists());
 }
 
+#[tokio::test]
+async fn collect_observability_registers_adaptive_before_validation() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": { "version": 1 }
+                },
+                {
+                    "kind": "adaptive",
+                    "enabled": false,
+                    "config": {
+                        "policy": {
+                            "unknown_component": "warn",
+                            "unknown_field": "warn",
+                            "unsupported_value": "error"
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    assert!(
+        !checks.iter().any(|check| check
+            .details
+            .contains("plugin component kind 'adaptive' is unsupported")),
+        "doctor should register adaptive before plugin validation: {checks:?}"
+    );
+}
+
 #[test]
 fn format_agents_human_lists_supported_and_separates_detected() {
     let agents = vec![
