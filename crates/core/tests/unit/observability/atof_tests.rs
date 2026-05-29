@@ -118,13 +118,24 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn start_atof_socket_sink(
-    expected_events: usize,
-) -> (String, mpsc::Receiver<Vec<serde_json::Value>>) {
+struct AtofSocketSink {
+    address: String,
+    events: mpsc::Receiver<Vec<serde_json::Value>>,
+    release: mpsc::Sender<()>,
+}
+
+impl AtofSocketSink {
+    fn release_after_shutdown(&self) {
+        let _ = self.release.send(());
+    }
+}
+
+fn start_atof_socket_sink(expected_events: usize) -> AtofSocketSink {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap().to_string();
     let (sender, receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
     thread::spawn(move || {
         let deadline = Instant::now() + TEST_RECV_TIMEOUT;
         let stream = loop {
@@ -153,11 +164,14 @@ fn start_atof_socket_sink(
                 Ok(_) => events.push(serde_json::from_str(line.trim_end()).unwrap()),
             }
         }
-        let mut drain = String::new();
-        let _ = reader.read_to_string(&mut drain);
         let _ = sender.send(events);
+        let _ = release_receiver.recv_timeout(TEST_RECV_TIMEOUT);
     });
-    (address, receiver)
+    AtofSocketSink {
+        address,
+        events: receiver,
+        release: release_sender,
+    }
 }
 
 fn start_atof_eof_sink() -> (String, mpsc::Receiver<bool>) {
@@ -301,14 +315,15 @@ fn subscriber_writes_canonical_event_jsonl() {
 
 #[test]
 fn streaming_exporter_writes_canonical_event_json_values_to_socket() {
-    let (address, receiver) = start_atof_socket_sink(1);
-    let exporter = AtofStreamingExporter::connect(address).unwrap();
+    let sink = start_atof_socket_sink(1);
+    let exporter = AtofStreamingExporter::connect(sink.address.clone()).unwrap();
     let event = make_annotated_llm_event("streamed-llm-start");
 
     (exporter.subscriber())(&event);
     exporter.shutdown().unwrap();
+    sink.release_after_shutdown();
 
-    let delivered = receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    let delivered = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     assert_eq!(delivered[0], event.try_to_json_value().unwrap());
     assert_eq!(exporter.stats().events_sent, 1);
 }
@@ -430,8 +445,8 @@ fn streaming_exporter_registers_with_runtime_events() {
     )
     .unwrap();
 
-    let (address, receiver) = start_atof_socket_sink(3);
-    let exporter = AtofStreamingExporter::connect(address).unwrap();
+    let sink = start_atof_socket_sink(3);
+    let exporter = AtofStreamingExporter::connect(sink.address.clone()).unwrap();
     let name = format!("atof_streaming_exporter_{}", Uuid::now_v7());
 
     exporter.register(&name).unwrap();
@@ -462,8 +477,9 @@ fn streaming_exporter_registers_with_runtime_events() {
     assert!(exporter.deregister(&name).unwrap());
     assert!(!exporter.deregister(&name).unwrap());
     exporter.shutdown().unwrap();
+    sink.release_after_shutdown();
 
-    let events = receiver.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+    let events = sink.events.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     let scope_start = &events[0];
     let mark = &events[1];
     let scope_end = &events[2];
