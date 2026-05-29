@@ -373,10 +373,11 @@ jobs:
       }}
     runs-on: ubuntu-latest
     environment: fern
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: write
     env:
+      NEMO_RELAY_CI_WORKSPACE: ${{ github.workspace }}/source-checkout
       UV_PYTHON_DOWNLOADS: never
     steps:
       - name: Determine version tag
@@ -400,6 +401,7 @@ jobs:
       - name: Checkout source branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          ref: ${{ steps.version.outputs.tag }}
           path: source-checkout
           fetch-depth: 1
 
@@ -419,12 +421,45 @@ jobs:
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          rustflags: ""
+
+      - name: Cache Rust docs dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: nemo-relay-rust-docs-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: source-checkout -> source-checkout/target
+          cache-all-crates: true
+          cache-bin: false
+          save-if: false
+
+      - name: Install managed Python
+        working-directory: source-checkout
+        run: |
+          set -euo pipefail
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Install just
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
       - name: Install release docs dependencies
         working-directory: source-checkout
         run: |
           set -euo pipefail
           uv sync --no-default-groups --group dev --no-install-project
           npm ci --ignore-scripts
+
+      - name: Generate source API references
+        working-directory: source-checkout
+        env:
+          NEMO_RELAY_DOCS_DEPS_READY: "1"
+        run: just docs-api-reference
 
       - name: Checkout docs website branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -439,6 +474,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run --no-sync python scripts/docs/sync_fern_docs_branch.py release-version \
+            --source-root "$GITHUB_WORKSPACE/source-checkout" \
             --target-root "$GITHUB_WORKSPACE/docs-checkout" \
             --tag "${{ steps.version.outputs.tag }}"
 

@@ -91,23 +91,6 @@ def rewrite_doc_references(value: Any, pages_directory: str) -> Any:
     return value
 
 
-def rewrite_pages_directory(value: Any, source_directory: str, target_directory: str) -> Any:
-    source_prefix = f"../{source_directory}/"
-    target_prefix = f"../{target_directory}/"
-    if isinstance(value, dict):
-        return {
-            key: (
-                item.replace(source_prefix, target_prefix, 1)
-                if key in {"folder", "path"} and isinstance(item, str) and item.startswith(source_prefix)
-                else rewrite_pages_directory(item, source_directory, target_directory)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [rewrite_pages_directory(item, source_directory, target_directory) for item in value]
-    return value
-
-
 def parse_release_tag(tag: str) -> tuple[str, str, bool]:
     match = VERSION_RE.fullmatch(tag)
     if match is None:
@@ -207,33 +190,26 @@ def update_github_links(pages_dir: Path, tag: str) -> None:
             path.write_text(updated, encoding="utf-8")
 
 
-def release_version(target_root: Path, tag: str) -> None:
+def release_version(target_root: Path, tag: str, source_root: Path) -> None:
     display_tag, availability, is_stable = parse_release_tag(tag)
     target_fern = target_root / "fern"
-    pages_dev = target_fern / "pages-dev"
     pages_version = target_fern / f"pages-{display_tag}"
     versions_dir = target_fern / "versions"
-    dev_yml = versions_dir / "dev.yml"
     version_yml = versions_dir / f"{display_tag}.yml"
     docs_yml_path = target_fern / "docs.yml"
+    source_docs = source_root / "docs"
 
-    if not pages_dev.is_dir():
-        raise FileNotFoundError(f"dev pages directory not found: {pages_dev}")
-    if not dev_yml.is_file():
-        raise FileNotFoundError(f"dev navigation file not found: {dev_yml}")
+    if not source_docs.is_dir():
+        raise FileNotFoundError(f"source docs directory not found: {source_docs}")
+    versions_dir.mkdir(parents=True, exist_ok=True)
     if pages_version.exists():
         shutil.rmtree(pages_version)
     if version_yml.exists():
         version_yml.unlink()
 
-    shutil.copytree(pages_dev, pages_version, ignore=docs_ignore)
+    shutil.copytree(source_docs, pages_version, ignore=docs_ignore)
     update_github_links(pages_version, tag)
-
-    version_navigation = rewrite_pages_directory(
-        read_yaml(dev_yml),
-        "pages-dev",
-        f"pages-{display_tag}",
-    )
+    version_navigation = rewrite_doc_references(read_yaml(source_docs / "index.yml"), f"pages-{display_tag}")
     write_yaml(version_yml, version_navigation)
 
     docs_yml = read_yaml(docs_yml_path)
@@ -294,7 +270,8 @@ def parse_args() -> argparse.Namespace:
     sync_parser.add_argument("--source-root", type=Path, required=True)
     sync_parser.add_argument("--target-root", type=Path, required=True)
 
-    release_parser = subparsers.add_parser("release-version", help="snapshot dev docs as a version")
+    release_parser = subparsers.add_parser("release-version", help="snapshot source docs as a version")
+    release_parser.add_argument("--source-root", type=Path, required=True)
     release_parser.add_argument("--target-root", type=Path, required=True)
     release_parser.add_argument("--tag", required=True)
 
@@ -306,7 +283,7 @@ def main() -> None:
     if args.command == "sync-dev":
         sync_dev(args.source_root.resolve(), args.target_root.resolve())
     elif args.command == "release-version":
-        release_version(args.target_root.resolve(), args.tag)
+        release_version(args.target_root.resolve(), args.tag, args.source_root.resolve())
     else:
         raise AssertionError(f"unhandled command: {args.command}")
 
