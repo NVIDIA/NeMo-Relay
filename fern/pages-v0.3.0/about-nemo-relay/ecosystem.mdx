@@ -49,22 +49,22 @@ flowchart TB
     User[User / Application]
     Framework[Agent Framework or Harness]
     Toolkit[NeMo Agent Toolkit / Framework Integrations]
-    Flow[NeMo Relay Runtime]
+    Relay[NeMo Relay Runtime]
     Provider[Model, Tool, or Provider SDK]
     Obs[Subscribers and Observability Backends]
     Policy[Guardrails, Intercepts, and Plugins]
 
     User --> Framework
     Framework --> Toolkit
-    Toolkit --> Flow
-    Framework -. direct instrumentation .-> Flow
-    Flow --> Provider
-    Policy --> Flow
-    Flow --> Obs
+    Toolkit --> Relay
+    Framework -. direct instrumentation .-> Relay
+    Relay --> Provider
+    Policy --> Relay
+    Relay --> Obs
 
     class Framework yellow-lightest;
     class Toolkit blue-lightest;
-    class Flow green-light;
+    class Relay green-light;
     class Provider purple-lightest;
     class Obs grey-light;
     class Policy green-lightest;
