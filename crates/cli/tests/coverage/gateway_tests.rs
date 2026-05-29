@@ -265,7 +265,8 @@ fn gateway_session_id_prefers_headers_and_has_fallbacks() {
     let mut headers = HeaderMap::new();
     let codex_body = json!({
         "prompt_cache_key": "codex-session",
-        "client_metadata": { "x-codex-installation-id": "install-1" }
+        "client_metadata": { "x-codex-installation-id": "install-1" },
+        "session_id": "body-session"
     });
     headers.insert(
         "anthropic-beta",
@@ -316,6 +317,24 @@ fn gateway_session_id_prefers_headers_and_has_fallbacks() {
             &HeaderMap::new(),
             &codex_body,
             ProviderRoute::OpenAiChatCompletions,
+        )
+        .as_deref(),
+        Some("body-session")
+    );
+    assert_eq!(
+        gateway_session_id(
+            &HeaderMap::new(),
+            &json!({ "session_id": " body-session " }),
+            ProviderRoute::OpenAiResponses,
+        )
+        .as_deref(),
+        Some("body-session")
+    );
+    assert_eq!(
+        gateway_session_id(
+            &HeaderMap::new(),
+            &json!({ "session_id": "body-session" }),
+            ProviderRoute::AnthropicMessages,
         ),
         None
     );
