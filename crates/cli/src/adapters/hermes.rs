@@ -48,6 +48,12 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             response: json!({}),
         };
     }
+    if normalized == "pretoolcall" && !hermes_pre_tool_call_is_correlatable(&payload, headers) {
+        return AdapterOutcome {
+            events: Vec::new(),
+            response: json!({}),
+        };
+    }
 
     // `on_session_end` is a Hermes per-turn boundary, not user-visible trajectory content.
     // Emitting it as both HookMark and TurnEnded polluted ATIF with system rows whose only purpose
@@ -219,6 +225,42 @@ fn hermes_payload_exact(payload: &Value, event_name: &str) -> bool {
         "postapirequest" => hermes_exact_response(payload).is_some(),
         _ => false,
     }
+}
+
+fn hermes_pre_tool_call_is_correlatable(payload: &Value, headers: &HeaderMap) -> bool {
+    // Public Hermes releases can emit `pre_tool_call` with only a turn/task id. Treating that
+    // `task_id` as a session opens a synthetic session that is later closed as `gateway_shutdown`.
+    // Keep pre-tool spans only when they can be routed to a real session and paired with a stable
+    // tool call id. The matching `post_tool_call` still records the tool result.
+    has_explicit_hermes_session_id(payload, headers) && has_explicit_hermes_tool_call_id(payload)
+}
+
+fn has_explicit_hermes_session_id(payload: &Value, headers: &HeaderMap) -> bool {
+    header_has_value(headers, "x-nemo-relay-session-id")
+        || header_has_value(headers, "x-claude-code-session-id")
+        || hermes_string_at(payload, "session_id").is_some()
+        || hermes_string_at(payload, "sessionId").is_some()
+        || value_at(payload, &["session", "id"]).is_some()
+        || hermes_string_at(payload, "conversation_id").is_some()
+        || hermes_string_at(payload, "conversationId").is_some()
+        || hermes_string_at(payload, "parent_session_id").is_some()
+}
+
+fn has_explicit_hermes_tool_call_id(payload: &Value) -> bool {
+    hermes_string_at(payload, "tool_call_id").is_some()
+        || hermes_string_at(payload, "toolCallId").is_some()
+        || hermes_string_at(payload, "tool_use_id").is_some()
+        || hermes_string_at(payload, "call_id").is_some()
+        || value_at(payload, &["tool", "id"]).is_some()
+        || value_at(payload, &["tool_input", "id"]).is_some()
+        || hermes_string_at(payload, "id").is_some()
+}
+
+fn header_has_value(headers: &HeaderMap, name: &str) -> bool {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn hermes_exact_request(payload: &Value) -> Option<Value> {
