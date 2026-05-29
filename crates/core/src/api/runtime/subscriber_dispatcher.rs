@@ -12,7 +12,7 @@ mod native {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::OnceLock;
-    use std::sync::mpsc::{self, Sender};
+    use std::sync::mpsc::{self, Receiver, Sender};
 
     use super::*;
     use crate::api::runtime::scope_stack::{
@@ -83,44 +83,52 @@ mod native {
     }
 
     fn dispatcher_sender() -> std::result::Result<Sender<DispatcherMessage>, String> {
-        DISPATCHER
-            .get_or_init(|| {
-                let (tx, rx) = mpsc::channel::<DispatcherMessage>();
-                std::thread::Builder::new()
-                    .name("nemo-relay-subscriber-dispatcher".into())
-                    .spawn(move || {
-                        while let Ok(message) = rx.recv() {
-                            match message {
-                                DispatcherMessage::Deliver {
-                                    event,
-                                    subscribers,
-                                    scope_stack,
-                                } => {
-                                    let previous_scope_stack = capture_thread_scope_stack();
-                                    set_thread_scope_stack(scope_stack);
-                                    IN_DISPATCHER.with(|flag| flag.set(true));
-                                    for subscriber in subscribers {
-                                        if catch_unwind(AssertUnwindSafe(|| subscriber(&event)))
-                                            .is_err()
-                                        {
-                                            eprintln!(
-                                                "nemo_relay: event subscriber callback panicked"
-                                            );
-                                        }
-                                    }
-                                    IN_DISPATCHER.with(|flag| flag.set(false));
-                                    restore_thread_scope_stack(previous_scope_stack);
-                                }
-                                DispatcherMessage::Flush { done } => {
-                                    let _ = done.send(());
-                                }
-                            }
-                        }
-                    })
-                    .map(|_| tx)
-                    .map_err(|error| error.to_string())
-            })
-            .clone()
+        DISPATCHER.get_or_init(start_dispatcher).clone()
+    }
+
+    fn start_dispatcher() -> std::result::Result<Sender<DispatcherMessage>, String> {
+        let (tx, rx) = mpsc::channel::<DispatcherMessage>();
+        std::thread::Builder::new()
+            .name("nemo-relay-subscriber-dispatcher".into())
+            .spawn(move || run_dispatcher(rx))
+            .map(|_| tx)
+            .map_err(|error| error.to_string())
+    }
+
+    fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
+        while let Ok(message) = rx.recv() {
+            handle_message(message);
+        }
+    }
+
+    fn handle_message(message: DispatcherMessage) {
+        match message {
+            DispatcherMessage::Deliver {
+                event,
+                subscribers,
+                scope_stack,
+            } => deliver_event(event, subscribers, scope_stack),
+            DispatcherMessage::Flush { done } => {
+                let _ = done.send(());
+            }
+        }
+    }
+
+    fn deliver_event(
+        event: Box<Event>,
+        subscribers: Vec<EventSubscriberFn>,
+        scope_stack: ScopeStackHandle,
+    ) {
+        let previous_scope_stack = capture_thread_scope_stack();
+        set_thread_scope_stack(scope_stack);
+        IN_DISPATCHER.with(|flag| flag.set(true));
+        for subscriber in subscribers {
+            if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
+                eprintln!("nemo_relay: event subscriber callback panicked");
+            }
+        }
+        IN_DISPATCHER.with(|flag| flag.set(false));
+        restore_thread_scope_stack(previous_scope_stack);
     }
 }
 

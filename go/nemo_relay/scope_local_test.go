@@ -19,6 +19,7 @@ const (
 	scopeLocalRegisterToolRequestInterceptFailed   = "ScopeRegisterToolRequestIntercept failed: %v"
 	scopeLocalRegisterSubscriberFailed             = "ScopeRegisterSubscriber failed: %v"
 	scopeLocalRegisterFailed                       = "ScopeRegister failed: %v"
+	scopeLocalFlushSubscribersFailed               = "FlushSubscribers failed: %v"
 	scopeLocalGuardrailRejected                    = "guardrail rejected"
 )
 
@@ -240,7 +241,7 @@ func TestScopeLocalToolSanitizeRequestGuardrail(t *testing.T) {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		if err := FlushSubscribers(); err != nil {
-			t.Fatalf("FlushSubscribers failed: %v", err)
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 
 		mu.Lock()
@@ -305,7 +306,7 @@ func TestScopeLocalToolSanitizeResponseGuardrail(t *testing.T) {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		if err := FlushSubscribers(); err != nil {
-			t.Fatalf("FlushSubscribers failed: %v", err)
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 
 		mu.Lock()
@@ -745,7 +746,7 @@ func TestScopeLocalSubscriberReceivesEvents(t *testing.T) {
 		PopScope(child)
 		PopScope(handle)
 		if err := FlushSubscribers(); err != nil {
-			t.Fatalf("FlushSubscribers failed: %v", err)
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -935,7 +936,7 @@ func TestScopeLocalLlmSanitizeRequestGuardrailAffectsEvent(t *testing.T) {
 			t.Fatalf("LlmCallExecute failed: %v", err)
 		}
 		if err := FlushSubscribers(); err != nil {
-			t.Fatalf("FlushSubscribers failed: %v", err)
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 
 		mu.Lock()
@@ -1190,6 +1191,40 @@ func assertScopeLocalLLMStreamWrapperDeregisters(t *testing.T, scopeUUID string,
 	}
 }
 
+func assertScopeLocalSubscriberDeregisters(t *testing.T, scopeUUID string) {
+	t.Helper()
+
+	subscriberCalls := 0
+	err := ScopeRegisterSubscriber(scopeUUID, "llm_scope_sub", func(event Event) {
+		subscriberCalls++
+	})
+	if err != nil {
+		t.Fatalf(scopeLocalRegisterSubscriberFailed, err)
+	}
+	if err := EmitEvent("llm_scope_sub_event_before"); err != nil {
+		t.Fatalf("EmitEvent before subscriber deregister failed: %v", err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(scopeLocalFlushSubscribersFailed, err)
+	}
+	if subscriberCalls == 0 {
+		t.Fatal("expected scope-local subscriber to receive an event")
+	}
+	if err := ScopeDeregisterSubscriber(scopeUUID, "llm_scope_sub"); err != nil {
+		t.Fatalf("ScopeDeregisterSubscriber failed: %v", err)
+	}
+	callsAfterDeregister := subscriberCalls
+	if err := EmitEvent("llm_scope_sub_event_after"); err != nil {
+		t.Fatalf("EmitEvent after subscriber deregister failed: %v", err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(scopeLocalFlushSubscribersFailed, err)
+	}
+	if subscriberCalls != callsAfterDeregister {
+		t.Fatalf("scope-local subscriber still fired after deregister: %d -> %d", callsAfterDeregister, subscriberCalls)
+	}
+}
+
 func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
 	stack, err := NewScopeStack()
 	if err != nil {
@@ -1208,35 +1243,6 @@ func TestScopeLocalExplicitDeregisterLlmWrappers(t *testing.T) {
 		scopeUUID := handle.UUID()
 		assertScopeLocalLLMWrappersDeregister(t, scopeUUID, request)
 		assertScopeLocalLLMStreamWrapperDeregisters(t, scopeUUID, request)
-
-		subscriberCalls := 0
-		err = ScopeRegisterSubscriber(scopeUUID, "llm_scope_sub", func(event Event) {
-			subscriberCalls++
-		})
-		if err != nil {
-			t.Fatalf(scopeLocalRegisterSubscriberFailed, err)
-		}
-		if err := EmitEvent("llm_scope_sub_event_before"); err != nil {
-			t.Fatalf("EmitEvent before subscriber deregister failed: %v", err)
-		}
-		if err := FlushSubscribers(); err != nil {
-			t.Fatalf("FlushSubscribers failed: %v", err)
-		}
-		if subscriberCalls == 0 {
-			t.Fatal("expected scope-local subscriber to receive an event")
-		}
-		if err := ScopeDeregisterSubscriber(scopeUUID, "llm_scope_sub"); err != nil {
-			t.Fatalf("ScopeDeregisterSubscriber failed: %v", err)
-		}
-		callsAfterDeregister := subscriberCalls
-		if err := EmitEvent("llm_scope_sub_event_after"); err != nil {
-			t.Fatalf("EmitEvent after subscriber deregister failed: %v", err)
-		}
-		if err := FlushSubscribers(); err != nil {
-			t.Fatalf("FlushSubscribers failed: %v", err)
-		}
-		if subscriberCalls != callsAfterDeregister {
-			t.Fatalf("scope-local subscriber still fired after deregister: %d -> %d", callsAfterDeregister, subscriberCalls)
-		}
+		assertScopeLocalSubscriberDeregisters(t, scopeUUID)
 	})
 }

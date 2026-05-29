@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	toolCallFailed        = "ToolCall failed: %v"
-	toolCallExecuteFailed = "ToolCallExecute failed: %v"
-	registerFailed        = "register failed: %v"
-	executeFailed         = "execute failed: %v"
+	toolCallFailed             = "ToolCall failed: %v"
+	toolCallExecuteFailed      = "ToolCallExecute failed: %v"
+	registerFailed             = "register failed: %v"
+	executeFailed              = "execute failed: %v"
+	toolFlushSubscribersFailed = "FlushSubscribers failed: %v"
 )
 
 // ============================================================================
@@ -101,7 +102,7 @@ func TestToolEvents(t *testing.T) {
 	handle, _ := ToolCall("evt_tool", json.RawMessage(`{}`))
 	ToolCallEnd(handle, json.RawMessage(`{}`))
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(toolFlushSubscribersFailed, err)
 	}
 
 	mu.Lock()
@@ -471,7 +472,7 @@ func TestToolSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 		t.Fatalf(toolCallExecuteFailed, err)
 	}
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(toolFlushSubscribersFailed, err)
 	}
 
 	mu.Lock()
@@ -698,7 +699,7 @@ func TestToolCallWithToolCallID(t *testing.T) {
 	}
 	ToolCallEnd(handle, json.RawMessage(`{}`))
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(toolFlushSubscribersFailed, err)
 	}
 
 	mu.Lock()
@@ -733,7 +734,7 @@ func TestToolEventInputOutput(t *testing.T) {
 		t.Fatalf(toolCallExecuteFailed, err)
 	}
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(toolFlushSubscribersFailed, err)
 	}
 
 	mu.Lock()

@@ -21,6 +21,7 @@ const (
 	llmStreamCallExecuteFailed = "LlmStreamCallExecute failed: %v"
 	streamNextFailed           = "stream.Next() failed: %v"
 	llmExecuteFailed           = "execute failed: %v"
+	llmFlushSubscribersFailed  = "FlushSubscribers failed: %v"
 )
 
 func makeRequest() map[string]interface{} {
@@ -116,7 +117,7 @@ func TestLlmEvents(t *testing.T) {
 	handle, _ := LlmCall("evt_llm", request)
 	LlmCallEnd(handle, json.RawMessage(`{}`))
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(llmFlushSubscribersFailed, err)
 	}
 	DeregisterSubscriber("go_llm_evt")
 
@@ -222,7 +223,7 @@ func registerLlmCodecEventCollector(t *testing.T) (func() []Event, func()) {
 
 	return func() []Event {
 			if err := FlushSubscribers(); err != nil {
-				t.Fatalf("FlushSubscribers failed: %v", err)
+				t.Fatalf(llmFlushSubscribersFailed, err)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -593,7 +594,7 @@ func TestLlmSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 		t.Fatalf(llmCallExecuteFailed, err)
 	}
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(llmFlushSubscribersFailed, err)
 	}
 
 	mu.Lock()
@@ -728,7 +729,7 @@ func TestLlmCallWithModelName(t *testing.T) {
 	}
 	LlmCallEnd(handle, json.RawMessage(`{}`))
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(llmFlushSubscribersFailed, err)
 	}
 	DeregisterSubscriber("go_llm_model_sub")
 
@@ -765,7 +766,7 @@ func TestLlmEventInputOutput(t *testing.T) {
 	}
 	_ = result
 	if err := FlushSubscribers(); err != nil {
-		t.Fatalf("FlushSubscribers failed: %v", err)
+		t.Fatalf(llmFlushSubscribersFailed, err)
 	}
 	DeregisterSubscriber("go_llm_io_sub")
 
