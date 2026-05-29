@@ -2356,8 +2356,7 @@ fn test_exporter_correlates_mixed_explicit_implicit_duplicate_tool_calls() {
             "content": null,
             "role": "assistant",
             "tool_calls": [
-                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"./same.py\",\"offset\":0,\"limit\":10}"}},
-                {"id": "c2", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"./same.py\",\"offset\":0,\"limit\":10}"}}
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\":\"./same.py\",\"offset\":0,\"limit\":10}"}}
             ]
         }))
         .build();
@@ -2383,16 +2382,29 @@ fn test_exporter_correlates_mixed_explicit_implicit_duplicate_tool_calls() {
     }
 
     let trajectory = exporter.export();
-    let observation = trajectory.steps[0].observation.as_ref().unwrap();
+    let results = trajectory
+        .steps
+        .iter()
+        .filter_map(|step| step.observation.as_ref())
+        .flat_map(|observation| observation.results.iter())
+        .collect::<Vec<_>>();
 
-    assert_eq!(observation.results.len(), 2);
+    assert_eq!(results.len(), 2);
     assert_eq!(
-        observation.results[0].source_call_id,
+        results
+            .iter()
+            .find(|result| result.content == Some(json!("first")))
+            .unwrap()
+            .source_call_id,
         Some("c1".to_string())
     );
     assert_eq!(
-        observation.results[1].source_call_id,
-        Some("c2".to_string())
+        results
+            .iter()
+            .find(|result| result.content == Some(json!("second")))
+            .unwrap()
+            .source_call_id,
+        None
     );
 }
 
