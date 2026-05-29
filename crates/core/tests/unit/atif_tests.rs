@@ -502,7 +502,7 @@ fn test_exporter_omits_null_tool_observation_content() {
         state.events.push(end);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
 
     assert_eq!(result.content, None);
@@ -1803,7 +1803,7 @@ fn test_exporter_skips_llm_chunk_marks() {
         );
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
 
     assert_eq!(trajectory.steps.len(), 1);
     assert_eq!(trajectory.steps[0].message, json!("agent.status"));
@@ -2207,7 +2207,7 @@ fn test_exporter_correlates_hermes_style_tool_outputs_before_llm_calls() {
         ]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_steps = trajectory
         .steps
         .iter()
@@ -2305,7 +2305,7 @@ fn test_exporter_correlates_repeated_identical_tool_calls_by_ordinal() {
             .extend([tool1_start, tool1_end, tool2_start, tool2_end, llm_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let observation = trajectory.steps[0].observation.as_ref().unwrap();
     assert_eq!(observation.results.len(), 2);
     assert_eq!(
@@ -2381,7 +2381,7 @@ fn test_exporter_correlates_mixed_explicit_implicit_duplicate_tool_calls() {
             .extend([tool1_start, tool1_end, tool2_start, tool2_end, llm_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let results = trajectory
         .steps
         .iter()
@@ -2466,7 +2466,7 @@ fn test_exporter_does_not_guess_ambiguous_tool_calls_without_arguments() {
             .extend([tool1_start, tool1_end, tool2_start, tool2_end, llm_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = trajectory
         .steps
         .iter()
@@ -2533,7 +2533,7 @@ fn test_exporter_does_not_guess_by_name_for_active_duplicate_tool_names() {
             .extend([llm_end, tool1_start, tool1_end, tool2_start, tool2_end]);
     }
 
-    let trajectory = exporter.export();
+    let trajectory = exporter.export().unwrap();
     let agent_step = trajectory
         .steps
         .iter()
