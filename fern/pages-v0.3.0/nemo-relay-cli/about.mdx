@@ -35,14 +35,16 @@ If you are instrumenting an application or framework directly, use
 
 ## Agent Harness Support
 
-NeMo Relay CLI support is experimental and observability-focused.
+NeMo Relay CLI support is experimental. Observability is supported, while
+security and optimization support are partial and depend on the hooks each
+agent exposes.
 
 | Agent | Observability | Security | Optimization | Notes |
 | --- | --- | --- | --- | --- |
-| Claude Code | ✅ Yes | ❌ No | ❌ No | Observability only; no known issues. |
-| Codex | ✅ Yes | ❌ No | ❌ No | Observability only; some hooks needed for full feature coverage are missing. |
-| Hermes Agent | ✅ Yes | ❌ No | ❌ No | Observability only; no known issues. |
-| Cursor | 🚧 Partial | ❌ No | ❌ No | Observability only; highly experimental |
+| Claude Code | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
+| Codex | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Hook forwarding and gateway-routed LLM optimization are supported. Codex hook activation and the missing session-end hook limit full coverage. |
+| Hermes Agent | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Hook forwarding and Hermes API-request telemetry are supported. Guardrail and optimization support depend on Hermes shell and API-request hook coverage. |
+| Cursor | 🚧 Partial | ⚠️ Partial | ❌ No | Hook forwarding is supported. Gateway observability is limited. Missing hooks under `cursor-agent` limit full feature coverage. |
 
 ## Guides
 

@@ -6,8 +6,58 @@ position: 5
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This page summarizes the current documentation-visible release state. GitHub Releases remain the source of truth for complete release history and tag-specific notes.
+This page summarizes the current documentation-visible release state. GitHub
+Releases remain the source of truth for complete release history and
+tag-specific notes.
 
 ## Current Release
 
-Use this page as the release-notes entry point. Use the child pages for current highlights, known issues, and related release resources.
+NeMo Relay 0.3 focuses on the renamed NeMo Relay runtime, plugin-driven agent
+observability, guardrails integration, adaptive behavior for coding agents, and
+ATIF v1.7 trace export.
+
+The most important compatibility notes are:
+
+- The project and package-facing documentation now use the NeMo Relay name.
+- The core runtime registry surface has been narrowed. Code that registered
+  runtime behavior through older broad registry entry points should move to the
+  documented middleware, subscriber, and plugin APIs.
+- Node.js 24 or newer is now the minimum supported Node.js version.
+- Native subscriber delivery is now non-blocking. Code that depends on
+  subscriber callback side effects, exporter output, or deterministic test
+  assertions must call the subscriber flush API.
+
+Use the child pages for release highlights and support notes. For the complete
+PR-by-PR changelog, release artifacts, and tag-specific history, use
+[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+
+## Release Scope
+
+This release includes:
+
+- Built-in NeMo Guardrails plugin support, including a remote backend and CLI
+  editor support.
+- Canonical ATOF event JSON exposure across Rust, Python, and Node.js bindings.
+- ATIF v1.7 exporter updates for nested subagents, tool-observation
+  correlation, and first-class S3-compatible storage export.
+- Adaptive plugin support for the CLI and OpenClaw integration, including
+  editor support for adaptive configuration.
+- Streaming LLM chunk marks and improved guardrail scope emission.
+- Python plugin context-manager ergonomics.
+- Non-blocking native subscriber delivery with flush APIs across Rust, Python,
+  Node.js, FFI/Go, and WebAssembly parity.
+- LangChain serialization fixes and OpenClaw trace replay visibility fixes.
+- Fern documentation publishing, link validation, and updated guidance for
+  agent runtime concepts, trace incident response, plugin building, and adaptive
+  tuning.
+
+## Feature Documentation
+
+For the major 0.3 additions, start with:
+
+- [Observability Plugin](/observability-plugin/about)
+- [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif)
+- [NeMo Guardrails Plugin](/nemo-guardrails-plugin/about)
+- [Adaptive Plugin](/adaptive-plugin/about)
+- [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin)
+- [LangChain Integration Guide](/supported-integrations/langchain)
