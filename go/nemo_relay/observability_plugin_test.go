@@ -31,6 +31,10 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if atof.Enabled || atof.Mode != "append" {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
+	atofStream := NewObservabilityAtofStreamConfig()
+	if atofStream.Enabled || atofStream.Address != "" {
+		t.Fatalf("unexpected ATOF stream defaults: %#v", atofStream)
+	}
 	atif := NewObservabilityAtifConfig()
 	if atif.Enabled || atif.AgentName != "NeMo Relay" || atif.ModelName != "unknown" || atif.FilenameTemplate != "nemo-relay-atif-{session_id}.json" {
 		t.Fatalf("unexpected ATIF defaults: %#v", atif)
@@ -41,12 +45,16 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	}
 
 	config.Atof = &atof
+	config.AtofStream = &atofStream
 	wrapped := ObservabilityComponent(config)
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
 	}
 	if _, ok := wrapped.Config["atof"].(map[string]any); !ok {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
+	}
+	if _, ok := wrapped.Config["atof_stream"].(map[string]any); !ok {
+		t.Fatalf("expected serialized ATOF stream config object, got %#v", wrapped.Config)
 	}
 }
 
@@ -179,6 +187,9 @@ func TestObservabilityPluginValidationRejectsBadValues(t *testing.T) {
 	atof := NewObservabilityAtofConfig()
 	atof.Mode = "bad"
 	config.Atof = &atof
+	atofStream := NewObservabilityAtofStreamConfig()
+	atofStream.Enabled = true
+	config.AtofStream = &atofStream
 	atif := NewObservabilityAtifConfig()
 	atif.FilenameTemplate = "missing-placeholder.json"
 	config.Atif = &atif
@@ -187,7 +198,7 @@ func TestObservabilityPluginValidationRejectsBadValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidatePluginConfig failed: %v", err)
 	}
-	if len(report.Diagnostics) < 2 {
+	if len(report.Diagnostics) < 3 {
 		t.Fatalf("expected validation diagnostics, got %#v", report.Diagnostics)
 	}
 }

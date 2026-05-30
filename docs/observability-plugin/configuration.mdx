@@ -36,6 +36,7 @@ only when it includes `enabled: true`.
 | Section | Runtime behavior |
 |---|---|
 | `atof` | Registers a global Agent Trajectory Observability Format (ATOF) JSONL exporter for raw lifecycle events. |
+| `atof_stream` | Registers a global TCP-backed ATOF JSONL stream exporter to a separate receiver process. |
 | `atif` | Registers one Agent Trajectory Interchange Format (ATIF) dispatcher that writes one trajectory file for each top-level agent scope. |
 | `opentelemetry` | Registers a global OpenTelemetry OTLP subscriber. |
 | `openinference` | Registers a global OpenInference OTLP subscriber. |
@@ -45,6 +46,7 @@ component-local subscriber names and registers them under the observability
 plugin namespace:
 
 - Agent Trajectory Observability Format (ATOF): `__nemo_relay_plugin__observability__atof`
+- Streaming Agent Trajectory Observability Format (ATOF): `__nemo_relay_plugin__observability__atof_stream`
 - Agent Trajectory Interchange Format (ATIF) dispatcher: `__nemo_relay_plugin__observability__atif`
 - Per-agent ATIF scope subscriber: `__nemo_relay_plugin__observability__atif-{agent_scope_uuid}`
 - OpenTelemetry: `__nemo_relay_plugin__observability__opentelemetry`
@@ -67,6 +69,10 @@ enabled = true
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "overwrite"
+
+[components.config.atof_stream]
+enabled = true
+address = "127.0.0.1:43199"
 
 [components.config.atif]
 enabled = true
@@ -128,6 +134,7 @@ from nemo_relay import plugin, scope, ScopeType
 from nemo_relay.observability import (
     AtifConfig,
     AtofConfig,
+    AtofStreamConfig,
     ComponentSpec,
     ObservabilityConfig,
     OtlpConfig,
@@ -142,6 +149,10 @@ config = plugin.PluginConfig(
                     output_directory="logs",
                     filename="events.jsonl",
                     mode="overwrite",
+                ),
+                atof_stream=AtofStreamConfig(
+                    enabled=True,
+                    address="127.0.0.1:43199",
                 ),
                 atif=AtifConfig(
                     enabled=True,
@@ -201,6 +212,10 @@ await plugin.initialize({
         filename: "events.jsonl",
         mode: "overwrite",
       }),
+      atof_stream: observability.atofStreamConfig({
+        enabled: true,
+        address: "127.0.0.1:43199",
+      }),
       atif: observability.atifConfig({
         enabled: true,
         output_directory: "logs",
@@ -244,8 +259,8 @@ try {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::plugin_component::{
-    AtifSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
-    OtlpSectionConfig,
+    AtifSectionConfig, AtofSectionConfig, AtofStreamSectionConfig,
+    ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
 };
 use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
@@ -255,6 +270,10 @@ let component = ComponentSpec::new(ObservabilityConfig {
         output_directory: Some("logs".into()),
         filename: Some("events.jsonl".into()),
         mode: "overwrite".into(),
+    }),
+    atof_stream: Some(AtofStreamSectionConfig {
+        enabled: true,
+        address: Some("127.0.0.1:43199".into()),
     }),
     atif: Some(AtifSectionConfig {
         enabled: true,

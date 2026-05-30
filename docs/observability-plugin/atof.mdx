@@ -264,6 +264,10 @@ Register the streaming exporter before the instrumented work starts. The
 receiver process only observes future events and does not replay earlier
 lifecycle events.
 
+For plugin-managed streaming, use the Observability plugin `atof_stream`
+section. The design details and failure semantics are documented in
+[Streaming ATOF Design](/observability-plugin/streaming-atof-design).
+
 A minimal receiver can block on TCP lines and exit when the exporter closes the
 connection. This keeps short idle gaps from ending the stream:
 

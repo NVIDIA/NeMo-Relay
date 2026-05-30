@@ -13,6 +13,11 @@ export interface AtofConfig {
   mode?: 'append' | 'overwrite' | string;
 }
 
+export interface AtofStreamConfig {
+  enabled?: boolean;
+  address?: string;
+}
+
 export interface S3StorageConfig {
   type: 's3';
   bucket: string;
@@ -53,6 +58,7 @@ export interface OtlpConfig {
 export interface Config {
   version?: number;
   atof?: AtofConfig;
+  atof_stream?: AtofStreamConfig;
   atif?: AtifConfig;
   opentelemetry?: OtlpConfig;
   openinference?: OtlpConfig;
@@ -71,6 +77,8 @@ export declare const OBSERVABILITY_PLUGIN_KIND: 'observability';
 export declare function defaultConfig(): Config;
 /** Create filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL settings with defaults applied. */
 export declare function atofConfig(config?: AtofConfig): AtofConfig;
+/** Create TCP-backed Agent Trajectory Observability Format (ATOF) JSONL stream settings with defaults applied. */
+export declare function atofStreamConfig(config?: AtofStreamConfig): AtofStreamConfig;
 /** Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied. */
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
 /** Create OTLP exporter settings for OpenTelemetry or OpenInference. */

@@ -15,6 +15,7 @@ from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
     AtofConfig,
+    AtofStreamConfig,
     ComponentSpec,
     ObservabilityConfig,
     OtlpConfig,
@@ -28,6 +29,7 @@ if typing.TYPE_CHECKING:
 class TestObservabilityConfigHelpers:
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False, "mode": "append"}
+        assert AtofStreamConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
             "enabled": False,
             "agent_name": "NeMo Relay",
@@ -58,6 +60,7 @@ class TestObservabilityConfigHelpers:
                         {
                             "version": 1,
                             "atof": {"mode": "bad"},
+                            "atof_stream": {"enabled": True},
                             "atif": {"filename_template": "missing-placeholder"},
                         }
                     )
@@ -65,7 +68,7 @@ class TestObservabilityConfigHelpers:
             )
         )
         fields = {diag.get("field") for diag in report["diagnostics"]}
-        assert {"mode", "filename_template"} <= fields
+        assert {"mode", "address", "filename_template"} <= fields
 
     def test_list_kinds_includes_builtin_observability(self):
         assert OBSERVABILITY_PLUGIN_KIND in plugin.list_kinds()

@@ -33,6 +33,19 @@ function atofConfig(config = {}) {
 }
 
 /**
+ * Create TCP-backed ATOF JSONL stream settings with defaults applied.
+ *
+ * @param {object} [config={}] - Partial ATOF stream settings to override.
+ * @returns {object} A normalized ATOF stream config object.
+ */
+function atofStreamConfig(config = {}) {
+  return {
+    enabled: false,
+    ...config,
+  };
+}
+
+/**
  * Create per-agent ATIF trajectory settings with defaults applied.
  *
  * @param {object} [config={}] - Partial ATIF settings to override.
@@ -83,6 +96,7 @@ module.exports = {
   OBSERVABILITY_PLUGIN_KIND,
   defaultConfig,
   atofConfig,
+  atofStreamConfig,
   atifConfig,
   otlpConfig,
   ComponentSpec,

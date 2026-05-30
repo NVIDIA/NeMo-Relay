@@ -17,7 +17,53 @@ use crate::plugin::{
 };
 use serde_json::json;
 use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::{BufRead, BufReader, ErrorKind};
+use std::net::TcpListener;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+struct AtofStreamSink {
+    address: String,
+    receiver: mpsc::Receiver<Json>,
+}
+
+fn start_atof_stream_sink() -> AtofStreamSink {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                    let reader = BufReader::new(stream);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(line) if !line.trim().is_empty() => {
+                                if let Ok(value) = serde_json::from_str(&line) {
+                                    let _ = sender.send(value);
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    break;
+                }
+                Err(error)
+                    if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    AtofStreamSink { address, receiver }
+}
 
 fn temp_dir(prefix: &str) -> PathBuf {
     let id = SystemTime::now()
@@ -67,6 +113,18 @@ fn editor_schema_tracks_observability_config_types() {
     let mode = atof_schema.field("mode").expect("atof mode field");
     assert_eq!(mode.kind, EditorFieldKind::Enum);
     assert_eq!(mode.enum_values, &["append", "overwrite"]);
+
+    let stream = schema.field("atof_stream").expect("atof_stream section");
+    assert_eq!(stream.label, "ATOF Stream");
+    assert_eq!(stream.kind, EditorFieldKind::Section);
+    assert!(stream.optional);
+
+    let stream_schema = stream.schema().expect("atof_stream editor schema");
+    let address = stream_schema
+        .field("address")
+        .expect("stream address field");
+    assert_eq!(address.kind, EditorFieldKind::String);
+    assert!(address.optional);
 
     let otlp = schema
         .field("openinference")
@@ -161,6 +219,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     let defaults = ObservabilityConfig::default();
     assert_eq!(defaults.version, 1);
     assert!(defaults.atof.is_none());
+    assert!(defaults.atof_stream.is_none());
     assert!(defaults.atif.is_none());
     assert!(defaults.opentelemetry.is_none());
     assert!(defaults.openinference.is_none());
@@ -170,6 +229,10 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(atof.mode, "append");
     assert!(atof.output_directory.is_none());
     assert!(atof.filename.is_none());
+
+    let atof_stream = AtofStreamSectionConfig::default();
+    assert!(!atof_stream.enabled);
+    assert!(atof_stream.address.is_none());
 
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
@@ -186,6 +249,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let generic: PluginComponentSpec = ComponentSpec::new(ObservabilityConfig {
         atof: Some(atof),
+        atof_stream: Some(atof_stream),
         atif: Some(atif),
         opentelemetry: Some(otlp.clone()),
         openinference: Some(otlp),
@@ -195,6 +259,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(generic.kind, OBSERVABILITY_PLUGIN_KIND);
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(1));
+    assert_eq!(generic.config["atof_stream"]["enabled"], json!(false));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
 }
 
@@ -205,6 +270,7 @@ fn schema_contains_every_supported_observability_option() {
     for field in [
         "version",
         "atof",
+        "atof_stream",
         "atif",
         "opentelemetry",
         "openinference",
@@ -213,6 +279,7 @@ fn schema_contains_every_supported_observability_option() {
         "output_directory",
         "filename",
         "mode",
+        "address",
         "agent_name",
         "agent_version",
         "model_name",
@@ -310,6 +377,7 @@ fn empty_and_disabled_config_register_nothing() {
 
     let config = plugin_config(json!({
         "atof": {"enabled": false, "mode": "overwrite"},
+        "atof_stream": {"enabled": false},
         "atif": {"enabled": false},
         "opentelemetry": {"enabled": false, "transport": "grpc"},
         "openinference": {"enabled": false, "transport": "grpc"}
@@ -377,6 +445,7 @@ fn unknown_fields_and_bad_values_follow_policy() {
 
     let warn_report = validate_plugin_config(&plugin_config(json!({
         "atof": {"bogus": true, "mode": "invalid"},
+        "atof_stream": {"enabled": true},
         "atif": {"filename_template": "missing-session"}
     })));
     assert!(warn_report.has_errors());
@@ -398,10 +467,18 @@ fn unknown_fields_and_bad_values_follow_policy() {
             .iter()
             .any(|diag| diag.field.as_deref() == Some("filename_template"))
     );
+    assert!(
+        warn_report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.component.as_deref() == Some("atof_stream")
+                && diag.field.as_deref() == Some("address"))
+    );
 
     let ignore_report = validate_plugin_config(&plugin_config(json!({
         "policy": {"unknown_field": "ignore", "unsupported_value": "ignore"},
         "atof": {"bogus": true, "mode": "invalid"},
+        "atof_stream": {"enabled": true},
         "atif": {"filename_template": "missing-session"}
     })));
     assert!(!ignore_report.has_errors());
@@ -520,6 +597,13 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
     let error = futures::executor::block_on(initialize_plugins(invalid_openinference_transport))
         .unwrap_err();
     assert!(error.to_string().contains("OpenInference transport"));
+
+    let invalid_atof_stream = plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "atof_stream": {"enabled": true}
+    }));
+    let error = futures::executor::block_on(initialize_plugins(invalid_atof_stream)).unwrap_err();
+    assert!(error.to_string().contains("ATOF stream address"));
 }
 
 #[test]
@@ -568,6 +652,65 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
     assert!(lines[0].contains("\"kind\":\"scope\""));
     assert!(lines[1].contains("\"kind\":\"mark\""));
     assert!(lines[2].contains("\"scope_category\":\"end\""));
+}
+
+#[test]
+fn atof_stream_enabled_writes_jsonl_to_receiver_and_teardown_flushes() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let sink = start_atof_stream_sink();
+
+    let config = plugin_config(json!({
+        "atof_stream": {
+            "enabled": true,
+            "address": sink.address
+        }
+    }));
+    assert!(!validate_plugin_config(&config).has_errors());
+    futures::executor::block_on(initialize_plugins(config)).unwrap();
+
+    {
+        let state = global_context();
+        let names = state
+            .read()
+            .unwrap()
+            .event_subscribers
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["__nemo_relay_plugin__observability__atof_stream"]
+        );
+    }
+
+    let agent = push_agent("atof-stream-agent");
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("checkpoint")
+            .parent(&agent)
+            .data(json!({"step": 1}))
+            .build(),
+    )
+    .unwrap();
+    pop(&agent);
+    clear_plugin_configuration().unwrap();
+
+    let records = (0..3)
+        .map(|_| {
+            sink.receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("streamed ATOF record")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["scope", "mark", "scope"]
+    );
+    assert_eq!(records[1]["name"], json!("checkpoint"));
 }
 
 #[test]
