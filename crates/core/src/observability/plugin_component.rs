@@ -35,6 +35,7 @@ use crate::api::subscriber::{scope_deregister_subscriber, scope_register_subscri
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofExporter, AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode,
+    AtofStreamingExporter, AtofStreamingExporterConfig as CoreAtofStreamingExporterConfig,
 };
 #[cfg(feature = "openinference")]
 use crate::observability::openinference::{
@@ -110,6 +111,9 @@ pub struct ObservabilityConfig {
     /// Filesystem-backed raw ATOF JSONL export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub atof: Option<AtofSectionConfig>,
+    /// TCP-backed raw ATOF JSONL stream export to a separate receiver process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atof_stream: Option<AtofStreamSectionConfig>,
     /// Per-top-level-agent ATIF trajectory export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub atif: Option<AtifSectionConfig>,
@@ -129,6 +133,7 @@ impl Default for ObservabilityConfig {
         Self {
             version: default_observability_config_version(),
             atof: None,
+            atof_stream: None,
             atif: None,
             opentelemetry: None,
             openinference: None,
@@ -170,6 +175,24 @@ impl Default for AtofSectionConfig {
             mode: default_atof_mode(),
         }
     }
+}
+
+/// TCP-backed raw ATOF JSONL stream exporter config.
+///
+/// When enabled, this section wraps
+/// [`crate::observability::atof::AtofStreamingExporter`] and connects to a
+/// separate local receiver process. The receiver owns UI, HTTP, SSE,
+/// WebSocket, or any other fan-out; Relay only emits canonical ATOF JSONL over
+/// the configured TCP socket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AtofStreamSectionConfig {
+    /// Whether ATOF stream export is active.
+    #[serde(default)]
+    pub enabled: bool,
+    /// TCP address for the receiver process, for example `127.0.0.1:43199`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -372,6 +395,13 @@ crate::editor_config! {
             nested: AtofSectionConfig,
             default: AtofSectionConfig,
         },
+        atof_stream => {
+            label: "ATOF Stream",
+            kind: Section,
+            optional: true,
+            nested: AtofStreamSectionConfig,
+            default: AtofStreamSectionConfig,
+        },
         atif => {
             label: "ATIF",
             kind: Section,
@@ -408,6 +438,13 @@ crate::editor_config! {
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename => { label: "filename", kind: String, optional: true },
         mode => { label: "mode", kind: Enum, values: ["append", "overwrite"] },
+    }
+}
+
+crate::editor_config! {
+    impl AtofStreamSectionConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        address => { label: "address", kind: String, optional: true },
     }
 }
 
@@ -538,6 +575,9 @@ fn register_observability(
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
         register_atof_exporter(atof, ctx)?;
     }
+    if let Some(atof_stream) = config.atof_stream.filter(|section| section.enabled) {
+        register_atof_stream_exporter(atof_stream, ctx)?;
+    }
     if let Some(atif) = config.atif.filter(|section| section.enabled) {
         register_atif_dispatcher(atif, ctx)?;
     }
@@ -570,6 +610,38 @@ fn register_atof_exporter(
     ctx.add_registration(PluginRegistration::new(
         "observability",
         ctx.qualify_name("atof.shutdown"),
+        Box::new(move || {
+            exporter
+                .shutdown()
+                .map_err(observability_registration_error)
+        }),
+    ));
+    Ok(())
+}
+
+fn register_atof_stream_exporter(
+    section: AtofStreamSectionConfig,
+    ctx: &mut PluginRegistrationContext,
+) -> PluginResult<()> {
+    let Some(address) = section
+        .address
+        .as_deref()
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Err(PluginError::InvalidConfig(
+            "ATOF stream address is required when atof_stream is enabled".to_string(),
+        ));
+    };
+    let exporter = Arc::new(
+        AtofStreamingExporter::new(CoreAtofStreamingExporterConfig::new(address))
+            .map_err(observability_registration_error)?,
+    );
+    ctx.register_subscriber("atof_stream", exporter.subscriber())?;
+    ctx.add_registration(PluginRegistration::new(
+        "observability",
+        ctx.qualify_name("atof_stream.shutdown"),
         Box::new(move || {
             exporter
                 .shutdown()
@@ -1291,6 +1363,7 @@ fn validate_observability_plugin_config(
         &[
             "version",
             "atof",
+            "atof_stream",
             "atif",
             "opentelemetry",
             "openinference",
@@ -1306,6 +1379,13 @@ fn validate_observability_plugin_config(
         plugin_config,
         "atof",
         &["enabled", "output_directory", "filename", "mode"],
+    );
+    validate_section_fields(
+        &mut diagnostics,
+        &config.policy,
+        plugin_config,
+        "atof_stream",
+        &["enabled", "address"],
     );
     validate_section_fields(
         &mut diagnostics,
@@ -1372,6 +1452,20 @@ fn validate_observability_plugin_config(
                 Some("atof".to_string()),
                 Some("enabled".to_string()),
                 "ATOF file export is not supported on WebAssembly".to_string(),
+            );
+        }
+    }
+    if let Some(section) = &config.atof_stream {
+        validate_atof_stream_values(&mut diagnostics, &config.policy, section);
+        #[cfg(target_arch = "wasm32")]
+        if section.enabled {
+            push_policy_diag(
+                &mut diagnostics,
+                config.policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atof_stream".to_string()),
+                Some("enabled".to_string()),
+                "ATOF stream export is not supported on WebAssembly".to_string(),
             );
         }
     }
@@ -1492,6 +1586,29 @@ fn validate_atof_values(
             Some("atof".to_string()),
             Some("mode".to_string()),
             "ATOF mode must be 'append' or 'overwrite'".to_string(),
+        );
+    }
+}
+
+fn validate_atof_stream_values(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtofStreamSectionConfig,
+) {
+    if section.enabled
+        && section
+            .address
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof_stream".to_string()),
+            Some("address".to_string()),
+            "atof_stream address is required when enabled".to_string(),
         );
     }
 }

@@ -74,6 +74,23 @@ class AtofConfig:
 
 
 @dataclass(slots=True)
+class AtofStreamConfig:
+    """TCP-backed raw ATOF JSONL stream export settings."""
+
+    enabled: bool = False
+    address: str | None = None
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this ATOF stream config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "enabled": self.enabled,
+                "address": self.address,
+            }
+        )
+
+
+@dataclass(slots=True)
 class S3StorageConfig:
     """S3-compatible remote storage settings for ATIF trajectory upload.
 
@@ -181,6 +198,7 @@ class ObservabilityConfig:
 
     version: int = 1
     atof: AtofConfig | None = None
+    atof_stream: AtofStreamConfig | None = None
     atif: AtifConfig | None = None
     opentelemetry: OtlpConfig | None = None
     openinference: OtlpConfig | None = None
@@ -192,6 +210,7 @@ class ObservabilityConfig:
             {
                 "version": self.version,
                 "atof": self.atof,
+                "atof_stream": self.atof_stream,
                 "atif": self.atif,
                 "opentelemetry": self.opentelemetry,
                 "openinference": self.openinference,
@@ -222,6 +241,7 @@ class ComponentSpec:
 __all__ = [
     "ConfigPolicy",
     "AtofConfig",
+    "AtofStreamConfig",
     "AtifConfig",
     "S3StorageConfig",
     "OtlpConfig",

@@ -230,6 +230,62 @@ exporter.shutdown()?;
 
 </Tabs>
 
+## Streaming API
+
+Use `AtofStreamingExporter` when an application needs to consume canonical ATOF
+events as they are emitted instead of reading a completed JSONL file. The
+streaming exporter connects to a separate local process over TCP and writes one
+canonical ATOF JSON object per JSONL line. The receiver process can then fan the
+events out through HTTP, SSE, WebSocket, stdout, or another local transport
+without changing the ATOF event contract. `AtofStreamingExporter` uses a
+per-exporter bounded queue: producers do not block, the newest event is dropped
+when that bounded queue is full, and `stats().events_dropped` records the
+overflow while fatal stream disconnects are still surfaced as errors.
+
+```rust
+use nemo_relay::observability::atof::{
+    AtofStreamingExporter, AtofStreamingExporterConfig,
+};
+
+// Start a separate local receiver process before connecting the exporter.
+let config = AtofStreamingExporterConfig::new("127.0.0.1:43199");
+let exporter = AtofStreamingExporter::new(config)?;
+exporter.register("atof-stream")?;
+
+// Run instrumented application work here.
+
+let _ = exporter.deregister("atof-stream")?;
+exporter.shutdown()?;
+let stats = exporter.stats();
+assert!(stats.events_sent > 0);
+```
+
+Register the streaming exporter before the instrumented work starts. The
+receiver process only observes future events and does not replay earlier
+lifecycle events.
+
+For plugin-managed streaming, use the Observability plugin `atof_stream`
+section. The design details and failure semantics are documented in
+[Streaming ATOF Design](/observability-plugin/streaming-atof-design).
+
+A minimal receiver can block on TCP lines and exit when the exporter closes the
+connection. This keeps short idle gaps from ending the stream:
+
+```rust
+use serde_json::{from_str, to_string, Value};
+use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
+
+let listener = TcpListener::bind("127.0.0.1:43199")?;
+let (stream, _) = listener.accept()?;
+let reader = BufReader::new(stream);
+
+for line in reader.lines() {
+    let event: Value = from_str(&line?)?;
+    println!("{}", to_string(&event)?);
+}
+```
+
 ## Common Validation Failures
 
 - `mode` is not `append` or `overwrite`.

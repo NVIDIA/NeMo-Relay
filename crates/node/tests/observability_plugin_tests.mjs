@@ -21,6 +21,7 @@ describe('observability plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
     assert.deepEqual(observability.defaultConfig(), { version: 1 });
     assert.deepEqual(observability.atofConfig(), { enabled: false, mode: 'append' });
+    assert.deepEqual(observability.atofStreamConfig(), { enabled: false });
     assert.deepEqual(observability.atifConfig(), {
       enabled: false,
       agent_name: 'NeMo Relay',
@@ -49,11 +50,16 @@ describe('observability plugin helpers', () => {
         observability.ComponentSpec({
           version: 1,
           atof: observability.atofConfig({ mode: 'bad' }),
+          atof_stream: observability.atofStreamConfig({ enabled: true }),
           atif: observability.atifConfig({ filename_template: 'missing-placeholder.json' }),
         }),
       ],
     });
-    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'mode']);
+    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), [
+      'address',
+      'filename_template',
+      'mode',
+    ]);
   });
 
   it('activates ATOF and ATIF file sinks', async () => {

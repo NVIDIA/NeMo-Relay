@@ -21,6 +21,7 @@ Format (ATIF), OpenTelemetry, or OpenInference.
 The first-party plugin component has kind `observability`. It can install:
 
 - Agent Trajectory Observability Format (ATOF) JSONL export for raw lifecycle events.
+- Streaming Agent Trajectory Observability Format (ATOF) JSONL export to a separate receiver process.
 - Agent Trajectory Interchange Format (ATIF) trajectory export for each top-level agent scope.
 - OpenTelemetry OTLP trace export.
 - OpenInference-oriented OTLP trace export.
@@ -55,6 +56,7 @@ Choose the exporter based on the downstream system:
 | Need | Use |
 |---|---|
 | Raw canonical event stream | [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof) |
+| Live process-separated raw event stream | [Streaming ATOF Design](/observability-plugin/streaming-atof-design) |
 | Offline analysis, replay, or evaluation trajectories | [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif) |
 | Generic OTLP traces | [OpenTelemetry](/observability-plugin/opentelemetry) |
 | OpenInference-oriented agent and LLM spans | [OpenInference](/observability-plugin/openinference) |
@@ -85,6 +87,8 @@ are not written into ATIF.
 - [Observability Configuration](/observability-plugin/configuration) documents the whole plugin
   component shape, activation, validation, and teardown.
 - [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof) covers raw JSONL event stream export.
+- [Streaming ATOF Design](/observability-plugin/streaming-atof-design) covers TCP JSONL
+  streaming to a separate receiver process.
 - [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif) covers per-agent trajectory export.
 - [OpenTelemetry](/observability-plugin/opentelemetry) covers generic OTLP trace export.
 - [OpenInference](/observability-plugin/openinference) covers OpenInference-oriented OTLP trace

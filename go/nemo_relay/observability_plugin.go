@@ -8,12 +8,13 @@ const ObservabilityPluginKind = "observability"
 
 // ObservabilityConfig is the canonical Go shape for the observability plugin config document.
 type ObservabilityConfig struct {
-	Version       uint32                   `json:"version,omitempty"`
-	Atof          *ObservabilityAtofConfig `json:"atof,omitempty"`
-	Atif          *ObservabilityAtifConfig `json:"atif,omitempty"`
-	OpenTelemetry *ObservabilityOtlpConfig `json:"opentelemetry,omitempty"`
-	OpenInference *ObservabilityOtlpConfig `json:"openinference,omitempty"`
-	Policy        *ConfigPolicy            `json:"policy,omitempty"`
+	Version       uint32                         `json:"version,omitempty"`
+	Atof          *ObservabilityAtofConfig       `json:"atof,omitempty"`
+	AtofStream    *ObservabilityAtofStreamConfig `json:"atof_stream,omitempty"`
+	Atif          *ObservabilityAtifConfig       `json:"atif,omitempty"`
+	OpenTelemetry *ObservabilityOtlpConfig       `json:"opentelemetry,omitempty"`
+	OpenInference *ObservabilityOtlpConfig       `json:"openinference,omitempty"`
+	Policy        *ConfigPolicy                  `json:"policy,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
@@ -22,6 +23,12 @@ type ObservabilityAtofConfig struct {
 	OutputDirectory string `json:"output_directory,omitempty"`
 	Filename        string `json:"filename,omitempty"`
 	Mode            string `json:"mode,omitempty"`
+}
+
+// ObservabilityAtofStreamConfig configures TCP-backed raw ATOF JSONL stream export.
+type ObservabilityAtofStreamConfig struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Address string `json:"address,omitempty"`
 }
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
@@ -66,6 +73,11 @@ func NewObservabilityAtofConfig() ObservabilityAtofConfig {
 	return ObservabilityAtofConfig{
 		Mode: "append",
 	}
+}
+
+// NewObservabilityAtofStreamConfig returns disabled ATOF stream settings.
+func NewObservabilityAtofStreamConfig() ObservabilityAtofStreamConfig {
+	return ObservabilityAtofStreamConfig{}
 }
 
 // NewObservabilityAtifConfig returns disabled ATIF settings with core defaults.
