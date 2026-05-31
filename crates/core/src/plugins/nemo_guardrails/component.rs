@@ -17,9 +17,13 @@ use crate::plugin::{
     register_plugin,
 };
 
+#[path = "local.rs"]
+mod local;
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 #[path = "remote.rs"]
 mod remote;
+use local::register_local_backend;
+pub use local::{clear_local_backend_provider, register_local_backend_provider};
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 use remote::register_remote_backend;
 
@@ -447,9 +451,7 @@ fn register_nemo_guardrails_backend(
 ) -> PluginResult<()> {
     match config.mode.as_str() {
         "remote" => register_remote_backend(config, ctx),
-        "local" => Err(PluginError::RegistrationFailed(
-            "built-in NeMo Guardrails local backend is not implemented yet".to_string(),
-        )),
+        "local" => register_local_backend(config, ctx),
         other => Err(PluginError::InvalidConfig(format!(
             "unsupported NeMo Guardrails mode '{other}'"
         ))),
@@ -954,6 +956,18 @@ fn validate_request_defaults(
     let Some(request_defaults) = &config.request_defaults else {
         return;
     };
+
+    if config.mode == "local" {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some("request_defaults".to_string()),
+            "local mode does not currently support request_defaults".to_string(),
+        );
+        return;
+    }
 
     validate_json_object_field(
         diagnostics,

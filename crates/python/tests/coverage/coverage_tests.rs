@@ -4,11 +4,13 @@
 //! Coverage tests for coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use pyo3::ffi::c_str;
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{IntoPyDict, PyModule};
 use serde_json::{Value as Json, json};
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
@@ -24,7 +26,13 @@ use crate::py_callable::{
 };
 use nemo_relay::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState, ToolExecutionNextFn,
+    global_context,
+};
+use nemo_relay::plugin::{
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+};
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -65,6 +73,13 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
     result
 }
 
+fn reset_runtime_state() {
+    let _ = clear_plugin_configuration();
+    nemo_relay::plugins::nemo_guardrails::component::clear_local_backend_provider().unwrap();
+    let context = global_context();
+    *context.write().unwrap() = NemoRelayContextState::new();
+}
+
 #[test]
 fn test_native_module_registers_types_and_api_functions() {
     let _python = crate::test_support::init_python_test();
@@ -92,6 +107,635 @@ fn test_native_pymodule_entrypoint_registers_bindings() {
         assert!(module.getattr("initialize_plugins").is_ok());
         assert!(module.getattr("set_latency_sensitivity").is_ok());
     });
+}
+
+#[test]
+fn test_native_pymodule_entrypoint_installs_nemo_guardrails_local_provider() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_native_guardrails_provider").unwrap();
+        crate::_native(&module).unwrap();
+    });
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let error = runtime
+        .block_on(initialize_plugins(PluginConfig {
+            version: 1,
+            components: vec![PluginComponentSpec {
+                kind: "nemo_guardrails".to_string(),
+                enabled: true,
+                config: serde_json::from_value(json!({
+                    "mode": "local",
+                    "codec": "openai_chat",
+                    "config_path": "./rails"
+                }))
+                .unwrap(),
+            }],
+            policy: Default::default(),
+        }))
+        .unwrap_err();
+
+    let _ = clear_plugin_configuration();
+    match error {
+        nemo_relay::plugin::PluginError::RegistrationFailed(message) => {
+            assert!(
+                message.contains(
+                    "NeMo Guardrails is required for the built-in NeMo Guardrails local backend"
+                ),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn test_guardrails_local_helper_registers_and_enforces_llm_and_tool_checks() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let python_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let module = load_module(
+            py,
+            &format!(
+                r#"
+import pathlib
+import sys
+import types
+
+sys.path.insert(0, {python_dir:?})
+
+MODULE_NAME = "fake_guardrails_local_helper"
+
+fake_root = types.ModuleType(MODULE_NAME)
+fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
+
+class Result:
+    def __init__(self, status, content=None, rail=None):
+        self.status = status
+        self.content = content
+        self.rail = rail
+
+class RailType:
+    INPUT = "input"
+    OUTPUT = "output"
+
+class RailStatus:
+    BLOCKED = "blocked"
+    MODIFIED = "modified"
+    PASSED = "passed"
+
+class RailsConfig:
+    @staticmethod
+    def from_content(*, colang_content=None, yaml_content=None):
+        return {{"yaml": yaml_content, "colang": colang_content}}
+
+    @staticmethod
+    def from_path(path):
+        return {{"path": path}}
+
+check_results = []
+check_calls = []
+
+class LLMRails:
+    def __init__(self, config):
+        self.config = config
+
+    async def check_async(self, messages, rail_types):
+        check_calls.append((messages, rail_types))
+        return check_results.pop(0)
+
+fake_root.RailsConfig = RailsConfig
+fake_root.LLMRails = LLMRails
+fake_options.RailType = RailType
+fake_options.RailStatus = RailStatus
+
+sys.modules[MODULE_NAME] = fake_root
+sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
+sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
+sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+
+from nemo_relay._native import LLMRequest
+from nemo_relay._guardrails_local import register_local_backend
+
+class Context:
+    def register_llm_execution_intercept(self, name, priority, callback):
+        self.llm = callback
+
+    def register_llm_stream_execution_intercept(self, name, priority, callback):
+        self.stream = callback
+
+    def register_tool_execution_intercept(self, name, priority, callback):
+        self.tool = callback
+
+async def run_case():
+    ctx = Context()
+    event_log = []
+    register_local_backend(
+        {{
+            "mode": "local",
+            "codec": "openai_chat",
+            "config_yaml": "models: []",
+            "input": True,
+            "output": True,
+            "tool_input": True,
+            "tool_output": True,
+            "local": {{"python_module": MODULE_NAME}},
+        }},
+        ctx,
+    )
+
+    request = LLMRequest(
+        {{}},
+        {{
+            "model": "gpt-4o-mini",
+            "messages": [{{"role": "user", "content": "unsafe"}}],
+        }},
+    )
+    seen_request_messages = []
+
+    async def next_call(req):
+        seen_request_messages.append(req.content["messages"][-1]["content"])
+        return {{
+            "choices": [{{"message": {{"role": "assistant", "content": "safe reply"}}}}],
+            "id": "resp_1",
+            "model": "gpt-4o-mini",
+        }}
+
+    check_results.extend(
+        [
+            Result(RailStatus.MODIFIED, content="sanitized user"),
+            Result(RailStatus.PASSED),
+        ]
+    )
+    llm_result = await ctx.llm("demo", request, next_call)
+
+    seen_tool_args = []
+
+    async def next_tool(args):
+        seen_tool_args.append(args)
+        return {{"raw": True}}
+
+    check_results.extend(
+        [
+            Result(RailStatus.MODIFIED, content='{{"arguments": {{"city": "Boston"}}}}'),
+            Result(RailStatus.MODIFIED, content='{{"result": {{"ok": true}}}}'),
+        ]
+    )
+    tool_result = await ctx.tool("weather_lookup", {{"city": "Phoenix"}}, next_tool)
+
+    return {{
+        "llm_result": llm_result,
+        "tool_result": tool_result,
+        "seen_request_messages": seen_request_messages,
+        "seen_tool_args": seen_tool_args,
+        "check_calls": check_calls,
+    }}
+"#,
+                python_dir = python_dir.display(),
+            ),
+        );
+
+        let result_json = with_event_loop(py, |event_loop| {
+            let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+            let result = event_loop
+                .call_method1("run_until_complete", (coroutine,))
+                .unwrap();
+            crate::convert::py_to_json(&result).unwrap()
+        });
+
+        assert_eq!(
+            result_json["seen_request_messages"][0],
+            json!("sanitized user")
+        );
+        assert_eq!(result_json["tool_result"], json!({ "ok": true }));
+        assert_eq!(
+            result_json["seen_tool_args"][0],
+            json!({ "city": "Boston" })
+        );
+        assert_eq!(
+            result_json["llm_result"]["choices"][0]["message"]["content"],
+            json!("safe reply")
+        );
+        assert_eq!(result_json["check_calls"].as_array().unwrap().len(), 4);
+    });
+}
+
+#[test]
+fn test_guardrails_local_helper_enforces_streamed_output_rails() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let native_module = PyModule::new(py, "_native_guardrails_streaming").unwrap();
+        crate::_native(&native_module).unwrap();
+        let sys = py.import("sys").unwrap();
+        let modules = sys.getattr("modules").unwrap();
+        modules
+            .set_item("nemo_relay._native", native_module.clone())
+            .unwrap();
+
+        let python_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let module = load_module(
+            py,
+            &format!(
+                r#"
+import sys
+import types
+
+sys.path.insert(0, {python_dir:?})
+
+MODULE_NAME = "fake_guardrails_streaming"
+
+fake_root = types.ModuleType(MODULE_NAME)
+fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
+
+class Result:
+    def __init__(self, status, content=None, rail=None):
+        self.status = status
+        self.content = content
+        self.rail = rail
+
+class RailType:
+    INPUT = "input"
+    OUTPUT = "output"
+
+class RailStatus:
+    BLOCKED = "blocked"
+    MODIFIED = "modified"
+    PASSED = "passed"
+
+class RailsConfig:
+    @staticmethod
+    def from_content(*, colang_content=None, yaml_content=None):
+        return {{"yaml": yaml_content}}
+
+stream_results = []
+event_log = []
+
+class LLMRails:
+    def __init__(self, config):
+        self.config = types.SimpleNamespace(
+            rails=types.SimpleNamespace(
+                output=types.SimpleNamespace(
+                    flows=["self check output"],
+                    streaming=types.SimpleNamespace(enabled=True, stream_first=True),
+                )
+            )
+        )
+
+    async def check_async(self, messages, rail_types):
+        return Result(RailStatus.PASSED)
+
+    def stream_async(self, *, messages=None, generator=None, include_metadata=False):
+        async def _run():
+            outcome = stream_results.pop(0)
+            async for chunk in generator:
+                event_log.append(f"guardrails-sees:{{chunk}}")
+                if outcome == "pass":
+                    yield chunk
+            if outcome == "block":
+                yield '{{"error": {{"message": "Blocked by output rails: output-policy", "type": "guardrails_violation"}}}}'
+        return _run()
+
+fake_root.RailsConfig = RailsConfig
+fake_root.LLMRails = LLMRails
+fake_options.RailType = RailType
+fake_options.RailStatus = RailStatus
+
+sys.modules[MODULE_NAME] = fake_root
+sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
+sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
+sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+
+from nemo_relay._native import LLMRequest
+from nemo_relay._guardrails_local import register_local_backend
+
+class Context:
+    def register_llm_execution_intercept(self, name, priority, callback):
+        self.llm = callback
+
+    def register_llm_stream_execution_intercept(self, name, priority, callback):
+        self.stream = callback
+
+    def register_tool_execution_intercept(self, name, priority, callback):
+        self.tool = callback
+
+async def run_case():
+    ctx = Context()
+    event_log.clear()
+    register_local_backend(
+        {{
+            "mode": "local",
+            "codec": "openai_chat",
+            "config_yaml": "models: []",
+            "input": False,
+            "output": True,
+            "local": {{"python_module": MODULE_NAME}},
+        }},
+        ctx,
+    )
+
+    request = LLMRequest(
+        {{}},
+        {{
+            "model": "gpt-4o-mini",
+            "messages": [{{"role": "user", "content": "hello"}}],
+        }},
+    )
+
+    async def next_call(req):
+        async def _stream():
+            event_log.append("source:hello")
+            yield {{"choices": [{{"delta": {{"content": "hello"}}}}]}}
+            event_log.append("source:world")
+            yield {{"choices": [{{"delta": {{"content": "world"}}}}]}}
+        return _stream()
+
+    stream_results.append("pass")
+    allowed_stream = await ctx.stream(request, next_call)
+    allowed_chunks = []
+    async for chunk in allowed_stream:
+        event_log.append(f"yield:{{chunk['choices'][0]['delta']['content']}}")
+        allowed_chunks.append(chunk)
+
+    stream_results.append("block")
+    try:
+        blocked_stream = await ctx.stream(request, next_call)
+        async for _chunk in blocked_stream:
+            pass
+    except RuntimeError as error:
+        blocked = str(error)
+    else:
+        raise AssertionError("expected streamed output block")
+
+    ctx_stream_first_false = Context()
+    fake_root.LLMRails = lambda config: types.SimpleNamespace(
+        config=types.SimpleNamespace(
+            rails=types.SimpleNamespace(
+                output=types.SimpleNamespace(
+                    flows=["self check output"],
+                    streaming=types.SimpleNamespace(enabled=True, stream_first=False),
+                )
+            )
+        ),
+        check_async=LLMRails(config).check_async,
+        stream_async=LLMRails(config).stream_async,
+    )
+    register_local_backend(
+        {{
+            "mode": "local",
+            "codec": "openai_chat",
+            "config_yaml": "models: []",
+            "input": False,
+            "output": True,
+            "local": {{"python_module": MODULE_NAME}},
+        }},
+        ctx_stream_first_false,
+    )
+    try:
+        failing_stream = await ctx_stream_first_false.stream(request, next_call)
+        async for _chunk in failing_stream:
+            pass
+    except RuntimeError as error:
+        modified = str(error)
+    else:
+        raise AssertionError("expected stream_first=false error")
+
+    return {{
+        "allowed_chunks": allowed_chunks,
+        "blocked": blocked,
+        "event_log": event_log,
+        "modified": modified,
+    }}
+"#,
+                python_dir = python_dir.display(),
+            ),
+        );
+
+        let result = with_event_loop(py, |event_loop| {
+            let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+            let result = event_loop
+                .call_method1("run_until_complete", (coroutine,))
+                .unwrap();
+            crate::convert::py_to_json(&result).unwrap()
+        });
+        assert_eq!(
+            result["allowed_chunks"],
+            json!([
+                {"choices": [{"delta": {"content": "hello"}}]},
+                {"choices": [{"delta": {"content": "world"}}]}
+            ])
+        );
+        let event_log = result["event_log"].as_array().unwrap();
+        assert_eq!(
+            &event_log[..6],
+            json!([
+                "source:hello",
+                "yield:hello",
+                "source:world",
+                "yield:world",
+                "guardrails-sees:hello",
+                "guardrails-sees:world",
+            ])
+            .as_array()
+            .unwrap()
+        );
+        assert!(
+            result["blocked"]
+                .as_str()
+                .unwrap()
+                .contains("output rail blocked the LLM call")
+        );
+        assert!(
+            result["modified"]
+                .as_str()
+                .unwrap()
+                .contains("stream_first = true")
+        );
+    });
+}
+
+#[test]
+fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() {
+    let _python = crate::test_support::init_python_test();
+    reset_runtime_state();
+
+    Python::attach(|py| {
+        let native_module = PyModule::new(py, "_native_guardrails_e2e").unwrap();
+        crate::_native(&native_module).unwrap();
+        let sys = py.import("sys").unwrap();
+        let modules = sys.getattr("modules").unwrap();
+        let module_names = py
+            .eval(
+                c_str!("list(sys.modules.keys())"),
+                None,
+                Some(&[(c_str!("sys"), sys)].into_py_dict(py).unwrap()),
+            )
+            .unwrap()
+            .extract::<Vec<String>>()
+            .unwrap();
+        for name in module_names {
+            if name == "nemo_relay" || name.starts_with("nemo_relay.") {
+                modules.del_item(name).unwrap();
+            }
+        }
+        modules
+            .set_item("nemo_relay._native", native_module.clone())
+            .unwrap();
+
+        let python_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let module = load_module(
+            py,
+            &format!(
+                r#"
+import sys
+import types
+
+sys.path.insert(0, {python_dir:?})
+
+MODULE_NAME = "fake_guardrails_local_e2e"
+
+fake_root = types.ModuleType(MODULE_NAME)
+fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
+
+class Result:
+    def __init__(self, status, content=None, rail=None):
+        self.status = status
+        self.content = content
+        self.rail = rail
+
+class RailType:
+    INPUT = "input"
+    OUTPUT = "output"
+
+class RailStatus:
+    BLOCKED = "blocked"
+    MODIFIED = "modified"
+    PASSED = "passed"
+
+class RailsConfig:
+    @staticmethod
+    def from_content(*, colang_content=None, yaml_content=None):
+        return {{"yaml": yaml_content}}
+
+check_results = []
+
+class LLMRails:
+    def __init__(self, config):
+        self.config = config
+
+    async def check_async(self, messages, rail_types):
+        return check_results.pop(0)
+
+fake_root.RailsConfig = RailsConfig
+fake_root.LLMRails = LLMRails
+fake_options.RailType = RailType
+fake_options.RailStatus = RailStatus
+
+sys.modules[MODULE_NAME] = fake_root
+sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
+sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
+sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+
+import nemo_relay
+
+async def run_case():
+    stack = nemo_relay.create_scope_stack()
+    nemo_relay.set_thread_scope_stack(stack)
+
+    await nemo_relay.plugin.initialize(
+        {{
+            "version": 1,
+            "components": [
+                {{
+                    "kind": "nemo_guardrails",
+                    "enabled": True,
+                    "config": {{
+                        "mode": "local",
+                        "codec": "openai_chat",
+                        "config_yaml": "models: []",
+                        "input": True,
+                        "output": True,
+                        "tool_input": True,
+                        "tool_output": True,
+                        "local": {{"python_module": MODULE_NAME}},
+                    }},
+                }}
+            ],
+        }}
+    )
+
+    check_results.extend(
+        [
+            Result(RailStatus.MODIFIED, content="sanitized user"),
+            Result(RailStatus.PASSED),
+            Result(RailStatus.MODIFIED, content='{{"arguments": {{"city": "Boston"}}}}'),
+            Result(RailStatus.MODIFIED, content='{{"result": {{"ok": true}}}}'),
+        ]
+    )
+
+    request = nemo_relay.LLMRequest(
+        {{}},
+        {{
+            "model": "gpt-4o-mini",
+            "messages": [{{"role": "user", "content": "unsafe"}}],
+        }},
+    )
+
+    seen_request_messages = []
+    async def llm_impl(req):
+        seen_request_messages.append(req.content["messages"][-1]["content"])
+        return {{
+            "choices": [{{"message": {{"role": "assistant", "content": "safe reply"}}}}],
+            "id": "resp_1",
+            "model": req.content["model"],
+        }}
+
+    llm_result = await nemo_relay.llm.execute(
+        "demo",
+        request,
+        llm_impl,
+        response_codec=nemo_relay.codecs.OpenAIChatCodec(),
+    )
+
+    seen_tool_args = []
+    async def tool_impl(args):
+        seen_tool_args.append(args)
+        return {{"raw": True}}
+
+    tool_result = await nemo_relay.tools.execute("weather_lookup", {{"city": "Phoenix"}}, tool_impl)
+    return {{
+        "llm_result": llm_result,
+        "tool_result": tool_result,
+        "seen_request_messages": seen_request_messages,
+        "seen_tool_args": seen_tool_args,
+    }}
+"#,
+                python_dir = python_dir.display(),
+            ),
+        );
+        let result_json = with_event_loop(py, |event_loop| {
+            let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+            let result = event_loop
+                .call_method1("run_until_complete", (coroutine,))
+                .unwrap();
+            crate::convert::py_to_json(&result).unwrap()
+        });
+
+        assert_eq!(
+            result_json["llm_result"]["choices"][0]["message"]["content"],
+            json!("safe reply")
+        );
+        assert_eq!(result_json["tool_result"], json!({ "ok": true }));
+        assert_eq!(
+            result_json["seen_request_messages"][0],
+            json!("sanitized user")
+        );
+        assert_eq!(
+            result_json["seen_tool_args"][0],
+            json!({ "city": "Boston" })
+        );
+    });
+
+    reset_runtime_state();
 }
 
 #[test]
