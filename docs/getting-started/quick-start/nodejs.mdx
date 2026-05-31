@@ -44,7 +44,6 @@ const {
   registerSubscriber,
   deregisterSubscriber,
   flushSubscribers,
-  LlmRequest,
   withScope,
   event,
   toolCallExecute,
@@ -57,13 +56,15 @@ async function main() {
   });
 
   await withScope("demo-agent", ScopeType.Agent, async (handle) => {
-    event("initialized", handle, { binding: "node" }, null);
+    // `handle` describes the active scope (handle.uuid, handle.name, handle.scopeType).
+    // For lifecycle calls inside the scope, pass null to target the current scope.
+    event("initialized", null, { binding: "node" }, null);
 
     const toolResult = await toolCallExecute(
       "search",
       { query: "hello" },
       (args) => ({ echo: args.query }),
-      handle,
+      null,
       null,
       null,
       null,
@@ -71,9 +72,9 @@ async function main() {
 
     const llmResult = await llmCallExecute(
       "demo-provider",
-      new LlmRequest({}, { messages: [{ role: "user", content: "hi" }] }),
+      { headers: {}, content: { messages: [{ role: "user", content: "hi" }] } },
       (request) => ({ ok: true, messages: request.content.messages }),
-      handle,
+      null,
       null,
       null,
       null,

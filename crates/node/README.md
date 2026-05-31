@@ -77,7 +77,8 @@ async function main() {
   });
 
   await withScope("demo-agent", ScopeType.Agent, async (handle) => {
-    event("initialized", handle, { binding: "node" }, null);
+    // `handle` describes the active scope; pass null to target the current scope.
+    event("initialized", null, { binding: "node" }, null);
   });
 
   deregisterSubscriber("printer");
