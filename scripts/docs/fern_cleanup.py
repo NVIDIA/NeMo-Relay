@@ -41,18 +41,6 @@ ASSISTANT_SYMBOL_REFERENCE_TEXT = (
     "and keep examples aligned with the public docs."
 )
 REPO_FILE_LINK_REPLACEMENTS = {
-    "../../examples/nemoguardrails/example/agent_example.py": (
-        f"{GITHUB_BLOB_BASE}/examples/nemoguardrails/example/agent_example.py"
-    ),
-    "/examples/nemoguardrails/example/agent_example.py": (
-        f"{GITHUB_BLOB_BASE}/examples/nemoguardrails/example/agent_example.py"
-    ),
-    "../../examples/nemoguardrails/example/example_config.yml": (
-        f"{GITHUB_BLOB_BASE}/examples/nemoguardrails/example/example_config.yml"
-    ),
-    "/examples/nemoguardrails/example/example_config.yml": (
-        f"{GITHUB_BLOB_BASE}/examples/nemoguardrails/example/example_config.yml"
-    ),
     "../../RELEASING.md": f"{GITHUB_BLOB_BASE}/RELEASING.md",
     "/RELEASING": f"{GITHUB_BLOB_BASE}/RELEASING.md",
     "/RELEASING.md": f"{GITHUB_BLOB_BASE}/RELEASING.md",
