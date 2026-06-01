@@ -41,6 +41,80 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     PyModule::from_code(py, &code, &file_name, &module_name).unwrap()
 }
 
+fn python_package_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python")
+}
+
+fn fake_guardrails_module_prelude(module_name: &str, python_dir: &str) -> String {
+    format!(
+        r#"
+import sys
+import types
+
+sys.path.insert(0, {python_dir:?})
+
+MODULE_NAME = {module_name:?}
+
+fake_root = types.ModuleType(MODULE_NAME)
+fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
+
+class Result:
+    def __init__(self, status, content=None, rail=None):
+        self.status = status
+        self.content = content
+        self.rail = rail
+
+class RailType:
+    INPUT = "input"
+    OUTPUT = "output"
+
+class RailStatus:
+    BLOCKED = "blocked"
+    MODIFIED = "modified"
+    PASSED = "passed"
+
+class RailsConfig:
+    @staticmethod
+    def from_content(*, colang_content=None, yaml_content=None):
+        return {{"yaml": yaml_content, "colang": colang_content}}
+
+    @staticmethod
+    def from_path(path):
+        return {{"path": path}}
+"#,
+        python_dir = python_dir,
+        module_name = module_name,
+    )
+}
+
+fn register_fake_guardrails_module_epilogue() -> &'static str {
+    r#"
+fake_root.RailsConfig = RailsConfig
+fake_root.LLMRails = LLMRails
+fake_options.RailType = RailType
+fake_options.RailStatus = RailStatus
+
+sys.modules[MODULE_NAME] = fake_root
+sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
+sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
+sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+"#
+}
+
+fn local_plugin_context_python() -> &'static str {
+    r#"
+class Context:
+    def register_llm_execution_intercept(self, name, priority, callback):
+        self.llm = callback
+
+    def register_llm_stream_execution_intercept(self, name, priority, callback):
+        self.stream = callback
+
+    def register_tool_execution_intercept(self, name, priority, callback):
+        self.tool = callback
+"#
+}
+
 fn make_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::from_iter([("x-trace".into(), json!("1"))]),
@@ -153,45 +227,24 @@ fn test_native_pymodule_entrypoint_installs_nemo_guardrails_local_provider() {
 fn test_guardrails_local_helper_registers_and_enforces_llm_and_tool_checks() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
-        let python_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let native_module = PyModule::new(py, "_native_guardrails_helper").unwrap();
+        crate::_native(&native_module).unwrap();
+        let sys = py.import("sys").unwrap();
+        let modules = sys.getattr("modules").unwrap();
+        modules
+            .set_item("nemo_relay._native", native_module.clone())
+            .unwrap();
+
+        let python_dir = python_package_dir();
+        let prelude =
+            fake_guardrails_module_prelude("fake_guardrails_local_helper", &python_dir.display().to_string());
+        let epilogue = register_fake_guardrails_module_epilogue();
+        let context_class = local_plugin_context_python();
         let module = load_module(
             py,
             &format!(
                 r#"
-import pathlib
-import sys
-import types
-
-sys.path.insert(0, {python_dir:?})
-
-MODULE_NAME = "fake_guardrails_local_helper"
-
-fake_root = types.ModuleType(MODULE_NAME)
-fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
-
-class Result:
-    def __init__(self, status, content=None, rail=None):
-        self.status = status
-        self.content = content
-        self.rail = rail
-
-class RailType:
-    INPUT = "input"
-    OUTPUT = "output"
-
-class RailStatus:
-    BLOCKED = "blocked"
-    MODIFIED = "modified"
-    PASSED = "passed"
-
-class RailsConfig:
-    @staticmethod
-    def from_content(*, colang_content=None, yaml_content=None):
-        return {{"yaml": yaml_content, "colang": colang_content}}
-
-    @staticmethod
-    def from_path(path):
-        return {{"path": path}}
+{prelude}
 
 check_results = []
 check_calls = []
@@ -204,32 +257,15 @@ class LLMRails:
         check_calls.append((messages, rail_types))
         return check_results.pop(0)
 
-fake_root.RailsConfig = RailsConfig
-fake_root.LLMRails = LLMRails
-fake_options.RailType = RailType
-fake_options.RailStatus = RailStatus
-
-sys.modules[MODULE_NAME] = fake_root
-sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
-sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
-sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+{epilogue}
 
 from nemo_relay._native import LLMRequest
 from nemo_relay._guardrails_local import register_local_backend
 
-class Context:
-    def register_llm_execution_intercept(self, name, priority, callback):
-        self.llm = callback
-
-    def register_llm_stream_execution_intercept(self, name, priority, callback):
-        self.stream = callback
-
-    def register_tool_execution_intercept(self, name, priority, callback):
-        self.tool = callback
+{context_class}
 
 async def run_case():
     ctx = Context()
-    event_log = []
     register_local_backend(
         {{
             "mode": "local",
@@ -291,7 +327,9 @@ async def run_case():
         "check_calls": check_calls,
     }}
 "#,
-                python_dir = python_dir.display(),
+                prelude = prelude,
+                epilogue = epilogue,
+                context_class = context_class,
             ),
         );
 
@@ -332,40 +370,16 @@ fn test_guardrails_local_helper_enforces_streamed_output_rails() {
             .set_item("nemo_relay._native", native_module.clone())
             .unwrap();
 
-        let python_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let python_dir = python_package_dir();
+        let prelude =
+            fake_guardrails_module_prelude("fake_guardrails_streaming", &python_dir.display().to_string());
+        let epilogue = register_fake_guardrails_module_epilogue();
+        let context_class = local_plugin_context_python();
         let module = load_module(
             py,
             &format!(
                 r#"
-import sys
-import types
-
-sys.path.insert(0, {python_dir:?})
-
-MODULE_NAME = "fake_guardrails_streaming"
-
-fake_root = types.ModuleType(MODULE_NAME)
-fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
-
-class Result:
-    def __init__(self, status, content=None, rail=None):
-        self.status = status
-        self.content = content
-        self.rail = rail
-
-class RailType:
-    INPUT = "input"
-    OUTPUT = "output"
-
-class RailStatus:
-    BLOCKED = "blocked"
-    MODIFIED = "modified"
-    PASSED = "passed"
-
-class RailsConfig:
-    @staticmethod
-    def from_content(*, colang_content=None, yaml_content=None):
-        return {{"yaml": yaml_content}}
+{prelude}
 
 stream_results = []
 event_log = []
@@ -395,28 +409,12 @@ class LLMRails:
                 yield '{{"error": {{"message": "Blocked by output rails: output-policy", "type": "guardrails_violation"}}}}'
         return _run()
 
-fake_root.RailsConfig = RailsConfig
-fake_root.LLMRails = LLMRails
-fake_options.RailType = RailType
-fake_options.RailStatus = RailStatus
-
-sys.modules[MODULE_NAME] = fake_root
-sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
-sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
-sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+{epilogue}
 
 from nemo_relay._native import LLMRequest
 from nemo_relay._guardrails_local import register_local_backend
 
-class Context:
-    def register_llm_execution_intercept(self, name, priority, callback):
-        self.llm = callback
-
-    def register_llm_stream_execution_intercept(self, name, priority, callback):
-        self.stream = callback
-
-    def register_tool_execution_intercept(self, name, priority, callback):
-        self.tool = callback
+{context_class}
 
 async def run_case():
     ctx = Context()
@@ -506,7 +504,9 @@ async def run_case():
         "modified": modified,
     }}
 "#,
-                python_dir = python_dir.display(),
+                prelude = prelude,
+                epilogue = epilogue,
+                context_class = context_class,
             ),
         );
 
@@ -581,40 +581,15 @@ fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() 
             .set_item("nemo_relay._native", native_module.clone())
             .unwrap();
 
-        let python_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python");
+        let python_dir = python_package_dir();
+        let prelude =
+            fake_guardrails_module_prelude("fake_guardrails_local_e2e", &python_dir.display().to_string());
+        let epilogue = register_fake_guardrails_module_epilogue();
         let module = load_module(
             py,
             &format!(
                 r#"
-import sys
-import types
-
-sys.path.insert(0, {python_dir:?})
-
-MODULE_NAME = "fake_guardrails_local_e2e"
-
-fake_root = types.ModuleType(MODULE_NAME)
-fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
-
-class Result:
-    def __init__(self, status, content=None, rail=None):
-        self.status = status
-        self.content = content
-        self.rail = rail
-
-class RailType:
-    INPUT = "input"
-    OUTPUT = "output"
-
-class RailStatus:
-    BLOCKED = "blocked"
-    MODIFIED = "modified"
-    PASSED = "passed"
-
-class RailsConfig:
-    @staticmethod
-    def from_content(*, colang_content=None, yaml_content=None):
-        return {{"yaml": yaml_content}}
+{prelude}
 
 check_results = []
 
@@ -625,15 +600,7 @@ class LLMRails:
     async def check_async(self, messages, rail_types):
         return check_results.pop(0)
 
-fake_root.RailsConfig = RailsConfig
-fake_root.LLMRails = LLMRails
-fake_options.RailType = RailType
-fake_options.RailStatus = RailStatus
-
-sys.modules[MODULE_NAME] = fake_root
-sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
-sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
-sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+{epilogue}
 
 import nemo_relay
 
@@ -709,7 +676,8 @@ async def run_case():
         "seen_tool_args": seen_tool_args,
     }}
 "#,
-                python_dir = python_dir.display(),
+                prelude = prelude,
+                epilogue = epilogue,
             ),
         );
         let result_json = with_event_loop(py, |event_loop| {
