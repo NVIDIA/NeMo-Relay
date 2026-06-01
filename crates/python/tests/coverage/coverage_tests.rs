@@ -236,8 +236,10 @@ fn test_guardrails_local_helper_registers_and_enforces_llm_and_tool_checks() {
             .unwrap();
 
         let python_dir = python_package_dir();
-        let prelude =
-            fake_guardrails_module_prelude("fake_guardrails_local_helper", &python_dir.display().to_string());
+        let prelude = fake_guardrails_module_prelude(
+            "fake_guardrails_local_helper",
+            &python_dir.display().to_string(),
+        );
         let epilogue = register_fake_guardrails_module_epilogue();
         let context_class = local_plugin_context_python();
         let module = load_module(
@@ -371,8 +373,10 @@ fn test_guardrails_local_helper_enforces_streamed_output_rails() {
             .unwrap();
 
         let python_dir = python_package_dir();
-        let prelude =
-            fake_guardrails_module_prelude("fake_guardrails_streaming", &python_dir.display().to_string());
+        let prelude = fake_guardrails_module_prelude(
+            "fake_guardrails_streaming",
+            &python_dir.display().to_string(),
+        );
         let epilogue = register_fake_guardrails_module_epilogue();
         let context_class = local_plugin_context_python();
         let module = load_module(
@@ -582,8 +586,10 @@ fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() 
             .unwrap();
 
         let python_dir = python_package_dir();
-        let prelude =
-            fake_guardrails_module_prelude("fake_guardrails_local_e2e", &python_dir.display().to_string());
+        let prelude = fake_guardrails_module_prelude(
+            "fake_guardrails_local_e2e",
+            &python_dir.display().to_string(),
+        );
         let epilogue = register_fake_guardrails_module_epilogue();
         let module = load_module(
             py,

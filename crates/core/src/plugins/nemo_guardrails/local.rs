@@ -14,7 +14,8 @@ type LocalBackendProvider = Arc<
 static LOCAL_BACKEND_PROVIDER: LazyLock<Mutex<Option<LocalBackendProvider>>> =
     LazyLock::new(|| Mutex::new(None));
 
-fn local_backend_provider_guard() -> PluginResult<MutexGuard<'static, Option<LocalBackendProvider>>> {
+fn local_backend_provider_guard() -> PluginResult<MutexGuard<'static, Option<LocalBackendProvider>>>
+{
     LOCAL_BACKEND_PROVIDER.lock().map_err(|e| {
         PluginError::Internal(format!(
             "NeMo Guardrails local backend provider lock poisoned: {e}"
