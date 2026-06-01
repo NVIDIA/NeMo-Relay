@@ -61,7 +61,9 @@ At least one managed Guardrails surface must be enabled.
 ## Remote Mode
 
 Use `remote` mode when NeMo Relay should call a Guardrails service over
-HTTP(S).
+HTTP(S), especially when Guardrails must be shared across runtimes, used from
+non-Python environments, or deployed independently from the application
+process.
 
 ### Requirements
 
@@ -75,6 +77,11 @@ Relay decides when managed checks run, while the Guardrails config decides what
 to block, allow, or rewrite.
 
 ### `plugins.toml` Example
+
+You can write this config directly in `plugins.toml`, or create and edit it
+through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
+precedence, merge behavior, and editor controls, see
+[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
 
 ```toml
 version = 1
@@ -232,6 +239,11 @@ The same ownership boundary still applies:
 
 ### `plugins.toml` Example
 
+You can write this config directly in `plugins.toml`, or create and edit it
+through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
+precedence, merge behavior, and editor controls, see
+[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+
 ```toml
 version = 1
 
@@ -310,11 +322,24 @@ When output rails are configured, the current local mode uses Guardrails-native
 streaming output rails instead of buffering the full provider stream. That
 requires `rails.output.streaming.enabled = true` in the Guardrails config.
 
-The current local mode supports the `stream_first = true` streaming semantics:
-provider chunks can still flow to the caller while Guardrails evaluates the
-stream in parallel. If Guardrails later blocks the stream, the call fails at
-that point even though some chunks may already have been delivered.
+Guardrails calls the main streaming-output switch
+`rails.output.streaming.stream_first`.
+
+When `stream_first = true`, the current local mode uses pass-through-first
+streaming semantics:
+
+- provider chunks can flow to the caller immediately
+- Guardrails evaluates the streamed text in parallel
+- if Guardrails later blocks the stream, the call fails at that point even
+  though some chunks may already have been delivered
 
 The current local mode does not support `rails.output.streaming.stream_first = false`
-yet, because that would require converting guarded text chunks back into valid
-provider-shaped stream chunks.
+yet. That mode would be Guardrails-first streaming semantics:
+
+- Guardrails would need to evaluate streamed text before chunks are released to
+  the caller
+- the local backend would then need to convert Guardrails-approved text back
+  into valid provider-shaped stream chunks
+
+That guarded-text-to-provider-chunk adapter does not exist yet in the current
+local backend.

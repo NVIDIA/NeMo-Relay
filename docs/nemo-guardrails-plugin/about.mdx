@@ -37,19 +37,18 @@ Start here when you need to:
 
 ## Current Scope
 
-The built-in plugin currently exposes two user-facing modes with
-different boundaries.
+The built-in plugin currently exposes two user-facing modes:
 
-| Area | `remote` | `local` |
-|---|---|---|
-| Managed non-streaming LLM `input` | Supported | Supported |
-| Managed non-streaming LLM `output` | Supported | Supported |
-| Managed streaming LLM execution | Supported over the remote HTTP(S) contract | Supported for managed input checks and Guardrails-native output streaming when `rails.output.streaming.enabled = true`; with `stream_first = true`, output rails can stop the stream after some chunks have already been delivered; `stream_first = false` is not supported yet |
-| Managed `tool_input` | Not supported against the stock Guardrails remote contract | Supported |
-| Managed `tool_output` | Supported | Supported |
-| `request_defaults` | Supported as backend pass-through request semantics | Not supported |
-| Codec support | `openai_chat` | `openai_chat`, `openai_responses`, `anthropic_messages` |
-| Runtime availability | Any runtime that includes the remote backend | Python-enabled runtimes that can import `nemoguardrails` |
+- `remote` for Guardrails-service integration over HTTP(S)
+- `local` for in-process `nemoguardrails` integration through the Python runtime
+
+Both modes support managed LLM `input` and `output`. The current mode-specific
+differences are:
+
+- `remote` supports `request_defaults` pass-through but does not support managed
+  `tool_input`
+- `local` supports managed `tool_input` and broader LLM codec coverage, but it
+  does not support `request_defaults`
 
 The `local` backend is a Python-backed runtime feature, not a universal
 cross-binding backend. Runtimes that do not install the local backend provider
@@ -119,5 +118,5 @@ separate managed middleware surfaces in NeMo Relay.
 ## Pages
 
 - [NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration)
-  documents the built-in component shape, mode boundaries, and current
+  documents the built-in component shape, mode boundaries, and the detailed
   support matrix.
