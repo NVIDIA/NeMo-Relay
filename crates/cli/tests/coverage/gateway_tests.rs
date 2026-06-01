@@ -111,6 +111,7 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         anthropic_base_url: "http://anthropic/".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
 
     assert_eq!(
@@ -139,6 +140,7 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
 
     assert_eq!(
@@ -721,6 +723,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let state = AppState {
         config: config.clone(),
@@ -747,6 +750,7 @@ async fn models_rejects_non_get_requests_directly() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let state = AppState {
         config: config.clone(),

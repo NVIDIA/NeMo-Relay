@@ -42,6 +42,9 @@ from nemo_relay._native import (
     initialize_plugins as _initialize_plugins,
 )
 from nemo_relay._native import (
+    layer_plugin_config as _layer_plugin_config,
+)
+from nemo_relay._native import (
     list_plugin_kinds as _list_plugin_kinds,
 )
 from nemo_relay._native import (
@@ -285,6 +288,27 @@ class PluginConfig:
         }
 
 
+def layer(base: PluginConfig | JsonObject, overlay: PluginConfig | JsonObject) -> JsonObject:
+    """Layer one plugin configuration over another.
+
+    Args:
+        base: Lower-precedence plugin config, usually loaded from files.
+        overlay: Higher-precedence plugin config, usually built in code.
+
+    Returns:
+        The effective raw JSON plugin config.
+
+    Behavior:
+        Objects merge recursively, arrays and scalar values are replaced by the
+        overlay, and top-level components merge by `kind`. Passing raw mappings
+        preserves omitted fields so they can inherit from the base config.
+    """
+    return cast(
+        JsonObject,
+        _layer_plugin_config(_normalize_object(base), _normalize_object(overlay)),
+    )
+
+
 def validate(config: PluginConfig | JsonObject) -> ConfigReport:
     """Validate a plugin configuration without changing runtime state.
 
@@ -420,8 +444,9 @@ __all__ = [
     "PluginContext",
     "Plugin",
     "clear",
-    "initialize",
     "deregister",
+    "initialize",
+    "layer",
     "list_kinds",
     "register",
     "report",

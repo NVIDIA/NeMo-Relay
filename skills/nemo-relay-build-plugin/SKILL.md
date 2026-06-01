@@ -43,6 +43,8 @@ Do not build a plugin when a narrower NeMo Relay surface is enough:
   from a shared plugin document.
 - Plugin config must be JSON-compatible across Rust, Python, Node.js, files,
   tests, and deployment systems.
+- Code-driven plugin config can layer over file-backed config. Use the
+  binding's plugin config layering helper instead of hand-merging nested JSON.
 - Validation is deterministic and side-effect free. It inspects config and
   returns structured diagnostics before runtime behavior changes.
 - Registration runs after validation and installs real behavior through
@@ -108,6 +110,11 @@ endpoints rather than embedding sensitive values.
 - Node.js: `nemo-relay-node/plugin`
 - Rust: `nemo_relay::plugin`
 - Go, WebAssembly, and raw FFI are source-first or advanced surfaces.
+
+When composing file-backed config with code-driven overrides, use
+`nemo_relay.plugin.layer(...)`, `plugin.layer(...)`, or
+`nemo_relay::plugin::layer_plugin_config(...)` so omitted fields inherit from
+the lower-precedence layer and top-level components merge by `kind`.
 
 Use the same canonical `snake_case` config keys across bindings and files. Node
 helper functions can be `camelCase`, but plugin config objects remain

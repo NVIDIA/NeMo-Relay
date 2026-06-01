@@ -657,6 +657,30 @@ async fn collect_observability_registers_adaptive_before_validation() {
     );
 }
 
+#[tokio::test]
+async fn collect_observability_reports_plugin_config_source() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": []
+        })),
+        plugin_config_source: Some(
+            "plugins.toml /tmp/plugins.toml overlaid by --plugin-config".into(),
+        ),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let plugins = checks
+        .iter()
+        .find(|check| check.name == "Plugins")
+        .expect("plugin validation check");
+    assert_eq!(plugins.status, Status::Pass);
+    assert!(plugins.details.contains("plugins.toml /tmp/plugins.toml"));
+    assert!(plugins.details.contains("--plugin-config"));
+}
+
 #[test]
 fn format_agents_human_lists_supported_and_separates_detected() {
     let agents = vec![

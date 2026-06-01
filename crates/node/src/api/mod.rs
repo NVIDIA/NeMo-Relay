@@ -3202,6 +3202,12 @@ pub fn validate_plugin_config(config: Json) -> napi::Result<Json> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
+/// Layer one raw plugin config document over another.
+#[napi]
+pub fn layer_plugin_config(base: Json, overlay: Json) -> Json {
+    nemo_relay::plugin::layer_plugin_config(base, overlay)
+}
+
 /// Register a plugin backed by JavaScript callbacks.
 ///
 /// `validate` receives `(pluginConfig)` and should return a diagnostics array.

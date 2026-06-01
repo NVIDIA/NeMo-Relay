@@ -12,9 +12,10 @@ startup. The file contains the same generic plugin configuration document used
 by the Rust, Python, and Node.js plugin APIs, but encoded as TOML at the file
 root.
 
-This page documents file discovery, precedence, merge behavior, editor behavior,
-and conflict rules for the CLI gateway. Component-specific fields are documented
-in the guide for each plugin component.
+This page documents file discovery, precedence, code-driven overlays, merge
+behavior, editor behavior, and conflict rules for the CLI gateway.
+Component-specific fields are documented in the guide for each plugin
+component.
 
 <Note>
 NeMo Relay plugin configuration keys use `snake_case` regardless of language or
@@ -70,17 +71,32 @@ The gateway reads only files named `plugins.toml`.
 
 ## Discovery
 
-The gateway can receive plugin configuration from three source classes:
+The gateway can receive plugin configuration from file-backed sources and
+code-driven overlay sources:
 
 | Source | Use case |
 |---|---|
 | `plugins.toml` | Normal operator- and project-managed gateway plugin configuration. |
 | `[plugins].config` in `config.toml` | Inline gateway config for small or generated setups. |
-| `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation. |
+| `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation that should layer over file config. |
+| Runtime or hook-provided plugin config | Code-driven host configuration that should layer over the process config. |
 
-Use only one source class for a given gateway run. The gateway fails clearly if
-file-based plugin config and `--plugin-config` are both present, or if
-`plugins.toml` and `[plugins].config` are both present.
+Use only one file-backed source class for a given gateway run. The gateway
+still fails clearly if `plugins.toml` and `[plugins].config` are both present.
+Code-driven sources such as `--plugin-config` are overlays and can be combined
+with either file-backed source.
+
+The effective source order is:
+
+1. The selected file-backed source:
+   - discovered `plugins.toml` files, merged from system to project to user; or
+   - one inline `[plugins].config` block from `config.toml`.
+2. Code-driven overlays, such as `--plugin-config`.
+
+For transparent `nemo-relay run`, a run-subcommand `--plugin-config` replaces an
+inherited top-level `--plugin-config` before layering over the file-backed
+config. This preserves the existing "run flag wins over top-level flag"
+behavior while still allowing either flag to overlay `plugins.toml`.
 
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
 to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
@@ -157,6 +173,11 @@ When more than one `plugins.toml` file is discovered, later files have higher
 precedence. User config overrides project config, and project config overrides
 system config.
 
+After the file-backed config is resolved, code-driven config uses the same merge
+rules at higher precedence. A code-driven component with the same `kind` layers
+over the file-backed component; a code-driven component with a new `kind` is
+appended to the effective component list.
+
 TOML tables merge recursively:
 
 ```toml
@@ -182,6 +203,29 @@ mode = "overwrite"
 The effective Agent Trajectory Observability Format (ATOF) config keeps
 `enabled` and `output_directory` from the system file and uses
 `mode = "overwrite"` from the user file.
+
+The same rule applies when the higher-precedence layer comes from code:
+
+```toml
+# plugins.toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = false
+
+[components.config.atof]
+enabled = true
+filename = "events.jsonl"
+```
+
+```bash
+nemo-relay run --plugin-config '{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}' -- codex
+```
+
+The effective component keeps `enabled = false`, `atof.enabled = true`, and
+`filename = "events.jsonl"` from the file, and uses `mode = "overwrite"` from
+the code-driven overlay.
 
 The top-level `components` array is special. Components are matched by `kind`
 across files. A higher-precedence component with the same `kind` merges into the
@@ -241,9 +285,11 @@ Common validation failures include:
   Format (ATIF) filename template that does not contain `{session_id}`.
 
 Use `nemo-relay doctor` to inspect the resolved gateway configuration and plugin
-diagnostics. For Observability, doctor also reports enabled exporter sections and
-checks writable file exporter directories or reachable OTLP endpoints when those
-settings are present.
+diagnostics. Doctor reports the effective plugin config source, including
+code-driven overlays, so validation failures identify the winning layer. For
+Observability, doctor also reports enabled exporter sections and checks writable
+file exporter directories or reachable OTLP endpoints when those settings are
+present.
 
 ## Relationship To `config.toml`
 

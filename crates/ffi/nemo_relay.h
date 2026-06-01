@@ -1114,6 +1114,17 @@ NemoRelayStatus nemo_relay_openinference_subscriber_force_flush(const struct Ffi
 NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
 
 /**
+ * Layer one raw plugin config document over another and return the effective JSON document.
+ *
+ * # Safety
+ * `base_json` and `overlay_json` must be valid C strings and `out_json` must be a valid,
+ * non-null pointer.
+ */
+NemoRelayStatus nemo_relay_layer_plugin_config(const char *base_json,
+                                               const char *overlay_json,
+                                               char **out_json);
+
+/**
  * Validate a generic plugin config document and return the diagnostics report as JSON.
  *
  * # Safety

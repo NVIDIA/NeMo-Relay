@@ -126,6 +126,87 @@ impl PluginComponentSpec {
     }
 }
 
+/// Layers one raw plugin configuration document over another.
+///
+/// The plugin document is merged as JSON so callers can preserve omitted fields
+/// before deserializing into [`PluginConfig`]. Objects merge recursively, arrays
+/// and scalar values are replaced by the higher-precedence layer, and the
+/// top-level `components` array is matched by component `kind`.
+pub fn layer_plugin_config(base: Json, overlay: Json) -> Json {
+    let mut merged = base;
+    merge_plugin_config_layer(&mut merged, overlay);
+    merged
+}
+
+fn merge_plugin_config_layer(base: &mut Json, overlay: Json) {
+    match (base, overlay) {
+        (Json::Object(base), Json::Object(overlay)) => {
+            for (key, value) in overlay {
+                match (key.as_str(), base.get_mut(&key)) {
+                    ("components", Some(existing)) => merge_plugin_components(existing, value),
+                    (_, Some(existing)) => merge_json_value(existing, value),
+                    _ => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+fn merge_json_value(base: &mut Json, overlay: Json) {
+    match (base, overlay) {
+        (Json::Object(base), Json::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+// Mirrors the file-time `plugins.toml` merge in
+// `crates/cli/src/config.rs::merge_plugin_components` (over `toml::Value`). Keep
+// the two in sync if the by-`kind` component merge rule changes.
+fn merge_plugin_components(base: &mut Json, overlay: Json) {
+    let Json::Array(base_components) = base else {
+        *base = overlay;
+        return;
+    };
+    let Json::Array(overlay_components) = overlay else {
+        *base = overlay;
+        return;
+    };
+
+    for component in overlay_components {
+        let Some(kind) = json_component_kind(&component).map(str::to_owned) else {
+            base_components.push(component);
+            continue;
+        };
+        if let Some(existing) = base_components
+            .iter_mut()
+            .find(|candidate| json_component_kind(candidate) == Some(kind.as_str()))
+        {
+            merge_json_value(existing, component);
+        } else {
+            base_components.push(component);
+        }
+    }
+}
+
+fn json_component_kind(component: &Json) -> Option<&str> {
+    component
+        .as_object()
+        .and_then(|object| object.get("kind"))
+        .and_then(Json::as_str)
+}
+
 /// Structured validation report.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

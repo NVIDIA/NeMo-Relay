@@ -160,6 +160,19 @@ export declare function ComponentSpec(
   },
 ): ComponentSpec;
 /**
+ * Layer one plugin configuration over another.
+ *
+ * Objects merge recursively, arrays and scalar values are replaced by the
+ * overlay, and top-level components merge by `kind`.
+ *
+ * @param base - Lower-precedence plugin config, usually loaded from files.
+ * @param overlay - Higher-precedence plugin config, usually built in code.
+ * @returns The effective raw plugin config document.
+ * @remarks Passing raw objects preserves omitted fields so they can inherit
+ * from the base config.
+ */
+export declare function layer(base: PluginConfig, overlay: PluginConfig): PluginConfig;
+/**
  * Validate a plugin configuration without activating it.
  *
  * Runs the same config validation pipeline used by initialization while

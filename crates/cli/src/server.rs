@@ -66,7 +66,11 @@ pub(crate) async fn serve_listener(
     config: GatewayConfig,
     shutdown: Option<oneshot::Receiver<()>>,
 ) -> Result<(), CliError> {
-    let plugin_activation = PluginActivation::initialize(config.plugin_config.clone()).await?;
+    let plugin_activation = PluginActivation::initialize(
+        config.plugin_config.clone(),
+        config.plugin_config_source.as_deref(),
+    )
+    .await?;
     let state = AppState::new(config);
     let sessions = state.sessions.clone();
     let app = router_with_state(state);
@@ -150,18 +154,20 @@ struct PluginActivation {
 }
 
 impl PluginActivation {
-    async fn initialize(config: Option<Value>) -> Result<Self, CliError> {
+    async fn initialize(config: Option<Value>, source: Option<&str>) -> Result<Self, CliError> {
         let Some(config) = config else {
             return Ok(Self { active: false });
         };
+        let source = source.unwrap_or("plugin config");
         register_adaptive_component().map_err(|error| {
             CliError::Config(format!("adaptive plugin registration failed: {error}"))
         })?;
-        let plugin_config: PluginConfig = serde_json::from_value(config)
-            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
-        initialize_plugins(plugin_config)
-            .await
-            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        let plugin_config: PluginConfig = serde_json::from_value(config).map_err(|error| {
+            CliError::Config(format!("invalid plugin config from {source}: {error}"))
+        })?;
+        initialize_plugins(plugin_config).await.map_err(|error| {
+            CliError::Config(format!("plugin activation failed for {source}: {error}"))
+        })?;
         Ok(Self { active: true })
     }
 

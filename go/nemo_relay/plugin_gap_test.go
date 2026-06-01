@@ -3,7 +3,10 @@
 
 package nemo_relay
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestPluginConfigSerializationErrorsSurfaceBeforeFFI(t *testing.T) {
 	config := PluginConfig{
@@ -29,5 +32,22 @@ func TestPluginConfigSerializationErrorsSurfaceBeforeFFI(t *testing.T) {
 
 	if _, err := InitializePlugins(config); err == nil {
 		t.Fatal("expected InitializePlugins serialization error")
+	}
+}
+
+func TestLayerPluginConfigRoundTripsMerge(t *testing.T) {
+	// Smoke test only: merge semantics are covered by the core crate. This
+	// verifies the cgo boundary forwards both documents and returns merged JSON.
+	merged, err := LayerPluginConfig(
+		map[string]any{"a": float64(1)},
+		map[string]any{"b": float64(2)},
+	)
+	if err != nil {
+		t.Fatalf("LayerPluginConfig failed: %v", err)
+	}
+
+	expected := map[string]any{"a": float64(1), "b": float64(2)}
+	if !reflect.DeepEqual(merged, expected) {
+		t.Fatalf("merged config mismatch:\n got: %#v\nwant: %#v", merged, expected)
 	}
 }

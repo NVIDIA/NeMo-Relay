@@ -2164,6 +2164,19 @@ pub fn validate_plugin_config(
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Layer one raw plugin config document over another.
+#[wasm_bindgen(js_name = "layerPluginConfig", unchecked_return_type = "Json")]
+pub fn layer_plugin_config(
+    #[wasm_bindgen(unchecked_param_type = "Json")] base: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "Json")] overlay: JsValue,
+) -> Result<JsValue, JsValue> {
+    let base = serde_wasm_bindgen::from_value(base)?;
+    let overlay = serde_wasm_bindgen::from_value(overlay)?;
+    Ok(json_to_js(&nemo_relay::plugin::layer_plugin_config(
+        base, overlay,
+    )))
+}
+
 #[derive(Clone)]
 #[wasm_bindgen(js_name = "PluginContext", skip_typescript)]
 /// Plugin registration context exposed to JavaScript plugins.

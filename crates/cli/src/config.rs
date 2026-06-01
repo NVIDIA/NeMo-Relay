@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use nemo_relay::plugin::layer_plugin_config;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -222,6 +223,7 @@ pub(crate) struct GatewayConfig {
     pub(crate) anthropic_base_url: String,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
+    pub(crate) plugin_config_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -312,8 +314,14 @@ impl GatewayConfig {
     pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
         let metadata =
             header_json(headers, "x-nemo-relay-session-metadata").or_else(|| self.metadata.clone());
-        let plugin_config = header_json(headers, "x-nemo-relay-plugin-config")
-            .or_else(|| self.plugin_config.clone());
+        let plugin_config = match (
+            self.plugin_config.clone(),
+            header_json(headers, "x-nemo-relay-plugin-config"),
+        ) {
+            (Some(base), Some(overlay)) => Some(layer_plugin_config(base, overlay)),
+            (None, Some(overlay)) => Some(overlay),
+            (base, None) => base,
+        };
         let profile = header_string(headers, "x-nemo-relay-config-profile");
         let gateway_mode = header_string(headers, "x-nemo-relay-gateway-mode");
         SessionConfig {
@@ -423,6 +431,7 @@ impl Default for GatewayConfig {
             anthropic_base_url: "https://api.anthropic.com".into(),
             metadata: None,
             plugin_config: None,
+            plugin_config_source: None,
         }
     }
 }
@@ -568,6 +577,9 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
         ..ResolvedConfig::default()
     };
     apply_file_config(&mut resolved, merged)?;
+    if let Some(source) = config_toml_plugin_sources.first() {
+        resolved.gateway.plugin_config_source = Some(config_toml_plugin_source(source));
+    }
     apply_plugin_toml_config(
         &mut resolved.gateway,
         config_toml_plugin_sources.first(),
@@ -781,23 +793,40 @@ fn apply_plugin_toml_config(
     };
     if let Some(config_source) = config_toml_plugin_source {
         return Err(CliError::Config(format!(
-            "plugin config is defined in both {} and {}; choose one source",
+            "plugin config is defined in both {} and {}; choose one file source before applying code-driven layers",
             config_source.display(),
             format_paths(&plugin_toml.sources)
         )));
     }
+    gateway.plugin_config_source = Some(plugin_toml_source(&plugin_toml.sources));
     gateway.plugin_config = Some(plugin_toml.value);
     Ok(())
 }
 
 fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<(), CliError> {
-    if config.plugin_config.is_some() {
-        return Err(CliError::Config(
-            "plugin config is defined by both --plugin-config and file configuration; choose one source".into(),
-        ));
-    }
-    config.plugin_config = Some(parse_json_option("plugin config", value)?);
+    apply_code_plugin_config_layer(
+        config,
+        parse_json_option("plugin config", value)?,
+        "--plugin-config",
+    );
     Ok(())
+}
+
+fn apply_code_plugin_config_layer(config: &mut GatewayConfig, value: Value, source: &str) {
+    match config.plugin_config.take() {
+        Some(base) => {
+            config.plugin_config = Some(layer_plugin_config(base, value));
+            let base_source = config
+                .plugin_config_source
+                .take()
+                .unwrap_or_else(|| "existing plugin config".into());
+            config.plugin_config_source = Some(format!("{base_source} overlaid by {source}"));
+        }
+        None => {
+            config.plugin_config = Some(value);
+            config.plugin_config_source = Some(source.into());
+        }
+    }
 }
 
 // Applies configured agent commands and Cursor's temporary-hook behavior. Cursor's
@@ -879,6 +908,9 @@ fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
+// Mirrors the runtime layering merge in `nemo_relay::plugin`
+// (`merge_plugin_components` over `serde_json::Value`). Keep the two in sync if
+// the by-`kind` component merge rule changes.
 fn merge_plugin_components(left: &mut toml::Value, right: toml::Value) {
     let toml::Value::Array(left_components) = left else {
         *left = right;
@@ -962,6 +994,14 @@ fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {
         sections.push("[export.openinference]");
     }
     sections
+}
+
+fn config_toml_plugin_source(path: &Path) -> String {
+    format!("[plugins].config in {}", path.display())
+}
+
+fn plugin_toml_source(paths: &[PathBuf]) -> String {
+    format!("plugins.toml {}", format_paths(paths))
 }
 
 fn format_paths(paths: &[PathBuf]) -> String {

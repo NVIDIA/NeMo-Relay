@@ -103,6 +103,7 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -1238,6 +1239,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let mut headers = HeaderMap::new();
@@ -1307,6 +1309,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -1385,6 +1388,7 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -1815,6 +1819,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -1890,6 +1895,7 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -1961,6 +1967,7 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
@@ -2016,6 +2023,7 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     let active = manager
@@ -2061,6 +2069,7 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -2117,6 +2126,7 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -2213,6 +2223,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -2327,6 +2338,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -2419,6 +2431,7 @@ async fn no_active_hint_reuses_last_llm_owner() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     manager
@@ -4077,6 +4090,7 @@ fn session_test_config() -> GatewayConfig {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     }
 }
 
@@ -4090,6 +4104,7 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     };
     let manager = SessionManager::new(config);
     manager

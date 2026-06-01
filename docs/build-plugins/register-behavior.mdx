@@ -36,18 +36,34 @@ Use the plugin APIs in this order:
 5. Inspect the activation report.
 6. Clear active config during teardown when needed.
 
+When a host has file-backed plugin config and wants to add code-driven defaults
+or per-run overrides, layer the code-driven config over the file config before
+validation. Layering preserves omitted fields, merges component objects by
+`kind`, and replaces arrays and scalar values from the higher-precedence layer.
+
 <Tabs>
 <Tab title="Python" language="python">
 ```python
 import nemo_relay
 
-config = nemo_relay.plugin.PluginConfig()
-config.components = [
+file_config = {
+    "version": 1,
+    "components": [
+        {
+            "kind": "header-plugin",
+            "enabled": True,
+            "config": {"header_name": "x-tenant"},
+        }
+    ],
+}
+code_config = nemo_relay.plugin.PluginConfig()
+code_config.components = [
     nemo_relay.plugin.ComponentSpec(
         kind="header-plugin",
-        config={"header_name": "x-tenant", "value": "tenant-a"},
+        config={"value": "tenant-a"},
     )
 ]
+config = nemo_relay.plugin.layer(file_config, code_config)
 
 report = nemo_relay.plugin.validate(config)
 active_report = await nemo_relay.plugin.initialize(config)
@@ -61,14 +77,21 @@ nemo_relay.plugin.clear()
 ```ts
 import * as plugin from 'nemo-relay-node/plugin';
 
-const config = plugin.defaultConfig();
-config.components = [
+const fileConfig = {
+  version: 1,
+  components: [
+    plugin.ComponentSpec('header-plugin', { header_name: 'x-tenant' }),
+  ],
+};
+const codeConfig = plugin.defaultConfig();
+codeConfig.components = [
   plugin.ComponentSpec(
     'header-plugin',
-    { header_name: 'x-tenant', value: 'tenant-a' },
+    { value: 'tenant-a' },
     { enabled: true },
   ),
 ];
+const config = plugin.layer(fileConfig, codeConfig);
 
 const report = plugin.validate(config);
 const activeReport = await plugin.initialize(config);
@@ -81,15 +104,28 @@ plugin.clear();
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, list_plugin_kinds, validate_plugin_config,
+    clear_plugin_configuration, initialize_plugins, layer_plugin_config, list_plugin_kinds,
+    validate_plugin_config,
     PluginComponentSpec, PluginConfig,
 };
+use serde_json::json;
 
-let mut config = PluginConfig::default();
+let file_config = json!({
+    "version": 1,
+    "components": [{
+        "kind": "header-plugin",
+        "enabled": true,
+        "config": {
+            "header_name": "x-tenant"
+        }
+    }]
+});
+let mut code_config = PluginConfig::default();
 let mut component = PluginComponentSpec::new("header-plugin");
-component.config.insert("header_name".into(), "x-tenant".into());
 component.config.insert("value".into(), "tenant-a".into());
-config.components.push(component);
+code_config.components.push(component);
+let config_json = layer_plugin_config(file_config, serde_json::to_value(code_config)?);
+let config: PluginConfig = serde_json::from_value(config_json)?;
 
 let report = validate_plugin_config(&config);
 let active_report = initialize_plugins(config).await?;

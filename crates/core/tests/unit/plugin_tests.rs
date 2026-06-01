@@ -529,6 +529,124 @@ fn test_plugin_config_defaults_debug_and_invalid_config_messages() {
 }
 
 #[test]
+fn test_layer_plugin_config_merges_by_kind_and_preserves_omissions() {
+    let base = json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": false,
+                "config": {
+                    "atof": {
+                        "enabled": true,
+                        "headers": ["base"],
+                        "nested": {
+                            "base": true
+                        }
+                    }
+                }
+            },
+            {
+                "kind": "adaptive",
+                "enabled": true,
+                "config": {
+                    "source": "file"
+                }
+            }
+        ],
+        "policy": {
+            "unknown_field": "warn"
+        }
+    });
+    let overlay = json!({
+        "components": [
+            {
+                "kind": "observability",
+                "config": {
+                    "atof": {
+                        "headers": ["code"],
+                        "nested": {
+                            "code": true
+                        }
+                    },
+                    "atif": {
+                        "enabled": true
+                    }
+                }
+            },
+            {
+                "kind": "custom",
+                "config": {
+                    "source": "code"
+                }
+            }
+        ],
+        "policy": {
+            "unknown_field": "error"
+        }
+    });
+
+    let merged = layer_plugin_config(base, overlay);
+
+    assert_eq!(
+        merged,
+        json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": false,
+                    "config": {
+                        "atof": {
+                            "enabled": true,
+                            "headers": ["code"],
+                            "nested": {
+                                "base": true,
+                                "code": true
+                            }
+                        },
+                        "atif": {
+                            "enabled": true
+                        }
+                    }
+                },
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "source": "file"
+                    }
+                },
+                {
+                    "kind": "custom",
+                    "config": {
+                        "source": "code"
+                    }
+                }
+            ],
+            "policy": {
+                "unknown_field": "error"
+            }
+        })
+    );
+}
+
+#[test]
+fn test_layer_plugin_config_replaces_non_object_shapes() {
+    assert_eq!(
+        layer_plugin_config(json!({"components": []}), json!([])),
+        json!([])
+    );
+    assert_eq!(
+        layer_plugin_config(
+            json!({"components": [{"kind": "base"}]}),
+            json!({"components": "not-an-array"})
+        ),
+        json!({"components": "not-an-array"})
+    );
+}
+
+#[test]
 fn test_plugin_helper_defaults_and_policy_diagnostics() {
     let _guard = lock_runtime_owner();
     reset_global();

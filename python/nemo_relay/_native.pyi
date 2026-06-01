@@ -2077,6 +2077,18 @@ def scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
     """
     ...
 
+def layer_plugin_config(base: object, overlay: object) -> _JsonObject:
+    """Layer one raw plugin configuration over another.
+
+    Args:
+        base: Lower-precedence plugin config object or equivalent mapping.
+        overlay: Higher-precedence plugin config object or equivalent mapping.
+
+    Returns:
+        Effective plugin config as a JSON object.
+    """
+    ...
+
 def validate_plugin_config(config: object) -> _JsonObject:
     """Validate a plugin configuration without changing active runtime state.
 

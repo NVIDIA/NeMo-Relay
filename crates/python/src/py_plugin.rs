@@ -29,7 +29,8 @@ use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,
+    initialize_plugins, layer_plugin_config, list_plugin_kinds, register_plugin,
+    validate_plugin_config,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -720,6 +721,18 @@ impl Plugin for PyPlugin {
     }
 }
 
+#[pyfunction(name = "layer_plugin_config")]
+#[pyo3(signature = (base: "object", overlay: "object") -> "object", text_signature = "(base: object, overlay: object) -> object")]
+fn layer_plugin_config_py(
+    py: Python<'_>,
+    base: &Bound<'_, PyAny>,
+    overlay: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let base = py_to_json(base)?;
+    let overlay = py_to_json(overlay)?;
+    json_to_py(py, &layer_plugin_config(base, overlay))
+}
+
 #[pyfunction(name = "validate_plugin_config")]
 #[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
 fn validate_plugin_config_py(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -796,6 +809,7 @@ fn deregister_plugin_py(plugin_kind: &str) -> bool {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginContext>()?;
+    m.add_function(wrap_pyfunction!(layer_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(validate_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;

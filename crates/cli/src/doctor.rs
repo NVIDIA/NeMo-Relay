@@ -577,10 +577,14 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         checks.push(Check {
             name: "Plugins",
             status: Status::Info,
-            details: "plugins.toml not configured".into(),
+            details: "plugin config not configured".into(),
         });
         return checks;
     };
+    let source = gateway
+        .plugin_config_source
+        .as_deref()
+        .unwrap_or("plugin config");
 
     let plugin_config = match serde_json::from_value::<PluginConfig>(plugin_value.clone()) {
         Ok(config) => config,
@@ -588,7 +592,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             checks.push(Check {
                 name: "Plugins",
                 status: Status::Fail,
-                details: format!("invalid plugin config: {err}"),
+                details: format!("invalid plugin config from {source}: {err}"),
             });
             return checks;
         }
@@ -606,7 +610,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         checks.push(Check {
             name: "Plugins",
             status: Status::Pass,
-            details: "validation passed".into(),
+            details: format!("validation passed from {source}"),
         });
     } else {
         for diagnostic in report.diagnostics {
@@ -617,7 +621,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
                 } else {
                     Status::Warn
                 },
-                details: format!("{}: {}", diagnostic.code, diagnostic.message),
+                details: format!("{source}: {}: {}", diagnostic.code, diagnostic.message),
             });
         }
     }

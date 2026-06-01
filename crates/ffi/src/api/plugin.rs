@@ -9,13 +9,13 @@ use super::{
     NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
     PluginConfig, PluginError, PluginRegistrationContext, active_plugin_report, c_char,
     c_str_to_json, c_str_to_string, clear_last_error, clear_plugin_configuration,
-    deregister_plugin, initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
-    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
-    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_subscriber,
-    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
-    wrap_tool_sanitize_fn,
+    deregister_plugin, initialize_plugins, json_to_c_string, last_error_message,
+    layer_plugin_config, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
+    register_plugin, set_last_error, status_from_plugin_error, tokio_runtime,
+    validate_plugin_config, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
+    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 
 struct FfiHostedPluginUserData {
@@ -124,6 +124,34 @@ impl Plugin for FfiHostedPluginAdapter {
 
 fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoRelayStatus> {
     register_adaptive_component().map_err(|err| status_from_plugin_error(&err))
+}
+
+/// Layer one raw plugin config document over another and return the effective JSON document.
+///
+/// # Safety
+/// `base_json` and `overlay_json` must be valid C strings and `out_json` must be a valid,
+/// non-null pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_layer_plugin_config(
+    base_json: *const c_char,
+    overlay_json: *const c_char,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out_json.is_null() {
+        set_last_error("out_json pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let base = match c_str_to_json(base_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let overlay = match c_str_to_json(overlay_json) {
+        Some(value) => value,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    unsafe { *out_json = json_to_c_string(&layer_plugin_config(base, overlay)) };
+    NemoRelayStatus::Ok
 }
 
 /// Validate a generic plugin config document and return the diagnostics report as JSON.

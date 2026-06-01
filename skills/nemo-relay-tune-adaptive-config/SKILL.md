@@ -26,6 +26,9 @@ request-specific middleware, or production trace debugging.
 - Wrap the adaptive object in an adaptive `ComponentSpec`, insert it into the
   shared plugin config `components` list, validate the plugin config, then
   initialize the plugin system.
+- If adaptive settings are code-driven overlays on top of `plugins.toml` or
+  inline `[plugins].config`, use the plugin config layering helper before
+  validation so omitted fields inherit correctly.
 - Python uses `nemo_relay.adaptive.AdaptiveConfig(...)`,
   `nemo_relay.adaptive.ComponentSpec(...)`, and
   `nemo_relay.plugin.PluginConfig(...)`.

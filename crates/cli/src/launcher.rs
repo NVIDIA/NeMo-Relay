@@ -538,6 +538,9 @@ impl PreparedRun {
                 ));
             }
         }
+        if let Some(source) = &resolved.gateway.plugin_config_source {
+            lines.push(format!("  Plugins        {source}"));
+        }
         if !self.notes.is_empty() {
             lines.push(String::new());
             for note in &self.notes {
@@ -591,6 +594,9 @@ impl PreparedRun {
         }
         if let Some(cursor) = &self.cursor_restore {
             println!("cursor_hooks = {}", cursor.path.display());
+        }
+        if let Some(source) = &resolved.gateway.plugin_config_source {
+            println!("plugin_config_source = {source}");
         }
         for note in &self.notes {
             println!("note = {note}");

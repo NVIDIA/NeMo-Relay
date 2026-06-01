@@ -13,6 +13,7 @@ fn config() -> GatewayConfig {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     }
 }
 
@@ -61,6 +62,51 @@ fn session_config_uses_defaults_and_ignores_bad_json() {
 
     assert_eq!(session.metadata, None);
     assert_eq!(header_string(&headers, "x-empty"), None);
+}
+
+#[test]
+fn session_config_layers_header_plugin_config_over_gateway_config() {
+    let mut gateway = config();
+    gateway.plugin_config = Some(json!({
+        "version": 1,
+        "components": [{
+            "kind": "observability",
+            "enabled": false,
+            "config": {
+                "atof": {
+                    "enabled": true,
+                    "filename": "gateway.jsonl"
+                }
+            }
+        }]
+    }));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-nemo-relay-plugin-config",
+        HeaderValue::from_static(
+            r#"{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}"#,
+        ),
+    );
+
+    let session = gateway.session_config_from_headers(&headers);
+
+    assert_eq!(
+        session.plugin_config,
+        Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": false,
+                "config": {
+                    "atof": {
+                        "enabled": true,
+                        "filename": "gateway.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }]
+        }))
+    );
 }
 
 #[test]
@@ -261,6 +307,9 @@ mode = "overwrite"
             ]
         }))
     );
+    let source = resolved.gateway.plugin_config_source.as_deref().unwrap();
+    assert!(source.contains("plugins.toml"));
+    assert!(source.contains(&temp.path().join("plugins.toml").display().to_string()));
 }
 
 #[test]
@@ -522,27 +571,118 @@ config = { version = 1, components = [] }
 }
 
 #[test]
-fn cli_plugin_config_conflicts_with_file_plugin_config() {
+fn cli_plugin_config_layers_over_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "").unwrap();
-    std::fs::write(temp.path().join("plugins.toml"), "version = 1\n").unwrap();
+    std::fs::write(
+        temp.path().join("plugins.toml"),
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = false
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+filename = "file.jsonl"
+"#,
+    )
+    .unwrap();
     let command = RunCommand {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
+        plugin_config: Some(
+            r#"{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}"#
+                .into(),
+        ),
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
     };
 
-    let error = resolve_run_config(&command, None).unwrap_err().to_string();
+    let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert!(error.contains("--plugin-config"));
-    assert!(error.contains("file configuration"));
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": false,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "filename": "file.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }]
+        }))
+    );
+    let source = resolved.gateway.plugin_config_source.as_deref().unwrap();
+    assert!(source.contains("plugins.toml"));
+    assert!(source.contains("overlaid by --plugin-config"));
+}
+
+#[test]
+fn cli_plugin_config_layers_over_inline_config_toml_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[plugins]
+config = { version = 1, components = [{ kind = "observability", enabled = false, config = { atof = { enabled = true, filename = "inline.jsonl" } } }] }
+"#,
+    )
+    .unwrap();
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: Some(config_path.clone()),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config: Some(
+            r#"{"components":[{"kind":"observability","config":{"atof":{"mode":"append"}}}]}"#
+                .into(),
+        ),
+        dry_run: false,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let resolved = resolve_run_config(&command, None).unwrap();
+
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": false,
+                "config": {
+                    "atof": {
+                        "enabled": true,
+                        "filename": "inline.jsonl",
+                        "mode": "append"
+                    }
+                }
+            }]
+        }))
+    );
+    let source = resolved.gateway.plugin_config_source.as_deref().unwrap();
+    assert!(source.contains("[plugins].config"));
+    assert!(source.contains(&config_path.display().to_string()));
+    assert!(source.contains("overlaid by --plugin-config"));
 }
 
 #[test]

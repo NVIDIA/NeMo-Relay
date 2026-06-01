@@ -6,6 +6,23 @@
 use super::*;
 
 #[test]
+fn test_ffi_layer_plugin_config_round_trips_merge() {
+    // Smoke test only: merge semantics are covered by the core crate. This
+    // verifies the FFI boundary forwards both documents and returns merged JSON.
+    let base = cstring(&json!({ "a": 1 }).to_string());
+    let overlay = cstring(&json!({ "b": 2 }).to_string());
+
+    unsafe {
+        let mut out_json = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_layer_plugin_config(base.as_ptr(), overlay.as_ptr(), &mut out_json),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out_json), json!({ "a": 1, "b": 2 }));
+    }
+}
+
+#[test]
 fn test_ffi_plugin_registration_validation_and_cleanup() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();

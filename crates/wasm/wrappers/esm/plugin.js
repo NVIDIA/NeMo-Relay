@@ -3,6 +3,7 @@
 
 import {
   validatePluginConfig,
+  layerPluginConfig,
   registerPlugin,
   deregisterPlugin,
   initializePlugins,
@@ -48,6 +49,22 @@ export function ComponentSpec(kind, config = {}, { enabled = true } = {}) {
     enabled,
     config,
   };
+}
+
+/**
+ * Layer one plugin configuration over another.
+ *
+ * Objects merge recursively, arrays and scalar values are replaced by the
+ * overlay, and top-level components merge by `kind`.
+ *
+ * @param {object} base - Lower-precedence plugin config, usually loaded from files.
+ * @param {object} overlay - Higher-precedence plugin config, usually built in code.
+ * @returns {object} The effective raw plugin config document.
+ * @remarks Passing raw objects preserves omitted fields so they can inherit
+ * from the base config.
+ */
+export function layer(base, overlay) {
+  return layerPluginConfig(base, overlay);
 }
 
 /**

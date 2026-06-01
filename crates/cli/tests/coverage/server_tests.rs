@@ -102,6 +102,7 @@ fn test_config() -> GatewayConfig {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        plugin_config_source: None,
     }
 }
 
@@ -435,6 +436,8 @@ async fn serve_listener_rejects_invalid_plugin_config() {
             }
         ]
     }));
+    config.plugin_config_source =
+        Some("plugins.toml /tmp/plugins.toml overlaid by --plugin-config".into());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (_shutdown_tx, shutdown_rx) = oneshot::channel();
     let error = serve_listener(listener, config, Some(shutdown_rx))
@@ -442,6 +445,8 @@ async fn serve_listener_rejects_invalid_plugin_config() {
         .unwrap_err();
 
     assert!(error.to_string().contains("ATOF mode"));
+    assert!(error.to_string().contains("plugins.toml /tmp/plugins.toml"));
+    assert!(error.to_string().contains("--plugin-config"));
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
