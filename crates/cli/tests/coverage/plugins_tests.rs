@@ -7,7 +7,7 @@ use nemo_relay::config_editor::{EditorConfig, EditorSchema};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay::plugins::nemo_guardrails::component::{
-    NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig, RemoteBackendConfig,
+    LocalBackendConfig, NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig, RemoteBackendConfig,
 };
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
@@ -43,6 +43,40 @@ fn guardrails_component_config(config_id: &str) -> serde_json::Map<String, Value
         "remote": {
             "endpoint": "http://localhost:8000",
             "config_id": config_id
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+fn local_guardrails_component_config(config_path: &str) -> serde_json::Map<String, Value> {
+    json!({
+        "mode": "local",
+        "input": false,
+        "output": false,
+        "config_path": config_path,
+        "tool_input": true,
+        "tool_output": true,
+        "local": {
+            "python_module": "custom_guardrails"
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+fn local_llm_guardrails_component_config(config_yaml: &str) -> serde_json::Map<String, Value> {
+    json!({
+        "mode": "local",
+        "codec": "openai_chat",
+        "input": true,
+        "output": true,
+        "config_yaml": config_yaml,
+        "colang_content": "define flow noop\n  pass",
+        "local": {
+            "python_module": "custom_guardrails"
         }
     })
     .as_object()
@@ -158,6 +192,24 @@ fn typed_editor_model_contains_nemo_guardrails_options() {
     assert_eq!(
         remote.field("headers").unwrap().kind,
         EditorFieldKind::StringMap
+    );
+
+    let local = schema.field("local").unwrap().schema().unwrap();
+    assert_eq!(
+        local.field("python_module").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        schema.field("config_path").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        schema.field("config_yaml").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        schema.field("colang_content").unwrap().kind,
+        EditorFieldKind::String
     );
 
     let request_defaults = schema.field("request_defaults").unwrap().schema().unwrap();
@@ -1138,6 +1190,98 @@ fn validate_config_accepts_nemo_guardrails_component() {
 }
 
 #[test]
+fn validate_config_accepts_local_tool_only_nemo_guardrails_component() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: local_guardrails_component_config("./rails"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
+fn validate_config_rejects_local_nemo_guardrails_request_defaults() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "mode": "local",
+                "codec": "openai_chat",
+                "input": true,
+                "output": true,
+                "config_yaml": "models: []",
+                "request_defaults": {
+                    "context": {"tenant": "demo"}
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("request_defaults"), "error was: {error}");
+    assert!(error.contains("local mode"), "error was: {error}");
+}
+
+#[test]
+fn validate_config_rejects_local_nemo_guardrails_multiple_config_sources() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "mode": "local",
+                "config_path": "./rails",
+                "config_yaml": "models: []"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(
+        error.contains("exactly one of config_path or config_yaml"),
+        "error was: {error}"
+    );
+}
+
+#[test]
+fn validate_config_rejects_local_nemo_guardrails_colang_without_yaml() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "mode": "local",
+                "config_path": "./rails",
+                "colang_content": "define flow noop\n  pass"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(
+        error.contains("colang_content can only be used with config_yaml"),
+        "error was: {error}"
+    );
+}
+
+#[test]
 fn nemo_guardrails_config_map_prunes_default_version() {
     let map = nemo_guardrails_config_map(&NeMoGuardrailsConfig {
         codec: Some("openai_chat".into()),
@@ -1153,6 +1297,103 @@ fn nemo_guardrails_config_map_prunes_default_version() {
     assert!(!map.contains_key("version"));
     assert_eq!(map.get("codec"), Some(&json!("openai_chat")));
     assert_eq!(map["remote"]["config_id"], json!("default"));
+}
+
+#[test]
+fn write_plugin_config_round_trips_local_nemo_guardrails_component() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: local_guardrails_component_config("./rails"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    write_plugin_config(&path, &config).unwrap();
+
+    let rendered = std::fs::read_to_string(&path).unwrap();
+    assert!(rendered.contains("mode = \"local\""));
+    assert!(rendered.contains("config_path = \"./rails\""));
+    assert!(rendered.contains("tool_input = true"));
+    assert!(rendered.contains("python_module = \"custom_guardrails\""));
+
+    let round_tripped = read_plugin_config(&path).unwrap();
+    let guardrails = round_tripped
+        .components
+        .iter()
+        .find(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+        .unwrap();
+    assert!(guardrails.enabled);
+    assert_eq!(guardrails.config["mode"], json!("local"));
+    assert_eq!(guardrails.config["config_path"], json!("./rails"));
+    assert_eq!(guardrails.config["tool_input"], json!(true));
+    assert_eq!(
+        guardrails.config["local"]["python_module"],
+        json!("custom_guardrails")
+    );
+}
+
+#[test]
+fn nemo_guardrails_config_map_serializes_local_mode_fields() {
+    let map = nemo_guardrails_config_map(&NeMoGuardrailsConfig {
+        mode: "local".into(),
+        config_path: Some("./rails".into()),
+        tool_input: true,
+        tool_output: true,
+        local: Some(LocalBackendConfig {
+            python_module: Some("custom_guardrails".into()),
+        }),
+        ..NeMoGuardrailsConfig::default()
+    })
+    .unwrap();
+
+    assert!(!map.contains_key("version"));
+    assert_eq!(map.get("mode"), Some(&json!("local")));
+    assert_eq!(map.get("config_path"), Some(&json!("./rails")));
+    assert_eq!(map.get("tool_input"), Some(&json!(true)));
+    assert_eq!(map["local"]["python_module"], json!("custom_guardrails"));
+}
+
+#[test]
+fn write_plugin_config_round_trips_local_llm_nemo_guardrails_component() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: local_llm_guardrails_component_config("models: []"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    write_plugin_config(&path, &config).unwrap();
+
+    let rendered = std::fs::read_to_string(&path).unwrap();
+    assert!(rendered.contains("mode = \"local\""));
+    assert!(rendered.contains("codec = \"openai_chat\""));
+    assert!(rendered.contains("input = true"));
+    assert!(rendered.contains("output = true"));
+    assert!(rendered.contains("config_yaml = \"models: []\""));
+
+    let round_tripped = read_plugin_config(&path).unwrap();
+    let guardrails = round_tripped
+        .components
+        .iter()
+        .find(|component| component.kind == NEMO_GUARDRAILS_PLUGIN_KIND)
+        .unwrap();
+    assert_eq!(guardrails.config["mode"], json!("local"));
+    assert_eq!(guardrails.config["codec"], json!("openai_chat"));
+    assert_eq!(guardrails.config["input"], json!(true));
+    assert_eq!(guardrails.config["output"], json!(true));
+    assert_eq!(guardrails.config["config_yaml"], json!("models: []"));
+    assert_eq!(
+        guardrails.config["colang_content"],
+        json!("define flow noop\n  pass")
+    );
 }
 
 #[test]
