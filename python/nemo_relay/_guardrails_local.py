@@ -9,7 +9,7 @@ import asyncio
 import importlib
 import json
 from collections.abc import Callable
-from typing import Any, Protocol, cast
+from typing import Any, NamedTuple, Protocol, cast
 
 from nemo_relay import Json, LLMRequest
 from nemo_relay.codecs import (
@@ -49,6 +49,15 @@ class _GuardrailsCodec(LlmCodec, LlmResponseCodec, Protocol):
     """Codec shape required by the local backend."""
 
 
+class _GuardrailsRuntimeImports(NamedTuple):
+    """Resolved Python symbols required by the local Guardrails backend."""
+
+    rails_config_cls: Any
+    llm_rails_cls: Any
+    rail_type: Any
+    rail_status: Any
+
+
 _CODECS: dict[str, Callable[[], _GuardrailsCodec]] = {
     "openai_chat": OpenAIChatCodec,
     "openai_responses": OpenAIResponsesCodec,
@@ -56,7 +65,7 @@ _CODECS: dict[str, Callable[[], _GuardrailsCodec]] = {
 }
 
 
-def _load_nemoguardrails(module_name: str | None):
+def _load_nemoguardrails(module_name: str | None) -> _GuardrailsRuntimeImports:
     root_module = module_name or "nemoguardrails"
     try:
         guardrails = cast(Any, importlib.import_module(root_module))
@@ -72,11 +81,11 @@ def _load_nemoguardrails(module_name: str | None):
             f"{error.name or error}. Install the full NeMo Guardrails runtime dependencies."
         ) from error
 
-    return (
-        guardrails.RailsConfig,
-        guardrails.LLMRails,
-        options.RailType,
-        options.RailStatus,
+    return _GuardrailsRuntimeImports(
+        rails_config_cls=guardrails.RailsConfig,
+        llm_rails_cls=guardrails.LLMRails,
+        rail_type=options.RailType,
+        rail_status=options.RailStatus,
     )
 
 
@@ -543,9 +552,9 @@ def register_local_backend(config: dict[str, Any], context: PluginContext) -> No
 
     local = cast(dict[str, Any], config.get("local") or {})
     module_name = cast(str | None, local.get("python_module"))
-    RailsConfig, LLMRails, RailType, RailStatus = _load_nemoguardrails(module_name)
-    guardrails_config = _build_guardrails_config(config, RailsConfig)
-    rails = LLMRails(guardrails_config)
+    runtime_imports = _load_nemoguardrails(module_name)
+    guardrails_config = _build_guardrails_config(config, runtime_imports.rails_config_cls)
+    rails = runtime_imports.llm_rails_cls(guardrails_config)
     enable_input = bool(config.get("input", True))
     enable_output = bool(config.get("output", True))
     enable_tool_input = bool(config.get("tool_input", False))
@@ -556,16 +565,16 @@ def register_local_backend(config: dict[str, Any], context: PluginContext) -> No
         codec_name, codec = _resolve_codec(config)
         intercept = _make_llm_intercept(
             rails=rails,
-            rail_type=RailType,
-            rail_status=RailStatus,
+            rail_type=runtime_imports.rail_type,
+            rail_status=runtime_imports.rail_status,
             codec=codec,
             enable_input=enable_input,
             enable_output=enable_output,
         )
         stream_intercept = _make_llm_stream_intercept(
             rails=rails,
-            rail_type=RailType,
-            rail_status=RailStatus,
+            rail_type=runtime_imports.rail_type,
+            rail_status=runtime_imports.rail_status,
             codec_name=codec_name,
             codec=codec,
             enable_input=enable_input,
@@ -581,8 +590,8 @@ def register_local_backend(config: dict[str, Any], context: PluginContext) -> No
     if enable_tool_input or enable_tool_output:
         tool_intercept = _make_tool_intercept(
             rails=rails,
-            rail_type=RailType,
-            rail_status=RailStatus,
+            rail_type=runtime_imports.rail_type,
+            rail_status=runtime_imports.rail_status,
             enable_tool_input=enable_tool_input,
             enable_tool_output=enable_tool_output,
         )
