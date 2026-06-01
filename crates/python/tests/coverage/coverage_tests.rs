@@ -4,13 +4,13 @@
 //! Coverage tests for coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use pyo3::ffi::c_str;
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyModule};
+use pyo3::types::{PyDict, PyModule};
 use serde_json::{Value as Json, json};
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
@@ -113,6 +113,59 @@ class Context:
     def register_tool_execution_intercept(self, name, priority, callback):
         self.tool = callback
 "#
+}
+
+fn with_isolated_nemo_relay_modules<T>(
+    py: Python<'_>,
+    native_module: &Bound<'_, PyModule>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let sys = py.import("sys").unwrap();
+    let modules = sys
+        .getattr("modules")
+        .unwrap()
+        .cast_into::<PyDict>()
+        .unwrap();
+    let saved_modules = modules
+        .iter()
+        .filter_map(|(name, module)| {
+            let name = name.extract::<String>().ok()?;
+            if name == "nemo_relay" || name.starts_with("nemo_relay.") {
+                Some((name, module.unbind()))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    clear_nemo_relay_modules(&modules);
+    modules
+        .set_item("nemo_relay._native", native_module.clone())
+        .unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(f));
+
+    clear_nemo_relay_modules(&modules);
+    for (name, module) in saved_modules {
+        modules.set_item(name, module).unwrap();
+    }
+
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn clear_nemo_relay_modules(modules: &Bound<'_, PyDict>) {
+    let module_names = modules
+        .iter()
+        .filter_map(|(name, _)| name.extract::<String>().ok())
+        .filter(|name| name == "nemo_relay" || name.starts_with("nemo_relay."))
+        .collect::<Vec<_>>();
+
+    for name in module_names {
+        modules.del_item(name).unwrap();
+    }
 }
 
 fn make_request() -> LlmRequest {
@@ -229,23 +282,19 @@ fn test_guardrails_local_helper_registers_and_enforces_llm_and_tool_checks() {
     Python::attach(|py| {
         let native_module = PyModule::new(py, "_native_guardrails_helper").unwrap();
         crate::_native(&native_module).unwrap();
-        let sys = py.import("sys").unwrap();
-        let modules = sys.getattr("modules").unwrap();
-        modules
-            .set_item("nemo_relay._native", native_module.clone())
-            .unwrap();
 
-        let python_dir = python_package_dir();
-        let prelude = fake_guardrails_module_prelude(
-            "fake_guardrails_local_helper",
-            &python_dir.display().to_string(),
-        );
-        let epilogue = register_fake_guardrails_module_epilogue();
-        let context_class = local_plugin_context_python();
-        let module = load_module(
-            py,
-            &format!(
-                r#"
+        with_isolated_nemo_relay_modules(py, &native_module, || {
+            let python_dir = python_package_dir();
+            let prelude = fake_guardrails_module_prelude(
+                "fake_guardrails_local_helper",
+                &python_dir.display().to_string(),
+            );
+            let epilogue = register_fake_guardrails_module_epilogue();
+            let context_class = local_plugin_context_python();
+            let module = load_module(
+                py,
+                &format!(
+                    r#"
 {prelude}
 
 check_results = []
@@ -329,34 +378,61 @@ async def run_case():
         "check_calls": check_calls,
     }}
 "#,
-                prelude = prelude,
-                epilogue = epilogue,
-                context_class = context_class,
-            ),
-        );
+                    prelude = prelude,
+                    epilogue = epilogue,
+                    context_class = context_class,
+                ),
+            );
 
-        let result_json = with_event_loop(py, |event_loop| {
-            let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
-            let result = event_loop
-                .call_method1("run_until_complete", (coroutine,))
-                .unwrap();
-            crate::convert::py_to_json(&result).unwrap()
+            let result_json = with_event_loop(py, |event_loop| {
+                let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+                let result = event_loop
+                    .call_method1("run_until_complete", (coroutine,))
+                    .unwrap();
+                crate::convert::py_to_json(&result).unwrap()
+            });
+
+            assert_eq!(
+                result_json["seen_request_messages"][0],
+                json!("sanitized user")
+            );
+            assert_eq!(result_json["tool_result"], json!({ "ok": true }));
+            assert_eq!(
+                result_json["seen_tool_args"][0],
+                json!({ "city": "Boston" })
+            );
+            assert_eq!(
+                result_json["llm_result"]["choices"][0]["message"]["content"],
+                json!("safe reply")
+            );
+            assert_eq!(
+                result_json["check_calls"],
+                json!([
+                    [
+                        [{"role": "user", "content": "unsafe"}],
+                        ["input"]
+                    ],
+                    [
+                        [
+                            {"role": "user", "content": "sanitized user"},
+                            {"role": "assistant", "content": "safe reply"}
+                        ],
+                        ["output"]
+                    ],
+                    [
+                        [{"role": "user", "content": "{\"arguments\":{\"city\":\"Phoenix\"},\"tool_name\":\"weather_lookup\"}"}],
+                        ["input"]
+                    ],
+                    [
+                        [
+                            {"role": "user", "content": "{\"arguments\":{\"city\":\"Boston\"},\"tool_name\":\"weather_lookup\"}"},
+                            {"role": "assistant", "content": "{\"arguments\":{\"city\":\"Boston\"},\"result\":{\"raw\":true},\"tool_name\":\"weather_lookup\"}"}
+                        ],
+                        ["output"]
+                    ]
+                ])
+            );
         });
-
-        assert_eq!(
-            result_json["seen_request_messages"][0],
-            json!("sanitized user")
-        );
-        assert_eq!(result_json["tool_result"], json!({ "ok": true }));
-        assert_eq!(
-            result_json["seen_tool_args"][0],
-            json!({ "city": "Boston" })
-        );
-        assert_eq!(
-            result_json["llm_result"]["choices"][0]["message"]["content"],
-            json!("safe reply")
-        );
-        assert_eq!(result_json["check_calls"].as_array().unwrap().len(), 4);
     });
 }
 
@@ -366,23 +442,19 @@ fn test_guardrails_local_helper_enforces_streamed_output_rails() {
     Python::attach(|py| {
         let native_module = PyModule::new(py, "_native_guardrails_streaming").unwrap();
         crate::_native(&native_module).unwrap();
-        let sys = py.import("sys").unwrap();
-        let modules = sys.getattr("modules").unwrap();
-        modules
-            .set_item("nemo_relay._native", native_module.clone())
-            .unwrap();
 
-        let python_dir = python_package_dir();
-        let prelude = fake_guardrails_module_prelude(
-            "fake_guardrails_streaming",
-            &python_dir.display().to_string(),
-        );
-        let epilogue = register_fake_guardrails_module_epilogue();
-        let context_class = local_plugin_context_python();
-        let module = load_module(
-            py,
-            &format!(
-                r#"
+        with_isolated_nemo_relay_modules(py, &native_module, || {
+            let python_dir = python_package_dir();
+            let prelude = fake_guardrails_module_prelude(
+                "fake_guardrails_streaming",
+                &python_dir.display().to_string(),
+            );
+            let epilogue = register_fake_guardrails_module_epilogue();
+            let context_class = local_plugin_context_python();
+            let module = load_module(
+                py,
+                &format!(
+                    r#"
 {prelude}
 
 stream_results = []
@@ -508,52 +580,53 @@ async def run_case():
         "modified": modified,
     }}
 "#,
-                prelude = prelude,
-                epilogue = epilogue,
-                context_class = context_class,
-            ),
-        );
+                    prelude = prelude,
+                    epilogue = epilogue,
+                    context_class = context_class,
+                ),
+            );
 
-        let result = with_event_loop(py, |event_loop| {
-            let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
-            let result = event_loop
-                .call_method1("run_until_complete", (coroutine,))
-                .unwrap();
-            crate::convert::py_to_json(&result).unwrap()
+            let result = with_event_loop(py, |event_loop| {
+                let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+                let result = event_loop
+                    .call_method1("run_until_complete", (coroutine,))
+                    .unwrap();
+                crate::convert::py_to_json(&result).unwrap()
+            });
+            assert_eq!(
+                result["allowed_chunks"],
+                json!([
+                    {"choices": [{"delta": {"content": "hello"}}]},
+                    {"choices": [{"delta": {"content": "world"}}]}
+                ])
+            );
+            let event_log = result["event_log"].as_array().unwrap();
+            assert_eq!(
+                &event_log[..6],
+                json!([
+                    "source:hello",
+                    "yield:hello",
+                    "source:world",
+                    "yield:world",
+                    "guardrails-sees:hello",
+                    "guardrails-sees:world",
+                ])
+                .as_array()
+                .unwrap()
+            );
+            assert!(
+                result["blocked"]
+                    .as_str()
+                    .unwrap()
+                    .contains("output rail blocked the LLM call")
+            );
+            assert!(
+                result["modified"]
+                    .as_str()
+                    .unwrap()
+                    .contains("stream_first = true")
+            );
         });
-        assert_eq!(
-            result["allowed_chunks"],
-            json!([
-                {"choices": [{"delta": {"content": "hello"}}]},
-                {"choices": [{"delta": {"content": "world"}}]}
-            ])
-        );
-        let event_log = result["event_log"].as_array().unwrap();
-        assert_eq!(
-            &event_log[..6],
-            json!([
-                "source:hello",
-                "yield:hello",
-                "source:world",
-                "yield:world",
-                "guardrails-sees:hello",
-                "guardrails-sees:world",
-            ])
-            .as_array()
-            .unwrap()
-        );
-        assert!(
-            result["blocked"]
-                .as_str()
-                .unwrap()
-                .contains("output rail blocked the LLM call")
-        );
-        assert!(
-            result["modified"]
-                .as_str()
-                .unwrap()
-                .contains("stream_first = true")
-        );
     });
 }
 
@@ -565,36 +638,18 @@ fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() 
     Python::attach(|py| {
         let native_module = PyModule::new(py, "_native_guardrails_e2e").unwrap();
         crate::_native(&native_module).unwrap();
-        let sys = py.import("sys").unwrap();
-        let modules = sys.getattr("modules").unwrap();
-        let module_names = py
-            .eval(
-                c_str!("list(sys.modules.keys())"),
-                None,
-                Some(&[(c_str!("sys"), sys)].into_py_dict(py).unwrap()),
-            )
-            .unwrap()
-            .extract::<Vec<String>>()
-            .unwrap();
-        for name in module_names {
-            if name == "nemo_relay" || name.starts_with("nemo_relay.") {
-                modules.del_item(name).unwrap();
-            }
-        }
-        modules
-            .set_item("nemo_relay._native", native_module.clone())
-            .unwrap();
 
-        let python_dir = python_package_dir();
-        let prelude = fake_guardrails_module_prelude(
-            "fake_guardrails_local_e2e",
-            &python_dir.display().to_string(),
-        );
-        let epilogue = register_fake_guardrails_module_epilogue();
-        let module = load_module(
-            py,
-            &format!(
-                r#"
+        with_isolated_nemo_relay_modules(py, &native_module, || {
+            let python_dir = python_package_dir();
+            let prelude = fake_guardrails_module_prelude(
+                "fake_guardrails_local_e2e",
+                &python_dir.display().to_string(),
+            );
+            let epilogue = register_fake_guardrails_module_epilogue();
+            let module = load_module(
+                py,
+                &format!(
+                    r#"
 {prelude}
 
 check_results = []
@@ -682,31 +737,32 @@ async def run_case():
         "seen_tool_args": seen_tool_args,
     }}
 "#,
-                prelude = prelude,
-                epilogue = epilogue,
-            ),
-        );
-        let result_json = with_event_loop(py, |event_loop| {
-            let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
-            let result = event_loop
-                .call_method1("run_until_complete", (coroutine,))
-                .unwrap();
-            crate::convert::py_to_json(&result).unwrap()
-        });
+                    prelude = prelude,
+                    epilogue = epilogue,
+                ),
+            );
+            let result_json = with_event_loop(py, |event_loop| {
+                let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+                let result = event_loop
+                    .call_method1("run_until_complete", (coroutine,))
+                    .unwrap();
+                crate::convert::py_to_json(&result).unwrap()
+            });
 
-        assert_eq!(
-            result_json["llm_result"]["choices"][0]["message"]["content"],
-            json!("safe reply")
-        );
-        assert_eq!(result_json["tool_result"], json!({ "ok": true }));
-        assert_eq!(
-            result_json["seen_request_messages"][0],
-            json!("sanitized user")
-        );
-        assert_eq!(
-            result_json["seen_tool_args"][0],
-            json!({ "city": "Boston" })
-        );
+            assert_eq!(
+                result_json["llm_result"]["choices"][0]["message"]["content"],
+                json!("safe reply")
+            );
+            assert_eq!(result_json["tool_result"], json!({ "ok": true }));
+            assert_eq!(
+                result_json["seen_request_messages"][0],
+                json!("sanitized user")
+            );
+            assert_eq!(
+                result_json["seen_tool_args"][0],
+                json!({ "city": "Boston" })
+            );
+        });
     });
 
     reset_runtime_state();

@@ -462,21 +462,21 @@ def _make_llm_stream_intercept(
             )
 
         text_queue: asyncio.Queue[str | None] = asyncio.Queue()
-        blocked: dict[str, str | None] = {"message": None}
-        monitor = asyncio.create_task(
-            _monitor_streaming_output_rails(
-                rails=rails,
-                messages=messages,
-                text_queue=text_queue,
-                blocked=blocked,
-            )
-        )
+        block_state: dict[str, str | None] = {"message": None}
 
         async def guarded_provider_stream():
+            monitor = asyncio.create_task(
+                _monitor_streaming_output_rails(
+                    rails=rails,
+                    messages=messages,
+                    text_queue=text_queue,
+                    blocked=block_state,
+                )
+            )
             try:
                 async for chunk in stream:
-                    if blocked["message"] is not None:
-                        _raise_streaming_output_blocked(blocked["message"])
+                    if block_state["message"] is not None:
+                        _raise_streaming_output_blocked(block_state["message"])
 
                     text = _extract_stream_text(codec_name, chunk)
                     if text is not None:
@@ -484,13 +484,13 @@ def _make_llm_stream_intercept(
 
                     yield chunk
 
-                    if blocked["message"] is not None:
-                        _raise_streaming_output_blocked(blocked["message"])
+                    if block_state["message"] is not None:
+                        _raise_streaming_output_blocked(block_state["message"])
             finally:
                 await text_queue.put(None)
                 await monitor
-                if blocked["message"] is not None:
-                    _raise_streaming_output_blocked(blocked["message"])
+                if block_state["message"] is not None:
+                    _raise_streaming_output_blocked(block_state["message"])
 
         return guarded_provider_stream()
 

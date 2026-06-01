@@ -112,6 +112,10 @@ fn load_guardrails_local_register_fn(py: Python<'_>) -> PyResult<Bound<'_, PyAny
     let module = match py.import("nemo_relay._guardrails_local") {
         Ok(module) => module,
         Err(err) => {
+            if !is_missing_guardrails_local_module(py, &err)? {
+                return Err(err);
+            }
+
             let source_python_dir = guardrails_local_source_python_dir();
             if !source_python_dir.exists() {
                 return Err(err);
@@ -122,6 +126,23 @@ fn load_guardrails_local_register_fn(py: Python<'_>) -> PyResult<Bound<'_, PyAny
         }
     };
     module.getattr("register_local_backend")
+}
+
+fn is_missing_guardrails_local_module(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
+    if !err.is_instance_of::<pyo3::exceptions::PyModuleNotFoundError>(py) {
+        return Ok(false);
+    }
+
+    let err_value = err.value(py);
+    let module_name = err_value
+        .getattr("name")
+        .ok()
+        .and_then(|name| name.extract::<String>().ok());
+
+    Ok(matches!(
+        module_name.as_deref(),
+        Some("nemo_relay") | Some("nemo_relay._guardrails_local")
+    ))
 }
 
 fn guardrails_local_source_python_dir() -> PathBuf {

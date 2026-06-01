@@ -29,7 +29,8 @@ use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,
+    initialize_plugins, list_plugin_kinds, register_plugin, rollback_registrations,
+    validate_plugin_config,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -174,10 +175,17 @@ pub(crate) fn invoke_python_plugin_register(
         namespace_prefix,
     )?;
     let plugin_config_py = plugin_config_to_py(py, plugin_kind, plugin_config)?;
-    register_fn.call1((plugin_config_py, py_ctx.clone_ref(py)))?;
-    {
-        let py_ctx_ref = py_ctx.bind(py).borrow();
-        py_ctx_ref.drain_registrations()
+    match register_fn.call1((plugin_config_py, py_ctx.clone_ref(py))) {
+        Ok(_) => {
+            let py_ctx_ref = py_ctx.bind(py).borrow();
+            py_ctx_ref.drain_registrations()
+        }
+        Err(err) => {
+            if let Ok(mut registrations) = py_ctx.bind(py).borrow().drain_registrations() {
+                rollback_registrations(&mut registrations);
+            }
+            Err(err)
+        }
     }
 }
 
