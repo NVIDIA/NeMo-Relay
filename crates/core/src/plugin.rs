@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
@@ -127,10 +128,12 @@ impl PluginComponentSpec {
     }
 }
 
-fn layer_plugin_config(base: Json, overlay: Json) -> Json {
+fn layer_plugin_config(base: Json, overlay: Json) -> Result<Json> {
+    validate_json_layer_component_kinds("base layer", &base)?;
+    validate_json_layer_component_kinds("overlay layer", &overlay)?;
     let mut merged = base;
     merge_plugin_config_layer(&mut merged, overlay);
-    merged
+    Ok(merged)
 }
 
 fn merge_plugin_config_layer(base: &mut Json, overlay: Json) {
@@ -202,6 +205,32 @@ fn json_component_kind(component: &Json) -> Option<&str> {
         .and_then(Json::as_str)
 }
 
+fn validate_json_layer_component_kinds(layer_name: &str, value: &Json) -> Result<()> {
+    let Some(components) = value.get("components").and_then(Json::as_array) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for component in components {
+        let Some(kind) = json_component_kind(component) else {
+            continue;
+        };
+        if !seen.insert(kind.to_string()) {
+            duplicates.push(kind.to_string());
+        }
+    }
+    duplicates.sort();
+    duplicates.dedup();
+    if duplicates.is_empty() {
+        Ok(())
+    } else {
+        Err(PluginError::InvalidConfig(format!(
+            "plugin config layering cannot merge duplicate component kind values in {layer_name}: {}; use a fully materialized config or add a stable component instance key before layering",
+            duplicates.join(", ")
+        )))
+    }
+}
+
 /// Effective plugin configuration resolved from discovered files plus an optional
 /// code-driven layer.
 #[derive(Debug, Clone)]
@@ -227,7 +256,7 @@ struct RawPluginConfigLayer {
 pub fn resolve_plugin_config_layers(code_config: Option<Json>) -> Result<ResolvedPluginConfig> {
     let raw = match (discover_plugin_toml_config()?, code_config) {
         (Some(base), Some(overlay)) => RawPluginConfigLayer {
-            value: layer_plugin_config(base.value, overlay),
+            value: layer_plugin_config(base.value, overlay)?,
             source: format!("{} overlaid by plugin.initialize(...)", base.source),
         },
         (Some(base), None) => base,
@@ -275,8 +304,10 @@ fn discover_plugin_toml_config() -> Result<Option<RawPluginConfigLayer>> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const PLUGINS_TOML: &str = "plugins.toml";
 
+#[cfg(not(target_arch = "wasm32"))]
 fn plugin_config_paths(cwd: Option<&Path>, user_config_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)];
     if let Some(cwd) = cwd
@@ -290,6 +321,7 @@ fn plugin_config_paths(cwd: Option<&Path>, user_config_dir: Option<PathBuf>) -> 
     paths
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn find_project_plugin_config(start: &Path) -> Option<PathBuf> {
     for ancestor in start.ancestors() {
         let path = ancestor.join(".nemo-relay").join(PLUGINS_TOML);
@@ -300,6 +332,7 @@ fn find_project_plugin_config(start: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn user_config_dir() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(base).join("nemo-relay"));
@@ -307,12 +340,14 @@ fn user_config_dir() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".config/nemo-relay"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<RawPluginConfigLayer>>
 where
     I: IntoIterator<Item = PathBuf>,
@@ -347,6 +382,7 @@ where
     }))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
     match (left, right) {
         (toml::Value::Table(left), toml::Value::Table(right)) => {
@@ -364,6 +400,7 @@ fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn merge_toml_value(left: &mut toml::Value, right: toml::Value) {
     match (left, right) {
         (toml::Value::Table(left), toml::Value::Table(right)) => {
@@ -380,6 +417,7 @@ fn merge_toml_value(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn merge_toml_components(left: &mut toml::Value, right: toml::Value) {
     let toml::Value::Array(left_components) = left else {
         *left = right;
@@ -406,6 +444,7 @@ fn merge_toml_components(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn toml_component_kind(component: &toml::Value) -> Option<&str> {
     component
         .as_table()
@@ -413,6 +452,7 @@ fn toml_component_kind(component: &toml::Value) -> Option<&str> {
         .and_then(toml::Value::as_str)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Result<()> {
     let Some(components) = value.get("components").and_then(toml::Value::as_array) else {
         return Ok(());
@@ -440,10 +480,12 @@ fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Res
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn plugin_toml_source(paths: &[PathBuf]) -> String {
     format!("plugins.toml {}", format_paths(paths))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn format_paths(paths: &[PathBuf]) -> String {
     paths
         .iter()

@@ -586,7 +586,7 @@ fn test_layer_plugin_config_merges_by_kind_and_preserves_omissions() {
         }
     });
 
-    let merged = layer_plugin_config(base, overlay);
+    let merged = layer_plugin_config(base, overlay).unwrap();
 
     assert_eq!(
         merged,
@@ -634,19 +634,66 @@ fn test_layer_plugin_config_merges_by_kind_and_preserves_omissions() {
 #[test]
 fn test_layer_plugin_config_replaces_non_object_shapes() {
     assert_eq!(
-        layer_plugin_config(json!({"components": []}), json!([])),
+        layer_plugin_config(json!({"components": []}), json!([])).unwrap(),
         json!([])
     );
     assert_eq!(
         layer_plugin_config(
             json!({"components": [{"kind": "base"}]}),
             json!({"components": "not-an-array"})
-        ),
+        )
+        .unwrap(),
         json!({"components": "not-an-array"})
     );
 }
 
 #[test]
+fn test_layer_plugin_config_rejects_duplicate_component_kinds() {
+    let base_error = layer_plugin_config(
+        json!({
+            "components": [
+                {"kind": "duplicate.plugin", "config": {"name": "first"}},
+                {"kind": "duplicate.plugin", "config": {"name": "second"}}
+            ]
+        }),
+        json!({}),
+    )
+    .unwrap_err();
+    match base_error {
+        PluginError::InvalidConfig(message) => {
+            assert!(
+                message.contains("duplicate component kind values in base layer"),
+                "{message}"
+            );
+            assert!(message.contains("duplicate.plugin"), "{message}");
+        }
+        other => panic!("unexpected duplicate-kind error: {other}"),
+    }
+
+    let overlay_error = layer_plugin_config(
+        json!({"components": [{"kind": "duplicate.plugin"}]}),
+        json!({
+            "components": [
+                {"kind": "duplicate.plugin", "config": {"name": "first"}},
+                {"kind": "duplicate.plugin", "config": {"name": "second"}}
+            ]
+        }),
+    )
+    .unwrap_err();
+    match overlay_error {
+        PluginError::InvalidConfig(message) => {
+            assert!(
+                message.contains("duplicate component kind values in overlay layer"),
+                "{message}"
+            );
+            assert!(message.contains("duplicate.plugin"), "{message}");
+        }
+        other => panic!("unexpected duplicate-kind error: {other}"),
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
 fn test_load_plugin_toml_config_from_paths_merges_by_kind() {
     let temp = std::env::temp_dir().join(format!(
         "nemo-relay-plugin-config-{}-{}",

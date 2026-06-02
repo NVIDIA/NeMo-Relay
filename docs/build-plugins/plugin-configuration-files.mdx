@@ -264,6 +264,11 @@ Declare each `kind` at most once inside one `plugins.toml` file. Duplicate
 component kinds in the same file fail before merge. Duplicate singleton
 components that reach plugin validation also fail validation.
 
+Code-driven layering also rejects duplicate component `kind` values in either
+layer. A fully materialized config can still contain repeated plugin kinds when
+that plugin supports multiple components, but layered configs need a unique
+`kind` match so NeMo Relay does not update the wrong instance.
+
 Arrays inside component config are replaced by the higher-precedence value.
 Tables inside component config merge recursively.
 

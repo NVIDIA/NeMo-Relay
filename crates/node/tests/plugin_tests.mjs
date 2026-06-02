@@ -9,7 +9,7 @@ import test from 'node:test';
 
 import * as plugin from '../plugin.js';
 
-test('initialize layers code config over project plugins.toml', async () => {
+async function withProjectPluginsToml({ atifEnabled }, callback) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nemo-relay-node-plugin-'));
   const project = path.join(root, 'project');
   const configDir = path.join(project, '.nemo-relay');
@@ -28,7 +28,7 @@ kind = "observability"
 enabled = true
 
 [components.config.atif]
-enabled = false
+enabled = ${atifEnabled}
 output_directory = ${JSON.stringify(path.join(root, 'atif'))}
 filename_template = "missing-session-id.json"
 `,
@@ -38,6 +38,26 @@ filename_template = "missing-session-id.json"
   process.env.HOME = path.join(root, 'home');
 
   try {
+    await callback({ root, project });
+  } finally {
+    plugin.clear();
+    process.chdir(oldCwd);
+    if (oldXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = oldXdg;
+    }
+    if (oldHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = oldHome;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('initialize layers code config over project plugins.toml', async () => {
+  await withProjectPluginsToml({ atifEnabled: false }, async () => {
     await assert.rejects(
       () =>
         plugin.initialize({
@@ -54,19 +74,11 @@ filename_template = "missing-session-id.json"
         }),
       /filename_template/,
     );
-  } finally {
-    plugin.clear();
-    process.chdir(oldCwd);
-    if (oldXdg === undefined) {
-      delete process.env.XDG_CONFIG_HOME;
-    } else {
-      process.env.XDG_CONFIG_HOME = oldXdg;
-    }
-    if (oldHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = oldHome;
-    }
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  });
+});
+
+test('initialize with no arguments uses project plugins.toml', async () => {
+  await withProjectPluginsToml({ atifEnabled: true }, async () => {
+    await assert.rejects(() => plugin.initialize(), /filename_template/);
+  });
 });
