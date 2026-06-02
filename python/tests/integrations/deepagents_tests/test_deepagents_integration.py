@@ -258,6 +258,7 @@ def test_e2e_agent(
     with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
         result = agent.invoke({"messages": [{"role": "user", "content": "Create a file named turtle."}]})
 
+    nemo_relay.subscribers.flush()
     assert (tmp_path / "turtle").read_text() == "shell"
     assert result["messages"][-1].content == "created turtle after reviewer verified turtle"
     found_write_file_message = False
