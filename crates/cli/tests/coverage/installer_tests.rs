@@ -96,7 +96,6 @@ fn helper_formatting_and_headers_cover_optional_paths() {
     let headers = gateway_headers(
         Some("profile"),
         Some(r#"{"team":"obs"}"#),
-        Some(r#"{"plugins":[]}"#),
         Some(GatewayMode::Passthrough),
     )
     .unwrap();
@@ -115,7 +114,7 @@ fn helper_formatting_and_headers_cover_optional_paths() {
         .is_err()
     );
 
-    let headers = gateway_headers(None, None, None, None).unwrap();
+    let headers = gateway_headers(None, None, None).unwrap();
     assert!(headers.is_empty());
 }
 

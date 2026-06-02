@@ -15,12 +15,6 @@ test('WebAssembly plugin wrappers expose default config', () => {
   });
 });
 
-test('WebAssembly plugin wrappers layer config documents', () => {
-  // Smoke test only: merge semantics are covered by the core crate. This
-  // verifies the wrapper forwards both documents and returns merged JSON.
-  assert.deepEqual(plugin.layer({ a: 1 }, { b: 2 }), { a: 1, b: 2 });
-});
-
 test('WebAssembly plugin wrappers register and validate components', () => {
   const pluginKind = unique('wasm.wrapper.plugin');
   const validatedConfigs = [];

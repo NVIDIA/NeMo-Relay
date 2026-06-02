@@ -29,8 +29,8 @@ use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, layer_plugin_config, list_plugin_kinds, register_plugin,
-    validate_plugin_config,
+    initialize_plugins, initialize_plugins_from_discovered_config, list_plugin_kinds,
+    register_plugin, validate_plugin_config,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -721,18 +721,6 @@ impl Plugin for PyPlugin {
     }
 }
 
-#[pyfunction(name = "layer_plugin_config")]
-#[pyo3(signature = (base: "object", overlay: "object") -> "object", text_signature = "(base: object, overlay: object) -> object")]
-fn layer_plugin_config_py(
-    py: Python<'_>,
-    base: &Bound<'_, PyAny>,
-    overlay: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let base = py_to_json(base)?;
-    let overlay = py_to_json(overlay)?;
-    json_to_py(py, &layer_plugin_config(base, overlay))
-}
-
 #[pyfunction(name = "validate_plugin_config")]
 #[pyo3(signature = (config: "object") -> "object", text_signature = "(config: object) -> object")]
 fn validate_plugin_config_py(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -756,6 +744,25 @@ fn initialize_plugins_py<'py>(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let report = initialize_plugins(config).await.map_err(to_py_err)?;
+        Python::attach(|py| {
+            let report = serde_json::to_value(&report)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            json_to_py(py, &report)
+        })
+    })
+}
+
+#[pyfunction(name = "initialize_plugins_from_discovered_config")]
+#[pyo3(signature = (config=None), text_signature = "(config: object | None = None) -> object")]
+fn initialize_plugins_from_discovered_config_py<'py>(
+    py: Python<'py>,
+    config: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let config_json = config.map(py_to_json).transpose()?;
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let report = initialize_plugins_from_discovered_config(config_json)
+            .await
+            .map_err(to_py_err)?;
         Python::attach(|py| {
             let report = serde_json::to_value(&report)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -809,9 +816,12 @@ fn deregister_plugin_py(plugin_kind: &str) -> bool {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginContext>()?;
-    m.add_function(wrap_pyfunction!(layer_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(validate_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        initialize_plugins_from_discovered_config_py,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
     m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;

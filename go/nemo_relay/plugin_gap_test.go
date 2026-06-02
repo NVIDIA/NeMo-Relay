@@ -4,7 +4,8 @@
 package nemo_relay
 
 import (
-	"reflect"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -35,19 +36,86 @@ func TestPluginConfigSerializationErrorsSurfaceBeforeFFI(t *testing.T) {
 	}
 }
 
-func TestLayerPluginConfigRoundTripsMerge(t *testing.T) {
-	// Smoke test only: merge semantics are covered by the core crate. This
-	// verifies the cgo boundary forwards both documents and returns merged JSON.
-	merged, err := LayerPluginConfig(
-		map[string]any{"a": float64(1)},
-		map[string]any{"b": float64(2)},
-	)
+func TestInitializePluginsLayersCodeConfigOverProjectPluginsToml(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	configDir := filepath.Join(project, ".nemo-relay")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	pluginKind := "go.layered.plugin"
+	pluginsToml := `
+version = 1
+
+[[components]]
+kind = "go.layered.plugin"
+enabled = true
+
+[components.config]
+source = "file"
+
+[components.config.nested]
+file = true
+`
+	if err := os.WriteFile(filepath.Join(configDir, "plugins.toml"), []byte(pluginsToml), 0o644); err != nil {
+		t.Fatalf("failed to write plugins.toml: %v", err)
+	}
+	oldCwd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("LayerPluginConfig failed: %v", err)
+		t.Fatalf("failed to read cwd: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldCwd)
+		_ = ClearPluginConfiguration()
+		_ = DeregisterPlugin(pluginKind)
+	})
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "xdg"))
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	if err := os.Chdir(project); err != nil {
+		t.Fatalf("failed to change cwd: %v", err)
 	}
 
-	expected := map[string]any{"a": float64(1), "b": float64(2)}
-	if !reflect.DeepEqual(merged, expected) {
-		t.Fatalf("merged config mismatch:\n got: %#v\nwant: %#v", merged, expected)
+	var configs []map[string]any
+	if err := RegisterPlugin(pluginKind, PluginFuncs{
+		ValidateFunc: func(pluginConfig map[string]any) ([]ConfigDiagnostic, error) {
+			configs = append(configs, pluginConfig)
+			return nil, nil
+		},
+		RegisterFunc: func(pluginConfig map[string]any, ctx *PluginContext) error {
+			configs = append(configs, pluginConfig)
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("RegisterPlugin failed: %v", err)
+	}
+
+	report, err := InitializePlugins(PluginConfig{
+		Components: []PluginComponentSpec{{
+			Kind: pluginKind,
+			Config: map[string]any{
+				"source": "code",
+				"nested": map[string]any{
+					"code": true,
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InitializePlugins failed: %v", err)
+	}
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
+	}
+	if len(configs) != 2 {
+		t.Fatalf("expected validate and register configs, got %#v", configs)
+	}
+	for _, config := range configs {
+		if config["source"] != "code" {
+			t.Fatalf("source mismatch: %#v", config)
+		}
+		nested, ok := config["nested"].(map[string]any)
+		if !ok || nested["file"] != true || nested["code"] != true {
+			t.Fatalf("nested config mismatch: %#v", config)
+		}
 	}
 }

@@ -40,7 +40,6 @@ export {
   getHandle,
   getLastCallbackError,
   initializePlugins,
-  layerPluginConfig,
   listPluginKinds,
   llmCall,
   llmCallEnd,

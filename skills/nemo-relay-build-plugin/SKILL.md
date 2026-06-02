@@ -111,10 +111,11 @@ endpoints rather than embedding sensitive values.
 - Rust: `nemo_relay::plugin`
 - Go, WebAssembly, and raw FFI are source-first or advanced surfaces.
 
-When composing file-backed config with code-driven overrides, use
-`nemo_relay.plugin.layer(...)`, `plugin.layer(...)`, or
-`nemo_relay::plugin::layer_plugin_config(...)` so omitted fields inherit from
-the lower-precedence layer and top-level components merge by `kind`.
+When composing file-backed config with code-driven overrides, pass the
+code-driven config to the binding's plugin `initialize(...)` function. The
+initializer discovers `plugins.toml`, layers the supplied config on top, keeps
+omitted fields inherited from the file layer, and merges top-level components by
+`kind`.
 
 Use the same canonical `snake_case` config keys across bindings and files. Node
 helper functions can be `camelCase`, but plugin config objects remain

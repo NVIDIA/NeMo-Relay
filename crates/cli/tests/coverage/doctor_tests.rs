@@ -664,9 +664,7 @@ async fn collect_observability_reports_plugin_config_source() {
             "version": 1,
             "components": []
         })),
-        plugin_config_source: Some(
-            "plugins.toml /tmp/plugins.toml overlaid by --plugin-config".into(),
-        ),
+        plugin_config_source: Some("plugins.toml /tmp/plugins.toml".into()),
         ..GatewayConfig::default()
     };
 
@@ -678,7 +676,6 @@ async fn collect_observability_reports_plugin_config_source() {
         .expect("plugin validation check");
     assert_eq!(plugins.status, Status::Pass);
     assert!(plugins.details.contains("plugins.toml /tmp/plugins.toml"));
-    assert!(plugins.details.contains("--plugin-config"));
 }
 
 #[test]

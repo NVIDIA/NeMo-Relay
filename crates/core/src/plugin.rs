@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
@@ -126,13 +127,7 @@ impl PluginComponentSpec {
     }
 }
 
-/// Layers one raw plugin configuration document over another.
-///
-/// The plugin document is merged as JSON so callers can preserve omitted fields
-/// before deserializing into [`PluginConfig`]. Objects merge recursively, arrays
-/// and scalar values are replaced by the higher-precedence layer, and the
-/// top-level `components` array is matched by component `kind`.
-pub fn layer_plugin_config(base: Json, overlay: Json) -> Json {
+fn layer_plugin_config(base: Json, overlay: Json) -> Json {
     let mut merged = base;
     merge_plugin_config_layer(&mut merged, overlay);
     merged
@@ -205,6 +200,256 @@ fn json_component_kind(component: &Json) -> Option<&str> {
         .as_object()
         .and_then(|object| object.get("kind"))
         .and_then(Json::as_str)
+}
+
+/// Effective plugin configuration resolved from discovered files plus an optional
+/// code-driven layer.
+#[derive(Debug, Clone)]
+pub struct ResolvedPluginConfig {
+    /// Parsed plugin configuration ready for validation or activation.
+    pub config: PluginConfig,
+    /// Human-readable source description for diagnostics.
+    pub source: String,
+}
+
+#[derive(Debug, Clone)]
+struct RawPluginConfigLayer {
+    value: Json,
+    source: String,
+}
+
+/// Resolve the plugin configuration that binding-level `initialize(...)` calls
+/// should activate.
+///
+/// Discovered `plugins.toml` files are the base layer. The optional
+/// code-driven config is overlaid on top, preserving omitted fields until the
+/// effective document is deserialized into [`PluginConfig`].
+pub fn resolve_plugin_config_layers(code_config: Option<Json>) -> Result<ResolvedPluginConfig> {
+    let raw = match (discover_plugin_toml_config()?, code_config) {
+        (Some(base), Some(overlay)) => RawPluginConfigLayer {
+            value: layer_plugin_config(base.value, overlay),
+            source: format!("{} overlaid by plugin.initialize(...)", base.source),
+        },
+        (Some(base), None) => base,
+        (None, Some(value)) => RawPluginConfigLayer {
+            value,
+            source: "plugin.initialize(...)".into(),
+        },
+        (None, None) => RawPluginConfigLayer {
+            value: Json::Object(Map::new()),
+            source: "default plugin config".into(),
+        },
+    };
+    let config: PluginConfig = serde_json::from_value(raw.value).map_err(|error| {
+        PluginError::InvalidConfig(format!(
+            "invalid plugin config from {}: {error}",
+            raw.source
+        ))
+    })?;
+    Ok(ResolvedPluginConfig {
+        config,
+        source: raw.source,
+    })
+}
+
+/// Validate and activate plugin configuration from discovered files plus an
+/// optional code-driven overlay.
+pub async fn initialize_plugins_from_discovered_config(
+    code_config: Option<Json>,
+) -> Result<ConfigReport> {
+    let resolved = resolve_plugin_config_layers(code_config)?;
+    initialize_plugins(resolved.config).await
+}
+
+fn discover_plugin_toml_config() -> Result<Option<RawPluginConfigLayer>> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Ok(None)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        load_plugin_toml_config_from_paths(plugin_config_paths(
+            std::env::current_dir().ok().as_deref(),
+            user_config_dir(),
+        ))
+    }
+}
+
+const PLUGINS_TOML: &str = "plugins.toml";
+
+fn plugin_config_paths(cwd: Option<&Path>, user_config_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)];
+    if let Some(cwd) = cwd
+        && let Some(project) = find_project_plugin_config(cwd)
+    {
+        paths.push(project);
+    }
+    if let Some(user) = user_config_dir {
+        paths.push(user.join(PLUGINS_TOML));
+    }
+    paths
+}
+
+fn find_project_plugin_config(start: &Path) -> Option<PathBuf> {
+    for ancestor in start.ancestors() {
+        let path = ancestor.join(".nemo-relay").join(PLUGINS_TOML);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn user_config_dir() -> Option<PathBuf> {
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(base).join("nemo-relay"));
+    }
+    home_dir().map(|home| home.join(".config/nemo-relay"))
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<RawPluginConfigLayer>>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    let mut sources = Vec::new();
+    for path in paths {
+        if path.exists() {
+            let raw = std::fs::read_to_string(&path)
+                .map_err(|error| PluginError::InvalidConfig(error.to_string()))?;
+            let parsed = raw
+                .parse::<toml::Table>()
+                .map(toml::Value::Table)
+                .map_err(|error| {
+                    PluginError::InvalidConfig(format!(
+                        "invalid plugin TOML in {}: {error}",
+                        path.display()
+                    ))
+                })?;
+            validate_plugin_toml_component_kinds(&path, &parsed)?;
+            merge_plugin_toml(&mut merged, parsed);
+            sources.push(path);
+        }
+    }
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let value = serde_json::to_value(merged)?;
+    Ok(Some(RawPluginConfigLayer {
+        value,
+        source: plugin_toml_source(&sources),
+    }))
+}
+
+fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
+    match (left, right) {
+        (toml::Value::Table(left), toml::Value::Table(right)) => {
+            for (key, value) in right {
+                match (key.as_str(), left.get_mut(&key)) {
+                    ("components", Some(existing)) => merge_toml_components(existing, value),
+                    (_, Some(existing)) => merge_toml_value(existing, value),
+                    _ => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+fn merge_toml_value(left: &mut toml::Value, right: toml::Value) {
+    match (left, right) {
+        (toml::Value::Table(left), toml::Value::Table(right)) => {
+            for (key, value) in right {
+                match left.get_mut(&key) {
+                    Some(existing) => merge_toml_value(existing, value),
+                    None => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+fn merge_toml_components(left: &mut toml::Value, right: toml::Value) {
+    let toml::Value::Array(left_components) = left else {
+        *left = right;
+        return;
+    };
+    let toml::Value::Array(right_components) = right else {
+        *left = right;
+        return;
+    };
+
+    for component in right_components {
+        let Some(kind) = toml_component_kind(&component).map(str::to_owned) else {
+            left_components.push(component);
+            continue;
+        };
+        if let Some(existing) = left_components
+            .iter_mut()
+            .find(|candidate| toml_component_kind(candidate) == Some(kind.as_str()))
+        {
+            merge_toml_value(existing, component);
+        } else {
+            left_components.push(component);
+        }
+    }
+}
+
+fn toml_component_kind(component: &toml::Value) -> Option<&str> {
+    component
+        .as_table()
+        .and_then(|table| table.get("kind"))
+        .and_then(toml::Value::as_str)
+}
+
+fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Result<()> {
+    let Some(components) = value.get("components").and_then(toml::Value::as_array) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for component in components {
+        let Some(kind) = toml_component_kind(component) else {
+            continue;
+        };
+        if !seen.insert(kind.to_string()) {
+            duplicates.push(kind.to_string());
+        }
+    }
+    duplicates.sort();
+    duplicates.dedup();
+    if duplicates.is_empty() {
+        Ok(())
+    } else {
+        Err(PluginError::InvalidConfig(format!(
+            "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
+            path.display(),
+            duplicates.join(", ")
+        )))
+    }
+}
+
+fn plugin_toml_source(paths: &[PathBuf]) -> String {
+    format!("plugins.toml {}", format_paths(paths))
+}
+
+fn format_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Structured validation report.

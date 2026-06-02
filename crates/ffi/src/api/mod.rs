@@ -58,8 +58,8 @@ use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, layer_plugin_config, list_plugin_kinds, register_plugin,
-    validate_plugin_config,
+    initialize_plugins, initialize_plugins_from_discovered_config, list_plugin_kinds,
+    register_plugin, validate_plugin_config,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;

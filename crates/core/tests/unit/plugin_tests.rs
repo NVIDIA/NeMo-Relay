@@ -647,6 +647,89 @@ fn test_layer_plugin_config_replaces_non_object_shapes() {
 }
 
 #[test]
+fn test_load_plugin_toml_config_from_paths_merges_by_kind() {
+    let temp = std::env::temp_dir().join(format!(
+        "nemo-relay-plugin-config-{}-{}",
+        std::process::id(),
+        "merge"
+    ));
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(&temp).unwrap();
+    let base = temp.join("base.toml");
+    let overlay = temp.join("overlay.toml");
+    std::fs::write(
+        &base,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+source = "base"
+
+[components.config.nested]
+base = true
+
+[[components]]
+kind = "adaptive"
+
+[components.config]
+source = "base"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &overlay,
+        r#"
+[[components]]
+kind = "observability"
+
+[components.config]
+source = "overlay"
+
+[components.config.nested]
+overlay = true
+"#,
+    )
+    .unwrap();
+
+    let loaded = load_plugin_toml_config_from_paths([base.clone(), overlay.clone()])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        loaded.value,
+        json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "source": "overlay",
+                        "nested": {
+                            "base": true,
+                            "overlay": true
+                        }
+                    }
+                },
+                {
+                    "kind": "adaptive",
+                    "config": {
+                        "source": "base"
+                    }
+                }
+            ]
+        })
+    );
+    assert!(loaded.source.contains(&base.display().to_string()));
+    assert!(loaded.source.contains(&overlay.display().to_string()));
+    let _ = std::fs::remove_dir_all(&temp);
+}
+
+#[test]
 fn test_plugin_helper_defaults_and_policy_diagnostics() {
     let _guard = lock_runtime_owner();
     reset_global();

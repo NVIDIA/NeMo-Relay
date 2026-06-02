@@ -306,7 +306,7 @@ command = "codex --full-auto"
 }
 
 #[test]
-fn cli_run_dry_run_layers_plugin_config_over_plugins_toml() {
+fn cli_run_dry_run_reports_plugins_toml_config() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config.toml");
     std::fs::write(
@@ -330,7 +330,7 @@ enabled = true
 version = 1
 
 [components.config.atof]
-enabled = false
+enabled = true
 output_directory = "logs"
 filename = "events.jsonl"
 "#,
@@ -344,8 +344,6 @@ filename = "events.jsonl"
             "run",
             "--agent",
             "codex",
-            "--plugin-config",
-            r#"{"components":[{"kind":"observability","config":{"atof":{"enabled":true}}}]}"#,
             "--dry-run",
         ])
         .output()
@@ -369,9 +367,20 @@ filename = "events.jsonl"
         stdout.contains("plugin_config_source = plugins.toml"),
         "expected dry-run output to include plugin config source, got:\n{stdout}"
     );
+}
+
+#[test]
+fn cli_run_rejects_plugin_config_flag() {
+    let output = Command::new(gateway_bin())
+        .args(["run", "--plugin-config", "{}", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
     assert!(
-        stdout.contains("overlaid by --plugin-config"),
-        "expected dry-run output to include overlay source, got:\n{stdout}"
+        String::from_utf8_lossy(&output.stderr).contains("--plugin-config"),
+        "expected removed flag to be named in stderr, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -422,8 +431,6 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "coverage",
             "--session-metadata",
             r#"{"team":"cli"}"#,
-            "--plugin-config",
-            r#"{"components":[]}"#,
             "--gateway-mode",
             "passthrough",
             "--fail-closed",

@@ -39,10 +39,7 @@ from nemo_relay._native import (
     deregister_plugin as _deregister_plugin,
 )
 from nemo_relay._native import (
-    initialize_plugins as _initialize_plugins,
-)
-from nemo_relay._native import (
-    layer_plugin_config as _layer_plugin_config,
+    initialize_plugins_from_discovered_config as _initialize_plugins_from_discovered_config,
 )
 from nemo_relay._native import (
     list_plugin_kinds as _list_plugin_kinds,
@@ -288,27 +285,6 @@ class PluginConfig:
         }
 
 
-def layer(base: PluginConfig | JsonObject, overlay: PluginConfig | JsonObject) -> JsonObject:
-    """Layer one plugin configuration over another.
-
-    Args:
-        base: Lower-precedence plugin config, usually loaded from files.
-        overlay: Higher-precedence plugin config, usually built in code.
-
-    Returns:
-        The effective raw JSON plugin config.
-
-    Behavior:
-        Objects merge recursively, arrays and scalar values are replaced by the
-        overlay, and top-level components merge by `kind`. Passing raw mappings
-        preserves omitted fields so they can inherit from the base config.
-    """
-    return cast(
-        JsonObject,
-        _layer_plugin_config(_normalize_object(base), _normalize_object(overlay)),
-    )
-
-
 def validate(config: PluginConfig | JsonObject) -> ConfigReport:
     """Validate a plugin configuration without changing runtime state.
 
@@ -325,21 +301,24 @@ def validate(config: PluginConfig | JsonObject) -> ConfigReport:
     return cast(ConfigReport, _validate_plugin_config(_normalize_object(config)))
 
 
-async def initialize(config: PluginConfig | JsonObject) -> ConfigReport:
+async def initialize(config: PluginConfig | JsonObject | None = None) -> ConfigReport:
     """Validate and activate a plugin configuration.
 
     Args:
-        config: `PluginConfig` or an equivalent JSON object.
+        config: Optional `PluginConfig` or equivalent JSON object. When omitted,
+            NeMo Relay initializes the discovered `plugins.toml` configuration.
 
     Returns:
         The report for the successfully activated configuration.
 
     Behavior:
-        Initialization replaces the current active plugin configuration. Partial
-        registration is rolled back on failure, and the previous configuration
-        is restored when possible.
+        Initialization layers the supplied code config over discovered
+        `plugins.toml` files, replaces the current active plugin configuration,
+        rolls back partial registration on failure, and restores the previous
+        configuration when possible.
     """
-    return cast(ConfigReport, await _initialize_plugins(_normalize_object(config)))
+    overlay = None if config is None else _normalize_object(config)
+    return cast(ConfigReport, await _initialize_plugins_from_discovered_config(overlay))
 
 
 def clear() -> None:
@@ -356,11 +335,11 @@ def clear() -> None:
 
 
 @asynccontextmanager
-async def plugin(config: PluginConfig | JsonObject) -> AsyncIterator[ConfigReport]:
+async def plugin(config: PluginConfig | JsonObject | None = None) -> AsyncIterator[ConfigReport]:
     """Context manager for plugin initialization and cleanup.
 
     Args:
-        config: `PluginConfig` or an equivalent JSON object.
+        config: Optional `PluginConfig` or equivalent JSON object.
 
     Yields:
         The `ConfigReport` for the initialized configuration.
@@ -446,7 +425,6 @@ __all__ = [
     "clear",
     "deregister",
     "initialize",
-    "layer",
     "list_kinds",
     "register",
     "report",

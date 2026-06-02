@@ -158,14 +158,12 @@ Common environment variables for direct gateway server use are:
 - `NEMO_RELAY_ANTHROPIC_BASE_URL`
 
 Plugin configuration controls process-level Observability exporters. Per-session
-configuration controls structured metadata on the top-level agent begin event
-and the plugin configuration metadata associated with the session.
+configuration controls structured metadata on the top-level agent begin event.
 
 `hook-forward` can also pass per-session configuration through headers:
 
 - `x-nemo-relay-config-profile`
 - `x-nemo-relay-session-metadata`
-- `x-nemo-relay-plugin-config`
 - `x-nemo-relay-gateway-mode`
 
 The accepted gateway mode values are `hook-only`, `passthrough`, and
@@ -250,7 +248,6 @@ default so observability outages do not block the coding agent. Add
 Optional flags map to gateway headers:
 
 - `--session-metadata` sets `x-nemo-relay-session-metadata`.
-- `--plugin-config` sets `x-nemo-relay-plugin-config`.
 - `--profile` sets `x-nemo-relay-config-profile`.
 - `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
 

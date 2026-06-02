@@ -162,19 +162,6 @@ export declare function ComponentSpec(
   },
 ): ComponentSpec;
 /**
- * Layer one plugin configuration over another.
- *
- * Objects merge recursively, arrays and scalar values are replaced by the
- * overlay, and top-level components merge by `kind`.
- *
- * @param base - Lower-precedence plugin config, usually loaded from files.
- * @param overlay - Higher-precedence plugin config, usually built in code.
- * @returns The effective raw plugin config document.
- * @remarks Passing raw objects preserves omitted fields so they can inherit
- * from the base config.
- */
-export declare function layer(base: PluginConfig, overlay: PluginConfig): PluginConfig;
-/**
  * Validate a plugin configuration without activating it.
  *
  * Runs the same config validation pipeline used by initialization while
@@ -192,12 +179,14 @@ export declare function validate(config: PluginConfig): ConfigReport;
  * Replaces the current active config, invokes each enabled component's
  * registration hooks, and resolves with the final activation report.
  *
- * @param config - Plugin configuration document to activate.
+ * @param config - Optional plugin configuration overlay to activate.
  * @returns A promise resolving to the activation report.
- * @remarks Partial plugin registration is rolled back if activation fails, and
- * the promise rejects with the underlying validation or setup error.
+ * @remarks Discovered `plugins.toml` files are used as the base config. The
+ * supplied object is layered on top, partial plugin registration is rolled back
+ * if activation fails, and the promise rejects with the underlying validation
+ * or setup error.
  */
-export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
+export declare function initialize(config?: PluginConfig | null): Promise<ConfigReport>;
 /**
  * Clear the active plugin configuration.
  *

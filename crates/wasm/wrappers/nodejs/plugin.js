@@ -5,7 +5,6 @@
 
 const {
   validatePluginConfig,
-  layerPluginConfig,
   registerPlugin,
   deregisterPlugin,
   initializePlugins,
@@ -54,22 +53,6 @@ function ComponentSpec(kind, config = {}, { enabled = true } = {}) {
 }
 
 /**
- * Layer one plugin configuration over another.
- *
- * Objects merge recursively, arrays and scalar values are replaced by the
- * overlay, and top-level components merge by `kind`.
- *
- * @param {object} base - Lower-precedence plugin config, usually loaded from files.
- * @param {object} overlay - Higher-precedence plugin config, usually built in code.
- * @returns {object} The effective raw plugin config document.
- * @remarks Passing raw objects preserves omitted fields so they can inherit
- * from the base config.
- */
-function layer(base, overlay) {
-  return layerPluginConfig(base, overlay);
-}
-
-/**
  * Validate a plugin configuration without activating it.
  *
  * Runs the same config validation pipeline used by initialization while
@@ -90,12 +73,14 @@ function validate(config) {
  * Replaces the current active config, invokes each enabled component's
  * registration hooks, and resolves with the final activation report.
  *
- * @param {object} config - Plugin configuration document to activate.
+ * @param {object} [config] - Optional plugin configuration document to activate.
  * @returns {Promise<object>} A promise resolving to the activation report.
- * @remarks Partial plugin registration is rolled back if activation fails, and
- * the returned promise rejects with the underlying validation or setup error.
+ * @remarks WebAssembly does not discover local `plugins.toml` files, so the
+ * supplied object is layered over an empty base config. Partial plugin
+ * registration is rolled back if activation fails, and the returned promise
+ * rejects with the underlying validation or setup error.
  */
-function initialize(config) {
+function initialize(config = undefined) {
   return initializePlugins(config);
 }
 
@@ -178,7 +163,6 @@ function deregister(pluginKind) {
 
 exports.defaultConfig = defaultConfig;
 exports.ComponentSpec = ComponentSpec;
-exports.layer = layer;
 exports.validate = validate;
 exports.initialize = initialize;
 exports.clear = clear;

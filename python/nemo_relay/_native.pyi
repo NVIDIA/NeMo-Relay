@@ -2077,18 +2077,6 @@ def scope_deregister_subscriber(scope_uuid: str, name: str) -> bool:
     """
     ...
 
-def layer_plugin_config(base: object, overlay: object) -> _JsonObject:
-    """Layer one raw plugin configuration over another.
-
-    Args:
-        base: Lower-precedence plugin config object or equivalent mapping.
-        overlay: Higher-precedence plugin config object or equivalent mapping.
-
-    Returns:
-        Effective plugin config as a JSON object.
-    """
-    ...
-
 def validate_plugin_config(config: object) -> _JsonObject:
     """Validate a plugin configuration without changing active runtime state.
 
@@ -2108,6 +2096,21 @@ def initialize_plugins(config: object) -> Awaitable[_JsonObject]:
 
     Args:
         config: Plugin configuration object or equivalent mapping.
+
+    Returns:
+        Awaitable resolving to the activation report.
+
+    Exceptional flow:
+        Activation errors propagate through the awaitable. The native runtime
+        rolls back partial registration when possible.
+    """
+    ...
+
+def initialize_plugins_from_discovered_config(config: object | None = None) -> Awaitable[_JsonObject]:
+    """Validate and activate discovered plugin configuration with an optional overlay.
+
+    Args:
+        config: Optional code-driven plugin configuration overlay.
 
     Returns:
         Awaitable resolving to the activation report.

@@ -25,8 +25,8 @@ typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
 
 extern int32_t nemo_relay_validate_plugin_config(const char* config_json, char** out_json);
-extern int32_t nemo_relay_layer_plugin_config(const char* base_json, const char* overlay_json, char** out_json);
 extern int32_t nemo_relay_initialize_plugins(const char* config_json, char** out_json);
+extern int32_t nemo_relay_initialize_plugins_from_discovered_config(const char* config_json, char** out_json);
 extern int32_t nemo_relay_clear_plugin_configuration(void);
 extern int32_t nemo_relay_active_plugin_report_json(char** out_json);
 extern int32_t nemo_relay_list_plugin_kinds_json(char** out_json);
@@ -91,25 +91,6 @@ var (
 			C.nemo_relay_string_free(out)
 		})
 	}
-	layerPluginConfigJSON = func(base map[string]any, overlay map[string]any) (string, error) {
-		cBase, err := jsonCString(base)
-		if err != nil {
-			return "", err
-		}
-		defer C.free(unsafe.Pointer(cBase))
-
-		cOverlay, err := jsonCString(overlay)
-		if err != nil {
-			return "", err
-		}
-		defer C.free(unsafe.Pointer(cOverlay))
-
-		var out *C.char
-		status := C.nemo_relay_layer_plugin_config(cBase, cOverlay, &out)
-		return checkedJSONString(int32(status), func() string { return C.GoString(out) }, func() {
-			C.nemo_relay_string_free(out)
-		})
-	}
 	initializePluginsJSON = func(config PluginConfig) (string, error) {
 		cConfig, err := pluginConfigCString(config)
 		if err != nil {
@@ -118,7 +99,7 @@ var (
 		defer C.free(unsafe.Pointer(cConfig))
 
 		var out *C.char
-		status := C.nemo_relay_initialize_plugins(cConfig, &out)
+		status := C.nemo_relay_initialize_plugins_from_discovered_config(cConfig, &out)
 		return checkedJSONString(int32(status), func() string { return C.GoString(out) }, func() {
 			C.nemo_relay_string_free(out)
 		})
@@ -260,28 +241,11 @@ func ValidatePluginConfig(config PluginConfig) (ConfigReport, error) {
 	return report, nil
 }
 
-// LayerPluginConfig layers one raw plugin config document over another.
-//
-// Objects merge recursively, arrays and scalar values are replaced by overlay,
-// and top-level components merge by kind. Passing raw maps preserves omitted
-// fields so they can inherit from base.
-func LayerPluginConfig(base map[string]any, overlay map[string]any) (map[string]any, error) {
-	raw, err := layerPluginConfigJSON(base, overlay)
-	if err != nil {
-		return nil, err
-	}
-	var merged map[string]any
-	if err := jsonUnmarshal([]byte(raw), &merged); err != nil {
-		return nil, err
-	}
-	return merged, nil
-}
-
 // InitializePlugins validates and activates a plugin config.
 //
 // The returned report describes the successfully activated configuration.
-// Initialization replaces the current active config and rolls back partial
-// registration on failure.
+// Discovered plugins.toml files are used as the base config, the supplied
+// config is layered on top, and partial registration rolls back on failure.
 func InitializePlugins(config PluginConfig) (ConfigReport, error) {
 	raw, err := initializePluginsJSON(config)
 	if err != nil {

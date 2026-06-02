@@ -49,22 +49,6 @@ function ComponentSpec(kind, config = {}, { enabled = true } = {}) {
 }
 
 /**
- * Layer one plugin configuration over another.
- *
- * Objects merge recursively, arrays and scalar values are replaced by the
- * overlay, and top-level components merge by `kind`.
- *
- * @param {object} base - Lower-precedence plugin config, usually loaded from files.
- * @param {object} overlay - Higher-precedence plugin config, usually built in code.
- * @returns {object} The effective raw plugin config document.
- * @remarks Passing raw objects preserves omitted fields so they can inherit
- * from the base config.
- */
-function layer(base, overlay) {
-  return lib.layerPluginConfig(base, overlay);
-}
-
-/**
  * Validate a plugin configuration without activating it.
  *
  * Runs the same config validation pipeline used by initialization while
@@ -85,13 +69,15 @@ function validate(config) {
  * Replaces the current active config, invokes each enabled component's
  * registration hooks, and resolves with the final activation report.
  *
- * @param {object} config - Plugin configuration document to activate.
+ * @param {object} [config] - Optional plugin configuration overlay to activate.
  * @returns {Promise<object>} A promise resolving to the activation report.
- * @remarks Partial plugin registration is rolled back if activation fails, and
- * the returned promise rejects with the underlying validation or setup error.
+ * @remarks Discovered `plugins.toml` files are used as the base config. The
+ * supplied object is layered on top, partial plugin registration is rolled back
+ * if activation fails, and the returned promise rejects with the underlying
+ * validation or setup error.
  */
-function initialize(config) {
-  return lib.initializePlugins(config);
+function initialize(config = undefined) {
+  return lib.initializePluginsFromDiscoveredConfig(config);
 }
 
 /**
@@ -175,7 +161,6 @@ function deregister(pluginKind) {
 module.exports = {
   defaultConfig,
   ComponentSpec,
-  layer,
   validate,
   initialize,
   clear,

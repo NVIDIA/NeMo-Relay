@@ -33,10 +33,6 @@ fn session_config_prefers_headers_and_parses_json() {
         HeaderValue::from_static(r#"{"team":"obs"}"#),
     );
     headers.insert(
-        "x-nemo-relay-plugin-config",
-        HeaderValue::from_static(r#"{"components":[]}"#),
-    );
-    headers.insert(
         "x-nemo-relay-gateway-mode",
         HeaderValue::from_static("required"),
     );
@@ -45,7 +41,7 @@ fn session_config_prefers_headers_and_parses_json() {
 
     assert_eq!(session.profile.as_deref(), Some("profile-a"));
     assert_eq!(session.metadata, Some(json!({ "team": "obs" })));
-    assert_eq!(session.plugin_config, Some(json!({ "components": [] })));
+    assert_eq!(session.plugin_config, None);
     assert_eq!(session.gateway_mode.as_deref(), Some("required"));
 }
 
@@ -65,7 +61,7 @@ fn session_config_uses_defaults_and_ignores_bad_json() {
 }
 
 #[test]
-fn session_config_layers_header_plugin_config_over_gateway_config() {
+fn session_config_uses_gateway_plugin_config() {
     let mut gateway = config();
     gateway.plugin_config = Some(json!({
         "version": 1,
@@ -80,13 +76,7 @@ fn session_config_layers_header_plugin_config_over_gateway_config() {
             }
         }]
     }));
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-nemo-relay-plugin-config",
-        HeaderValue::from_static(
-            r#"{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}"#,
-        ),
-    );
+    let headers = HeaderMap::new();
 
     let session = gateway.session_config_from_headers(&headers);
 
@@ -100,8 +90,7 @@ fn session_config_layers_header_plugin_config_over_gateway_config() {
                 "config": {
                     "atof": {
                         "enabled": true,
-                        "filename": "gateway.jsonl",
-                        "mode": "overwrite"
+                        "filename": "gateway.jsonl"
                     }
                 }
             }]
@@ -170,7 +159,6 @@ command = "hermes --yolo chat"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -225,7 +213,6 @@ fn legacy_observability_config_sections_fail_clearly() {
             openai_base_url: None,
             anthropic_base_url: None,
             session_metadata: None,
-            plugin_config: None,
             dry_run: false,
             print: false,
             command: vec![],
@@ -278,7 +265,6 @@ mode = "overwrite"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -571,7 +557,7 @@ config = { version = 1, components = [] }
 }
 
 #[test]
-fn cli_plugin_config_layers_over_plugins_toml() {
+fn plugins_toml_maps_root_plugin_config_without_cli_overlay() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "").unwrap();
@@ -599,10 +585,6 @@ filename = "file.jsonl"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: Some(
-            r#"{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}"#
-                .into(),
-        ),
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -621,8 +603,7 @@ filename = "file.jsonl"
                     "version": 1,
                     "atof": {
                         "enabled": true,
-                        "filename": "file.jsonl",
-                        "mode": "overwrite"
+                        "filename": "file.jsonl"
                     }
                 }
             }]
@@ -630,11 +611,10 @@ filename = "file.jsonl"
     );
     let source = resolved.gateway.plugin_config_source.as_deref().unwrap();
     assert!(source.contains("plugins.toml"));
-    assert!(source.contains("overlaid by --plugin-config"));
 }
 
 #[test]
-fn cli_plugin_config_layers_over_inline_config_toml_plugin_config() {
+fn inline_config_toml_plugin_config_remains_a_file_source() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(
@@ -651,10 +631,6 @@ config = { version = 1, components = [{ kind = "observability", enabled = false,
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: Some(
-            r#"{"components":[{"kind":"observability","config":{"atof":{"mode":"append"}}}]}"#
-                .into(),
-        ),
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -672,8 +648,7 @@ config = { version = 1, components = [{ kind = "observability", enabled = false,
                 "config": {
                     "atof": {
                         "enabled": true,
-                        "filename": "inline.jsonl",
-                        "mode": "append"
+                        "filename": "inline.jsonl"
                     }
                 }
             }]
@@ -682,7 +657,6 @@ config = { version = 1, components = [{ kind = "observability", enabled = false,
     let source = resolved.gateway.plugin_config_source.as_deref().unwrap();
     assert!(source.contains("[plugins].config"));
     assert!(source.contains(&config_path.display().to_string()));
-    assert!(source.contains("overlaid by --plugin-config"));
 }
 
 #[test]
@@ -703,7 +677,6 @@ openai_base_url = "http://file-openai"
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: None,
         session_metadata: Some(r#"{"team":"cli"}"#.into()),
-        plugin_config: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -738,7 +711,6 @@ openai_base_url = "http://file-openai"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -750,34 +722,6 @@ openai_base_url = "http://file-openai"
 }
 
 #[test]
-fn run_plugin_config_overrides_inherited_top_level_plugin_config() {
-    let temp = tempfile::tempdir().unwrap();
-    let server = ServerArgs {
-        config: Some(isolated_config_path(&temp)),
-        plugin_config: Some(r#"{"components":["top-level"]}"#.into()),
-        ..ServerArgs::default()
-    };
-    let command = RunCommand {
-        agent: Some(CodingAgent::Codex),
-        config: None,
-        openai_base_url: None,
-        anthropic_base_url: None,
-        session_metadata: None,
-        plugin_config: Some(r#"{"components":["run"]}"#.into()),
-        dry_run: false,
-        print: false,
-        command: vec!["codex".into()],
-    };
-
-    let resolved = resolve_run_config(&command, Some(&server)).unwrap();
-
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "components": ["run"] }))
-    );
-}
-
-#[test]
 fn server_resolution_applies_all_server_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let args = ServerArgs {
@@ -785,7 +729,6 @@ fn server_resolution_applies_all_server_overrides() {
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
-        plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
     };
 
     let resolved = resolve_server_config(&args).unwrap();
@@ -793,10 +736,7 @@ fn server_resolution_applies_all_server_overrides() {
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "version": 1, "components": [] }))
-    );
+    assert_eq!(resolved.gateway.plugin_config, None);
     assert!(args.requested_daemon_mode());
 }
 
@@ -809,7 +749,6 @@ fn run_resolution_applies_all_run_overrides() {
         openai_base_url: Some("http://run-openai".into()),
         anthropic_base_url: Some("http://run-anthropic".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),
-        plugin_config: Some(r#"{"components":["x"]}"#.into()),
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -820,10 +759,7 @@ fn run_resolution_applies_all_run_overrides() {
     assert_eq!(resolved.gateway.openai_base_url, "http://run-openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://run-anthropic");
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "run" })));
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "components": ["x"] }))
-    );
+    assert_eq!(resolved.gateway.plugin_config, None);
 }
 
 #[test]

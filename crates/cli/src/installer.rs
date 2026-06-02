@@ -76,7 +76,6 @@ const HERMES_HOOK_EVENTS: &[&str] = &[
 /// `--fail-closed` converts missing URLs, HTTP failures, and upstream errors into process errors.
 pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliError> {
     validate_optional_json("session metadata", command.session_metadata.as_deref())?;
-    validate_optional_json("plugin config", command.plugin_config.as_deref())?;
 
     let input = read_hook_payload()?;
     let Some(url) = hook_forward_url(&command)? else {
@@ -138,7 +137,6 @@ async fn send_hook_forward_request(
         .headers(gateway_headers(
             command.profile.as_deref(),
             command.session_metadata.as_deref(),
-            command.plugin_config.as_deref(),
             command.gateway_mode,
         )?)
         .header(CONTENT_TYPE, "application/json")
@@ -435,7 +433,6 @@ fn validate_optional_json(name: &str, value: Option<&str>) -> Result<(), CliErro
 fn gateway_headers(
     profile: Option<&str>,
     session_metadata: Option<&str>,
-    plugin_config: Option<&str>,
     gateway_mode: Option<GatewayMode>,
 ) -> Result<HeaderMap, CliError> {
     let mut headers = HeaderMap::new();
@@ -445,7 +442,6 @@ fn gateway_headers(
         "x-nemo-relay-session-metadata",
         session_metadata,
     )?;
-    insert_header(&mut headers, "x-nemo-relay-plugin-config", plugin_config)?;
     insert_header(
         &mut headers,
         "x-nemo-relay-gateway-mode",

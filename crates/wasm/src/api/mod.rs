@@ -55,7 +55,8 @@ use nemo_relay::plugin::{
     PluginRegistration as ComponentRegistration, PluginRegistrationContext,
     active_plugin_report as active_plugin_report_impl,
     clear_plugin_configuration as clear_plugin_configuration_impl,
-    deregister_plugin as deregister_plugin_impl, initialize_plugins as initialize_plugins_impl,
+    deregister_plugin as deregister_plugin_impl,
+    initialize_plugins_from_discovered_config as initialize_plugins_from_discovered_config_impl,
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
     validate_plugin_config as validate_plugin_config_impl,
 };
@@ -2164,19 +2165,6 @@ pub fn validate_plugin_config(
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
-/// Layer one raw plugin config document over another.
-#[wasm_bindgen(js_name = "layerPluginConfig", unchecked_return_type = "Json")]
-pub fn layer_plugin_config(
-    #[wasm_bindgen(unchecked_param_type = "Json")] base: JsValue,
-    #[wasm_bindgen(unchecked_param_type = "Json")] overlay: JsValue,
-) -> Result<JsValue, JsValue> {
-    let base = serde_wasm_bindgen::from_value(base)?;
-    let overlay = serde_wasm_bindgen::from_value(overlay)?;
-    Ok(json_to_js(&nemo_relay::plugin::layer_plugin_config(
-        base, overlay,
-    )))
-}
-
 #[derive(Clone)]
 #[wasm_bindgen(js_name = "PluginContext", skip_typescript)]
 /// Plugin registration context exposed to JavaScript plugins.
@@ -2837,14 +2825,21 @@ pub fn deregister_plugin(
 #[wasm_bindgen(js_name = "initializePlugins", unchecked_return_type = "Json")]
 /// Validate and activate a plugin configuration.
 ///
-/// Replaces the current active plugin configuration and rolls back partial
-/// registration on failure.
+/// Uses discovered file config as the base where the target supports
+/// discovery, layers the supplied code config on top, replaces the current
+/// active plugin configuration, and rolls back partial registration on failure.
 pub async fn initialize_plugins(
     #[wasm_bindgen(unchecked_param_type = "Json")] config: JsValue,
 ) -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
-    let config: PluginConfig = serde_wasm_bindgen::from_value(config)?;
-    let report = initialize_plugins_impl(config).await.map_err(to_js_err)?;
+    let config = if config.is_null() || config.is_undefined() {
+        None
+    } else {
+        Some(js_to_json(&config)?)
+    };
+    let report = initialize_plugins_from_discovered_config_impl(config)
+        .await
+        .map_err(to_js_err)?;
     serde_wasm_bindgen::to_value(&report).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 

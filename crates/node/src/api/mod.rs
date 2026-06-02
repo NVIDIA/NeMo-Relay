@@ -45,6 +45,7 @@ use nemo_relay::plugin::{
     PluginRegistrationContext, active_plugin_report as active_plugin_report_impl,
     clear_plugin_configuration as clear_plugin_configuration_impl,
     deregister_plugin as deregister_plugin_impl, initialize_plugins as initialize_plugins_impl,
+    initialize_plugins_from_discovered_config as initialize_plugins_from_discovered_config_impl,
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
     validate_plugin_config as validate_plugin_config_impl,
 };
@@ -3202,12 +3203,6 @@ pub fn validate_plugin_config(config: Json) -> napi::Result<Json> {
         .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-/// Layer one raw plugin config document over another.
-#[napi]
-pub fn layer_plugin_config(base: Json, overlay: Json) -> Json {
-    nemo_relay::plugin::layer_plugin_config(base, overlay)
-}
-
 /// Register a plugin backed by JavaScript callbacks.
 ///
 /// `validate` receives `(pluginConfig)` and should return a diagnostics array.
@@ -3267,6 +3262,15 @@ pub async fn initialize_plugins(config: Json) -> napi::Result<Json> {
     let config: PluginConfig =
         serde_json::from_value(config).map_err(|e| napi::Error::from_reason(e.to_string()))?;
     let report = initialize_plugins_impl(config)
+        .await
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+    serde_json::to_value(&report).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+/// Initialize plugin components from discovered config files plus an optional code overlay.
+#[napi]
+pub async fn initialize_plugins_from_discovered_config(config: Option<Json>) -> napi::Result<Json> {
+    let report = initialize_plugins_from_discovered_config_impl(config)
         .await
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     serde_json::to_value(&report).map_err(|e| napi::Error::from_reason(e.to_string()))
