@@ -1311,10 +1311,12 @@ pub fn with_scope(
 
     let scope_stack = current_scope_stack_handle();
     let scope_uuid = scope_handle.inner.uuid;
-    let scope_name = scope_handle.inner.name.clone();
-    let scope_type_int: u32 = ScopeType::from(scope_handle.inner.scope_type) as u32;
-    let scope_attrs = scope_handle.inner.attributes.bits();
-    let scope_parent_uuid = scope_handle.inner.parent_uuid.map(|u| u.to_string());
+    // Hand the callback a real `ScopeHandle` instance, matching the Rust,
+    // Python, and WebAssembly bindings, so it can be passed back into `event`,
+    // `toolCallExecute`, and `llmCallExecute`. The instance is materialized on
+    // the JS thread because a `napi_wrap`'d handle cannot cross the
+    // threadsafe-function boundary as plain JSON.
+    let callback_handle = scope_handle.inner.clone();
 
     // Create a promise-aware wrapper so we handle both sync and async callbacks.
     let pa_fn = std::sync::Arc::new(
@@ -1333,15 +1335,18 @@ pub fn with_scope(
         async move {
             TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
-                    let handle_json = serde_json::json!({
-                        "uuid": scope_uuid.to_string(),
-                        "name": scope_name,
-                        "scopeType": scope_type_int,
-                        "attributes": scope_attrs,
-                        "parentUuid": scope_parent_uuid,
-                    });
+                    let build_handle: crate::promise_call::Arg0Builder =
+                        Box::new(move |env: &Env| {
+                            let raw = unsafe {
+                                <ScopeHandle as ToNapiValue>::to_napi_value(
+                                    env.raw(),
+                                    ScopeHandle::from(callback_handle),
+                                )?
+                            };
+                            Ok(unsafe { JsUnknown::from_raw_unchecked(env.raw(), raw) })
+                        });
 
-                    let result = pa_fn.call(handle_json).await;
+                    let result = pa_fn.call_with_arg0(build_handle).await;
                     // Always pop the scope, even on error.
                     if core_scope_api::pop_scope(
                         core_scope_api::PopScopeParams::builder()

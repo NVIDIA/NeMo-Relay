@@ -33,8 +33,24 @@ enum NextFn {
     Stream(JsonStreamNextFn),
 }
 
+/// Builds the first JS callback argument on the Node main thread.
+///
+/// Some callback arguments, such as `#[napi]` class instances, cannot cross the
+/// threadsafe-function boundary as plain JSON. This builder runs inside the
+/// threadsafe-function call (on the JS thread), so it can materialize those
+/// values directly instead of serializing them.
+pub type Arg0Builder = Box<dyn FnOnce(&Env) -> napi::Result<JsUnknown> + Send>;
+
+/// The first argument passed to the wrapped JS callback.
+enum PrimaryArg {
+    /// A plain JSON value converted on the JS thread.
+    Json(Json),
+    /// A value materialized on the JS thread by a builder closure.
+    Build(Arg0Builder),
+}
+
 struct CallArgs {
-    args: Json,
+    arg0: PrimaryArg,
     next: Option<NextFn>,
     completion: CallCompletion,
 }
@@ -197,13 +213,12 @@ impl PromiseAwareFn {
                     None => undefined_to_unknown(&ctx.env)?,
                 };
                 let (resolve, reject) = build_completion_unknowns(&ctx.env, ctx.value.completion)?;
+                let arg0 = match ctx.value.arg0 {
+                    PrimaryArg::Json(value) => json_to_unknown(&ctx.env, value)?,
+                    PrimaryArg::Build(build) => build(&ctx.env)?,
+                };
 
-                let args = vec![
-                    json_to_unknown(&ctx.env, ctx.value.args)?,
-                    next,
-                    resolve,
-                    reject,
-                ];
+                let args = vec![arg0, next, resolve, reject];
                 Ok(args)
             })?;
 
@@ -217,13 +232,24 @@ impl PromiseAwareFn {
 
     /// Call the JS function with the given args and await the result.
     pub async fn call(&self, args: Json) -> FlowResult<Json> {
-        self.call_inner(args, None).await
+        self.call_inner(PrimaryArg::Json(args), None).await
+    }
+
+    /// Call the JS function with a builder-constructed first argument and await
+    /// the result.
+    ///
+    /// The builder runs on the Node main thread, so it can construct values that
+    /// cannot cross the threadsafe-function boundary as plain JSON, such as a
+    /// `#[napi]` class instance.
+    pub async fn call_with_arg0(&self, build_arg0: Arg0Builder) -> FlowResult<Json> {
+        self.call_inner(PrimaryArg::Build(build_arg0), None).await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
     /// resolves to a JSON result.
     pub async fn call_with_json_next(&self, args: Json, next: JsonNextFn) -> FlowResult<Json> {
-        self.call_inner(args, Some(NextFn::Json(next))).await
+        self.call_inner(PrimaryArg::Json(args), Some(NextFn::Json(next)))
+            .await
     }
 
     /// Call the JS function with a middleware-style `next(arg)` callback that
@@ -233,7 +259,8 @@ impl PromiseAwareFn {
         args: Json,
         next: JsonStreamNextFn,
     ) -> FlowResult<Json> {
-        self.call_inner(args, Some(NextFn::Stream(next))).await
+        self.call_inner(PrimaryArg::Json(args), Some(NextFn::Stream(next)))
+            .await
     }
 
     /// Release the underlying threadsafe function so it does not outlive its registration.
@@ -243,7 +270,7 @@ impl PromiseAwareFn {
         }
     }
 
-    async fn call_inner(&self, args: Json, next: Option<NextFn>) -> FlowResult<Json> {
+    async fn call_inner(&self, arg0: PrimaryArg, next: Option<NextFn>) -> FlowResult<Json> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         let tsfn = self
             .tsfn
@@ -254,7 +281,7 @@ impl PromiseAwareFn {
             .ok_or_else(closed_tsfn_error)?;
         let status = tsfn.call(
             Ok(CallArgs {
-                args,
+                arg0,
                 next,
                 completion: CallCompletion::new(sender),
             }),

@@ -25,83 +25,6 @@ That gives the plugin system three important guarantees:
 
 Use the context only after validation succeeds. Validation should inspect config and return diagnostics; registration should create runtime objects and attach them to the context.
 
-## Activation APIs
-
-Use the plugin APIs in this order:
-
-1. Register the plugin kind.
-2. Build a `PluginConfig`.
-3. Validate the config.
-4. Initialize the config.
-5. Inspect the activation report.
-6. Clear active config during teardown when needed.
-
-When a host has file-backed plugin config and wants to add code-driven defaults
-or per-run overrides, pass the code-driven config to the binding's
-`plugin.initialize(...)` function. Initialization discovers the normal
-`plugins.toml` base config first, then layers the supplied config over it.
-Layering preserves omitted fields, merges component objects by `kind`, and
-replaces arrays and scalar values from the higher-precedence layer. Omit fields
-to inherit them from the file-backed config. Set fields explicitly, including
-`false` or `null`, to override the lower-precedence value.
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-import nemo_relay
-
-active_report = await nemo_relay.plugin.initialize({
-    "components": [{
-        "kind": "header-plugin",
-        "config": {
-            "value": "tenant-a",
-        },
-    }],
-})
-kinds = nemo_relay.plugin.list_kinds()
-nemo_relay.plugin.clear()
-```
-
-</Tab>
-
-<Tab title="Node.js" language="node">
-```ts
-import * as plugin from 'nemo-relay-node/plugin';
-
-const activeReport = await plugin.initialize({
-  components: [
-    plugin.ComponentSpec('header-plugin', { value: 'tenant-a' }),
-  ],
-});
-const kinds = plugin.listKinds();
-plugin.clear();
-```
-
-</Tab>
-
-<Tab title="Rust" language="rust">
-```rust
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins_from_discovered_config, list_plugin_kinds,
-};
-use serde_json::json;
-
-let active_report = initialize_plugins_from_discovered_config(Some(json!({
-    "components": [{
-        "kind": "header-plugin",
-        "config": {
-            "value": "tenant-a"
-        }
-    }]
-})).await?;
-let kinds = list_plugin_kinds();
-clear_plugin_configuration()?;
-```
-
-</Tab>
-
-</Tabs>
-
 ## Header Plugin Example
 
 The same model applies in every binding: validate component-local config, then install middleware through the component-scoped registration context.
@@ -252,6 +175,90 @@ impl Plugin for HeaderPlugin {
 }
 
 register_plugin(Arc::new(HeaderPlugin))?;
+```
+
+</Tab>
+
+</Tabs>
+
+## Activation APIs
+
+With the plugin kind registered (see the Header Plugin Example above), use the plugin APIs in this order:
+
+1. Build a `PluginConfig`.
+2. Validate the config.
+3. Initialize the config.
+4. Inspect the activation report.
+5. Clear active config during teardown when needed.
+
+Register the plugin kind before you initialize. An unregistered kind is reported by `validate()` only as a warning under the default `unknown_component="warn"` policy, so an error-only check still passes, but `initialize()` raises for a kind that was never registered.
+
+When a host also has file-backed plugin config, Python and Node.js
+`plugin.initialize(...)` discover the normal `plugins.toml` base config first,
+then layer the supplied code-driven config over it. Rust hosts can use
+`initialize_plugins_from_discovered_config(...)` for the same behavior. Omit
+fields to inherit them from file-backed config, and set fields explicitly,
+including `false` or `null`, to override lower-precedence values.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+config = nemo_relay.plugin.PluginConfig()
+config.components = [
+    nemo_relay.plugin.ComponentSpec(
+        kind="header-plugin",
+        config={"header_name": "x-tenant", "value": "tenant-a"},
+    )
+]
+
+report = nemo_relay.plugin.validate(config)
+active_report = await nemo_relay.plugin.initialize(config)
+kinds = nemo_relay.plugin.list_kinds()
+nemo_relay.plugin.clear()
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import * as plugin from 'nemo-relay-node/plugin';
+
+const config = plugin.defaultConfig();
+config.components = [
+  plugin.ComponentSpec(
+    'header-plugin',
+    { header_name: 'x-tenant', value: 'tenant-a' },
+    { enabled: true },
+  ),
+];
+
+const report = plugin.validate(config);
+const activeReport = await plugin.initialize(config);
+const kinds = plugin.listKinds();
+plugin.clear();
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, list_plugin_kinds, validate_plugin_config,
+    PluginComponentSpec, PluginConfig,
+};
+
+let mut config = PluginConfig::default();
+let mut component = PluginComponentSpec::new("header-plugin");
+component.config.insert("header_name".into(), "x-tenant".into());
+component.config.insert("value".into(), "tenant-a".into());
+config.components.push(component);
+
+let report = validate_plugin_config(&config);
+let active_report = initialize_plugins(config).await?;
+let kinds = list_plugin_kinds();
+clear_plugin_configuration()?;
 ```
 
 </Tab>
