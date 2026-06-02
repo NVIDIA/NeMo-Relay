@@ -130,6 +130,8 @@ fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoRelaySt
 ///
 /// # Safety
 /// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+/// On success, `*out_json` is set to an allocated JSON string that the caller must free with
+/// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_validate_plugin_config(
     config_json: *const c_char,
@@ -170,6 +172,8 @@ pub unsafe extern "C" fn nemo_relay_validate_plugin_config(
 /// # Safety
 /// `config_json` may be null to use only discovered file config. When non-null, it must be a valid
 /// C string. `out_json` must be a valid, non-null pointer.
+/// On success, `*out_json` is set to an allocated JSON string that the caller must free with
+/// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_initialize_plugins_from_discovered_config(
     config_json: *const c_char,
@@ -211,6 +215,8 @@ pub unsafe extern "C" fn nemo_relay_initialize_plugins_from_discovered_config(
 ///
 /// # Safety
 /// `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+/// On success, `*out_json` is set to an allocated JSON string that the caller must free with
+/// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_initialize_plugins(
     config_json: *const c_char,
@@ -264,6 +270,8 @@ pub extern "C" fn nemo_relay_clear_plugin_configuration() -> NemoRelayStatus {
 ///
 /// # Safety
 /// `out_json` must be a valid, non-null pointer.
+/// On success, `*out_json` is set to an allocated JSON string that the caller must free with
+/// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_active_plugin_report_json(
     out_json: *mut *mut c_char,
@@ -288,6 +296,8 @@ pub unsafe extern "C" fn nemo_relay_active_plugin_report_json(
 ///
 /// # Safety
 /// `out_json` must be a valid, non-null pointer.
+/// On success, `*out_json` is set to an allocated JSON string that the caller must free with
+/// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_list_plugin_kinds_json(
     out_json: *mut *mut c_char,

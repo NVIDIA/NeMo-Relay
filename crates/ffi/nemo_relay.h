@@ -1118,6 +1118,8 @@ NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpe
  *
  * # Safety
  * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+ * On success, `*out_json` is set to an allocated JSON string that the caller must free with
+ * `nemo_relay_string_free`.
  */
 NemoRelayStatus nemo_relay_validate_plugin_config(const char *config_json, char **out_json);
 
@@ -1127,6 +1129,8 @@ NemoRelayStatus nemo_relay_validate_plugin_config(const char *config_json, char 
  * # Safety
  * `config_json` may be null to use only discovered file config. When non-null, it must be a valid
  * C string. `out_json` must be a valid, non-null pointer.
+ * On success, `*out_json` is set to an allocated JSON string that the caller must free with
+ * `nemo_relay_string_free`.
  */
 NemoRelayStatus nemo_relay_initialize_plugins_from_discovered_config(const char *config_json,
                                                                      char **out_json);
@@ -1136,6 +1140,8 @@ NemoRelayStatus nemo_relay_initialize_plugins_from_discovered_config(const char 
  *
  * # Safety
  * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+ * On success, `*out_json` is set to an allocated JSON string that the caller must free with
+ * `nemo_relay_string_free`.
  */
 NemoRelayStatus nemo_relay_initialize_plugins(const char *config_json, char **out_json);
 
@@ -1149,6 +1155,8 @@ NemoRelayStatus nemo_relay_clear_plugin_configuration(void);
  *
  * # Safety
  * `out_json` must be a valid, non-null pointer.
+ * On success, `*out_json` is set to an allocated JSON string that the caller must free with
+ * `nemo_relay_string_free`.
  */
 NemoRelayStatus nemo_relay_active_plugin_report_json(char **out_json);
 
@@ -1157,6 +1165,8 @@ NemoRelayStatus nemo_relay_active_plugin_report_json(char **out_json);
  *
  * # Safety
  * `out_json` must be a valid, non-null pointer.
+ * On success, `*out_json` is set to an allocated JSON string that the caller must free with
+ * `nemo_relay_string_free`.
  */
 NemoRelayStatus nemo_relay_list_plugin_kinds_json(char **out_json);
 

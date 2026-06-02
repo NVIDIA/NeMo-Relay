@@ -445,7 +445,6 @@ async fn serve_listener_rejects_invalid_plugin_config() {
 
     assert!(error.to_string().contains("ATOF mode"));
     assert!(error.to_string().contains("plugins.toml /tmp/plugins.toml"));
-    assert!(error.to_string().contains("plugins.toml /tmp/plugins.toml"));
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
