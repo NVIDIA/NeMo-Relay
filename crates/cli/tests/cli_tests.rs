@@ -306,6 +306,63 @@ command = "codex --full-auto"
 }
 
 #[test]
+fn cli_run_dry_run_layers_plugin_config_over_plugins_toml() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[agents.codex]
+command = "codex"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("plugins.toml"),
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = false
+output_directory = "logs"
+filename = "events.jsonl"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "codex",
+            "--plugin-config",
+            r#"{"components":[{"kind":"observability","config":{"atof":{"enabled":true}}}]}"#,
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "dry run should resolve layered plugin config: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("exporter = ATOF logs/events.jsonl"));
+    assert!(stdout.contains("plugin_config_source = plugins.toml"));
+    assert!(stdout.contains("overlaid by --plugin-config"));
+}
+
+#[test]
 fn cli_hook_forward_fails_open_without_gateway_url() {
     let mut child = Command::new(gateway_bin())
         .env_remove("NEMO_RELAY_GATEWAY_URL")
