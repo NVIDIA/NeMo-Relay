@@ -185,8 +185,29 @@ The public package modules are:
 - `nemo_relay.plugin`
 - `nemo_relay.adaptive`
 - `nemo_relay.observability`
+- `nemo_relay.nat_exporter`
 - `nemo_relay.typed`
 - `nemo_relay.codecs`
+
+### NeMo Agent Toolkit Export
+
+Use `NatTelemetryExporter` when a Python host process needs to hand Relay
+events to NVIDIA NeMo Agent Toolkit. It registers as a normal Relay subscriber
+and writes canonical ATOF JSONL that NeMo Agent Toolkit can replay into its
+telemetry stream.
+
+```python
+import nemo_relay
+
+exporter = nemo_relay.NatTelemetryExporter("relay-events.jsonl")
+exporter.register("nat")
+try:
+    with nemo_relay.scope.scope("agent", nemo_relay.ScopeType.Agent):
+        nemo_relay.scope.event("ready")
+finally:
+    exporter.deregister("nat")
+    exporter.shutdown()
+```
 
 ### Integrations
 

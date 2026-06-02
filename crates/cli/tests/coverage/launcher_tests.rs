@@ -366,9 +366,20 @@ fn cursor_patching_can_be_disabled() {
 
 #[test]
 fn prepares_hermes_hook_environment() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+    let hooks_path = temp.path().join("hermes-home/config.yaml");
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
-        agents: AgentConfigs::default(),
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                command: None,
+                hooks_path: Some(hooks_path.clone()),
+            },
+            ..AgentConfigs::default()
+        },
     };
     let prepared = PreparedRun::new(
         CodingAgent::Hermes,
@@ -385,12 +396,64 @@ fn prepares_hermes_hook_environment() {
         "http://127.0.0.1:1234".into()
     )));
     assert!(
-        !prepared
+        prepared
             .env
-            .iter()
-            .any(|(name, _)| name == "HERMES_ACCEPT_HOOKS")
+            .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
     );
-    assert!(prepared.notes[0].contains("nemo-relay config hermes"));
+    assert_eq!(
+        prepared
+            .hermes_restore
+            .as_ref()
+            .map(|restore| &restore.path),
+        Some(&hooks_path)
+    );
+    let hooks = std::fs::read_to_string(&hooks_path).unwrap();
+    assert!(hooks.contains("hook-forward hermes"));
+    assert!(prepared.notes[0].contains("temporarily merged"));
+
+    prepared.restore().unwrap();
+    assert!(!hooks_path.exists());
+    std::env::set_current_dir(previous).unwrap();
+}
+
+#[test]
+fn hermes_patch_restore_restores_original_file() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+    let hooks_path = temp.path().join("hermes-home/config.yaml");
+    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
+    let original = "hooks:\n  PreToolUse: []\n";
+    std::fs::write(&hooks_path, original).unwrap();
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                command: None,
+                hooks_path: Some(hooks_path.clone()),
+            },
+            ..AgentConfigs::default()
+        },
+    };
+
+    let prepared = PreparedRun::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into(), "chat".into()],
+        "http://s",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert!(
+        std::fs::read_to_string(&hooks_path)
+            .unwrap()
+            .contains("hook-forward hermes")
+    );
+    prepared.restore().unwrap();
+    assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
+    std::env::set_current_dir(previous).unwrap();
 }
 
 #[test]
@@ -548,6 +611,7 @@ fn cursor_restore_reports_failed_backup_restore() {
             backup_path: Some(temp.path().join("missing-backup.json")),
             had_original: true,
         }),
+        hermes_restore: None,
         notes: vec![],
     };
 
@@ -570,6 +634,7 @@ fn cursor_restore_reports_failed_temporary_hook_removal() {
             backup_path: None,
             had_original: false,
         }),
+        hermes_restore: None,
         notes: vec![],
     };
 
@@ -589,6 +654,7 @@ fn cursor_restore_noops_when_original_was_declared_without_backup() {
             backup_path: None,
             had_original: true,
         }),
+        hermes_restore: None,
         notes: vec![],
     };
 

@@ -1583,6 +1583,77 @@ async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
 }
 
 #[tokio::test]
+async fn hermes_task_id_tool_hooks_reuse_api_session() {
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-main"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-main",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read file" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "tool-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "tool_response": { "content": "hello" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "provider-tool-1"
+            }
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    let sessions = manager.inner.lock().await;
+    assert!(sessions.contains_key("hermes-main"));
+    assert!(
+        !sessions.contains_key("task-1"),
+        "Hermes tool hooks keyed by task_id should not create a duplicate session"
+    );
+    let session = sessions.get("hermes-main").unwrap();
+    assert!(
+        session.tools.is_empty(),
+        "post_tool_call should close the matching pre_tool_call even when call IDs differ"
+    );
+}
+
+#[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
