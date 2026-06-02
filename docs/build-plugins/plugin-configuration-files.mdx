@@ -98,9 +98,30 @@ inherited top-level `--plugin-config` before layering over the file-backed
 config. This preserves the existing "run flag wins over top-level flag"
 behavior while still allowing either flag to overlay `plugins.toml`.
 
+For hook-forwarded or gateway sessions, the `x-nemo-relay-plugin-config` header
+is a per-session overlay on top of the process-level plugin config. The
+`nemo-relay hook-forward --plugin-config '<json>'` flag sets that header for
+automation and installed hooks.
+
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
 to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
 not loaded for that run.
+
+For example, use this layout when you want an explicit base plugin file:
+
+```text
+my-run/
+  config.toml
+  plugins.toml
+```
+
+Run this command:
+
+```bash
+nemo-relay --config my-run/config.toml run --agent codex --dry-run
+```
+
+The selected file-backed plugin config is `my-run/plugins.toml`.
 
 When no explicit `--config` path is supplied, the gateway checks these
 `plugins.toml` locations from lowest to highest precedence:
