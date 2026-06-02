@@ -137,7 +137,7 @@ jobs:
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
 
       - name: Run Python LangChain integration tests
-        if: ${{ inputs.run_integration_langchain == 'true' }}
+        if: ${{ inputs.run_integration_langchain }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-langchain
 
