@@ -1178,17 +1178,36 @@ function trajectoryRunKey(session: SessionState, runId?: string): string {
   return runId ?? session.sessionId;
 }
 
-/** Normalize provider usage into OpenInference-friendly token/cost fields. */
+/** Normalize provider usage into NeMo Relay token and cost fields. */
 function mapUsage(usage: unknown): Record<string, number> | undefined {
   if (!isRecord(usage)) {
     return undefined;
   }
   const mapped: Record<string, number> = {};
-  const input = numberField(usage, 'input') ?? numberField(usage, 'prompt_tokens');
-  const output = numberField(usage, 'output') ?? numberField(usage, 'completion_tokens');
-  const cacheRead = numberField(usage, 'cacheRead') ?? numberField(usage, 'cache_read_tokens');
-  const cacheWrite = numberField(usage, 'cacheWrite') ?? numberField(usage, 'cache_write_tokens');
-  const total = numberField(usage, 'total') ?? numberField(usage, 'totalTokens') ?? numberField(usage, 'total_tokens');
+  const input =
+    numberField(usage, 'input') ??
+    numberField(usage, 'prompt_tokens') ??
+    numberField(usage, 'input_tokens') ??
+    numberField(usage, 'inputTokens');
+  const output =
+    numberField(usage, 'output') ??
+    numberField(usage, 'completion_tokens') ??
+    numberField(usage, 'output_tokens') ??
+    numberField(usage, 'outputTokens');
+  const cacheRead =
+    numberField(usage, 'cacheRead') ??
+    numberField(usage, 'cache_read_tokens') ??
+    numberField(usage, 'cache_read_input_tokens') ??
+    nestedNumberField(usage, 'input_tokens_details', 'cached_tokens') ??
+    nestedNumberField(usage, 'prompt_tokens_details', 'cached_tokens');
+  const cacheWrite =
+    numberField(usage, 'cacheWrite') ??
+    numberField(usage, 'cache_write_tokens') ??
+    numberField(usage, 'cache_creation_input_tokens');
+  const total =
+    numberField(usage, 'total') ??
+    numberField(usage, 'totalTokens') ??
+    numberField(usage, 'total_tokens');
   const totalCanIncludeCompletion = total === undefined || output === undefined || total >= output;
   const prompt = total !== undefined && output !== undefined && totalCanIncludeCompletion ? total - output : input;
   const totalCanIncludePrompt = total === undefined || prompt === undefined || total >= prompt;
@@ -1228,6 +1247,12 @@ function stringField(record: Record<string, unknown>, key: string): string | und
 function numberField(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Read a finite numeric field nested one object deep from a generic hook record. */
+function nestedNumberField(record: Record<string, unknown>, objectKey: string, fieldKey: string): number | undefined {
+  const value = record[objectKey];
+  return isRecord(value) ? numberField(value, fieldKey) : undefined;
 }
 
 /** Copy model_call_ended details into a retained timing record. */

@@ -104,6 +104,135 @@ describe('LLM replay', () => {
     assert.deepEqual((response.openclaw as ResponseOpenClaw).assistant_tool_call_names, ['web_search']);
   });
 
+  it('normalizes Anthropic messages content blocks from message-write replay', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+    const assistantMessage = {
+      role: 'assistant',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4',
+      content: [
+        { type: 'text', text: 'I will search for it.' },
+        {
+          type: 'tool_use',
+          id: 'toolu-search-1',
+          name: 'web_search',
+          input: { query: 'release notes' },
+        },
+      ],
+      usage: {
+        input_tokens: 11,
+        output_tokens: 7,
+        cache_read_input_tokens: 3,
+        cache_creation_input_tokens: 5,
+      },
+    };
+
+    backend.onLlmInput(
+      {
+        ...llmInput(),
+        provider: 'anthropic',
+        model: 'claude-sonnet-4',
+        prompt: 'Find the release notes.',
+        historyMessages: [{ role: 'user', content: [{ type: 'text', text: 'Find the release notes.' }] }],
+      },
+      { runId: 'run-1', sessionId: 'session-1' },
+    );
+    backend.onModelCallEnded(
+      {
+        ...modelEnded('call-1', 42),
+        provider: 'anthropic',
+        model: 'claude-sonnet-4',
+      },
+      { runId: 'run-1', sessionId: 'session-1' },
+    );
+    backend.onBeforeMessageWrite({ message: assistantMessage }, { sessionKey: 'session-1' });
+    backend.onAgentEnd(
+      {
+        runId: 'run-1',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'Find the release notes.' }] },
+          assistantMessage,
+        ],
+        success: true,
+      },
+      { runId: 'run-1', sessionId: 'session-1' },
+    );
+
+    assert.equal(nf.calls.llmCall.length, 1);
+    assert.equal(nf.calls.llmCallEnd.length, 1);
+    const request = nf.calls.llmCall[0]?.request as ReplayRequest;
+    assert.deepEqual(request.content.messages, [
+      { role: 'user', content: [{ type: 'text', text: 'Find the release notes.' }] },
+    ]);
+    const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
+    assert.equal(response.content, 'I will search for it.');
+    assert.deepEqual(response.tool_calls, [
+      {
+        type: 'tool_use',
+        id: 'toolu-search-1',
+        name: 'web_search',
+        input: { stripped: true },
+      },
+    ]);
+    assert.deepEqual(response.usage, {
+      prompt_tokens: 11,
+      completion_tokens: 7,
+      cached_tokens: 3,
+      cache_read_tokens: 3,
+      cache_write_tokens: 5,
+      total_tokens: 18,
+    });
+    assert.deepEqual((response.openclaw as ResponseOpenClaw).assistant_tool_call_names, ['web_search']);
+  });
+
+  it('normalizes OpenAI responses usage from message-write replay', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+    const assistantMessage = {
+      role: 'assistant',
+      provider: 'openai',
+      model: 'gpt-4.1',
+      content: [{ type: 'output_text', text: 'Done.' }],
+      usage: {
+        input_tokens: 75,
+        output_tokens: 20,
+        total_tokens: 95,
+        input_tokens_details: { cached_tokens: 10 },
+      },
+    };
+
+    backend.onLlmInput(
+      {
+        ...llmInput(),
+        model: 'gpt-4.1',
+        prompt: 'Use the responses endpoint.',
+        historyMessages: [{ role: 'user', content: 'Use the responses endpoint.' }],
+      },
+      { runId: 'run-1', sessionId: 'session-1' },
+    );
+    backend.onModelCallEnded({ ...modelEnded('call-1', 42), model: 'gpt-4.1' }, { runId: 'run-1', sessionId: 'session-1' });
+    backend.onBeforeMessageWrite({ message: assistantMessage }, { sessionKey: 'session-1' });
+    backend.onAgentEnd(
+      {
+        runId: 'run-1',
+        messages: [{ role: 'user', content: 'Use the responses endpoint.' }, assistantMessage],
+        success: true,
+      },
+      { runId: 'run-1', sessionId: 'session-1' },
+    );
+
+    const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
+    assert.equal(response.content, 'Done.');
+    assert.deepEqual(response.usage, {
+      prompt_tokens: 75,
+      completion_tokens: 20,
+      cached_tokens: 10,
+      cache_read_tokens: 10,
+      total_tokens: 95,
+    });
+  });
+
   it('uses the observed input time as the fallback llm span start time', () => {
     const now = Date.now;
     const nf = createNemoRelayRuntime();
