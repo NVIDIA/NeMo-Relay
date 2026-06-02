@@ -102,8 +102,7 @@ class TestGraphCallbacks:
         callback_handler: NemoRelayCallbackHandler,
     ):
         with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
-            result = sync_graph.invoke(
-                {"value": 1}, config={"callbacks": [callback_handler]})
+            result = sync_graph.invoke({"value": 1}, config={"callbacks": [callback_handler]})
 
         nemo_relay.subscribers.flush()
 
@@ -117,8 +116,7 @@ class TestGraphCallbacks:
         callback_handler: NemoRelayCallbackHandler,
     ):
         with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
-            result = await async_graph.ainvoke(
-                {"value": 1}, config={"callbacks": [callback_handler]})
+            result = await async_graph.ainvoke({"value": 1}, config={"callbacks": [callback_handler]})
 
         nemo_relay.subscribers.flush()
 
