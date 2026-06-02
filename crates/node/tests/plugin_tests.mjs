@@ -40,7 +40,11 @@ filename_template = "missing-session-id.json"
   try {
     await callback({ root, project });
   } finally {
-    plugin.clear();
+    try {
+      plugin.clear();
+    } catch (error) {
+      console.warn('plugin.clear() failed during cleanup:', error);
+    }
     process.chdir(oldCwd);
     if (oldXdg === undefined) {
       delete process.env.XDG_CONFIG_HOME;
