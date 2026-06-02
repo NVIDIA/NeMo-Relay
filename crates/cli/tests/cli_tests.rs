@@ -357,9 +357,22 @@ filename = "events.jsonl"
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("exporter = ATOF logs/events.jsonl"));
-    assert!(stdout.contains("plugin_config_source = plugins.toml"));
-    assert!(stdout.contains("overlaid by --plugin-config"));
+    let expected_exporter = format!(
+        "exporter = ATOF {}",
+        std::path::Path::new("logs").join("events.jsonl").display()
+    );
+    assert!(
+        stdout.contains(&expected_exporter),
+        "expected dry-run output to contain `{expected_exporter}`, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("plugin_config_source = plugins.toml"),
+        "expected dry-run output to include plugin config source, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("overlaid by --plugin-config"),
+        "expected dry-run output to include overlay source, got:\n{stdout}"
+    );
 }
 
 #[test]
