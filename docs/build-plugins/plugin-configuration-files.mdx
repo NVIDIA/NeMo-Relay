@@ -285,6 +285,19 @@ plugin_config_source = plugins.toml <path> overlaid by --plugin-config
 Those lines show that the overlay changed only `atof.enabled`, while the file
 still supplies `output_directory` and `filename`.
 
+To supply or replace the output filename from the code-driven layer, include
+`filename` in the overlay:
+
+```bash
+nemo-relay --config config.toml run --agent codex \
+  --plugin-config '{"components":[{"kind":"observability","config":{"atof":{"filename":"run-events.jsonl"}}}]}' \
+  --dry-run
+```
+
+The effective ATOF config keeps any omitted file-backed fields, such as
+`enabled`, `output_directory`, and `mode`, and uses
+`filename = "run-events.jsonl"` from the overlay.
+
 ## Explicit Defaults And Overrides
 
 The editor writes explicit defaults for edited Observability and Adaptive
