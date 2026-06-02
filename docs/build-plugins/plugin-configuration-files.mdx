@@ -178,6 +178,10 @@ rules at higher precedence. A code-driven component with the same `kind` layers
 over the file-backed component; a code-driven component with a new `kind` is
 appended to the effective component list.
 
+Omitted fields inherit from the lower-precedence layer. Explicit values in the
+higher-precedence layer, including `false` and `null`, replace lower-precedence
+values.
+
 TOML tables merge recursively:
 
 ```toml
@@ -220,7 +224,9 @@ filename = "events.jsonl"
 ```
 
 ```bash
-nemo-relay run --plugin-config '{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}' -- codex
+nemo-relay run --agent codex \
+  --plugin-config '{"components":[{"kind":"observability","config":{"atof":{"mode":"overwrite"}}}]}' \
+  --dry-run
 ```
 
 The effective component keeps `enabled = false`, `atof.enabled = true`, and
@@ -238,6 +244,46 @@ components that reach plugin validation also fail validation.
 
 Arrays inside component config are replaced by the higher-precedence value.
 Tables inside component config merge recursively.
+
+## Verify Layering Quickly
+
+Use `--dry-run` to inspect the effective transparent-run configuration without
+starting a gateway or agent process. For example, with this `plugins.toml` next
+to the selected `config.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = false
+output_directory = "logs"
+filename = "events.jsonl"
+```
+
+Run this command:
+
+```bash
+nemo-relay --config config.toml run --agent codex \
+  --plugin-config '{"components":[{"kind":"observability","config":{"atof":{"enabled":true}}}]}' \
+  --dry-run
+```
+
+The output includes these lines:
+
+```text
+exporter = ATOF logs/events.jsonl
+plugin_config_source = plugins.toml <path> overlaid by --plugin-config
+```
+
+Those lines show that the overlay changed only `atof.enabled`, while the file
+still supplies `output_directory` and `filename`.
 
 ## Explicit Defaults And Overrides
 

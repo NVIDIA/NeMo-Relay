@@ -40,6 +40,8 @@ When a host has file-backed plugin config and wants to add code-driven defaults
 or per-run overrides, layer the code-driven config over the file config before
 validation. Layering preserves omitted fields, merges component objects by
 `kind`, and replaces arrays and scalar values from the higher-precedence layer.
+Omit fields to inherit them from the file-backed config. Set fields explicitly,
+including `false` or `null`, to override the lower-precedence value.
 
 <Tabs>
 <Tab title="Python" language="python">
