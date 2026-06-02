@@ -44,6 +44,7 @@ const {
   registerSubscriber,
   deregisterSubscriber,
   flushSubscribers,
+  LlmRequest,
   withScope,
   event,
   toolCallExecute,
@@ -70,7 +71,7 @@ async function main() {
 
     const llmResult = await llmCallExecute(
       "demo-provider",
-      { headers: {}, content: { messages: [{ role: "user", content: "hi" }] } },
+      new LlmRequest({}, { messages: [{ role: "user", content: "hi" }] }),
       (request) => ({ ok: true, messages: request.content.messages }),
       handle,
       null,
