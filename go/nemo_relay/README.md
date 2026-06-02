@@ -100,6 +100,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer nemo.DeregisterSubscriber("printer")
+	defer nemo.FlushSubscribers()
 
 	handle, err := scope.Push("demo-agent", nemo.ScopeTypeAgent)
 	if err != nil {

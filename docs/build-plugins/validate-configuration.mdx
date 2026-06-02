@@ -126,6 +126,14 @@ Prefer stable diagnostic codes over prose-only messages. The message can improve
 
 Use the validation API before initialization and fail deployment if the report contains errors.
 
+<Warning>
+This error check does not catch an unknown or unregistered component kind. Under
+the default `unknown_component="warn"` policy that case is reported as a warning,
+not an error, so the check below passes while `initialize()` still raises for a
+kind that is not registered. Register every kind before initialization, or set
+`unknown_component="error"` to make validation fail on unknown kinds.
+</Warning>
+
 <Tabs>
 <Tab title="Python" language="python">
 ```python
