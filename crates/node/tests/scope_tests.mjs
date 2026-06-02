@@ -14,6 +14,8 @@ const {
   popScope,
   event,
   withScope,
+  toolCallExecute,
+  llmCallExecute,
   registerSubscriber,
   deregisterSubscriber,
   flushSubscribers,
@@ -116,6 +118,46 @@ describe('withScope', () => {
     // Scope should be popped
     const after = getHandle();
     assert.equal(after.uuid, before.uuid, 'scope should be popped after withScope');
+  });
+
+  it('callback receives a reusable ScopeHandle', async () => {
+    let toolResult;
+    let llmResult;
+    let childParentUuid;
+    await withScope('reusable_handle', ScopeType.Agent, async (handle) => {
+      // The handle is a real ScopeHandle: usable as an event target,
+      const handleUuid = handle.uuid;
+      event('inside', handle, { ok: true }, null);
+
+      // as an explicit parent for child scopes,
+      const child = pushScope('child', ScopeType.Function, handle, null);
+      childParentUuid = child.parentUuid;
+      popScope(child);
+
+      // and as the scope target for managed tool/LLM execution.
+      toolResult = await toolCallExecute(
+        'search',
+        { query: 'hello' },
+        (args) => ({ echo: args.query }),
+        handle,
+        null,
+        null,
+        null,
+      );
+      llmResult = await llmCallExecute(
+        'demo-provider',
+        { headers: {}, content: { messages: [{ role: 'user', content: 'hi' }] } },
+        (request) => ({ ok: true, messages: request.content.messages }),
+        handle,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.equal(childParentUuid, handleUuid, 'child scope should record the handle as its parent');
+    });
+    assert.deepEqual(toolResult, { echo: 'hello' });
+    assert.deepEqual(llmResult, { ok: true, messages: [{ role: 'user', content: 'hi' }] });
   });
 
   it('returns callback result', async () => {

@@ -56,15 +56,13 @@ async function main() {
   });
 
   await withScope("demo-agent", ScopeType.Agent, async (handle) => {
-    // `handle` describes the active scope (handle.uuid, handle.name, handle.scopeType).
-    // For lifecycle calls inside the scope, pass null to target the current scope.
-    event("initialized", null, { binding: "node" }, null);
+    event("initialized", handle, { binding: "node" }, null);
 
     const toolResult = await toolCallExecute(
       "search",
       { query: "hello" },
       (args) => ({ echo: args.query }),
-      null,
+      handle,
       null,
       null,
       null,
@@ -74,7 +72,7 @@ async function main() {
       "demo-provider",
       { headers: {}, content: { messages: [{ role: "user", content: "hi" }] } },
       (request) => ({ ok: true, messages: request.content.messages }),
-      null,
+      handle,
       null,
       null,
       null,
