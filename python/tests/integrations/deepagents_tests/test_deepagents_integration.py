@@ -75,6 +75,7 @@ def test_before_agent_emits_configuration_mark(
     with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
         middleware.before_agent(MagicMock(name="mock_state"), MagicMock(name="mock_runtime"))
 
+    nemo_relay.subscribers.flush()
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["DeepAgents Skills Configured"]
     assert _mark_metadata(marks[0])["deepagents_kind"] == "skill"
@@ -121,6 +122,7 @@ def test_callback_handler_emits_human_in_the_loop_marks(
             )
         )
 
+    nemo_relay.subscribers.flush()
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == [
         "DeepAgents Human In The Loop Interrupt",
@@ -159,6 +161,7 @@ def test_callback_handler_falls_back_for_non_hitl_interrupt(
             )
         )
 
+    nemo_relay.subscribers.flush()
     marks = _filter_mark_events(subscribed_events)
     assert [mark.name for mark in marks] == ["Graph Interrupt", "Graph Resume"]
     assert _mark_metadata(marks[0])["integration"] == "langgraph"

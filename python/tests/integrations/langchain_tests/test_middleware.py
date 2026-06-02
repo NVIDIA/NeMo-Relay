@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol
 from unittest.mock import AsyncMock, MagicMock
@@ -342,7 +343,8 @@ def test_awrap_tool_call_routes_through_tool_execute(
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMiddleware):
+def test_agent_integration(use_async: bool,
+                           nemo_relay_middleware: NemoRelayMiddleware):
     """An integration test to verify that the middleware correctly wraps a model call end-to-end."""
     from langchain.agents import create_agent
     from langchain_core.messages import AIMessage
@@ -351,13 +353,13 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
     model_responses = [
         AIMessage(
             content="",
-            tool_calls=[
-                {
-                    "name": "get_weather",
-                    "args": {"location": "San Francisco"},
-                    "id": "call-1",
-                }
-            ],
+            tool_calls=[{
+                "name": "get_weather",
+                "args": {
+                    "location": "San Francisco"
+                },
+                "id": "call-1",
+            }],
         ),
         AIMessage(content=_DEFAULT_MOCK_RESPONSE_MSG),
     ]
@@ -369,15 +371,15 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
         """Get the current weather for a location."""
         return f"The weather in {location} is sunny and 72 degrees."
 
-    agent = create_agent(model=mock_model, tools=[get_weather], middleware=[nemo_relay_middleware])
+    agent = create_agent(model=mock_model,
+                         tools=[get_weather],
+                         middleware=[nemo_relay_middleware])
 
     input_payload = {
-        "messages": [
-            {
-                "role": "user",
-                "content": "What is the weather in San Francisco?",
-            }
-        ]
+        "messages": [{
+            "role": "user",
+            "content": "What is the weather in San Francisco?",
+        }]
     }
 
     events = []
@@ -398,16 +400,19 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
     nemo_relay.subscribers.register("event_recorder", event_recorder)
 
     try:
-        with nemo_relay.scope.scope("langchain-request", nemo_relay.ScopeType.Agent):
+        with nemo_relay.scope.scope("langchain-request",
+                                    nemo_relay.ScopeType.Agent):
             if use_async:
                 result = asyncio.run(agent.ainvoke(input_payload))
             else:
                 result = agent.invoke(input_payload)
     finally:
+        nemo_relay.subscribers.flush()
         nemo_relay.subscribers.deregister("event_recorder")
 
-    assert any(
-        message.content == "The weather in San Francisco is sunny and 72 degrees." for message in result["messages"]
-    )
+    assert any(message.content ==
+               "The weather in San Francisco is sunny and 72 degrees."
+               for message in result["messages"])
     assert result["messages"][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
+
     assert events == expected_events
