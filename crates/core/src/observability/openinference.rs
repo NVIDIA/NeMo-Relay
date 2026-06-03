@@ -1086,7 +1086,7 @@ fn display_text_from_openai_responses_content(value: &Json) -> Option<String> {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n\n")
         .trim()
         .to_string();
     if text.is_empty() { None } else { Some(text) }
