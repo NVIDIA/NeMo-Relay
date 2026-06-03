@@ -1611,27 +1611,6 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
                 }
             }
         }),
-        json!({
-            "hook_event_name": "pre_tool_call",
-            "session_id": "",
-            "tool_name": "read_file",
-            "tool_input": { "path": "README.md" },
-            "extra": {
-                "task_id": "task-1",
-                "tool_call_id": "tool-1"
-            }
-        }),
-        json!({
-            "hook_event_name": "post_tool_call",
-            "session_id": "",
-            "tool_name": "read_file",
-            "tool_input": { "path": "README.md" },
-            "tool_response": { "content": "hello" },
-            "extra": {
-                "task_id": "task-1",
-                "tool_call_id": "provider-tool-1"
-            }
-        }),
     ] {
         let outcome = crate::adapters::hermes::adapt(payload, &headers);
         manager
@@ -1640,12 +1619,58 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
             .unwrap();
     }
 
-    let sessions = manager.inner.lock().await;
-    assert!(sessions.contains_key("hermes-main"));
-    assert!(
-        !sessions.contains_key("task-1"),
-        "Hermes tool hooks keyed by task_id should not create a duplicate session"
+    let pre_tool = crate::adapters::hermes::adapt(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-main",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "tool-1"
+            }
+        }),
+        &headers,
     );
+    manager
+        .apply_events(&headers, pre_tool.events)
+        .await
+        .unwrap();
+
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.contains_key("hermes-main"));
+        assert!(
+            !sessions.contains_key("task-1"),
+            "Hermes tool hooks keyed by task_id should not create a duplicate session"
+        );
+        let session = sessions.get("hermes-main").unwrap();
+        assert!(
+            !session.tools.is_empty(),
+            "pre_tool_call should open an active tool before post_tool_call runs"
+        );
+    }
+
+    let post_tool = crate::adapters::hermes::adapt(
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-main",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "tool_response": { "content": "hello" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "provider-tool-1"
+            }
+        }),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, post_tool.events)
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
     let session = sessions.get("hermes-main").unwrap();
     assert!(
         session.tools.is_empty(),
