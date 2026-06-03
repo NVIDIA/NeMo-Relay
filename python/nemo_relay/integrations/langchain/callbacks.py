@@ -94,17 +94,13 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         """Pop the NeMo Relay scope associated with a failed LangChain chain run."""
         self._pop_scope(run_id, output={"error": repr(error)})
 
-    def _pop_scope(self,
-                   run_id: UUID,
-                   *,
-                   output: dict[str, typing.Any] | None = None) -> None:
+    def _pop_scope(self, run_id: UUID, *, output: dict[str, typing.Any] | None = None) -> None:
         handle = self._scope_handles.pop(run_id, None)
         if handle is None:
             return
 
         try:
-            prepared_outputs = _prepare_lc_payloads(
-                output) if output is not None else None
+            prepared_outputs = _prepare_lc_payloads(output) if output is not None else None
             nemo_relay.scope.pop(handle, output=prepared_outputs)
         except Exception:
             _logger.error("NeMo Relay: scope.pop failed", exc_info=True)
