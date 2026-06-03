@@ -552,7 +552,9 @@ function replayLlmOutput(params: {
   const metadata = toJsonRecord({
     source,
     runId: event.runId,
-    sessionId: event.sessionId,
+    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
+    agentId: session.agentId,
     provider: event.provider,
     model: event.model,
     callId: timing?.callId,
@@ -791,7 +793,15 @@ function existingSessionForMessageWrite(
   const key = resolveSessionKey(manager.state, {
     sessionKey: event.sessionKey ?? ctx.sessionKey,
   });
-  return key === undefined ? undefined : manager.state.sessions.get(key);
+  if (key === undefined) {
+    return undefined;
+  }
+  const session = manager.state.sessions.get(key);
+  const sessionKey = event.sessionKey ?? ctx.sessionKey;
+  if (session && session.sessionKey === undefined && sessionKey !== undefined) {
+    session.sessionKey = sessionKey;
+  }
+  return session;
 }
 
 /** Build a minimal request placeholder when only an llm_output hook is available. */

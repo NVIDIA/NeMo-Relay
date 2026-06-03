@@ -18,6 +18,7 @@ import type {
 import type { PluginLogger } from 'openclaw/plugin-sdk/plugin-entry';
 import type { JsonObject as JsonRecord } from 'nemo-relay-node/typed';
 import type { NemoRelayRuntimeModule } from '../modules.js';
+import { toJsonRecord } from './marks.js';
 
 export type SessionLookupInput = {
   sessionId?: string | undefined;
@@ -213,6 +214,7 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
 
   const existing = manager.state.sessions.get(key);
   if (existing) {
+    enrichSession(existing, input);
     rememberSessionAliases(manager.state, existing, input);
     return existing;
   }
@@ -220,6 +222,7 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
   const canonicalSessionId = input.sessionId ?? key;
   const aliased = manager.state.sessions.get(canonicalSessionId);
   if (aliased) {
+    enrichSession(aliased, input);
     rememberSessionAliases(manager.state, aliased, input);
     return aliased;
   }
@@ -247,6 +250,19 @@ export function ensureSession(manager: SessionManager, input: EnsureSessionInput
   return session;
 }
 
+/** Fill stable session identifiers from later hooks without clobbering established values. */
+function enrichSession(session: SessionState, input: EnsureSessionInput): void {
+  if (session.sessionKey === undefined && input.sessionKey !== undefined) {
+    session.sessionKey = input.sessionKey;
+  }
+  if (session.agentId === undefined && input.agentId !== undefined) {
+    session.agentId = input.agentId;
+  }
+  if (session.resumedFrom === undefined && input.resumedFrom !== undefined) {
+    session.resumedFrom = input.resumedFrom;
+  }
+}
+
 /** Flush pending LLM output/timing state before the root session closes. */
 export function drainSession(manager: SessionManager, session: SessionState): void {
   cancelPendingLlmOutputTimers(manager.state, session);
@@ -261,6 +277,7 @@ export function closeSessionRoot(
   session: SessionState,
   summary: JsonRecord,
   rootOutput: JsonRecord = summary,
+  metadata?: JsonRecord | null,
   timestamp?: number,
 ): void {
   manager.emitCapturedUnderSession('session_end', session, () => {
@@ -268,7 +285,7 @@ export function closeSessionRoot(
       return;
     }
 
-    manager.nf.event('openclaw.session_end', session.rootHandle, summary, null, timestamp ?? null);
+    manager.nf.event('openclaw.session_end', session.rootHandle, summary, metadata ?? null, timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
     manager.nf.popScope(session.rootHandle, rootOutput, timestamp ?? null);
     delete session.rootHandle;
@@ -313,6 +330,14 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
     ...(input.runId === undefined ? {} : { runId: input.runId }),
     ...(session.resumedFrom === undefined ? {} : { resumedFrom: session.resumedFrom }),
   };
+  const metadata = toJsonRecord({
+    source: session.source === 'session_start' ? 'openclaw.session_start' : 'openclaw.lazy_session',
+    hook_event_name: session.source === 'session_start' ? 'session_start' : undefined,
+    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
+    agentId: session.agentId,
+    runId: input.runId,
+  });
 
   manager.emitCapturedUnderSession('session_start', session, () => {
     session.rootHandle = manager.nf.pushScope(
@@ -322,10 +347,10 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
       null,
       data,
       null,
-      null,
+      metadata,
       input.timestamp ?? null,
     );
-    manager.nf.event('openclaw.session_start', session.rootHandle, data, null, input.timestamp ?? null);
+    manager.nf.event('openclaw.session_start', session.rootHandle, data, metadata, input.timestamp ?? null);
     manager.state.counters.marksEmitted += 1;
   });
 }
