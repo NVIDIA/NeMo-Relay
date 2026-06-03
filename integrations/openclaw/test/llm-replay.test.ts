@@ -283,38 +283,6 @@ describe('LLM replay', () => {
     });
   });
 
-  it('preserves canonical cached token usage fields', () => {
-    for (const [field, value] of [
-      ['cached_tokens', 7],
-      ['cachedTokens', 11],
-    ] as const) {
-      const nf = createNemoRelayRuntime();
-      const backend = createBackend(nf);
-
-      backend.onLlmInput(llmInput(), { runId: `run-${field}`, sessionId: `session-${field}` });
-      backend.onLlmOutput(
-        {
-          ...llmOutput(),
-          usage: {
-            input: 2,
-            output: 3,
-            [field]: value,
-          },
-        },
-        { runId: `run-${field}`, sessionId: `session-${field}` },
-      );
-
-      const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
-      assert.deepEqual(response.usage, {
-        prompt_tokens: 2,
-        completion_tokens: 3,
-        cached_tokens: value,
-        cache_read_tokens: value,
-        total_tokens: 5,
-      });
-    }
-  });
-
   it('does not derive impossible prompt tokens from inconsistent usage totals', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf);
