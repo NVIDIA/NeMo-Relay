@@ -1196,6 +1196,8 @@ function mapUsage(usage: unknown): Record<string, number> | undefined {
     numberField(usage, 'outputTokens');
   const cacheRead =
     numberField(usage, 'cacheRead') ??
+    numberField(usage, 'cached_tokens') ??
+    numberField(usage, 'cachedTokens') ??
     numberField(usage, 'cache_read_tokens') ??
     numberField(usage, 'cache_read_input_tokens') ??
     nestedNumberField(usage, 'input_tokens_details', 'cached_tokens') ??

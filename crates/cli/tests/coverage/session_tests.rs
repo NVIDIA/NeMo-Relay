@@ -3195,6 +3195,61 @@ async fn active_tool_name_args_fallback_requires_matching_subagent_owner() {
 }
 
 #[tokio::test]
+async fn active_tool_name_args_fallback_uses_unique_global_match_without_owner() {
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "tool-global-fallback";
+    let same_args = json!({ "file_path": "README.md" });
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-1-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "provider-worker-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: same_args,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let tools = &sessions.get(session_id).unwrap().tools;
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
 async fn agent_end_closes_active_tools_and_duplicate_starts_are_ignored() {
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();

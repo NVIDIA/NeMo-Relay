@@ -1623,7 +1623,8 @@ impl Session {
             .tools
             .iter()
             .filter_map(|(key, active)| {
-                (active.owner_subagent_id.as_deref() == owner_subagent_id
+                (owner_subagent_id
+                    .is_none_or(|owner| active.owner_subagent_id.as_deref() == Some(owner))
                     && active.name == event.tool_name
                     && active.arguments == event.arguments)
                     .then_some(key.clone())
