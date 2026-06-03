@@ -110,7 +110,7 @@ pub(crate) struct SessionAlignmentState {
     aliases: HashMap<String, SessionAlias>,
     completed_aliases: HashMap<String, SessionAlias>,
     pending_subagents: HashMap<String, PendingSubagentStart>,
-    hermes_task_sessions: HashMap<String, HashMap<String, String>>,
+    task_sessions: HashMap<String, HashMap<String, String>>,
 }
 
 impl SessionAlignmentState {
@@ -118,7 +118,7 @@ impl SessionAlignmentState {
         self.aliases.clear();
         self.completed_aliases.clear();
         self.pending_subagents.clear();
-        self.hermes_task_sessions.clear();
+        self.task_sessions.clear();
     }
 
     pub(crate) fn alias_for_session(&self, session_id: &str) -> Option<SessionAlias> {
@@ -156,8 +156,8 @@ impl SessionAlignmentState {
     }
 
     pub(crate) fn route_event(&mut self, event: NormalizedEvent) -> NormalizedEvent {
-        self.record_hermes_task_session(&event);
-        let event = self.route_hermes_task_event(event);
+        self.record_task_session(&event);
+        let event = self.route_task_session_event(event);
         let (event, finished_alias) = route_event_through_alias(event, &self.aliases);
         let session_id = event.session_id().to_string();
         if let Some(child_session_id) = finished_alias.as_ref() {
@@ -232,8 +232,8 @@ impl SessionAlignmentState {
         self.pending_subagents.retain(|child_session_id, pending| {
             child_session_id != session_id && pending.parent_session_id() != session_id
         });
-        self.hermes_task_sessions.remove(session_id);
-        prune_hermes_task_sessions(&mut self.hermes_task_sessions, session_id);
+        self.task_sessions.remove(session_id);
+        prune_task_sessions(&mut self.task_sessions, session_id);
     }
 
     pub(crate) fn clear_for_ended_subagent(&mut self, parent_session_id: &str, subagent_id: &str) {
@@ -247,29 +247,29 @@ impl SessionAlignmentState {
                 && !(pending.parent_session_id() == parent_session_id
                     && pending.event.session_id == subagent_id)
         });
-        self.hermes_task_sessions
+        self.task_sessions
             .retain(|session_id, _| session_id != subagent_id);
-        prune_hermes_task_sessions(&mut self.hermes_task_sessions, subagent_id);
+        prune_task_sessions(&mut self.task_sessions, subagent_id);
     }
 
-    fn record_hermes_task_session(&mut self, event: &NormalizedEvent) {
+    fn record_task_session(&mut self, event: &NormalizedEvent) {
         if normalized_event_agent_kind(event) != AgentKind::Hermes {
             return;
         }
-        let Some(task_id) = hermes_task_id(event) else {
+        let Some(task_id) = event_task_id(event) else {
             return;
         };
         let session_id = event.session_id();
         if session_id == task_id {
             return;
         }
-        self.hermes_task_sessions
+        self.task_sessions
             .entry(session_id.to_string())
             .or_default()
             .insert(task_id, session_id.to_string());
     }
 
-    fn route_hermes_task_event(&self, event: NormalizedEvent) -> NormalizedEvent {
+    fn route_task_session_event(&self, event: NormalizedEvent) -> NormalizedEvent {
         let should_route = matches!(
             event,
             NormalizedEvent::ToolStarted(_) | NormalizedEvent::ToolEnded(_)
@@ -278,30 +278,25 @@ impl SessionAlignmentState {
             return event;
         }
 
-        let task_id = hermes_task_id(&event).unwrap_or_else(|| event.session_id().to_string());
-        let session_scope = hermes_task_session_scope(&event);
-        let Some(session_id) = self.hermes_session_for_task(&task_id, session_scope.as_deref())
-        else {
+        let task_id = event_task_id(&event).unwrap_or_else(|| event.session_id().to_string());
+        let session_scope = event_task_session_scope(&event);
+        let Some(session_id) = self.session_for_task(&task_id, session_scope.as_deref()) else {
             return event;
         };
-        route_hermes_task_session_event(event, task_id, session_id)
+        route_task_session_event(event, task_id, session_id)
     }
 
-    fn hermes_session_for_task(
-        &self,
-        task_id: &str,
-        session_scope: Option<&str>,
-    ) -> Option<String> {
+    fn session_for_task(&self, task_id: &str, session_scope: Option<&str>) -> Option<String> {
         if let Some(session_scope) = session_scope {
             return self
-                .hermes_task_sessions
+                .task_sessions
                 .get(session_scope)
                 .and_then(|tasks| tasks.get(task_id))
                 .cloned();
         }
 
         let mut matches = self
-            .hermes_task_sessions
+            .task_sessions
             .values()
             .filter_map(|tasks| tasks.get(task_id).cloned());
         let session_id = matches.next()?;
@@ -309,16 +304,16 @@ impl SessionAlignmentState {
     }
 }
 
-fn prune_hermes_task_sessions(
-    hermes_task_sessions: &mut HashMap<String, HashMap<String, String>>,
+fn prune_task_sessions(
+    task_sessions: &mut HashMap<String, HashMap<String, String>>,
     session_id: &str,
 ) {
-    hermes_task_sessions.values_mut().for_each(|tasks| {
+    task_sessions.values_mut().for_each(|tasks| {
         tasks.retain(|task_id, mapped_session_id| {
             task_id != session_id && mapped_session_id != session_id
         });
     });
-    hermes_task_sessions.retain(|_, tasks| !tasks.is_empty());
+    task_sessions.retain(|_, tasks| !tasks.is_empty());
 }
 
 // Resolves the session id for a gateway request in precedence order:
@@ -684,14 +679,14 @@ fn route_tool_event(event: &mut ToolEvent, alias: &SessionAlias, metadata: Value
     event.metadata = merge_metadata(event.metadata.clone(), metadata);
 }
 
-fn route_hermes_task_session_event(
+fn route_task_session_event(
     event: NormalizedEvent,
     task_id: String,
     session_id: String,
 ) -> NormalizedEvent {
     let metadata = json!({
         "session_correlation_status": "task_session_alias",
-        "session_correlation_source": "hermes_task_id",
+        "session_correlation_source": "task_id",
         "hermes_task_id": task_id,
         "hermes_session_id": session_id,
     });
@@ -728,7 +723,7 @@ fn normalized_event_agent_kind(event: &NormalizedEvent) -> AgentKind {
     }
 }
 
-fn hermes_task_id(event: &NormalizedEvent) -> Option<String> {
+fn event_task_id(event: &NormalizedEvent) -> Option<String> {
     match event {
         NormalizedEvent::AgentStarted(event)
         | NormalizedEvent::AgentEnded(event)
@@ -754,7 +749,7 @@ fn hermes_task_id(event: &NormalizedEvent) -> Option<String> {
     }
 }
 
-fn hermes_task_session_scope(event: &NormalizedEvent) -> Option<String> {
+fn event_task_session_scope(event: &NormalizedEvent) -> Option<String> {
     match event {
         NormalizedEvent::AgentStarted(event)
         | NormalizedEvent::AgentEnded(event)
@@ -795,8 +790,8 @@ fn session_scope_from_llm_event(event: &LlmEvent) -> Option<String> {
 }
 
 fn session_scope_from_payload_and_metadata(payload: &Value, metadata: &Value) -> Option<String> {
-    json_string_at(payload, HERMES_SESSION_SCOPE_PATHS)
-        .or_else(|| json_string_at(metadata, HERMES_SESSION_SCOPE_PATHS))
+    json_string_at(payload, TASK_SESSION_SCOPE_PATHS)
+        .or_else(|| json_string_at(metadata, TASK_SESSION_SCOPE_PATHS))
 }
 
 const TASK_ID_PATHS: &[&[&str]] = &[
@@ -806,7 +801,7 @@ const TASK_ID_PATHS: &[&[&str]] = &[
     &["extra", "taskId"],
 ];
 
-const HERMES_SESSION_SCOPE_PATHS: &[&[&str]] = &[
+const TASK_SESSION_SCOPE_PATHS: &[&[&str]] = &[
     &["session_id"],
     &["sessionId"],
     &["session", "id"],
