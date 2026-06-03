@@ -131,6 +131,7 @@ struct ActiveTool {
     handle: ToolHandle,
     name: String,
     arguments: Value,
+    owner_subagent_id: Option<String>,
 }
 
 impl std::ops::Deref for ActiveTool {
@@ -1507,6 +1508,7 @@ impl Session {
         };
         let active_tool_arguments = arguments.clone();
         let active_tool_name = event.tool_name.clone();
+        let active_tool_owner_subagent_id = owner.subagent_id.clone();
         tool_conditional_execution(event.tool_name.as_str(), &arguments)?;
         let metadata = tool_correlation_metadata(
             event.metadata,
@@ -1531,6 +1533,7 @@ impl Session {
                 handle,
                 name: active_tool_name,
                 arguments: active_tool_arguments,
+                owner_subagent_id: active_tool_owner_subagent_id,
             },
         );
         Ok(())
@@ -1597,17 +1600,22 @@ impl Session {
 
     // Hermes pre/post tool hooks can disagree on call IDs: pre hooks may omit the provider id
     // while post hooks carry the final chat-completions tool id. When the ID misses but exactly
-    // one active tool has the same name and arguments, close that start instead of synthesizing a
-    // second zero-duration span.
+    // one active tool owned by the same subagent/root scope has the same name and arguments, close
+    // that start instead of synthesizing a second zero-duration span.
     fn remove_tool_handle_for_event(&mut self, event: &ToolEvent) -> Option<ToolHandle> {
         if let Some(active) = self.tools.remove(&event.tool_call_id) {
             return Some(active.handle);
         }
-        let key = self.matching_active_tool_key(event)?;
+        let owner_subagent_id = self.tool_event_owner_subagent_id(event);
+        let key = self.matching_active_tool_key(event, owner_subagent_id.as_deref())?;
         self.tools.remove(&key).map(|active| active.handle)
     }
 
-    fn matching_active_tool_key(&self, event: &ToolEvent) -> Option<String> {
+    fn matching_active_tool_key(
+        &self,
+        event: &ToolEvent,
+        owner_subagent_id: Option<&str>,
+    ) -> Option<String> {
         if event.arguments.is_null() {
             return None;
         }
@@ -1615,11 +1623,24 @@ impl Session {
             .tools
             .iter()
             .filter_map(|(key, active)| {
-                (active.name == event.tool_name && active.arguments == event.arguments)
+                (active.owner_subagent_id.as_deref() == owner_subagent_id
+                    && active.name == event.tool_name
+                    && active.arguments == event.arguments)
                     .then_some(key.clone())
             })
             .collect::<Vec<_>>();
         (matches.len() == 1).then(|| matches[0].clone())
+    }
+
+    fn tool_event_owner_subagent_id(&self, event: &ToolEvent) -> Option<String> {
+        if let Some(subagent_id) = &event.subagent_id
+            && self.subagents.contains_key(subagent_id)
+        {
+            return Some(subagent_id.clone());
+        }
+        self.matching_tool_hint_index(event)
+            .and_then(|index| self.pending_tool_hints[index].hint.subagent_id.clone())
+            .filter(|subagent_id| self.subagents.contains_key(subagent_id))
     }
 
     // Emits a mark event after ensuring the turn scope exists. Generic and unknown hooks use this
