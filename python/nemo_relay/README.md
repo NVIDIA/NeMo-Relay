@@ -142,8 +142,12 @@ nemo_relay.subscribers.register("printer", on_event)
 with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
     nemo_relay.scope.event("initialized", handle=handle, data={"binding": "python"})
 
+nemo_relay.subscribers.flush()
 nemo_relay.subscribers.deregister("printer")
 ```
+
+Native subscriber delivery is asynchronous, so call
+`nemo_relay.subscribers.flush()` before you read subscriber output or exit.
 
 For host integrations that need a serialized event shape, consume the
 canonical JSON payload from the subscriber event object:
@@ -164,6 +168,7 @@ try:
     with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent):
         nemo_relay.scope.event("initialized", data={"binding": "python"})
 finally:
+    nemo_relay.subscribers.flush()
     nemo_relay.subscribers.deregister("host-exporter")
 ```
 

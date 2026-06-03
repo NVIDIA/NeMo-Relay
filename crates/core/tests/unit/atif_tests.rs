@@ -756,6 +756,113 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
 }
 
 #[test]
+fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    let tool_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut start = event_builder(llm_uuid, EventType::Start)
+        .name("claude-sonnet-4")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "claude-sonnet-4",
+            "system": "Be concise.",
+            "messages": [{"role": "user", "content": "Find the file."}],
+            "tools": [{
+                "name": "search",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}}
+                }
+            }]
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+    let mut end = event_builder(llm_uuid, EventType::End)
+        .name("claude-sonnet-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [
+                {"type": "text", "text": "I will search for it."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "search",
+                    "input": {"query": "file"}
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 5
+            }
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+    let mut tool_end = event_builder(tool_uuid, EventType::End)
+        .name("search")
+        .scope_type(ScopeType::Tool)
+        .parent_uuid(llm_uuid)
+        .tool_call_id("toolu_01")
+        .output(json!({"matches": ["README.md"]}))
+        .build();
+
+    for (offset, event) in [&mut start, &mut end, &mut tool_end]
+        .into_iter()
+        .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([start, end, tool_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let user_step = &trajectory.steps[0];
+    assert_eq!(user_step.source, "user");
+    assert_eq!(user_step.message, json!("Find the file."));
+    let user_extra: AtifStepExtra =
+        serde_json::from_value(user_step.extra.clone().unwrap()).unwrap();
+    let llm_request = user_extra.llm_request.unwrap();
+    assert_eq!(llm_request["system"], json!("Be concise."));
+    assert_eq!(llm_request["tools"][0]["name"], json!("search"));
+
+    let agent_step = &trajectory.steps[1];
+    assert_eq!(agent_step.source, "agent");
+    assert_eq!(agent_step.message, json!("I will search for it."));
+    assert_eq!(agent_step.model_name, Some("claude-sonnet-4".to_string()));
+    let metrics = agent_step.metrics.as_ref().unwrap();
+    assert_eq!(metrics.prompt_tokens, Some(11));
+    assert_eq!(metrics.completion_tokens, Some(7));
+    assert_eq!(metrics.cached_tokens, Some(8));
+    let tool_call = &agent_step.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tool_call.tool_call_id, "toolu_01");
+    assert_eq!(tool_call.function_name, "search");
+    assert_eq!(tool_call.arguments, json!({"query": "file"}));
+    let observation = agent_step.observation.as_ref().unwrap();
+    assert_eq!(
+        observation.results[0].source_call_id.as_deref(),
+        Some("toolu_01")
+    );
+    assert_eq!(
+        observation.results[0].content,
+        Some(json!({"matches": ["README.md"]}))
+    );
+}
+
+#[test]
 fn test_openai_responses_input_extracts_latest_user_content_block() {
     let message = extract_user_messages(&json!({
         "input": [

@@ -83,6 +83,7 @@ const {
   ScopeType,
   deregisterSubscriber,
   event,
+  flushSubscribers,
   registerSubscriber,
   withScope,
 } = require("nemo-relay-wasm");
@@ -97,6 +98,7 @@ async function main() {
     event("initialized", handle, { binding: "wasm" }, null);
   });
 
+  flushSubscribers();
   deregisterSubscriber("printer");
 }
 

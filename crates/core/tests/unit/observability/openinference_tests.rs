@@ -688,7 +688,12 @@ fn output_value_extracts_chat_completion_display_text() {
                     ]
                 }
             }],
-            "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "total_tokens": 7,
+                "prompt_tokens_details": {"cached_tokens": 2}
+            }
         })),
     ));
 
@@ -708,6 +713,93 @@ fn output_value_extracts_chat_completion_display_text() {
     assert_eq!(
         attributes.get("llm.token_count.prompt"),
         Some(&"3".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"2".to_string())
+    );
+}
+
+#[test]
+fn output_value_extracts_openai_responses_display_text_and_usage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::Start,
+        root_uuid,
+        None,
+        "openai.responses",
+        ScopeType::Llm,
+        Some(json!({
+            "input": "Find the weather.",
+            "model": "gpt-4o"
+        })),
+        Some(CategoryProfile::builder().model_name("gpt-4o").build()),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "openai.responses",
+        ScopeType::Llm,
+        Some(json!({
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "I will check the weather."}
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_weather_1",
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"SF\"}",
+                    "status": "completed"
+                }
+            ],
+            "usage": {
+                "input_tokens": 75,
+                "output_tokens": 20,
+                "total_tokens": 95,
+                "input_tokens_details": {"cached_tokens": 10}
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.model_name"),
+        Some(&"gpt-4o".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"I will check the weather.\nRequested tools: get_weather".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"75".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"20".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.total"),
+        Some(&"95".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"10".to_string())
     );
 }
 
@@ -1403,6 +1495,103 @@ fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
     assert_eq!(
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"10".to_string())
+    );
+}
+
+#[test]
+fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::Start,
+        uuid,
+        None,
+        "claude-sonnet-4",
+        ScopeType::Llm,
+        Some(json!({
+            "messages": [{"role": "user", "content": "Find the file."}],
+            "model": "claude-sonnet-4"
+        })),
+        Some(
+            CategoryProfile::builder()
+                .model_name("claude-sonnet-4")
+                .build(),
+        ),
+    ));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "claude-sonnet-4",
+        ScopeType::Llm,
+        Some(json!({
+            "id": "msg_01",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [
+                {"type": "text", "text": "I will search for it."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "search",
+                    "input": {"query": "file"}
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 5
+            }
+        })),
+        Some(
+            CategoryProfile::builder()
+                .model_name("claude-sonnet-4")
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.model_name"),
+        Some(&"claude-sonnet-4".to_string())
+    );
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: Find the file.".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"I will search for it.\nRequested tools: search".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"11".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"7".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"3".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt_details.cache_write"),
+        Some(&"5".to_string())
     );
 }
 

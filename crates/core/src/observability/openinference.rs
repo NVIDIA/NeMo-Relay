@@ -779,7 +779,23 @@ fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
             "cacheReadInputTokens",
             "cacheRead",
         ],
-    );
+    )
+    .or_else(|| {
+        first_nested_u64_from_manual_usage(
+            usage,
+            token_usage,
+            "input_tokens_details",
+            "cached_tokens",
+        )
+    })
+    .or_else(|| {
+        first_nested_u64_from_manual_usage(
+            usage,
+            token_usage,
+            "prompt_tokens_details",
+            "cached_tokens",
+        )
+    });
     let cache_write_tokens = first_u64_from_manual_usage(
         usage,
         token_usage,
@@ -836,6 +852,29 @@ fn first_u64_from_manual_usage(
     usage
         .and_then(|value| first_u64(value, keys))
         .or_else(|| token_usage.and_then(|value| first_u64(value, keys)))
+}
+
+fn first_nested_u64_from_manual_usage(
+    usage: Option<&serde_json::Map<String, Json>>,
+    token_usage: Option<&serde_json::Map<String, Json>>,
+    parent_key: &str,
+    child_key: &str,
+) -> Option<u64> {
+    usage
+        .and_then(|value| nested_u64(value, parent_key, child_key))
+        .or_else(|| token_usage.and_then(|value| nested_u64(value, parent_key, child_key)))
+}
+
+fn nested_u64(
+    usage: &serde_json::Map<String, Json>,
+    parent_key: &str,
+    child_key: &str,
+) -> Option<u64> {
+    usage
+        .get(parent_key)
+        .and_then(Json::as_object)
+        .and_then(|details| details.get(child_key))
+        .and_then(Json::as_u64)
 }
 
 fn first_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
@@ -985,8 +1024,13 @@ fn display_text_from_json(value: &Json) -> Option<String> {
                 }
             }
             object
-                .get("choices")
-                .and_then(display_text_from_chat_choices)
+                .get("output")
+                .and_then(display_text_from_openai_responses_output)
+                .or_else(|| {
+                    object
+                        .get("choices")
+                        .and_then(display_text_from_chat_choices)
+                })
                 .or_else(|| {
                     object
                         .get("tool_calls")
@@ -996,6 +1040,56 @@ fn display_text_from_json(value: &Json) -> Option<String> {
         Json::Array(items) => display_text_from_content_blocks(items),
         _ => None,
     }
+}
+
+fn display_text_from_openai_responses_output(value: &Json) -> Option<String> {
+    let items = value.as_array()?;
+    let mut entries = Vec::new();
+    let mut tool_names = Vec::new();
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        match object.get("type").and_then(Json::as_str) {
+            Some("message") => {
+                if let Some(content) = object
+                    .get("content")
+                    .and_then(display_text_from_openai_responses_content)
+                {
+                    entries.push(content);
+                }
+            }
+            Some("function_call") => {
+                if let Some(name) = object.get("name").and_then(Json::as_str) {
+                    tool_names.push(name.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if !tool_names.is_empty() {
+        entries.push(format!("Requested tools: {}", tool_names.join(", ")));
+    }
+    let text = entries.join("\n").trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn display_text_from_openai_responses_content(value: &Json) -> Option<String> {
+    let content = value.as_array()?;
+    let text = content
+        .iter()
+        .filter_map(|part| {
+            let object = part.as_object()?;
+            match object.get("type").and_then(Json::as_str) {
+                Some("output_text" | "text") => object.get("text").and_then(Json::as_str),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .trim()
+        .to_string();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn display_text_from_messages(value: &Json) -> Option<String> {
