@@ -346,8 +346,8 @@ function openSessionRoot(manager: SessionManager, session: SessionState, input: 
       null,
       null,
       data,
-      null,
       metadata,
+      data,
       input.timestamp ?? null,
     );
     manager.nf.event('openclaw.session_start', session.rootHandle, data, metadata, input.timestamp ?? null);

@@ -38,6 +38,13 @@ describe('HookReplayBackend', () => {
       sessionKey: 'session-key-1',
       agentId: 'agent-1',
     });
+    assert.deepEqual(nf.calls.pushScope[0]?.input, {
+      sessionId: 'session-1',
+      source: 'session_start',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+      resumedFrom: 'previous-session',
+    });
     assertNoOverclaimedHookMetadata(nf.calls.pushScope[0]?.metadata);
     assert.deepEqual(
       nf.calls.event.map((event) => event.name),
@@ -82,6 +89,11 @@ describe('HookReplayBackend', () => {
     assert.deepEqual(nf.calls.pushScope[0]?.metadata, {
       source: 'openclaw.lazy_session',
       sessionId: 'lazy-session',
+      runId: 'run-1',
+    });
+    assert.deepEqual(nf.calls.pushScope[0]?.input, {
+      sessionId: 'lazy-session',
+      source: 'lazy_session',
       runId: 'run-1',
     });
     assertNoOverclaimedHookMetadata(nf.calls.pushScope[0]?.metadata);
@@ -439,7 +451,7 @@ describe('HookReplayBackend', () => {
 type TestNemoRelayRuntime = NemoRelayRuntimeModule & {
   previousStack: { id: 'previous' };
   calls: {
-    pushScope: Array<{ name: string; scopeType: number; data: unknown; metadata: unknown }>;
+    pushScope: Array<{ name: string; scopeType: number; data: unknown; metadata: unknown; input: unknown }>;
     popScope: Array<{ handle: unknown; output: unknown }>;
     event: Array<{ name: string; handle: unknown; data: unknown; metadata: unknown }>;
     setThreadScopeStack: unknown[];
@@ -497,13 +509,17 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (name, scopeType, _handle, _attributes, data, _links, metadata) => {
+    pushScope: (...args: Parameters<NemoRelayRuntimeModule['pushScope']>) => {
+      const [name, scopeType, , , data, metadata, input] = args;
       const handle = { id: `scope-${nextScopeId++}` };
-      calls.pushScope.push({ name, scopeType, data, metadata });
+      calls.pushScope.push({ name, scopeType, data, metadata, input });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
-    event: (name, handle, data, metadata) => calls.event.push({ name, handle, data, metadata }),
+    event: (...args: Parameters<NemoRelayRuntimeModule['event']>) => {
+      const [name, handle, data, metadata] = args;
+      calls.event.push({ name, handle, data, metadata });
+    },
     llmCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>,
     llmCallEnd: () => {},
     toolCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>,

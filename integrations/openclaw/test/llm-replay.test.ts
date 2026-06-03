@@ -1021,6 +1021,7 @@ type TestNemoRelayRuntime = NemoRelayRuntimeModule & {
       scopeType: number;
       data: unknown;
       metadata: unknown;
+      input: unknown;
       timestamp: number | null | undefined;
     }>;
     popScope: Array<{ handle: unknown; output: unknown }>;
@@ -1093,26 +1094,37 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (name, scopeType, _handle, _attributes, data, _links, metadata, timestamp) => {
+    pushScope: (...args: Parameters<NemoRelayRuntimeModule['pushScope']>) => {
+      const [name, scopeType, , , data, metadata, input, timestamp] = args;
       const handle = { id: `scope-${nextScopeId++}` };
-      calls.pushScope.push({ name, scopeType, data, metadata, timestamp });
+      calls.pushScope.push({ name, scopeType, data, metadata, input, timestamp });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
-    event: (name, handle, data, metadata) => calls.event.push({ name, handle, data, metadata }),
-    llmCall: (name, request, _handle, _attributes, data, metadata, modelName, timestamp) => {
+    event: (...args: Parameters<NemoRelayRuntimeModule['event']>) => {
+      const [name, handle, data, metadata] = args;
+      calls.event.push({ name, handle, data, metadata });
+    },
+    llmCall: (...args: Parameters<NemoRelayRuntimeModule['llmCall']>) => {
+      const [name, request, , , data, metadata, modelName, timestamp] = args;
       const handle = { id: `llm-${nextScopeId++}` };
       calls.llmCall.push({ name, request, data, metadata, modelName, timestamp });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>;
     },
-    llmCallEnd: (handle, response, data, metadata, timestamp) =>
-      calls.llmCallEnd.push({ handle, response, data, metadata, timestamp }),
-    toolCall: (name, args, _handle, _attributes, data, metadata) => {
+    llmCallEnd: (...args: Parameters<NemoRelayRuntimeModule['llmCallEnd']>) => {
+      const [handle, response, data, metadata, timestamp] = args;
+      calls.llmCallEnd.push({ handle, response, data, metadata, timestamp });
+    },
+    toolCall: (...args: Parameters<NemoRelayRuntimeModule['toolCall']>) => {
+      const [name, argsValue, , , , metadata] = args;
       const handle = { id: `tool-${nextScopeId++}` };
-      calls.toolCall.push({ name, args, metadata });
+      calls.toolCall.push({ name, args: argsValue, metadata });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>;
     },
-    toolCallEnd: (handle, result, data, metadata) => calls.toolCallEnd.push({ handle, result, data, metadata }),
+    toolCallEnd: (...args: Parameters<NemoRelayRuntimeModule['toolCallEnd']>) => {
+      const [handle, result, data, metadata] = args;
+      calls.toolCallEnd.push({ handle, result, data, metadata });
+    },
     toolConditionalExecution: async (name, args) => {
       calls.toolConditionalExecution.push({ name, args });
     },
