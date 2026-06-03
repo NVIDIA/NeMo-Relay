@@ -687,6 +687,10 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
+    let is_llm = event
+        .category()
+        .is_some_and(|category| category.as_str() == "llm");
+
     push_serialized(
         &mut attributes,
         "nemo_relay.end.output_json",
@@ -696,10 +700,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));
     }
-    let fallback_usage = if event
-        .category()
-        .is_some_and(|category| category.as_str() == "llm")
-    {
+    let fallback_usage = if is_llm {
         usage_from_manual_llm_output(event.output())
     } else {
         None
@@ -708,11 +709,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         .annotated_response()
         .and_then(|response| response.usage.as_ref())
         .or(fallback_usage.as_ref());
-    if event
-        .category()
-        .is_some_and(|category| category.as_str() == "llm")
-        && let Some(usage) = usage
-    {
+    if is_llm && let Some(usage) = usage {
         if let Some(v) = usage.prompt_tokens {
             attributes.push(KeyValue::new(oi::llm::token_count::PROMPT, v as i64));
         }
@@ -735,7 +732,26 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
             ));
         }
     }
+    if is_llm && let Some(cost_total) = cost_total_from_manual_llm_output(event.output()) {
+        attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
+    }
     attributes
+}
+
+fn cost_total_from_manual_llm_output(output: Option<&Json>) -> Option<f64> {
+    let object = output?.as_object()?;
+    let usage = object.get("usage").and_then(Json::as_object);
+    let token_usage = object.get("token_usage").and_then(Json::as_object);
+    usage
+        .and_then(cost_total_from_usage)
+        .or_else(|| token_usage.and_then(cost_total_from_usage))
+}
+
+fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
+    usage
+        .get("cost_usd")
+        .and_then(Json::as_f64)
+        .or_else(|| usage.get("cost")?.as_object()?.get("total")?.as_f64())
 }
 
 fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {

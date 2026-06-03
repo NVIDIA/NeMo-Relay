@@ -614,6 +614,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
             "prompt_tokens": 10,
             "completion_tokens": 20,
             "total_tokens": 30,
+            "cost_usd": 0.001,
             "prompt_tokens_details": {
                 "cached_tokens": 4
             }
@@ -627,19 +628,56 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         openai_metrics.extra.as_ref().unwrap()["total_tokens"],
         json!(30)
     );
+    assert_eq!(openai_metrics.cost_usd, Some(0.001));
 
     let anthropic_metrics = extract_metrics(&json!({
         "usage": {
             "input_tokens": 11,
             "output_tokens": 22,
             "cache_read_input_tokens": 3,
-            "cache_creation_input_tokens": 5
+            "cache_creation_input_tokens": 5,
+            "cost": { "total": 0.0042 }
         }
     }))
     .unwrap();
     assert_eq!(anthropic_metrics.prompt_tokens, Some(11));
     assert_eq!(anthropic_metrics.completion_tokens, Some(22));
     assert_eq!(anthropic_metrics.cached_tokens, Some(8));
+    assert_eq!(anthropic_metrics.cost_usd, Some(0.0042));
+}
+
+#[test]
+fn test_final_metrics_preserve_explicit_zero_cost_without_fabricating_tokens() {
+    let final_metrics = compute_final_metrics(&[AtifStep {
+        step_id: 1,
+        source: "assistant".to_string(),
+        message: json!("done"),
+        timestamp: None,
+        model_name: None,
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: Some(AtifMetrics {
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            cost_usd: Some(0.0),
+            prompt_token_ids: None,
+            completion_token_ids: None,
+            logprobs: None,
+            extra: None,
+        }),
+        llm_call_count: None,
+        is_copied_context: None,
+        extra: None,
+    }])
+    .unwrap();
+
+    assert_eq!(final_metrics.total_prompt_tokens, None);
+    assert_eq!(final_metrics.total_completion_tokens, None);
+    assert_eq!(final_metrics.total_cached_tokens, None);
+    assert_eq!(final_metrics.total_cost_usd, Some(0.0));
 }
 
 #[test]

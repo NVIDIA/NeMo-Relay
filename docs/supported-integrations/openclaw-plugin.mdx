@@ -281,7 +281,10 @@ emits diagnostic marks instead of inventing latency. This keeps traces honest
 and makes current fidelity boundaries explicit.
 
 When OpenClaw provides usage data, the plugin maps input, output, total, cache
-read, cache write, and cost fields into OpenInference-friendly usage fields.
+read, and cache write fields into OpenInference token-count attributes, and
+maps explicit cost fields into OpenInference cost attributes.
+NeMo Relay does not infer provider pricing; cost attributes are emitted only
+when OpenClaw supplies explicit cost fields.
 
 ## Troubleshooting
 

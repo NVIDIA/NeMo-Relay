@@ -629,6 +629,7 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
     "completion_tokens",
     "cached_tokens",
     "cost_usd",
+    "cost",
     "prompt_token_ids",
     "completion_token_ids",
     "logprobs",
@@ -638,7 +639,7 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 ///
 /// Supports NeMo Relay `token_usage` and provider-native `usage` payloads.
 /// Populates `extra` with any unknown usage keys (e.g. reasoning_tokens or total_tokens).
-/// Returns `None` if the response has no recognized token counts.
+/// Returns `None` if the response has no recognized token or cost metrics.
 fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     let usage = token_usage_object(output)?;
     let prompt = usage_u64(usage, &["prompt_tokens", "input_tokens"]);
@@ -651,7 +652,10 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
                 &["cache_read_input_tokens", "cache_creation_input_tokens"],
             )
         });
-    let cost = usage.get("cost_usd").and_then(Json::as_f64);
+    let cost = usage
+        .get("cost_usd")
+        .and_then(Json::as_f64)
+        .or_else(|| usage.get("cost")?.as_object()?.get("total")?.as_f64());
     let prompt_ids = usage
         .get("prompt_token_ids")
         .and_then(Json::as_array)
@@ -675,7 +679,7 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     } else {
         Some(Json::Object(extra_map))
     };
-    if prompt.is_none() && completion.is_none() && cached.is_none() {
+    if prompt.is_none() && completion.is_none() && cached.is_none() && cost.is_none() {
         return None;
     }
     Some(AtifMetrics {
@@ -1064,44 +1068,50 @@ fn event_extra(event: &Event) -> Json {
     Json::Object(extra)
 }
 
-/// Compute aggregate `final_metrics` by summing token counts across all steps.
+/// Compute aggregate `final_metrics` by summing metrics across all steps.
 ///
-/// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Token/cost
-/// fields are populated when at least one step carries metrics.
+/// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Each token
+/// or cost total is populated only when at least one step provides that field.
 fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
     let mut total_prompt: u64 = 0;
     let mut total_completion: u64 = 0;
     let mut total_cached: u64 = 0;
     let mut total_cost: f64 = 0.0;
-    let mut has_any = false;
+    let mut has_prompt = false;
+    let mut has_completion = false;
+    let mut has_cached = false;
+    let mut has_cost = false;
 
     for step in steps {
         if let Some(m) = &step.metrics {
-            has_any = true;
-            total_prompt += m.prompt_tokens.unwrap_or(0);
-            total_completion += m.completion_tokens.unwrap_or(0);
-            total_cached += m.cached_tokens.unwrap_or(0);
-            total_cost += m.cost_usd.unwrap_or(0.0);
+            if let Some(prompt_tokens) = m.prompt_tokens {
+                has_prompt = true;
+                total_prompt += prompt_tokens;
+            }
+            if let Some(completion_tokens) = m.completion_tokens {
+                has_completion = true;
+                total_completion += completion_tokens;
+            }
+            if let Some(cached_tokens) = m.cached_tokens {
+                has_cached = true;
+                total_cached += cached_tokens;
+            }
+            if let Some(cost) = m.cost_usd {
+                has_cost = true;
+                total_cost += cost;
+            }
         }
     }
 
     Some(AtifFinalMetrics {
-        total_prompt_tokens: if has_any { Some(total_prompt) } else { None },
-        total_completion_tokens: if has_any {
+        total_prompt_tokens: if has_prompt { Some(total_prompt) } else { None },
+        total_completion_tokens: if has_completion {
             Some(total_completion)
         } else {
             None
         },
-        total_cached_tokens: if has_any && total_cached > 0 {
-            Some(total_cached)
-        } else {
-            None
-        },
-        total_cost_usd: if has_any && total_cost > 0.0 {
-            Some(total_cost)
-        } else {
-            None
-        },
+        total_cached_tokens: if has_cached { Some(total_cached) } else { None },
+        total_cost_usd: if has_cost { Some(total_cost) } else { None },
         total_steps: Some(steps.len() as u64),
         extra: None,
     })

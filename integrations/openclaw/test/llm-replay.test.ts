@@ -125,6 +125,7 @@ describe('LLM replay', () => {
         output_tokens: 7,
         cache_read_input_tokens: 3,
         cache_creation_input_tokens: 5,
+        cost: { total: 0.0042 },
       },
     };
 
@@ -182,6 +183,7 @@ describe('LLM replay', () => {
       cache_read_tokens: 3,
       cache_write_tokens: 5,
       total_tokens: 18,
+      cost_usd: 0.0042,
     });
     assert.deepEqual((response.openclaw as ResponseOpenClaw).assistant_tool_call_names, ['web_search']);
   });

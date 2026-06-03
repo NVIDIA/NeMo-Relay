@@ -301,7 +301,8 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
                     "input_tokens": 11,
                     "output_tokens": 7,
                     "cache_read_input_tokens": 3,
-                    "cache_creation_input_tokens": 5
+                    "cache_creation_input_tokens": 5,
+                    "cost": {"total": 0.0042}
                 }
             }),
         ),
@@ -335,7 +336,8 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
                     "input_tokens": 75,
                     "output_tokens": 20,
                     "total_tokens": 95,
-                    "input_tokens_details": {"cached_tokens": 10}
+                    "input_tokens_details": {"cached_tokens": 10},
+                    "cost_usd": 0.005
                 }
             }),
         ),
@@ -371,7 +373,8 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
                     "prompt_tokens": 3,
                     "completion_tokens": 4,
                     "total_tokens": 7,
-                    "prompt_tokens_details": {"cached_tokens": 2}
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "cost_usd": 0.001
                 }
             }),
         ),
@@ -407,6 +410,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
     assert_eq!(lines[1]["scope_category"], "end");
     assert_eq!(lines[1]["data"]["content"][1]["type"], "tool_use");
     assert_eq!(lines[1]["data"]["usage"]["cache_creation_input_tokens"], 5);
+    assert_eq!(lines[1]["data"]["usage"]["cost"]["total"], 0.0042);
 
     assert_eq!(lines[2]["metadata"]["gateway_path"], "/v1/responses");
     assert_eq!(lines[2]["data"]["input"], "Find the weather.");
@@ -415,6 +419,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         lines[3]["data"]["usage"]["input_tokens_details"]["cached_tokens"],
         10
     );
+    assert_eq!(lines[3]["data"]["usage"]["cost_usd"], 0.005);
 
     assert_eq!(lines[4]["metadata"]["gateway_path"], "/v1/chat/completions");
     assert_eq!(
@@ -429,6 +434,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         lines[5]["data"]["usage"]["prompt_tokens_details"]["cached_tokens"],
         2
     );
+    assert_eq!(lines[5]["data"]["usage"]["cost_usd"], 0.001);
 }
 
 #[test]

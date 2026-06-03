@@ -692,7 +692,8 @@ fn output_value_extracts_chat_completion_display_text() {
                 "prompt_tokens": 3,
                 "completion_tokens": 4,
                 "total_tokens": 7,
-                "prompt_tokens_details": {"cached_tokens": 2}
+                "prompt_tokens_details": {"cached_tokens": 2},
+                "cost_usd": 0.001
             }
         })),
     ));
@@ -718,6 +719,7 @@ fn output_value_extracts_chat_completion_display_text() {
         attributes.get("llm.token_count.prompt_details.cache_read"),
         Some(&"2".to_string())
     );
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.001".to_string()));
 }
 
 #[test]
@@ -767,7 +769,8 @@ fn output_value_extracts_openai_responses_display_text_and_usage() {
                 "input_tokens": 75,
                 "output_tokens": 20,
                 "total_tokens": 95,
-                "input_tokens_details": {"cached_tokens": 10}
+                "input_tokens_details": {"cached_tokens": 10},
+                "cost_usd": 0.005
             }
         })),
     ));
@@ -801,6 +804,7 @@ fn output_value_extracts_openai_responses_display_text_and_usage() {
         attributes.get("llm.token_count.prompt_details.cache_read"),
         Some(&"10".to_string())
     );
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.005".to_string()));
 }
 
 #[test]
@@ -1496,6 +1500,7 @@ fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"10".to_string())
     );
+    assert!(!attributes.contains_key("llm.cost.total"));
 }
 
 #[test]
@@ -1546,7 +1551,8 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
                 "input_tokens": 11,
                 "output_tokens": 7,
                 "cache_read_input_tokens": 3,
-                "cache_creation_input_tokens": 5
+                "cache_creation_input_tokens": 5,
+                "cost": {"total": 0.0042}
             }
         })),
         Some(
@@ -1592,6 +1598,10 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
     assert_eq!(
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"5".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.0042".to_string())
     );
 }
 
