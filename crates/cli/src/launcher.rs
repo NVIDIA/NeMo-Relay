@@ -154,7 +154,9 @@ async fn execute_live_run(
 ) -> Result<ExitCode, CliError> {
     let running_server = RunningGateway::start(listener, gateway_config);
     if let Err(error) = wait_for_health(gateway_url).await {
+        let restore = prepared.restore();
         let _ = running_server.stop().await;
+        restore?;
         return Err(error);
     }
     let status = prepared.spawn_and_wait().await;

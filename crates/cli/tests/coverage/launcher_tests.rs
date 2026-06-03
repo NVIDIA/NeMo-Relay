@@ -772,6 +772,52 @@ async fn wait_for_health_reports_unready_gateway() {
     assert!(error.contains("gateway did not become ready"));
 }
 
+#[tokio::test]
+async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hermes-home/config.yaml");
+    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
+    let original = "hooks:\n  PreToolUse: []\n";
+    std::fs::write(&hooks_path, original).unwrap();
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                command: None,
+                hooks_path: Some(hooks_path.clone()),
+            },
+            ..AgentConfigs::default()
+        },
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into(), "chat".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+    assert!(
+        std::fs::read_to_string(&hooks_path)
+            .unwrap()
+            .contains("hook-forward hermes")
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let error = execute_live_run(
+        listener,
+        GatewayConfig::default(),
+        "http://127.0.0.1:1",
+        prepared,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("gateway did not become ready"));
+    assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
+}
+
 #[cfg(unix)]
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
