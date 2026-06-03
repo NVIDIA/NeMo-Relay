@@ -333,7 +333,7 @@ def clear() -> None:
 
 
 @asynccontextmanager
-async def plugin(config: PluginConfig | JsonObject, clear_on_exit: bool = True) -> AsyncIterator[ConfigReport]:
+async def plugin(config: PluginConfig | JsonObject, *, clear_on_exit: bool = True) -> AsyncIterator[ConfigReport]:
     """Context manager for plugin initialization and cleanup.
 
     Args:
@@ -346,9 +346,9 @@ async def plugin(config: PluginConfig | JsonObject, clear_on_exit: bool = True) 
     Behavior:
         This context manager initializes the plugin configuration on entry and clears it on exit.
     """
-    report = await initialize(config)
+    report_ = await initialize(config)
     try:
-        yield report
+        yield report_
     finally:
         subscribers.flush()
         if clear_on_exit:
