@@ -1583,6 +1583,102 @@ async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
 }
 
 #[tokio::test]
+async fn hermes_task_id_tool_hooks_reuse_api_session() {
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-main"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-main",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read file" }
+                        ]
+                    }
+                }
+            }
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    let pre_tool = crate::adapters::hermes::adapt(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-main",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "tool-1"
+            }
+        }),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, pre_tool.events)
+        .await
+        .unwrap();
+
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.contains_key("hermes-main"));
+        assert!(
+            !sessions.contains_key("task-1"),
+            "Hermes tool hooks keyed by task_id should not create a duplicate session"
+        );
+        let session = sessions.get("hermes-main").unwrap();
+        assert!(
+            !session.tools.is_empty(),
+            "pre_tool_call should open an active tool before post_tool_call runs"
+        );
+    }
+
+    let post_tool = crate::adapters::hermes::adapt(
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-main",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "tool_response": { "content": "hello" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "provider-tool-1"
+            }
+        }),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, post_tool.events)
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("hermes-main").unwrap();
+    assert!(
+        session.tools.is_empty(),
+        "post_tool_call should close the matching pre_tool_call even when call IDs differ"
+    );
+}
+
+#[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -3018,6 +3114,139 @@ async fn claude_agent_tool_async_launch_keeps_subagent_open_for_later_hooks() {
         tool.metadata.as_ref().unwrap()["tool_correlation_subagent_id"],
         json!("worker")
     );
+}
+
+#[tokio::test]
+async fn active_tool_name_args_fallback_requires_matching_subagent_owner() {
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "tool-owner-fallback";
+    let same_args = json!({ "file_path": "README.md" });
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-1-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-2-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-2".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "provider-worker-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let tools = &sessions.get(session_id).unwrap().tools;
+    assert!(!tools.contains_key("worker-1-pre"));
+    assert!(tools.contains_key("worker-2-pre"));
+    assert!(!tools.contains_key("provider-worker-1"));
+}
+
+#[tokio::test]
+async fn active_tool_name_args_fallback_uses_unique_global_match_without_owner() {
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "tool-global-fallback";
+    let same_args = json!({ "file_path": "README.md" });
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-1-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "provider-worker-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: same_args,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let tools = &sessions.get(session_id).unwrap().tools;
+    assert!(tools.is_empty());
 }
 
 #[tokio::test]
