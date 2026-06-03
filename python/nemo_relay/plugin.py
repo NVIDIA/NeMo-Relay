@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, TypedDict, cast
 
 from nemo_relay import (
+    subscribers,
     Json,
     JsonObject,
     LlmConditionalExecutionGuardrail,
@@ -348,6 +349,7 @@ async def plugin(config: PluginConfig | JsonObject) -> AsyncIterator[ConfigRepor
     try:
         yield report
     finally:
+        subscribers.flush()
         clear()
 
 
