@@ -304,50 +304,55 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
     raise TypeError(f"NeMo Relay model execution returned {type(decoded)!r}, expected ModelResponse")
 
 
-def _prepare_outputs(outputs: Any) -> Any:
-    """Prepare a NeMo Relay scope output dict for returning to LangChain."""
-    if isinstance(outputs, dict):
-        prepared_outputs = {}
-        for key, value in outputs.items():
-            prepared_outputs[key] = _prepare_outputs(value)
-    elif isinstance(outputs, list | tuple):
-        prepared_outputs = []
-        for value in outputs:
-            prepared_outputs.append(_prepare_outputs(value))
-    elif isinstance(outputs, Command):
-        prepared_outputs = {
+def _prepare_lc_payloads(pyaload: Any) -> Any:
+    """
+    Convert a LangChain payload to a JSON-serializable structure
+
+    Typically the entry point to this method is a LangChain dictionary containing LC message objects, and the returned
+    dictionary should contain the same structure, but the values are JSON serializable representations
+    """
+    if isinstance(pyaload, dict):
+        prepared = {}
+        for key, value in pyaload.items():
+            prepared[key] = _prepare_lc_payloads(value)
+    elif isinstance(pyaload, list | tuple):
+        prepared = []
+        for value in pyaload:
+            prepared.append(_prepare_lc_payloads(value))
+    elif isinstance(pyaload, Command):
+        prepared = {
             "type": "command",
             "command": {
-                "graph": _prepare_outputs(outputs.graph),
-                "update": _prepare_outputs(outputs.update),
-                "resume": _prepare_outputs(outputs.resume),
-                "goto": _prepare_outputs(outputs.goto),
+                "graph": _prepare_lc_payloads(pyaload.graph),
+                "update": _prepare_lc_payloads(pyaload.update),
+                "resume": _prepare_lc_payloads(pyaload.resume),
+                "goto": _prepare_lc_payloads(pyaload.goto),
             },
         }
-    elif isinstance(outputs, Send):
-        prepared_outputs = {
+    elif isinstance(pyaload, Send):
+        prepared = {
             "type": "send",
             "send": {
-                "node": outputs.node,
-                "arg": _prepare_outputs(outputs.arg),
+                "node": pyaload.node,
+                "arg": _prepare_lc_payloads(pyaload.arg),
             },
         }
-    elif isinstance(outputs, ToolMessage):
-        prepared_outputs = {
+    elif isinstance(pyaload, ToolMessage):
+        prepared = {
             "type": "tool_message",
             "tool_call": {
-                "name": outputs.name,
-                "id": outputs.id,
-                "tool_call_id": outputs.tool_call_id,
-                "content": outputs.content,
+                "name": pyaload.name,
+                "id": pyaload.id,
+                "tool_call_id": pyaload.tool_call_id,
+                "content": pyaload.content,
             },
         }
-    elif isinstance(outputs, BaseMessage):
-        prepared_outputs = {
+    elif isinstance(pyaload, BaseMessage):
+        prepared = {
             "type": "message",
-            "message": messages_to_dict([outputs]),
+            "message": messages_to_dict([pyaload]),
         }
     else:
-        prepared_outputs = outputs
+        prepared = pyaload
 
-    return prepared_outputs
+    return prepared
