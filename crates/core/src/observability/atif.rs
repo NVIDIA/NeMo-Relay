@@ -1335,7 +1335,10 @@ fn llm_request_signature(input: &Json) -> String {
 }
 
 fn llm_response_signature(output: &Json) -> String {
-    json_to_string(&extract_llm_response_message(output))
+    json_to_string(&serde_json::json!({
+        "message": extract_llm_response_message(output),
+        "tool_calls": extract_tool_calls(output),
+    }))
 }
 
 fn llm_request_correlation_keys(start: &Event, end: &Event) -> HashSet<String> {

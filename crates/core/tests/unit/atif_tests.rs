@@ -2062,6 +2062,95 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
 }
 
 #[test]
+fn test_exporter_keeps_tool_only_llm_spans_with_different_tool_calls() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let parent_uuid = Uuid::now_v7();
+    let first_uuid = Uuid::now_v7();
+    let second_uuid = Uuid::now_v7();
+    let request = json!({
+        "messages": [{"role": "user", "content": "Use tools"}],
+        "model": "test-model"
+    });
+
+    let mut first_start = event_builder(first_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .input(request.clone())
+        .build();
+    let mut first_end = event_builder(first_uuid, EventType::End)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .output(json!({
+            "type": "message",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu-read",
+                "name": "read_file",
+                "input": { "path": "README.md" }
+            }]
+        }))
+        .build();
+    let mut second_start = event_builder(second_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .input(request)
+        .build();
+    let mut second_end = event_builder(second_uuid, EventType::End)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .output(json!({
+            "type": "message",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu-search",
+                "name": "web_search",
+                "input": { "query": "release notes" }
+            }]
+        }))
+        .build();
+
+    for (idx, event) in [
+        &mut first_start,
+        &mut second_start,
+        &mut first_end,
+        &mut second_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([first_start, second_start, first_end, second_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let tool_call_ids = trajectory
+        .steps
+        .iter()
+        .filter_map(|step| step.tool_calls.as_deref())
+        .flat_map(|calls| calls.iter().map(|call| call.tool_call_id.as_str()))
+        .collect::<HashSet<_>>();
+
+    assert!(tool_call_ids.contains("toolu-read"));
+    assert!(tool_call_ids.contains("toolu-search"));
+    assert_eq!(tool_call_ids.len(), 2);
+}
+
+#[test]
 fn test_exporter_prefers_gateway_span_over_non_exact_hook_summary() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let base = base_timestamp();

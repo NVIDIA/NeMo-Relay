@@ -113,7 +113,7 @@ struct Session {
     // duplicate end hook does not reopen or mark an already-closed worker.
     completed_subagents: HashSet<String>,
     llms: HashMap<String, LlmHandle>,
-    tools: HashMap<String, ToolHandle>,
+    tools: HashMap<String, ActiveTool>,
     pending_llm_hints: Vec<PendingLlmHint>,
     pending_tool_hints: Vec<PendingToolHint>,
     // Maps stable user-task text from confidently owned LLM requests to the subagent that owns
@@ -124,6 +124,22 @@ struct Session {
     last_activity: Instant,
     active_gateway_calls: usize,
     config: SessionConfig,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveTool {
+    handle: ToolHandle,
+    name: String,
+    arguments: Value,
+    owner_subagent_id: Option<String>,
+}
+
+impl std::ops::Deref for ActiveTool {
+    type Target = ToolHandle;
+
+    fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1178,7 +1194,11 @@ impl Session {
     // Ends all active tool calls with a synthetic close result before ending their containing scopes.
     // Draining first avoids holding mutable map state while the runtime emits lifecycle events.
     fn close_active_tools(&mut self, reason: &str) -> Result<(), CliError> {
-        let active_tools: Vec<_> = self.tools.drain().map(|(_, handle)| handle).collect();
+        let active_tools: Vec<_> = self
+            .tools
+            .drain()
+            .map(|(_, active)| active.handle)
+            .collect();
         for handle in active_tools {
             tool_call_end(
                 ToolCallEndParams::builder()
@@ -1486,6 +1506,9 @@ impl Session {
         } else {
             event.arguments
         };
+        let active_tool_arguments = arguments.clone();
+        let active_tool_name = event.tool_name.clone();
+        let active_tool_owner_subagent_id = owner.subagent_id.clone();
         tool_conditional_execution(event.tool_name.as_str(), &arguments)?;
         let metadata = tool_correlation_metadata(
             event.metadata,
@@ -1504,7 +1527,15 @@ impl Session {
                 .tool_call_id(event.tool_call_id.clone())
                 .build(),
         )?;
-        self.tools.insert(event.tool_call_id, handle);
+        self.tools.insert(
+            event.tool_call_id,
+            ActiveTool {
+                handle,
+                name: active_tool_name,
+                arguments: active_tool_arguments,
+                owner_subagent_id: active_tool_owner_subagent_id,
+            },
+        );
         Ok(())
     }
 
@@ -1517,7 +1548,7 @@ impl Session {
             .subagent_id
             .clone()
             .filter(|subagent_id| self.subagents.contains_key(subagent_id));
-        let handle = match self.tools.remove(&event.tool_call_id) {
+        let handle = match self.remove_tool_handle_for_event(&event) {
             Some(handle) => handle,
             None => {
                 let owner = self.resolve_tool_owner(&event);
@@ -1565,6 +1596,52 @@ impl Session {
                 .await?;
         }
         Ok(())
+    }
+
+    // Hermes pre/post tool hooks can disagree on call IDs: pre hooks may omit the provider id
+    // while post hooks carry the final chat-completions tool id. When the ID misses but exactly
+    // one active tool owned by the same subagent/root scope has the same name and arguments, close
+    // that start instead of synthesizing a second zero-duration span.
+    fn remove_tool_handle_for_event(&mut self, event: &ToolEvent) -> Option<ToolHandle> {
+        if let Some(active) = self.tools.remove(&event.tool_call_id) {
+            return Some(active.handle);
+        }
+        let owner_subagent_id = self.tool_event_owner_subagent_id(event);
+        let key = self.matching_active_tool_key(event, owner_subagent_id.as_deref())?;
+        self.tools.remove(&key).map(|active| active.handle)
+    }
+
+    fn matching_active_tool_key(
+        &self,
+        event: &ToolEvent,
+        owner_subagent_id: Option<&str>,
+    ) -> Option<String> {
+        if event.arguments.is_null() {
+            return None;
+        }
+        let matches = self
+            .tools
+            .iter()
+            .filter_map(|(key, active)| {
+                (owner_subagent_id
+                    .is_none_or(|owner| active.owner_subagent_id.as_deref() == Some(owner))
+                    && active.name == event.tool_name
+                    && active.arguments == event.arguments)
+                    .then_some(key.clone())
+            })
+            .collect::<Vec<_>>();
+        (matches.len() == 1).then(|| matches[0].clone())
+    }
+
+    fn tool_event_owner_subagent_id(&self, event: &ToolEvent) -> Option<String> {
+        if let Some(subagent_id) = &event.subagent_id
+            && self.subagents.contains_key(subagent_id)
+        {
+            return Some(subagent_id.clone());
+        }
+        self.matching_tool_hint_index(event)
+            .and_then(|index| self.pending_tool_hints[index].hint.subagent_id.clone())
+            .filter(|subagent_id| self.subagents.contains_key(subagent_id))
     }
 
     // Emits a mark event after ensuring the turn scope exists. Generic and unknown hooks use this
