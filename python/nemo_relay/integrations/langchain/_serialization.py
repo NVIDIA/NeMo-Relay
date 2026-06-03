@@ -304,55 +304,55 @@ def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:
     raise TypeError(f"NeMo Relay model execution returned {type(decoded)!r}, expected ModelResponse")
 
 
-def _prepare_lc_payloads(pyaload: Any) -> Any:
+def _prepare_lc_payloads(payload: Any) -> Any:
     """
     Convert a LangChain payload to a JSON-serializable structure
 
     Typically the entry point to this method is a LangChain dictionary containing LC message objects, and the returned
     dictionary should contain the same structure, but the values are JSON serializable representations
     """
-    if isinstance(pyaload, dict):
+    if isinstance(payload, dict):
         prepared = {}
-        for key, value in pyaload.items():
+        for key, value in payload.items():
             prepared[key] = _prepare_lc_payloads(value)
-    elif isinstance(pyaload, list | tuple):
+    elif isinstance(payload, list | tuple):
         prepared = []
-        for value in pyaload:
+        for value in payload:
             prepared.append(_prepare_lc_payloads(value))
-    elif isinstance(pyaload, Command):
+    elif isinstance(payload, Command):
         prepared = {
             "type": "command",
             "command": {
-                "graph": _prepare_lc_payloads(pyaload.graph),
-                "update": _prepare_lc_payloads(pyaload.update),
-                "resume": _prepare_lc_payloads(pyaload.resume),
-                "goto": _prepare_lc_payloads(pyaload.goto),
+                "graph": _prepare_lc_payloads(payload.graph),
+                "update": _prepare_lc_payloads(payload.update),
+                "resume": _prepare_lc_payloads(payload.resume),
+                "goto": _prepare_lc_payloads(payload.goto),
             },
         }
-    elif isinstance(pyaload, Send):
+    elif isinstance(payload, Send):
         prepared = {
             "type": "send",
             "send": {
-                "node": pyaload.node,
-                "arg": _prepare_lc_payloads(pyaload.arg),
+                "node": payload.node,
+                "arg": _prepare_lc_payloads(payload.arg),
             },
         }
-    elif isinstance(pyaload, ToolMessage):
+    elif isinstance(payload, ToolMessage):
         prepared = {
             "type": "tool_message",
             "tool_call": {
-                "name": pyaload.name,
-                "id": pyaload.id,
-                "tool_call_id": pyaload.tool_call_id,
-                "content": pyaload.content,
+                "name": payload.name,
+                "id": payload.id,
+                "tool_call_id": payload.tool_call_id,
+                "content": payload.content,
             },
         }
-    elif isinstance(pyaload, BaseMessage):
+    elif isinstance(payload, BaseMessage):
         prepared = {
             "type": "message",
-            "message": messages_to_dict([pyaload]),
+            "message": messages_to_dict([payload]),
         }
     else:
-        prepared = pyaload
+        prepared = payload
 
     return prepared
