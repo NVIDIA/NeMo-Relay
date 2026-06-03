@@ -24,8 +24,7 @@ Top-level exports also include:
 - native runtime types such as ``ScopeHandle``, ``ToolHandle``, ``LLMHandle``,
   ``LLMRequest``, ``ScopeType``, and the lifecycle event classes
 - observability helpers such as ``AtifExporter``, ``AtofExporter``,
-  ``OpenTelemetrySubscriber``, ``OpenInferenceSubscriber``, and
-  ``NatTelemetryExporter``
+  ``OpenTelemetrySubscriber``, and ``OpenInferenceSubscriber``
 - JSON and callback type aliases used by middleware, typed wrappers, and
   plugin-facing configuration helpers
 
@@ -189,7 +188,6 @@ from nemo_relay import (  # noqa: E402
     guardrails,
     intercepts,
     llm,
-    nat_exporter,
     observability,
     plugin,
     scope,
@@ -198,7 +196,6 @@ from nemo_relay import (  # noqa: E402
     tools,
     typed,
 )
-from nemo_relay.nat_exporter import NatTelemetryExporter  # noqa: E402
 
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
 
@@ -428,7 +425,6 @@ __all__ = [
     "llm",
     "guardrails",
     "intercepts",
-    "nat_exporter",
     "subscribers",
     "scope_local",
     "codecs",
@@ -461,7 +457,6 @@ __all__ = [
     "AtofExporterMode",
     "AtofExporterConfig",
     "AtofExporter",
-    "NatTelemetryExporter",
     "OpenInferenceConfig",
     "OpenInferenceSubscriber",
     "OpenTelemetryConfig",
