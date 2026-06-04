@@ -385,10 +385,23 @@ fn assert_atif_message_value(value: &serde_json::Value) {
 }
 
 fn assert_atif_observation_content_value(value: &serde_json::Value) {
-    assert!(
-        !value.is_null(),
-        "ATIF observation content must not be null"
-    );
+    if value.is_string() {
+        return;
+    }
+    if let Some(parts) = value.as_array()
+        && parts.iter().all(is_atif_content_part)
+    {
+        return;
+    }
+    panic!("ATIF observation content must be a string or content-part array: {value}");
+}
+
+fn assert_structured_observation_result_extra(
+    result: &AtifObservationResult,
+    expected: serde_json::Value,
+) {
+    assert_eq!(result.content, None);
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], expected);
 }
 
 fn is_atif_content_part(part: &serde_json::Value) -> bool {
@@ -475,10 +488,7 @@ fn test_exporter_tool_lifecycle() {
     let obs = step1.observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 1);
     assert_eq!(obs.results[0].source_call_id, None);
-    assert_eq!(
-        obs.results[0].content,
-        Some(json!({"results": ["result1"]}))
-    );
+    assert_structured_observation_result_extra(&obs.results[0], json!({"results": ["result1"]}));
     assert_eq!(
         obs.results[0].extra.as_ref().unwrap()["event_name"],
         json!("web_search")
@@ -513,6 +523,65 @@ fn test_exporter_omits_null_tool_observation_content() {
             .unwrap()
             .contains_key("content")
     );
+}
+
+#[test]
+fn test_exporter_moves_structured_tool_close_result_to_observation_extra() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let close_result = json!({"status": "closed_by_turn_end"});
+
+    let end = event_builder(tool_uuid, EventType::End)
+        .name("terminal")
+        .scope_type(ScopeType::Tool)
+        .output(close_result.clone())
+        .tool_call_id("call_123")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(result.content, None);
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], close_result);
+
+    let exported = serde_json::to_value(&trajectory).unwrap();
+    let content = exported["steps"][0]["observation"]["results"][0].get("content");
+    assert!(content.is_none());
+}
+
+#[test]
+fn test_exporter_preserves_tool_content_part_array_observation_content() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let content_parts = json!([
+        {"type": "text", "text": "screenshot captured"},
+        {"type": "image", "source": {"media_type": "image/png", "path": "artifacts/screenshot.png"}},
+    ]);
+
+    let end = event_builder(tool_uuid, EventType::End)
+        .name("screenshot")
+        .scope_type(ScopeType::Tool)
+        .output(content_parts.clone())
+        .tool_call_id("call_123")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(result.content, Some(content_parts));
+    assert!(result.extra.as_ref().unwrap().get("tool_result").is_none());
 }
 
 #[test]
@@ -894,9 +963,9 @@ fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
         observation.results[0].source_call_id.as_deref(),
         Some("toolu_01")
     );
-    assert_eq!(
-        observation.results[0].content,
-        Some(json!({"matches": ["README.md"]}))
+    assert_structured_observation_result_extra(
+        &observation.results[0],
+        json!({"matches": ["README.md"]}),
     );
 }
 
@@ -1140,7 +1209,7 @@ fn test_exporter_openai_responses_function_calls_promoted_and_correlated() {
 
     let result = &agent_step.observation.as_ref().unwrap().results[0];
     assert_eq!(result.source_call_id.as_deref(), Some("call_terminal_1"));
-    assert_eq!(result.content, Some(json!({"stdout": "/workspace"})));
+    assert_structured_observation_result_extra(result, json!({"stdout": "/workspace"}));
 }
 
 #[test]
@@ -1301,9 +1370,9 @@ fn test_exporter_hermes_wrapper_payload_is_atif_v17_compatible() {
         observation.results[0].source_call_id,
         Some("call_terminal_1".to_string())
     );
-    assert_eq!(
-        observation.results[0].content,
-        Some(json!({"stdout": "hi", "exit_code": 0}))
+    assert_structured_observation_result_extra(
+        &observation.results[0],
+        json!({"stdout": "hi", "exit_code": 0}),
     );
 }
 
@@ -1679,7 +1748,7 @@ fn test_exporter_attaches_subagent_ref_to_delegating_tool_observation() {
 
     let result = &agent_step.observation.as_ref().unwrap().results[0];
     assert_eq!(result.source_call_id.as_deref(), Some("call_delegate"));
-    assert_eq!(result.content, Some(json!({"status": "launched"})));
+    assert_structured_observation_result_extra(result, json!({"status": "launched"}));
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
@@ -1792,7 +1861,7 @@ fn test_exporter_synthesizes_tool_call_for_active_subagent_dispatch() {
         result.source_call_id.as_deref(),
         Some(tool_call_id.as_str())
     );
-    assert_eq!(result.content, Some(json!({"status": "completed"})));
+    assert_structured_observation_result_extra(result, json!({"status": "completed"}));
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
@@ -2982,7 +3051,7 @@ fn test_exporter_correlates_hermes_style_tool_outputs_before_llm_calls() {
             observation.results[0].source_call_id,
             Some(source_call_id.to_string())
         );
-        assert_eq!(observation.results[0].content, Some(content));
+        assert_structured_observation_result_extra(&observation.results[0], content);
     }
 
     assert!(!trajectory.steps.iter().any(|step| {
