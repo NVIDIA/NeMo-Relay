@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-export-otel",
+  "cases": [
+    {
+      "id": "configure-otlp-tracing",
+      "question": "Send NeMo Relay runtime traces to an OTLP-compatible collector for production debugging.",
+      "expected_skill": "nemo-relay-export-otel",
+      "expected_script": null,
+      "ground_truth": "Use the OTEL export skill to configure an OpenTelemetry subscriber/exporter, register it before scoped work, attach useful metadata, flush, and verify spans arrive.",
+      "expected_behavior": [
+        "Choose OpenTelemetry for OTLP-compatible tracing",
+        "Configure and register the OTEL subscriber before scoped work",
+        "Attach useful scope, tool, LLM, and model metadata",
+        "Flush or shut down deterministically and verify exported spans"
+      ]
+    },
+    {
+      "id": "neg-openinference-semantics",
+      "question": "My backend expects OpenInference LLM span semantics.",
+      "expected_skill": "nemo-relay-export-openinference",
+      "expected_script": null,
+      "ground_truth": "OpenInference-specific semantics belong to nemo-relay-export-openinference.",
+      "expected_behavior": [
+        "nemo-relay-export-otel stays silent or redirects",
+        "nemo-relay-export-openinference handles semantic LLM export"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-tune-adaptive-config",
+  "cases": [
+    {
+      "id": "configure-adaptive-plugin",
+      "question": "Configure the NeMo Relay adaptive plugin with state, telemetry, adaptive hints, and validation before rollout.",
+      "expected_skill": "nemo-relay-tune-adaptive-config",
+      "expected_script": null,
+      "ground_truth": "Use the adaptive config skill to configure the adaptive plugin through the shared plugin system, validate settings, and plan measured rollout.",
+      "expected_behavior": [
+        "Use the shared plugin system for adaptive settings",
+        "Validate state, telemetry, hints, ACG, policy, or parallelism fields",
+        "Avoid unmeasured production rollout",
+        "Connect configuration to later performance tuning"
+      ]
+    },
+    {
+      "id": "neg-consume-hints",
+      "question": "The adaptive plugin is configured; now consume its hints safely in application logic.",
+      "expected_skill": "nemo-relay-tune-adaptive-hints",
+      "expected_script": null,
+      "ground_truth": "Consuming already-configured adaptive hints belongs to nemo-relay-tune-adaptive-hints.",
+      "expected_behavior": [
+        "nemo-relay-tune-adaptive-config stays silent or redirects",
+        "nemo-relay-tune-adaptive-hints handles hint consumption"
+      ]
+    }
+  ]
+}
