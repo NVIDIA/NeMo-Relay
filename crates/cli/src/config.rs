@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use nemo_relay::plugin::merge_plugin_config;
+use nemo_relay::plugin::layer_config;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -760,15 +760,14 @@ where
                     ))
                 })?;
             validate_plugin_toml_component_kinds(&path, &parsed)?;
-            // Merge file layers with the shared core primitive so file and code-driven layering
-            // stay in sync. Each file is converted to the canonical JSON document first.
+            // Merge file layers with the shared core primitive (each file converted to JSON first).
             let document = serde_json::to_value(parsed).map_err(|error| {
                 CliError::Config(format!(
                     "invalid plugin TOML shape in {}: {error}",
                     path.display()
                 ))
             })?;
-            merged = merge_plugin_config(&merged, &document);
+            merged = layer_config(&merged, &document);
             sources.push(path);
         }
     }

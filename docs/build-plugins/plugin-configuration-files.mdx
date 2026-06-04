@@ -86,9 +86,9 @@ clearly if file-based plugin config and `--plugin-config` are both present, or i
 `plugins.toml` and `[plugins].config` are both present.
 
 Configuration can also be composed in code: the same merge the gateway uses for
-file layers is exposed as the `merge_plugin_config` runtime API, so a Rust host
+file layers is exposed as the `layer_config` runtime API, so a Rust host
 can layer a programmatic document over a file-resolved one before activating it.
-See [Composing Configuration In Code](#composing-configuration-in-code).
+See [Configuration Layering](#configuration-layering).
 
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
 to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
@@ -225,18 +225,18 @@ naming the sources, in these conflict cases:
 | `plugins.toml` and `[plugins].config` both present | Error: choose one source |
 | `[plugins].config` defined in more than one `config.toml` file | Error: consolidate into one block |
 
-## Composing Configuration In Code
+## Configuration Layering
 
 The merge the gateway uses to layer files is exposed as a Rust runtime API,
-`merge_plugin_config`, so a host can compose a programmatic document over a
+`layer_config`, so a host can compose a programmatic document over a
 file-resolved one before activating it:
 
 ```rust
-use nemo_relay::plugin::{initialize_plugins, merge_plugin_config};
+use nemo_relay::plugin::{initialize_plugins, layer_config};
 
 // `base` and `overlay` are plugin config documents (the JSON shape of `PluginConfig`);
 // `overlay` is the higher-precedence layer.
-let effective = merge_plugin_config(&base, &overlay);
+let effective = layer_config(&base, &overlay);
 initialize_plugins(serde_json::from_value(effective)?).await?;
 ```
 
@@ -247,7 +247,7 @@ The merge is the same one applied to file layers:
   kind used by a multi-instance plugin keeps each instance instead of collapsing;
   components present in only one side are kept.
 
-`merge_plugin_config` is Rust-only (not exposed to the Python, Node.js, or other
+`layer_config` is Rust-only (not exposed to the Python, Node.js, or other
 bindings) and holds no global state — the caller controls precedence by argument
 order, and `initialize_plugins` activates whatever document it is given.
 

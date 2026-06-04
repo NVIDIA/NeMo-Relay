@@ -899,17 +899,12 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     report
 }
 
-/// Merges `overlay` (higher precedence) over `base`, returning the effective plugin
-/// configuration document.
+/// Merges `overlay` (higher precedence) over `base` into the effective config document.
 ///
-/// Both arguments are canonical plugin config documents (the JSON shape of
-/// [`PluginConfig`]). Objects merge recursively and arrays/scalars are replaced by
-/// `overlay`, except the top-level `components` array, whose entries pair by `kind`
-/// in order of appearance — so a kind used by a multi-instance plugin keeps each
-/// instance instead of collapsing into the first. This is the shared layering
-/// primitive used by the gateway's file-layer discovery and by hosts composing a
-/// configuration in code before calling [`initialize_plugins`].
-pub fn merge_plugin_config(base: &Json, overlay: &Json) -> Json {
+/// Objects merge recursively and arrays/scalars are replaced by `overlay`, except the
+/// top-level `components` array, whose entries pair by `kind` in order of appearance so
+/// multi-instance kinds are not collapsed. Shared by the gateway's file-layer merge.
+pub fn layer_config(base: &Json, overlay: &Json) -> Json {
     let (Json::Object(base_object), Json::Object(overlay_object)) = (base, overlay) else {
         return overlay.clone();
     };
@@ -927,11 +922,7 @@ pub fn merge_plugin_config(base: &Json, overlay: &Json) -> Json {
     Json::Object(merged)
 }
 
-/// Pairs `overlay` components with `base` components by `kind` in order of appearance.
-///
-/// The nth `overlay` component of a kind merges into the nth `base` component of that
-/// kind, so multi-instance kinds are not collapsed; unpaired `overlay` components are
-/// appended and `base`-only components are preserved. Non-array values are replaced.
+/// Merges `overlay` components into `base` by `kind`, pairing repeated kinds positionally.
 fn merge_plugin_components(base: &Json, overlay: &Json) -> Json {
     let (Json::Array(base_components), Json::Array(overlay_components)) = (base, overlay) else {
         return overlay.clone();
@@ -965,8 +956,7 @@ fn merge_plugin_components(base: &Json, overlay: &Json) -> Json {
     Json::Array(components)
 }
 
-/// Recursively merges two JSON values: objects merge key-by-key, while arrays and
-/// scalars are replaced by `overlay`. Mirrors the gateway's recursive TOML table merge.
+/// Recursively merges JSON objects; arrays and scalars are replaced by `overlay`.
 fn merge_json_value(base: &Json, overlay: &Json) -> Json {
     let (Json::Object(base_object), Json::Object(overlay_object)) = (base, overlay) else {
         return overlay.clone();

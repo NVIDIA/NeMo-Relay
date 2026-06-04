@@ -315,7 +315,7 @@ fn reset_global() {
 }
 
 #[test]
-fn test_merge_plugin_config_overlay_wins() {
+fn test_layer_config_overlay_wins() {
     // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
     // nested config objects, replaces arrays, appends overlay-only kinds, preserves base-only kinds,
     // replaces top-level scalars, and recursively merges top-level objects (policy).
@@ -344,7 +344,7 @@ fn test_merge_plugin_config_overlay_wins() {
         "policy": { "unknown_component": "error" }
     });
 
-    let merged = merge_plugin_config(&base, &overlay);
+    let merged = layer_config(&base, &overlay);
     let components = merged["components"].as_array().unwrap();
 
     // Ordering: base components first (in base order), then overlay-only components appended.
@@ -392,7 +392,7 @@ fn test_merge_plugin_config_overlay_wins() {
 }
 
 #[test]
-fn test_merge_plugin_config_preserves_multi_instance_kinds() {
+fn test_layer_config_preserves_multi_instance_kinds() {
     // A kind used more than once (multi-instance plugins) must not collapse into the first slot.
     let base = json!({ "components": [ { "kind": "multi", "config": { "n": 0 } } ] });
     let overlay = json!({
@@ -402,7 +402,7 @@ fn test_merge_plugin_config_preserves_multi_instance_kinds() {
         ]
     });
 
-    let merged = merge_plugin_config(&base, &overlay);
+    let merged = layer_config(&base, &overlay);
     let components = merged["components"].as_array().unwrap();
 
     // First overlay instance pairs with the base instance; the second is appended, not dropped.
