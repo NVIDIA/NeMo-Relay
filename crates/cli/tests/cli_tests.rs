@@ -285,35 +285,6 @@ command = "hermes --yolo chat"
 }
 
 #[test]
-fn cli_run_dry_run_infers_hermes_without_config() {
-    let temp = tempfile::tempdir().unwrap();
-    let xdg = temp.path().join("xdg");
-    let home = temp.path().join("home");
-    std::fs::create_dir_all(&xdg).unwrap();
-    std::fs::create_dir_all(&home).unwrap();
-
-    let output = Command::new(gateway_bin())
-        .current_dir(temp.path())
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("HOME", &home)
-        .args(["run", "--dry-run", "--print", "--", "hermes"])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "dry-run should stay inspection-only without config: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("agent = hermes"));
-    assert!(stdout.contains("gateway_url = http://127.0.0.1:<ephemeral>"));
-    assert!(stdout.contains("argv = hermes"));
-    assert!(stdout.contains("env.HERMES_ACCEPT_HOOKS = 1"));
-    assert!(stdout.contains("would temporarily merge NeMo Relay hooks"));
-}
-
-#[test]
 fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");

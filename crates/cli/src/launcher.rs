@@ -87,29 +87,24 @@ struct TransparentRun {
     agent: CodingAgent,
     prepared: PreparedRun,
     resolved: ResolvedConfig,
-    listener: Option<TcpListener>,
+    listener: TcpListener,
     gateway_url: String,
     dry_run: bool,
     print: bool,
 }
 
 impl TransparentRun {
-    // Resolves configuration and builds agent-specific launch wiring. Live runs also bind the
-    // ephemeral listener here so health checks and agent preparation share one resolved gateway
-    // address; dry runs stay side-effect free and use a placeholder dynamic URL for inspection.
+    // Resolves configuration, binds the ephemeral listener, and builds agent-specific launch wiring
+    // without starting the gateway or spawning the child command.
     async fn new(command: RunCommand, inherited: Option<&ServerArgs>) -> Result<Self, CliError> {
         let dry_run = command.dry_run;
         let print = command.print;
         let mut resolved = resolve_run_config(&command, inherited)?;
         let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
-        let (listener, gateway_url) = if dry_run {
-            (None, "http://127.0.0.1:<ephemeral>".to_string())
-        } else {
-            let listener = TcpListener::bind("127.0.0.1:0").await?;
-            let address = listener.local_addr()?;
-            resolved.gateway.bind = address;
-            (Some(listener), format!("http://{address}"))
-        };
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let gateway_url = format!("http://{address}");
+        resolved.gateway.bind = address;
 
         let prepared = PreparedRun::new(agent, argv, &gateway_url, &resolved, dry_run)?;
         Ok(Self {
@@ -137,13 +132,10 @@ impl TransparentRun {
         if self.dry_run {
             return Ok(ExitCode::SUCCESS);
         }
-        let listener = self
-            .listener
-            .expect("live transparent runs must allocate a gateway listener");
         self.prepared
             .print_live_status(self.agent, &self.gateway_url, &self.resolved);
         execute_live_run(
-            listener,
+            self.listener,
             self.resolved.gateway,
             &self.gateway_url,
             self.prepared,

@@ -8,11 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use this guide to observe local Hermes Agent sessions with NeMo Relay through
-Hermes shell hooks and the `nemo-relay` gateway. This wrapped gateway path is
-the release-safe Hermes integration path today. It is separate from the Hermes
-third-party patch set under `patches/hermes-agent/`, which remains useful for
-comparison and future plugin compatibility work but is not the priority path
-for current Hermes validation.
+Hermes shell hooks and the `nemo-relay` gateway.
 
 Hermes shell hooks provide session, subagent, tool, and LLM lifecycle events.
 For NeMo Relay contract work, `pre_api_request`, `post_api_request`, and
@@ -57,9 +53,6 @@ nemo-relay run \
   --print \
   -- hermes
 ```
-
-Dry-run stays inspection-only in this mode: it prints a placeholder ephemeral
-gateway URL and does not bind a listener or launch Hermes.
 
 ## Shared Config
 

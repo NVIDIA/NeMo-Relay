@@ -13,13 +13,6 @@ detailed operator runbook. It covers the pinned checkout, editable install with
 the `nemo-relay` extra, environment variables, ATIF output, OpenInference export,
 and smoke validation.
 
-This patch path is no longer the primary Hermes rollout path for NeMo Relay.
-For current release-safe Hermes validation, start with the wrapped gateway path
-documented in [docs/nemo-relay-cli/hermes.mdx](../docs/nemo-relay-cli/hermes.mdx).
-Use the patch path when you need to compare behavior against the tracked Hermes
-plugin integration or prepare for future Hermes releases that carry the built-in
-NeMo Relay plugin.
-
 ## Quick Path
 
 From the NeMo Relay repository root:
