@@ -24,7 +24,10 @@ use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use crate::codec::response::Usage;
+use crate::codec::request::{
+    AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
+};
+use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use crate::error::FlowError;
 use crate::json::Json;
 use chrono::{DateTime, Utc};
@@ -641,6 +644,9 @@ fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
 
 fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = common_attributes(event);
+    let is_llm = event
+        .category()
+        .is_some_and(|category| category.as_str() == "llm");
     let handle_attributes = event.attributes();
     if handle_attributes.is_some_and(|attributes| !attributes.is_empty()) {
         push_serialized(
@@ -682,11 +688,18 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
             attributes.push(KeyValue::new(oi::tool_call::function::ARGUMENTS, input));
         }
     }
+    if is_llm {
+        push_llm_request_attributes(&mut attributes, event);
+    }
     attributes
 }
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
+    let is_llm = event
+        .category()
+        .is_some_and(|category| category.as_str() == "llm");
+
     push_serialized(
         &mut attributes,
         "nemo_relay.end.output_json",
@@ -696,10 +709,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         attributes.push(KeyValue::new(oi::output::VALUE, output));
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));
     }
-    let fallback_usage = if event
-        .category()
-        .is_some_and(|category| category.as_str() == "llm")
-    {
+    let fallback_usage = if is_llm {
         usage_from_manual_llm_output(event.output())
     } else {
         None
@@ -708,11 +718,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         .annotated_response()
         .and_then(|response| response.usage.as_ref())
         .or(fallback_usage.as_ref());
-    if event
-        .category()
-        .is_some_and(|category| category.as_str() == "llm")
-        && let Some(usage) = usage
-    {
+    if is_llm && let Some(usage) = usage {
         if let Some(v) = usage.prompt_tokens {
             attributes.push(KeyValue::new(oi::llm::token_count::PROMPT, v as i64));
         }
@@ -735,7 +741,357 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
             ));
         }
     }
+    if is_llm && let Some(cost_total) = cost_total_from_manual_llm_output(event.output()) {
+        attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
+    }
+    if is_llm {
+        push_llm_response_attributes(&mut attributes, event);
+    }
     attributes
+}
+
+fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    if let Some(request) = event.annotated_request() {
+        push_annotated_request_attributes(attributes, request);
+        return;
+    }
+
+    let Some(input) = event.input().and_then(replay_llm_payload) else {
+        return;
+    };
+    if let Some(provider) = input.get("provider").and_then(Json::as_str) {
+        attributes.push(KeyValue::new(oi::llm::PROVIDER, provider.to_string()));
+    }
+    if let Some(system) = input.get("systemPrompt").and_then(display_text_from_json) {
+        attributes.push(KeyValue::new(oi::llm::SYSTEM, system));
+    }
+    push_replay_input_messages(attributes, input);
+}
+
+fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    if let Some(response) = event.annotated_response() {
+        push_annotated_response_attributes(attributes, response);
+        return;
+    }
+
+    let Some(output) = event.output().and_then(replay_llm_response) else {
+        return;
+    };
+    push_replay_response_attributes(attributes, output);
+}
+
+fn push_annotated_request_attributes(
+    attributes: &mut Vec<KeyValue>,
+    request: &AnnotatedLlmRequest,
+) {
+    if let Some(system) = request.system_prompt() {
+        attributes.push(KeyValue::new(oi::llm::SYSTEM, system.to_string()));
+    }
+    if let Some(params) = request.params.as_ref().and_then(to_json_string) {
+        attributes.push(KeyValue::new(oi::llm::INVOCATION_PARAMETERS, params));
+    }
+    push_annotated_input_messages(attributes, &request.messages);
+    if let Some(tools) = request.tools.as_deref() {
+        push_annotated_tools(attributes, tools);
+    }
+}
+
+fn push_annotated_response_attributes(
+    attributes: &mut Vec<KeyValue>,
+    response: &AnnotatedLlmResponse,
+) {
+    if let Some(reason) = response.finish_reason.as_ref() {
+        attributes.push(KeyValue::new(
+            "llm.finish_reason",
+            finish_reason_value(reason),
+        ));
+    }
+
+    let has_message = response.message.is_some()
+        || response
+            .tool_calls
+            .as_ref()
+            .is_some_and(|tool_calls| !tool_calls.is_empty());
+    if has_message {
+        attributes.push(KeyValue::new(
+            "llm.output_messages.0.message.role",
+            "assistant",
+        ));
+    }
+    if let Some(content) = response.message.as_ref().and_then(message_content_text) {
+        attributes.push(KeyValue::new(
+            "llm.output_messages.0.message.content",
+            content,
+        ));
+    }
+    if let Some(tool_calls) = response.tool_calls.as_deref() {
+        push_response_tool_calls(attributes, 0, tool_calls);
+    }
+}
+
+fn push_annotated_input_messages(attributes: &mut Vec<KeyValue>, messages: &[Message]) {
+    for (index, message) in messages.iter().enumerate() {
+        let (role, content) = match message {
+            Message::System { content, .. } => ("system", Some(content)),
+            Message::User { content, .. } => ("user", Some(content)),
+            Message::Assistant { content, .. } => ("assistant", content.as_ref()),
+            Message::Tool { content, .. } => ("tool", Some(content)),
+        };
+        push_message_role(attributes, "llm.input_messages", index, role);
+        if let Some(content) = content {
+            push_message_text_content(attributes, "llm.input_messages", index, content);
+        }
+    }
+}
+
+fn push_annotated_tools(attributes: &mut Vec<KeyValue>, tools: &[ToolDefinition]) {
+    for (index, tool) in tools.iter().enumerate() {
+        if let Some(json) = to_json_string(tool) {
+            attributes.push(KeyValue::new(
+                format!("llm.tools.{index}.tool.json_schema"),
+                json,
+            ));
+        }
+    }
+}
+
+fn push_response_tool_calls(
+    attributes: &mut Vec<KeyValue>,
+    message_index: usize,
+    tool_calls: &[ResponseToolCall],
+) {
+    for (call_index, tool_call) in tool_calls.iter().enumerate() {
+        push_output_tool_call(
+            attributes,
+            message_index,
+            call_index,
+            Some(tool_call.id.as_str()),
+            Some(tool_call.name.as_str()),
+            to_json_string(&tool_call.arguments),
+        );
+    }
+}
+
+fn push_message_role(
+    attributes: &mut Vec<KeyValue>,
+    prefix: &'static str,
+    index: usize,
+    role: &str,
+) {
+    attributes.push(KeyValue::new(
+        format!("{prefix}.{index}.message.role"),
+        role.to_string(),
+    ));
+}
+
+fn push_message_text_content(
+    attributes: &mut Vec<KeyValue>,
+    prefix: &'static str,
+    index: usize,
+    content: &MessageContent,
+) {
+    if let Some(text) = message_content_text(content) {
+        attributes.push(KeyValue::new(
+            format!("{prefix}.{index}.message.content"),
+            text,
+        ));
+    }
+}
+
+fn message_content_text(content: &MessageContent) -> Option<String> {
+    match content {
+        MessageContent::Text(text) => display_text_from_string(text),
+        MessageContent::Parts(parts) => {
+            let text = parts
+                .iter()
+                .filter_map(|part| match part {
+                    ContentPart::Text { text } => Some(text.as_str()),
+                    ContentPart::ImageUrl { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_string();
+            if text.is_empty() { None } else { Some(text) }
+        }
+    }
+}
+
+fn replay_llm_payload(input: &Json) -> Option<&Json> {
+    let content = input.as_object().and_then(|object| object.get("content"))?;
+    let content_object = content.as_object()?;
+    is_openclaw_replay_payload(content_object).then_some(content)
+}
+
+fn replay_llm_response(output: &Json) -> Option<&Json> {
+    output
+        .as_object()
+        .and_then(|object| object.get("openclaw"))
+        .and_then(Json::as_object)
+        .map(|_| output)
+}
+
+fn is_openclaw_replay_payload(content: &serde_json::Map<String, Json>) -> bool {
+    content
+        .get("source")
+        .and_then(Json::as_str)
+        .is_some_and(|source| source.starts_with("openclaw."))
+        || content.contains_key("placeholderRequest")
+}
+
+fn push_replay_input_messages(attributes: &mut Vec<KeyValue>, input: &Json) {
+    if let Some(messages) = input.get("messages").and_then(Json::as_array) {
+        for (index, message) in messages.iter().enumerate() {
+            push_replay_input_message(attributes, index, message);
+        }
+        return;
+    }
+    if let Some(prompt) = input.get("prompt").and_then(display_text_from_json) {
+        push_message_role(attributes, "llm.input_messages", 0, "user");
+        attributes.push(KeyValue::new(
+            "llm.input_messages.0.message.content",
+            prompt,
+        ));
+    }
+}
+
+fn push_replay_input_message(attributes: &mut Vec<KeyValue>, index: usize, message: &Json) {
+    let Some(object) = message.as_object() else {
+        return;
+    };
+    if !object.contains_key("role") && !object.contains_key("content") {
+        return;
+    }
+    let role = object.get("role").and_then(Json::as_str).unwrap_or("user");
+    push_message_role(attributes, "llm.input_messages", index, role);
+    if let Some(text) = object.get("content").and_then(display_text_from_json) {
+        attributes.push(KeyValue::new(
+            format!("llm.input_messages.{index}.message.content"),
+            text,
+        ));
+    }
+}
+
+fn push_replay_response_attributes(attributes: &mut Vec<KeyValue>, output: &Json) {
+    if output.get("role").is_none()
+        && output.get("content").is_none()
+        && output.get("tool_calls").is_none()
+    {
+        return;
+    }
+    let role = output
+        .get("role")
+        .and_then(Json::as_str)
+        .unwrap_or("assistant");
+    push_message_role(attributes, "llm.output_messages", 0, role);
+    if let Some(content) = output.get("content").and_then(display_text_from_json) {
+        attributes.push(KeyValue::new(
+            "llm.output_messages.0.message.content",
+            content,
+        ));
+    }
+    if let Some(tool_calls) = output.get("tool_calls").and_then(Json::as_array) {
+        push_raw_output_tool_calls(attributes, 0, tool_calls);
+    }
+}
+
+fn push_raw_output_tool_calls(
+    attributes: &mut Vec<KeyValue>,
+    message_index: usize,
+    tool_calls: &[Json],
+) {
+    for (call_index, tool_call) in tool_calls.iter().enumerate() {
+        push_output_tool_call(
+            attributes,
+            message_index,
+            call_index,
+            tool_call.get("id").and_then(Json::as_str),
+            raw_tool_call_name(tool_call),
+            raw_tool_call_arguments(tool_call).and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| to_json_string(value))
+            }),
+        );
+    }
+}
+
+fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
+    tool_call
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Json::as_str)
+        .or_else(|| tool_call.get("name").and_then(Json::as_str))
+        .or_else(|| tool_call.get("toolName").and_then(Json::as_str))
+}
+
+fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
+    tool_call
+        .get("function")
+        .and_then(|function| function.get("arguments"))
+        .or_else(|| tool_call.get("arguments"))
+        .or_else(|| tool_call.get("input"))
+}
+
+fn push_output_tool_call(
+    attributes: &mut Vec<KeyValue>,
+    message_index: usize,
+    call_index: usize,
+    id: Option<&str>,
+    name: Option<&str>,
+    arguments: Option<String>,
+) {
+    if let Some(id) = id {
+        attributes.push(KeyValue::new(
+            format!(
+                "llm.output_messages.{message_index}.message.tool_calls.{call_index}.tool_call.id"
+            ),
+            id.to_string(),
+        ));
+    }
+    if let Some(name) = name {
+        attributes.push(KeyValue::new(
+            format!(
+                "llm.output_messages.{message_index}.message.tool_calls.{call_index}.tool_call.function.name"
+            ),
+            name.to_string(),
+        ));
+    }
+    if let Some(arguments) = arguments {
+        attributes.push(KeyValue::new(
+            format!(
+                "llm.output_messages.{message_index}.message.tool_calls.{call_index}.tool_call.function.arguments"
+            ),
+            arguments,
+        ));
+    }
+}
+
+fn finish_reason_value(reason: &FinishReason) -> String {
+    match reason {
+        FinishReason::Complete => "complete".to_string(),
+        FinishReason::Length => "length".to_string(),
+        FinishReason::ToolUse => "tool_use".to_string(),
+        FinishReason::ContentFilter => "content_filter".to_string(),
+        FinishReason::Unknown(reason) => reason.clone(),
+    }
+}
+
+fn cost_total_from_manual_llm_output(output: Option<&Json>) -> Option<f64> {
+    let object = output?.as_object()?;
+    let usage = object.get("usage").and_then(Json::as_object);
+    let token_usage = object.get("token_usage").and_then(Json::as_object);
+    usage
+        .and_then(cost_total_from_usage)
+        .or_else(|| token_usage.and_then(cost_total_from_usage))
+}
+
+fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
+    usage
+        .get("cost_usd")
+        .and_then(Json::as_f64)
+        .or_else(|| usage.get("cost")?.as_object()?.get("total")?.as_f64())
 }
 
 fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {

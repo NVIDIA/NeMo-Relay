@@ -268,7 +268,7 @@ features such as adaptive hints require a managed execution path.
 | `after_tool_call` | Replays successful tool calls as tool spans; blocked tools emit marks. |
 | `agent_end` | Emits an agent lifecycle mark, flushes recorded assistant-turn LLM spans, and preserves the final assistant answer as the session output. |
 | `before_agent_finalize` | Preserves the last assistant message as fallback session output and emits a lifecycle mark without mutating the finalization payload. |
-| `subagent_spawned` / `subagent_ended` | Emits subagent lifecycle marks under the best available parent or child session. |
+| `subagent_spawned` / `subagent_ended` | Emits subagent lifecycle marks and nests child subagent session scopes under the requester session when stable lineage is available. |
 
 ## LLM Replay Fidelity
 
@@ -281,7 +281,8 @@ emits diagnostic marks instead of inventing latency. This keeps traces honest
 and makes current fidelity boundaries explicit.
 
 When OpenClaw provides usage data, the plugin maps input, output, total, cache
-read, cache write, and cost fields into OpenInference-friendly usage fields.
+read, and cache write fields into OpenInference token-count attributes, and
+maps explicit cost fields into OpenInference cost attributes.
 
 ## Troubleshooting
 

@@ -12,9 +12,11 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
+use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
     register_plugin,
@@ -835,6 +837,95 @@ async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
     assert_eq!(body["input_tokens"], json!(12));
 }
 
+#[tokio::test]
+async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
+    let subscriber_name = "server-claude-startup-probe-no-llm-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_llm_starts = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = captured_llm_starts.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "anthropic.messages"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("gateway_path"))
+                    .and_then(Value::as_str)
+                    == Some("/v1/messages")
+                && event
+                    .input()
+                    .and_then(|input| input.get("model"))
+                    .and_then(Value::as_str)
+                    == Some("claude-opus-4-8[1m]")
+                && event
+                    .input()
+                    .and_then(|input| input.get("max_tokens"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+                && event
+                    .input()
+                    .and_then(|input| input.get("messages"))
+                    .and_then(Value::as_array)
+                    .and_then(|messages| messages.first())
+                    .and_then(|message| message.get("content"))
+                    .and_then(Value::as_str)
+                    == Some("test")
+            {
+                captured.lock().unwrap().push(json!({
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_anthropic_upstream().await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "sk-ant-test")
+                .header("x-claude-code-session-id", "claude-probe")
+                .body(Body::from(
+                    json!({
+                        "model": "claude-opus-4-8[1m]",
+                        "max_tokens": 1,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "test"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/messages"));
+    assert_eq!(body["model"], json!("claude-opus-4-8[1m]"));
+    assert_eq!(body["prompt"], json!("test"));
+
+    flush_subscribers().unwrap();
+    assert!(
+        captured_llm_starts.lock().unwrap().is_empty(),
+        "Claude startup probe must not emit a managed LLM span"
+    );
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
 async fn wait_for_gateway(url: &str) {
     let client = test_http_client();
     for _ in 0..50 {
@@ -953,6 +1044,19 @@ async fn spawn_models_upstream() -> TestServer {
 }
 
 async fn spawn_anthropic_upstream() -> TestServer {
+    async fn messages(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+        let body = request.into_body().collect().await.unwrap().to_bytes();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        Json(json!({
+            "path": "/v1/messages",
+            "x_api_key": headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            "model": payload["model"],
+            "prompt": payload["messages"][0]["content"]
+        }))
+    }
+
     async fn count_tokens(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
         Json(json!({
             "path": request.uri().path(),
@@ -963,7 +1067,9 @@ async fn spawn_anthropic_upstream() -> TestServer {
         }))
     }
 
-    let app = Router::new().route("/v1/messages/count_tokens", post(count_tokens));
+    let app = Router::new()
+        .route("/v1/messages", post(messages))
+        .route("/v1/messages/count_tokens", post(count_tokens));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {

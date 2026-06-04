@@ -614,6 +614,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
             "prompt_tokens": 10,
             "completion_tokens": 20,
             "total_tokens": 30,
+            "cost_usd": 0.001,
             "prompt_tokens_details": {
                 "cached_tokens": 4
             }
@@ -627,19 +628,56 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         openai_metrics.extra.as_ref().unwrap()["total_tokens"],
         json!(30)
     );
+    assert_eq!(openai_metrics.cost_usd, Some(0.001));
 
     let anthropic_metrics = extract_metrics(&json!({
         "usage": {
             "input_tokens": 11,
             "output_tokens": 22,
             "cache_read_input_tokens": 3,
-            "cache_creation_input_tokens": 5
+            "cache_creation_input_tokens": 5,
+            "cost": { "total": 0.0042 }
         }
     }))
     .unwrap();
     assert_eq!(anthropic_metrics.prompt_tokens, Some(11));
     assert_eq!(anthropic_metrics.completion_tokens, Some(22));
     assert_eq!(anthropic_metrics.cached_tokens, Some(8));
+    assert_eq!(anthropic_metrics.cost_usd, Some(0.0042));
+}
+
+#[test]
+fn test_final_metrics_preserve_explicit_zero_cost_without_fabricating_tokens() {
+    let final_metrics = compute_final_metrics(&[AtifStep {
+        step_id: 1,
+        source: "assistant".to_string(),
+        message: json!("done"),
+        timestamp: None,
+        model_name: None,
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: Some(AtifMetrics {
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            cost_usd: Some(0.0),
+            prompt_token_ids: None,
+            completion_token_ids: None,
+            logprobs: None,
+            extra: None,
+        }),
+        llm_call_count: None,
+        is_copied_context: None,
+        extra: None,
+    }])
+    .unwrap();
+
+    assert_eq!(final_metrics.total_prompt_tokens, None);
+    assert_eq!(final_metrics.total_completion_tokens, None);
+    assert_eq!(final_metrics.total_cached_tokens, None);
+    assert_eq!(final_metrics.total_cost_usd, Some(0.0));
 }
 
 #[test]
@@ -2021,6 +2059,95 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
     assert_eq!(metrics.prompt_tokens, Some(7));
     assert_eq!(metrics.completion_tokens, Some(3));
     assert_eq!(metrics.extra.as_ref().unwrap()["total_tokens"], json!(10));
+}
+
+#[test]
+fn test_exporter_keeps_tool_only_llm_spans_with_different_tool_calls() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+    let parent_uuid = Uuid::now_v7();
+    let first_uuid = Uuid::now_v7();
+    let second_uuid = Uuid::now_v7();
+    let request = json!({
+        "messages": [{"role": "user", "content": "Use tools"}],
+        "model": "test-model"
+    });
+
+    let mut first_start = event_builder(first_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .input(request.clone())
+        .build();
+    let mut first_end = event_builder(first_uuid, EventType::End)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .output(json!({
+            "type": "message",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu-read",
+                "name": "read_file",
+                "input": { "path": "README.md" }
+            }]
+        }))
+        .build();
+    let mut second_start = event_builder(second_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .input(request)
+        .build();
+    let mut second_end = event_builder(second_uuid, EventType::End)
+        .name("anthropic.messages")
+        .parent_uuid(parent_uuid)
+        .scope_type(ScopeType::Llm)
+        .model_name("test-model")
+        .output(json!({
+            "type": "message",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu-search",
+                "name": "web_search",
+                "input": { "query": "release notes" }
+            }]
+        }))
+        .build();
+
+    for (idx, event) in [
+        &mut first_start,
+        &mut second_start,
+        &mut first_end,
+        &mut second_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(idx as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([first_start, second_start, first_end, second_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let tool_call_ids = trajectory
+        .steps
+        .iter()
+        .filter_map(|step| step.tool_calls.as_deref())
+        .flat_map(|calls| calls.iter().map(|call| call.tool_call_id.as_str()))
+        .collect::<HashSet<_>>();
+
+    assert!(tool_call_ids.contains("toolu-read"));
+    assert!(tool_call_ids.contains("toolu-search"));
+    assert_eq!(tool_call_ids.len(), 2);
 }
 
 #[test]

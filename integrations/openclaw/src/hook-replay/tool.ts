@@ -22,12 +22,14 @@ export async function guardBeforeToolCall(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
 ): Promise<void> {
+  const observedAtMicros = nowMicros();
   const session = ensureSession(manager, {
     sessionId: ctx.sessionId,
     sessionKey: ctx.sessionKey,
     runId: event.runId ?? ctx.runId,
     agentId: ctx.agentId,
     source: 'lazy_session',
+    timestamp: observedAtMicros,
   });
   const args = toJsonValue(event.params ?? {});
 
@@ -50,12 +52,15 @@ export function replayAfterToolCall(
   event: PluginHookAfterToolCallEvent,
   ctx: PluginHookToolContext,
 ): void {
+  const endMicros = nowMicros();
+  const sessionTimestamp = startMicrosFromDuration(endMicros, event.durationMs) ?? endMicros;
   const session = ensureSession(manager, {
     sessionId: ctx.sessionId,
     sessionKey: ctx.sessionKey,
     runId: event.runId ?? ctx.runId,
     agentId: ctx.agentId,
     source: 'lazy_session',
+    timestamp: sessionTimestamp,
   });
 
   const blockedDetails = blockedToolDetails(event, { runId: event.runId ?? ctx.runId });
@@ -67,6 +72,16 @@ export function replayAfterToolCall(
         session,
         name: 'openclaw.tool_blocked',
         data: blockedDetails,
+        metadata: toJsonRecord({
+          source: 'openclaw.after_tool_call',
+          hook_event_name: 'after_tool_call',
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
+          agentId: session.agentId,
+          runId: event.runId ?? ctx.runId,
+          toolCallId: event.toolCallId ?? ctx.toolCallId,
+        }),
+        timestamp: endMicros,
       });
     });
     return;
@@ -76,12 +91,12 @@ export function replayAfterToolCall(
     return;
   }
 
-  const endMicros = nowMicros();
   const metadata = toJsonRecord({
     source: 'openclaw.after_tool_call',
     runId: event.runId ?? ctx.runId,
-    sessionId: ctx.sessionId,
-    sessionKey: ctx.sessionKey,
+    sessionId: session.sessionId,
+    sessionKey: session.sessionKey,
+    agentId: session.agentId,
     toolCallId: event.toolCallId ?? ctx.toolCallId,
     durationMs: event.durationMs,
   });

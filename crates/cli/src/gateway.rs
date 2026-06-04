@@ -181,12 +181,49 @@ async fn run_managed_gateway(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
 ) -> Result<Response<Body>, CliError> {
+    if prep.bypass_managed_pipeline {
+        let session_id = prep.session_id.clone();
+        let prune_empty_session = prep.prune_empty_session_on_finish;
+        let model = prep.model_name.as_deref().unwrap_or("<unknown>");
+        eprintln!(
+            "nemo-relay CLI gateway: bypassing managed LLM observability for Claude Code startup probe session={session_id} provider={} model={model}",
+            prep.provider_name
+        );
+        state
+            .sessions
+            .finish_gateway_call(&session_id, prune_empty_session)
+            .await;
+        return run_unmanaged_gateway(state, prepared).await;
+    }
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
         run_managed_streaming(state, prepared, prep, codecs).await
     } else {
         run_managed_buffered(state, prepared, prep, codecs).await
     }
+}
+
+async fn run_unmanaged_gateway(
+    state: AppState,
+    prepared: PreparedGatewayRequest,
+) -> Result<Response<Body>, CliError> {
+    if prepared.streaming {
+        return passthrough_streaming(state, prepared).await;
+    }
+    let response = forward_upstream_request(
+        &state.http,
+        &prepared.method,
+        &prepared.upstream_url,
+        &prepared.body_bytes,
+        &prepared.headers,
+        None,
+        prepared.provider,
+    )
+    .await?;
+    let status = response.status();
+    let headers = response_headers(response.headers());
+    let bytes = response.bytes().await?;
+    build_response(status, headers, Body::from(bytes))
 }
 
 // Codecs registered for each managed provider route. Routes that emit LLM events but lack a typed
@@ -246,6 +283,8 @@ async fn run_managed_buffered(
         metadata,
         model_name,
         owner_subagent_id,
+        bypass_managed_pipeline: _,
+        prune_empty_session_on_finish: _,
     } = prep;
     let provider_for_event = provider_name.clone();
     let params = LlmCallExecuteParams::builder()
@@ -267,7 +306,7 @@ async fn run_managed_buffered(
                 .sessions
                 .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
                 .await;
-            state.sessions.finish_gateway_call(&session_id).await;
+            state.sessions.finish_gateway_call(&session_id, false).await;
             let (status, headers) = upstream_info
                 .lock()
                 .expect("upstream info lock poisoned")
@@ -281,7 +320,7 @@ async fn run_managed_buffered(
             build_response(status, headers, Body::from(bytes))
         }
         Err(error) => {
-            state.sessions.finish_gateway_call(&session_id).await;
+            state.sessions.finish_gateway_call(&session_id, false).await;
             Err(translate_runtime_error(error, &upstream_error))
         }
     }
@@ -375,7 +414,10 @@ async fn run_managed_streaming(
     // collector and finalizer for managed streaming, so without a codec we cannot use the managed
     // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
     let Some(streaming_codec) = codecs.streaming else {
-        state.sessions.finish_gateway_call(&prep.session_id).await;
+        state
+            .sessions
+            .finish_gateway_call(&prep.session_id, false)
+            .await;
         return passthrough_streaming(state, prepared).await;
     };
     let collector = streaming_codec.collector();
@@ -400,6 +442,8 @@ async fn run_managed_streaming(
         metadata,
         model_name,
         owner_subagent_id,
+        bypass_managed_pipeline: _,
+        prune_empty_session_on_finish: _,
     } = prep;
     let params = LlmStreamCallExecuteParams::builder()
         .name(provider_name)
@@ -422,7 +466,7 @@ async fn run_managed_streaming(
     let json_stream = match json_stream_result {
         Ok(json_stream) => json_stream,
         Err(error) => {
-            state.sessions.finish_gateway_call(&session_id).await;
+            state.sessions.finish_gateway_call(&session_id, false).await;
             return Err(translate_runtime_error(error, &upstream_error));
         }
     };
@@ -614,7 +658,7 @@ impl GatewayCallGuard {
                     )
                     .await;
             }
-            sessions.finish_gateway_call(&self.session_id).await;
+            sessions.finish_gateway_call(&self.session_id, false).await;
         }
     }
 }
@@ -638,7 +682,7 @@ impl Drop for GatewayCallGuard {
                         .record_gateway_response_hints(&session_id, owner_subagent_id, response)
                         .await;
                 }
-                sessions.finish_gateway_call(&session_id).await;
+                sessions.finish_gateway_call(&session_id, false).await;
             });
         }
     }

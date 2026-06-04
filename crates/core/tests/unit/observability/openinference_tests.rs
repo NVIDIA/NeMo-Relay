@@ -13,7 +13,11 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::response::{AnnotatedLlmResponse, Usage};
+use crate::codec::request::{
+    AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
+    ToolDefinition,
+};
+use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
@@ -52,6 +56,113 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
             )
         })
         .collect()
+}
+
+fn assert_attr(attributes: &HashMap<String, String>, key: &str, value: &str) {
+    assert_eq!(attributes.get(key).map(String::as_str), Some(value));
+}
+
+fn assert_attr_contains(attributes: &HashMap<String, String>, key: &str, expected: &str) {
+    let value = attributes
+        .get(key)
+        .unwrap_or_else(|| panic!("missing attribute {key}"));
+    assert!(
+        value.contains(expected),
+        "attribute {key} value {value:?} did not contain {expected:?}"
+    );
+}
+
+fn assert_no_attr_contains(attributes: &HashMap<String, String>, expected: &str) {
+    assert!(
+        !attributes
+            .iter()
+            .any(|(key, value)| key.contains(expected) || value.contains(expected)),
+        "attribute map unexpectedly contained {expected:?}"
+    );
+}
+
+fn empty_annotated_request() -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        messages: Vec::new(),
+        model: None,
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn empty_annotated_response() -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        id: None,
+        model: None,
+        message: None,
+        tool_calls: None,
+        finish_reason: None,
+        usage: None,
+        api_specific: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        messages: vec![
+            Message::System {
+                content: MessageContent::Text("Use concise answers.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Search docs.".to_string()),
+                name: None,
+            },
+        ],
+        model: Some("gpt-4o".to_string()),
+        params: Some(GenerationParams {
+            temperature: Some(0.2),
+            max_tokens: Some(128),
+            top_p: None,
+            stop: None,
+        }),
+        tools: Some(vec![ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "search_docs".to_string(),
+                description: Some("Search the docs corpus.".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}}
+                })),
+            },
+        }]),
+        ..empty_annotated_request()
+    }
+}
+
+fn sample_openinference_annotated_response() -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("I will search docs.".to_string())),
+        tool_calls: Some(vec![ResponseToolCall {
+            id: "call-search-docs".to_string(),
+            name: "search_docs".to_string(),
+            arguments: json!({"query": "docs"}),
+        }]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..empty_annotated_response()
+    }
 }
 
 fn make_start_event(
@@ -547,14 +658,274 @@ fn llm_input_value_omits_request_headers() {
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
-    assert_eq!(attributes.get("input.value"), Some(&"user: hi".to_string()));
-    assert_eq!(
-        attributes.get("input.mime_type"),
-        Some(&"text/plain".to_string())
-    );
+    assert_attr(&attributes, "input.value", "user: hi");
+    assert_attr(&attributes, "input.mime_type", "text/plain");
     assert!(!attributes.contains_key("nemo_relay.start.input_json"));
     assert!(!attributes["input.value"].contains("authorization"));
     assert!(!attributes["input.value"].contains("secret-token"));
+    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    assert_no_attr_contains(&attributes, "headers");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "systemPrompt": "Use reliable sources.",
+                "prompt": "Find the answer.",
+                "messages": [
+                    {"role": "user", "content": "Find the answer."}
+                ],
+                "placeholderRequest": false,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "tool_calls": [{
+                "id": "toolu_search",
+                "name": "tavily_search",
+                "input": {"query": "answer"}
+            }],
+            "openclaw": {
+                "duration_ms": 42,
+                "assistant_tool_call_names": ["tavily_search"]
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.provider", "nvidia-inference");
+    assert_attr(&attributes, "llm.system", "Use reliable sources.");
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Find the answer.",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search.",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+        "toolu_search",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+        "tavily_search",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+        "{\"query\":\"answer\"}",
+    );
+    assert!(!attributes.contains_key("llm.invocation_parameters"));
+    assert!(!attributes.contains_key("llm.finish_reason"));
+    assert_no_attr_contains(&attributes, "headers");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let parent_uuid = Uuid::now_v7();
+    let nested_child_uuid = Uuid::now_v7();
+    let fallback_child_uuid = Uuid::now_v7();
+
+    let nested_parent_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "parent-session"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "nested-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_parent_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "fallback-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+
+    for event in [
+        nested_parent_start,
+        nested_child_start,
+        nested_child_end,
+        nested_parent_end,
+        fallback_child_start,
+        fallback_child_end,
+    ] {
+        processor.process(&event);
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let nested_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "nested-worker")
+        .unwrap();
+    let fallback_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "fallback-worker")
+        .unwrap();
+    let nested_child_attributes = attr_map(&nested_child_span.attributes);
+    let fallback_child_attributes = attr_map(&fallback_child_span.attributes);
+
+    assert_eq!(
+        nested_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&parent_uuid.to_string())
+    );
+    assert_eq!(
+        fallback_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&String::new())
+    );
+}
+
+#[test]
+fn generic_unannotated_llm_output_does_not_emit_flattened_output_message_attrs() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "generic-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "generic-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "hello",
+            "tool_calls": [{
+                "id": "tool-call-1",
+                "name": "demo_tool",
+                "input": {"query": "hi"}
+            }]
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.output_messages.0.message.role"));
+    assert!(!attributes.contains_key("llm.output_messages.0.message.content"));
+    assert!(
+        !attributes
+            .contains_key("llm.output_messages.0.message.tool_calls.0.tool_call.function.name")
+    );
 }
 
 #[test]
@@ -692,7 +1063,8 @@ fn output_value_extracts_chat_completion_display_text() {
                 "prompt_tokens": 3,
                 "completion_tokens": 4,
                 "total_tokens": 7,
-                "prompt_tokens_details": {"cached_tokens": 2}
+                "prompt_tokens_details": {"cached_tokens": 2},
+                "cost_usd": 0.001
             }
         })),
     ));
@@ -718,6 +1090,7 @@ fn output_value_extracts_chat_completion_display_text() {
         attributes.get("llm.token_count.prompt_details.cache_read"),
         Some(&"2".to_string())
     );
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.001".to_string()));
 }
 
 #[test]
@@ -767,7 +1140,8 @@ fn output_value_extracts_openai_responses_display_text_and_usage() {
                 "input_tokens": 75,
                 "output_tokens": 20,
                 "total_tokens": 95,
-                "input_tokens_details": {"cached_tokens": 10}
+                "input_tokens_details": {"cached_tokens": 10},
+                "cost_usd": 0.005
             }
         })),
     ));
@@ -801,6 +1175,7 @@ fn output_value_extracts_openai_responses_display_text_and_usage() {
         attributes.get("llm.token_count.prompt_details.cache_read"),
         Some(&"10".to_string())
     );
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.005".to_string()));
 }
 
 #[test]
@@ -1440,6 +1815,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"10".to_string())
     );
+    assert!(!attributes.contains_key("llm.output_messages.0.message.role"));
 }
 
 #[test]
@@ -1496,6 +1872,7 @@ fn llm_end_with_manual_usage_payload_emits_token_count_attributes() {
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"10".to_string())
     );
+    assert!(!attributes.contains_key("llm.cost.total"));
 }
 
 #[test]
@@ -1546,7 +1923,8 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
                 "input_tokens": 11,
                 "output_tokens": 7,
                 "cache_read_input_tokens": 3,
-                "cache_creation_input_tokens": 5
+                "cache_creation_input_tokens": 5,
+                "cost": {"total": 0.0042}
             }
         })),
         Some(
@@ -1593,6 +1971,95 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"5".to_string())
     );
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.0042".to_string())
+    );
+}
+
+#[test]
+fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::Start,
+        uuid,
+        None,
+        "annotated-chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(sample_openinference_annotated_request()))
+                .build(),
+        ),
+    ));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "annotated-chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(sample_openinference_annotated_response()))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.system", "Use concise answers.");
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Search docs.",
+    );
+    assert_attr_contains(
+        &attributes,
+        "llm.invocation_parameters",
+        "\"temperature\":0.2",
+    );
+    assert_attr_contains(
+        &attributes,
+        "llm.tools.0.tool.json_schema",
+        "\"name\":\"search_docs\"",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search docs.",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+        "call-search-docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+        "search_docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+        "{\"query\":\"docs\"}",
+    );
+    assert_attr(&attributes, "llm.finish_reason", "tool_use");
 }
 
 #[test]

@@ -19,7 +19,9 @@ use crate::config::{
     ServerArgs, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
-use crate::installer::{generated_hooks, hook_forward_command, merge_hooks, read_json_file};
+use crate::installer::{
+    generated_hooks, hook_forward_command, merge_hermes_config, merge_hooks, read_json_file,
+};
 use crate::server;
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
@@ -152,7 +154,9 @@ async fn execute_live_run(
 ) -> Result<ExitCode, CliError> {
     let running_server = RunningGateway::start(listener, gateway_config);
     if let Err(error) = wait_for_health(gateway_url).await {
+        let restore = prepared.restore();
         let _ = running_server.stop().await;
+        restore?;
         return Err(error);
     }
     let status = prepared.spawn_and_wait().await;
@@ -240,10 +244,17 @@ struct PreparedRun {
     env: Vec<(String, String)>,
     temp_dirs: Vec<PathBuf>,
     cursor_restore: Option<CursorRestore>,
+    hermes_restore: Option<HermesRestore>,
     notes: Vec<String>,
 }
 
 struct CursorRestore {
+    path: PathBuf,
+    backup_path: Option<PathBuf>,
+    had_original: bool,
+}
+
+struct HermesRestore {
     path: PathBuf,
     backup_path: Option<PathBuf>,
     had_original: bool,
@@ -291,6 +302,7 @@ impl PreparedRun {
             env: vec![("NEMO_RELAY_GATEWAY_URL".into(), gateway_url.into())],
             temp_dirs: Vec::new(),
             cursor_restore: None,
+            hermes_restore: None,
             notes: Vec::new(),
         };
         if let Some(path) = path_with_transparent_hook_dir() {
@@ -314,7 +326,13 @@ impl PreparedRun {
                     }
                 }
             }
-            CodingAgent::Hermes => run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref()),
+            CodingAgent::Hermes => {
+                if dry_run {
+                    run.prepare_hermes_dry(resolved.agents.hermes.hooks_path.as_deref())?;
+                } else {
+                    run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref())?;
+                }
+            }
         }
         Ok(run)
     }
@@ -447,18 +465,36 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Surfaces where hermes' shell hooks live so users know what `nemo-relay config hermes` wrote.
-    // Hermes reads hooks from .hermes/config.yaml on its own; this launcher only exports the live
-    // gateway URL via NEMO_RELAY_GATEWAY_URL so installed hooks reach the ephemeral gateway.
-    fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) {
-        let note = match hooks_path {
-            Some(path) => format!(
-                "Hermes hooks at {} — re-run `nemo-relay config hermes` to refresh.",
-                path.display()
-            ),
-            None => "Hermes hooks not yet installed — run `nemo-relay config hermes` once so hermes traces under this gateway.".into(),
-        };
-        self.notes.push(note);
+    // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. For
+    // transparent runs, temporarily merge gateway hook-forward entries into the configured Hermes
+    // hook file, then restore it after the child exits.
+    fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
+        let path = hermes_hooks_path(hooks_path)?;
+        let (had_original, backup_path) = backup_existing_hermes_hooks(&path)?;
+        write_merged_hermes_hooks(&path)?;
+        self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
+        self.notes.push(format!(
+            "temporarily merged NeMo Relay hooks into {}",
+            path.display()
+        ));
+        self.hermes_restore = Some(HermesRestore {
+            path,
+            backup_path,
+            had_original,
+        });
+        Ok(())
+    }
+
+    // Records the Hermes hook file that would be patched during a real run without touching the
+    // filesystem, preserving dry-run as an inspection-only operation.
+    fn prepare_hermes_dry(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
+        let path = hermes_hooks_path(hooks_path)?;
+        self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
+        self.notes.push(format!(
+            "would temporarily merge NeMo Relay hooks into {}",
+            path.display()
+        ));
+        Ok(())
     }
 
     // Spawns the prepared child process with injected environment and waits for its exit status.
@@ -473,34 +509,28 @@ impl PreparedRun {
         child.wait().await.map_err(CliError::from)
     }
 
-    // Removes temporary directories and restores Cursor hook files after the child exits. Restore
+    // Removes temporary directories and restores patched hook files after the child exits. Restore
     // errors are surfaced after the child status is collected so cleanup problems are not hidden.
     fn restore(&self) -> Result<(), CliError> {
         for dir in &self.temp_dirs {
             let _ = std::fs::remove_dir_all(dir);
         }
-        let Some(cursor) = &self.cursor_restore else {
-            return Ok(());
-        };
-        match (&cursor.backup_path, cursor.had_original) {
-            (Some(backup), true) => {
-                std::fs::copy(backup, &cursor.path).map_err(|error| {
-                    CliError::Launch(format!(
-                        "failed to restore Cursor hooks from {}: {error}",
-                        backup.display()
-                    ))
-                })?;
-                let _ = std::fs::remove_file(backup);
-            }
-            (_, false) if cursor.path.exists() => {
-                std::fs::remove_file(&cursor.path).map_err(|error| {
-                    CliError::Launch(format!(
-                        "failed to remove temporary Cursor hooks {}: {error}",
-                        cursor.path.display()
-                    ))
-                })?;
-            }
-            _ => {}
+
+        if let Some(cursor) = &self.cursor_restore {
+            restore_hook_file(
+                &cursor.path,
+                cursor.backup_path.as_deref(),
+                cursor.had_original,
+                "Cursor",
+            )?;
+        }
+        if let Some(hermes) = &self.hermes_restore {
+            restore_hook_file(
+                &hermes.path,
+                hermes.backup_path.as_deref(),
+                hermes.had_original,
+                "Hermes",
+            )?;
         }
         Ok(())
     }
@@ -815,6 +845,17 @@ fn backup_existing_cursor_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), 
     Ok((true, Some(backup)))
 }
 
+// Backs up an existing Hermes hook config before run-mode patching.
+fn backup_existing_hermes_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), CliError> {
+    let had_original = path.exists();
+    if !had_original {
+        return Ok((false, None));
+    }
+    let backup = path.with_extension(format!("yaml.nemo-relay-run.bak.{}", timestamp()?));
+    std::fs::copy(path, &backup)?;
+    Ok((true, Some(backup)))
+}
+
 // Creates the Cursor hooks parent directory when needed, merges generated gateway hooks with any
 // existing hook file, and writes the patched JSON used for this transparent run.
 fn write_merged_cursor_hooks(path: &Path) -> Result<(), CliError> {
@@ -834,6 +875,74 @@ fn write_merged_cursor_hooks(path: &Path) -> Result<(), CliError> {
     let contents = serde_json::to_string_pretty(&merged)
         .map_err(|error| CliError::Launch(error.to_string()))?;
     std::fs::write(path, contents)?;
+    Ok(())
+}
+
+// Creates the Hermes config parent directory when needed, merges generated gateway hooks with any
+// existing YAML config, and writes the patched YAML used for this transparent run.
+fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let existing = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(CliError::Io(error)),
+    };
+    let contents = merge_hermes_config(
+        &existing,
+        generated_hooks(
+            CodingAgent::Hermes,
+            &hook_forward_command(&transparent_hook_executable(), CodingAgent::Hermes),
+        ),
+    )?;
+    std::fs::write(path, contents)?;
+    Ok(())
+}
+
+// Chooses the Hermes hook file that transparent run should patch. If setup recorded a specific
+// path, reuse it; otherwise fall back to the Hermes home config file that Hermes itself reads.
+fn hermes_hooks_path(configured: Option<&Path>) -> Result<PathBuf, CliError> {
+    if let Some(path) = configured {
+        return Ok(path.to_path_buf());
+    }
+    if let Some(home) = std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home).join("config.yaml"));
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or_else(|| {
+            CliError::Launch("could not resolve home directory for Hermes hooks".into())
+        })?;
+    Ok(PathBuf::from(home).join(".hermes").join("config.yaml"))
+}
+
+fn restore_hook_file(
+    path: &Path,
+    backup_path: Option<&Path>,
+    had_original: bool,
+    label: &str,
+) -> Result<(), CliError> {
+    match (backup_path, had_original) {
+        (Some(backup), true) => {
+            std::fs::copy(backup, path).map_err(|error| {
+                CliError::Launch(format!(
+                    "failed to restore {label} hooks from {}: {error}",
+                    backup.display()
+                ))
+            })?;
+            let _ = std::fs::remove_file(backup);
+        }
+        (_, false) if path.exists() => {
+            std::fs::remove_file(path).map_err(|error| {
+                CliError::Launch(format!(
+                    "failed to remove temporary {label} hooks {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 

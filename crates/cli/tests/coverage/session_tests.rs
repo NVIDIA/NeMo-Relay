@@ -1583,6 +1583,102 @@ async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
 }
 
 #[tokio::test]
+async fn hermes_task_id_tool_hooks_reuse_api_session() {
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-main"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-main",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read file" }
+                        ]
+                    }
+                }
+            }
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    let pre_tool = crate::adapters::hermes::adapt(
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-main",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "tool-1"
+            }
+        }),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, pre_tool.events)
+        .await
+        .unwrap();
+
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.contains_key("hermes-main"));
+        assert!(
+            !sessions.contains_key("task-1"),
+            "Hermes tool hooks keyed by task_id should not create a duplicate session"
+        );
+        let session = sessions.get("hermes-main").unwrap();
+        assert!(
+            !session.tools.is_empty(),
+            "pre_tool_call should open an active tool before post_tool_call runs"
+        );
+    }
+
+    let post_tool = crate::adapters::hermes::adapt(
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-main",
+            "tool_name": "read_file",
+            "tool_input": { "path": "README.md" },
+            "tool_response": { "content": "hello" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "provider-tool-1"
+            }
+        }),
+        &headers,
+    );
+    manager
+        .apply_events(&headers, post_tool.events)
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let session = sessions.get("hermes-main").unwrap();
+    assert!(
+        session.tools.is_empty(),
+        "post_tool_call should close the matching pre_tool_call even when call IDs differ"
+    );
+}
+
+#[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -2050,6 +2146,331 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 
     let sessions = manager.inner.lock().await;
     assert!(sessions.contains_key("llm-session"));
+}
+
+#[tokio::test]
+async fn claude_startup_probe_does_not_open_null_input_turn() {
+    let subscriber_name = "cli-claude-startup-probe-turn-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_turn_starts = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let captured = captured_turn_starts.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "claude-code-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("claude-probe")
+            {
+                captured.lock().unwrap().push(json!({
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "claude-probe",
+                "SessionStart",
+            ))],
+        )
+        .await
+        .unwrap();
+
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("claude-probe".into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-opus-4-8[1m]".into()),
+                request: LlmRequest {
+                    headers: Map::from_iter([(
+                        "x-claude-code-session-id".to_string(),
+                        json!("claude-probe"),
+                    )]),
+                    content: json!({
+                        "model": "claude-opus-4-8[1m]",
+                        "max_tokens": 1,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "test"
+                            }
+                        ]
+                    }),
+                },
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(prep.parent.is_none());
+    assert_eq!(
+        prep.metadata["llm_correlation_status"],
+        json!("pre_turn_probe")
+    );
+    assert_eq!(
+        prep.metadata["llm_correlation_source"],
+        json!("claude_startup_probe")
+    );
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::PromptSubmitted(SessionEvent {
+                session_id: "claude-probe".into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "UserPromptSubmit".into(),
+                payload: json!({ "prompt": "list contents of this dir" }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("claude-probe").expect("session retained");
+        assert!(
+            session.turn_scope.is_some(),
+            "prompt should open a Claude turn after the pre-turn probe"
+        );
+    }
+
+    flush_subscribers().unwrap();
+    let starts = captured_turn_starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 1, "expected one user-visible Claude turn");
+    assert_eq!(
+        starts[0]["input"],
+        json!({ "prompt": "list contents of this dir" }),
+        "startup probe must not create a null-input Claude turn"
+    );
+    assert_eq!(starts[0]["metadata"]["turn_index"], json!(1));
+    assert_eq!(starts[0]["metadata"]["turn_source"], json!("user_prompt"));
+
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn claude_startup_probe_only_session_is_pruned_after_finish() {
+    let manager = SessionManager::new(session_test_config());
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), claude_startup_probe_start("probe-only"))
+        .await
+        .unwrap();
+
+    assert!(prep.bypass_managed_pipeline);
+    assert!(prep.prune_empty_session_on_finish);
+    assert!(manager.inner.lock().await.contains_key("probe-only"));
+
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
+    assert!(!manager.inner.lock().await.contains_key("probe-only"));
+
+    let next = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next.session_id, "gateway-gateway",
+        "probe-only sessions must not become the single-active fallback"
+    );
+}
+
+#[tokio::test]
+async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let subscriber_name = "cli-claude-orphan-subagent-stop-no-null-turn-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_events = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let event_session_id = event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str);
+            if event_session_id != Some("claude-orphan-stop") {
+                return;
+            }
+            if event.name() == "claude-code-turn" {
+                captured.lock().unwrap().push(json!({
+                    "kind": "turn",
+                    "scope_category": event.scope_category(),
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "output": event.output().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            } else if event.name() == "subagent_end_without_start" {
+                captured.lock().unwrap().push(json!({
+                    "kind": "orphan_mark",
+                    "data": event.data().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-orphan-stop", "SessionStart")),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "claude-orphan-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "thanks!" }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    let active_llm = manager
+        .start_llm(
+            &HeaderMap::new(),
+            llm_start_with_messages_task("claude-orphan-stop", "thanks!"),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            active_llm,
+            json!({
+                "id": "msg_thanks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-test",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You're welcome!"
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 4
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::TurnEnded(SessionEvent {
+                    session_id: "claude-orphan-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "Stop".into(),
+                    payload: json!({ "content": "You're welcome!" }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: "claude-orphan-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "missing-worker".into(),
+                    payload: json!({
+                        "hook_event_name": "SubagentStop",
+                        "last_assistant_message": "add the event logs to .gitignore"
+                    }),
+                    metadata: json!({
+                        "hook_event_name": "SubagentStop",
+                        "agent_id": "missing-worker"
+                    }),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    clear_plugin_configuration().unwrap();
+    let events = captured_events.lock().unwrap().clone();
+    let turn_starts: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["kind"] == json!("turn") && event["scope_category"] == json!(ScopeCategory::Start)
+        })
+        .collect();
+    let idle_turn_closes: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["kind"] == json!("turn")
+                && event["scope_category"] == json!(ScopeCategory::End)
+                && event["output"]["status"] == json!("idle_timeout")
+        })
+        .collect();
+
+    assert_eq!(closed, 0, "orphan SubagentStop must not open an idle turn");
+    assert_eq!(
+        turn_starts.len(),
+        1,
+        "orphan SubagentStop must not create a second Claude turn: {events:#?}"
+    );
+    assert_eq!(turn_starts[0]["input"], json!({ "prompt": "thanks!" }));
+    assert_eq!(
+        idle_turn_closes.len(),
+        0,
+        "orphan SubagentStop must not create a turn later closed by idle timeout: {events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["kind"] != json!("orphan_mark")),
+        "uncorrelatable Claude SubagentStop should not emit a turn-scoped orphan mark: {events:#?}"
+    );
+
+    let atif = read_atif_for_session(&atif_dir, "claude-orphan-stop");
+    assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
+    assert!(
+        !serde_json::to_string(&atif)
+            .unwrap()
+            .contains("subagent_end_without_start"),
+        "ATIF should not include uncorrelatable Claude orphan stop diagnostics: {}",
+        serde_json::to_string_pretty(&atif).unwrap()
+    );
+
+    deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
@@ -3021,6 +3442,139 @@ async fn claude_agent_tool_async_launch_keeps_subagent_open_for_later_hooks() {
 }
 
 #[tokio::test]
+async fn active_tool_name_args_fallback_requires_matching_subagent_owner() {
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "tool-owner-fallback";
+    let same_args = json!({ "file_path": "README.md" });
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-2".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-1-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-2-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-2".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "provider-worker-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let tools = &sessions.get(session_id).unwrap().tools;
+    assert!(!tools.contains_key("worker-1-pre"));
+    assert!(tools.contains_key("worker-2-pre"));
+    assert!(!tools.contains_key("provider-worker-1"));
+}
+
+#[tokio::test]
+async fn active_tool_name_args_fallback_uses_unique_global_match_without_owner() {
+    let manager = SessionManager::new(session_test_config());
+    let session_id = "tool-global-fallback";
+    let same_args = json!({ "file_path": "README.md" });
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event(session_id, "SessionStart")),
+                NormalizedEvent::SubagentStarted(SubagentEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStart".into(),
+                    subagent_id: "worker-1".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolStarted(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PreToolUse".into(),
+                    tool_call_id: "worker-1-pre".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: Some("worker-1".into()),
+                    arguments: same_args.clone(),
+                    result: Value::Null,
+                    status: None,
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::ToolEnded(ToolEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "PostToolUse".into(),
+                    tool_call_id: "provider-worker-1".into(),
+                    tool_name: "Read".into(),
+                    subagent_id: None,
+                    arguments: same_args,
+                    result: json!({ "ok": true }),
+                    status: Some("success".into()),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let sessions = manager.inner.lock().await;
+    let tools = &sessions.get(session_id).unwrap().tools;
+    assert!(tools.is_empty());
+}
+
+#[tokio::test]
 async fn agent_end_closes_active_tools_and_duplicate_starts_are_ignored() {
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();
@@ -3411,7 +3965,7 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
             .contains_key("active-gateway-call")
     );
 
-    manager.finish_gateway_call(&prep.session_id).await;
+    manager.finish_gateway_call(&prep.session_id, false).await;
     let closed = manager
         .close_idle_sessions_at(
             Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
@@ -4144,6 +4698,28 @@ fn llm_start() -> LlmGatewayStart {
         },
         streaming: false,
         metadata: json!({}),
+    }
+}
+
+fn claude_startup_probe_start(session_id: &str) -> LlmGatewayStart {
+    LlmGatewayStart {
+        session_id: Some(session_id.into()),
+        provider: "anthropic.messages".into(),
+        model_name: Some("claude-opus-4-8[1m]".into()),
+        request: LlmRequest {
+            headers: Map::from_iter([("x-claude-code-session-id".to_string(), json!(session_id))]),
+            content: json!({
+                "model": "claude-opus-4-8[1m]",
+                "max_tokens": 1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "test"
+                    }
+                ]
+            }),
+        },
+        ..llm_start()
     }
 }
 
