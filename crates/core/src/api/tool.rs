@@ -9,7 +9,10 @@ use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
-use crate::api::shared::{ensure_runtime_owner, resolve_parent_uuid, snapshot_event_subscribers};
+use crate::api::shared::{
+    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid,
+    snapshot_event_subscribers,
+};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use bitflags::bitflags;
@@ -445,18 +448,21 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
 
     match execution(intercepted_args).await {
         Ok(result) => {
+            let end_metadata = metadata_with_otel_status(metadata, "OK", None);
             tool_call_end(
                 ToolCallEndParams::builder()
                     .handle(&handle)
                     .result(result.clone())
                     .data_opt(data)
-                    .metadata_opt(metadata)
+                    .metadata_opt(end_metadata)
                     .build(),
             )?;
             Ok(result)
         }
         Err(error) => {
-            let _ = emit_tool_end_without_output(&handle, metadata);
+            let end_metadata =
+                metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+            let _ = emit_tool_end_without_output(&handle, end_metadata);
             Err(error)
         }
     }
@@ -542,3 +548,7 @@ pub fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/tool_api_tests.rs"]
+mod tests;

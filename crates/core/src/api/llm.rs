@@ -19,8 +19,8 @@ use crate::api::runtime::{
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, resolve_parent_uuid, run_request_intercepts_with_codec,
-    snapshot_event_subscribers,
+    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid,
+    run_request_intercepts_with_codec, snapshot_event_subscribers,
 };
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
@@ -587,19 +587,22 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 .as_ref()
                 .and_then(|codec| codec.decode_response(&response).ok())
                 .map(Arc::new);
+            let end_metadata = metadata_with_otel_status(metadata, "OK", None);
             llm_call_end(
                 LlmCallEndParams::builder()
                     .handle(&handle)
                     .response(response.clone())
                     .data_opt(data)
-                    .metadata_opt(metadata)
+                    .metadata_opt(end_metadata)
                     .annotated_response_opt(annotated_response)
                     .build(),
             )?;
             Ok(response)
         }
         Err(error) => {
-            let _ = emit_llm_end_without_output(&handle, metadata);
+            let end_metadata =
+                metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+            let _ = emit_llm_end_without_output(&handle, end_metadata);
             Err(error)
         }
     }
@@ -831,3 +834,7 @@ pub fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/llm_api_tests.rs"]
+mod tests;
