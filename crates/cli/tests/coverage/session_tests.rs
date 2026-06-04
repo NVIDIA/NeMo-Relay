@@ -1858,7 +1858,7 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
 }
 
 #[tokio::test]
-async fn hermes_routed_gateway_wire_formats_write_exact_atif_trajectory() {
+async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");

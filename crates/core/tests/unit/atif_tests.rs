@@ -630,6 +630,27 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     );
     assert_eq!(openai_metrics.cost_usd, Some(0.001));
 
+    let responses_metrics = extract_metrics(&json!({
+        "usage": {
+            "input_tokens": 75,
+            "output_tokens": 20,
+            "total_tokens": 95,
+            "input_tokens_details": {
+                "cached_tokens": 10
+            },
+            "cost_usd": 0.005
+        }
+    }))
+    .unwrap();
+    assert_eq!(responses_metrics.prompt_tokens, Some(75));
+    assert_eq!(responses_metrics.completion_tokens, Some(20));
+    assert_eq!(responses_metrics.cached_tokens, Some(10));
+    assert_eq!(
+        responses_metrics.extra.as_ref().unwrap()["total_tokens"],
+        json!(95)
+    );
+    assert_eq!(responses_metrics.cost_usd, Some(0.005));
+
     let anthropic_metrics = extract_metrics(&json!({
         "usage": {
             "input_tokens": 11,
