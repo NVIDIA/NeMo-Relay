@@ -181,12 +181,45 @@ async fn run_managed_gateway(
     prepared: PreparedGatewayRequest,
     prep: GatewayCallPrep,
 ) -> Result<Response<Body>, CliError> {
+    if prep.bypass_managed_pipeline {
+        let session_id = prep.session_id.clone();
+        let model = prep.model_name.as_deref().unwrap_or("<unknown>");
+        eprintln!(
+            "nemo-relay CLI gateway: bypassing managed LLM observability for Claude Code startup probe session={session_id} provider={} model={model}",
+            prep.provider_name
+        );
+        state.sessions.finish_gateway_call(&session_id).await;
+        return run_unmanaged_gateway(state, prepared).await;
+    }
     let codecs = codecs_for_route(prepared.provider);
     if prepared.streaming {
         run_managed_streaming(state, prepared, prep, codecs).await
     } else {
         run_managed_buffered(state, prepared, prep, codecs).await
     }
+}
+
+async fn run_unmanaged_gateway(
+    state: AppState,
+    prepared: PreparedGatewayRequest,
+) -> Result<Response<Body>, CliError> {
+    if prepared.streaming {
+        return passthrough_streaming(state, prepared).await;
+    }
+    let response = forward_upstream_request(
+        &state.http,
+        &prepared.method,
+        &prepared.upstream_url,
+        &prepared.body_bytes,
+        &prepared.headers,
+        None,
+        prepared.provider,
+    )
+    .await?;
+    let status = response.status();
+    let headers = response_headers(response.headers());
+    let bytes = response.bytes().await?;
+    build_response(status, headers, Body::from(bytes))
 }
 
 // Codecs registered for each managed provider route. Routes that emit LLM events but lack a typed
@@ -246,6 +279,7 @@ async fn run_managed_buffered(
         metadata,
         model_name,
         owner_subagent_id,
+        bypass_managed_pipeline: _,
     } = prep;
     let provider_for_event = provider_name.clone();
     let params = LlmCallExecuteParams::builder()
@@ -400,6 +434,7 @@ async fn run_managed_streaming(
         metadata,
         model_name,
         owner_subagent_id,
+        bypass_managed_pipeline: _,
     } = prep;
     let params = LlmStreamCallExecuteParams::builder()
         .name(provider_name)

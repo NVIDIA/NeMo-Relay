@@ -24,8 +24,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
 use crate::alignment::{
-    self, PendingSubagentStart, SessionAlias, SessionAlignmentState, insert_optional,
-    json_string_at, json_value_at, merge_metadata,
+    self, GatewayManagementPolicy, PendingSubagentStart, SessionAlias, SessionAlignmentState,
+    insert_optional, json_string_at, json_value_at, merge_metadata,
 };
 use crate::config::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
@@ -92,6 +92,7 @@ pub(crate) struct GatewayCallPrep {
     pub(crate) metadata: Value,
     pub(crate) model_name: Option<String>,
     pub(crate) owner_subagent_id: Option<String>,
+    pub(crate) bypass_managed_pipeline: bool,
 }
 
 struct Session {
@@ -965,12 +966,19 @@ impl Session {
         let stack = self.scope_stack.clone();
         let result = TASK_SCOPE_STACK
             .scope(stack.clone(), async {
-                self.ensure_turn_started(Value::Null)?;
+                let policy = self.gateway_management_policy(&start);
+                if !policy.bypasses_managed_pipeline() {
+                    self.ensure_turn_started(Value::Null)?;
+                }
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
                 }
-                let owner = self.resolve_llm_owner(&start);
+                let owner = if policy.bypasses_managed_pipeline() {
+                    self.unmanaged_probe_owner(policy)
+                } else {
+                    self.resolve_llm_owner(&start)
+                };
                 self.record_llm_request_affinity(
                     &start.request,
                     owner.subagent_id.as_deref(),
@@ -996,6 +1004,7 @@ impl Session {
                     metadata,
                     model_name: start.model_name,
                     owner_subagent_id: owner.subagent_id,
+                    bypass_managed_pipeline: policy.bypasses_managed_pipeline(),
                 })
             })
             .await;
@@ -1063,6 +1072,18 @@ impl Session {
             return Ok(());
         }
         self.open_turn(event_metadata, Value::Null, "implicit")
+    }
+
+    fn gateway_management_policy(&self, start: &LlmGatewayStart) -> GatewayManagementPolicy {
+        if self.turn_scope.is_some() {
+            return GatewayManagementPolicy::Managed;
+        }
+        alignment::gateway_management_policy(
+            self.agent_kind,
+            &start.provider,
+            start.model_name.as_deref(),
+            &start.request,
+        )
     }
 
     fn open_turn(
@@ -1319,19 +1340,22 @@ impl Session {
         Ok(())
     }
 
-    // Ends a subagent by id. Unknown endings become mark events, while duplicate endings for a
-    // subagent already closed by another provider-specific completion signal are ignored. Applies
-    // to Claude Code Agent-tool completion today.
+    // Ends a subagent by id. Unknown endings usually become mark events, while duplicate endings for
+    // a subagent already closed by another provider-specific completion signal are ignored. Claude
+    // Code can also report late orphan stops after a turn has closed; those are logged and ignored
+    // when there is no active turn so they cannot create lifecycle-only traces.
     async fn end_subagent(&mut self, event: SubagentEvent) -> Result<(), CliError> {
         if self.completed_subagents.contains(&event.subagent_id) {
             return Ok(());
         }
-        self.ensure_turn_started(event.metadata.clone())?;
         if !self.subagents.contains_key(&event.subagent_id) {
             eprintln!(
                 "nemo-relay CLI gateway: received {} for subagent {} without a matching start",
                 event.event_name, event.subagent_id
             );
+            if self.agent_kind == AgentKind::ClaudeCode && self.turn_scope.is_none() {
+                return Ok(());
+            }
             return self.mark(
                 "subagent_end_without_start",
                 SessionEvent {
@@ -1343,6 +1367,7 @@ impl Session {
                 },
             );
         };
+        self.ensure_turn_started(event.metadata.clone())?;
         self.close_subagent_scope(&event.subagent_id, event.payload)
             .await?;
         Ok(())
@@ -1821,6 +1846,20 @@ impl Session {
                 "ambiguous_fallback"
             },
             source: None,
+            hint: None,
+            metadata: Value::Null,
+        }
+    }
+
+    fn unmanaged_probe_owner(&self, policy: GatewayManagementPolicy) -> LlmOwnerResolution {
+        let (status, source) = policy
+            .bypass_correlation()
+            .expect("unmanaged probe owner requires unmanaged gateway policy");
+        LlmOwnerResolution {
+            parent: self.root_work_scope(),
+            subagent_id: None,
+            status,
+            source: Some(source.to_string()),
             hint: None,
             metadata: Value::Null,
         }
