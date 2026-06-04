@@ -109,7 +109,11 @@ class TestScopeLifecycle:
             run_id=run_id,
         )
 
-        mock_nemo_relay.scope.pop.assert_called_once_with(handle, output={"output": "result"})
+        mock_nemo_relay.scope.pop.assert_called_once_with(
+            handle,
+            output={"output": "result"},
+            metadata={"otel.status_code": "OK"},
+        )
         assert run_id not in handler._scope_handles
 
     def test_on_chain_error_pops_scope(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
@@ -126,7 +130,11 @@ class TestScopeLifecycle:
             run_id=run_id,
         )
 
-        mock_nemo_relay.scope.pop.assert_called_once_with(handle, output={"error": "RuntimeError('boom')"})
+        mock_nemo_relay.scope.pop.assert_called_once_with(
+            handle,
+            output={"error": "RuntimeError('boom')"},
+            metadata={"otel.status_code": "ERROR", "otel.status_message": "boom"},
+        )
         assert run_id not in handler._scope_handles
 
     def test_on_chain_end_prepares_command_outputs(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
@@ -183,6 +191,7 @@ class TestScopeLifecycle:
                     },
                 }
             },
+            metadata={"otel.status_code": "OK"},
         )
 
     def test_parent_scope_passed_to_push(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
