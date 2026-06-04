@@ -42,7 +42,6 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn reset_runtime() {
     let _ = clear_plugin_configuration();
-    crate::plugins::nemo_guardrails::component::clear_local_backend_provider().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
@@ -976,26 +975,20 @@ fn unknown_fields_follow_policy() {
     assert!(ignored.diagnostics.is_empty());
 }
 
+#[cfg(not(feature = "python"))]
 #[test]
-fn enabled_local_initialization_fails_fast_until_backend_exists() {
-    let _guard = crate::plugins::nemo_guardrails::test_mutex()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    reset_runtime();
-
-    let error = futures::executor::block_on(initialize_plugins(plugin_config(json!({
+fn local_mode_validation_reports_missing_python_feature() {
+    let diagnostics = validate_plugin_config(&plugin_config(json!({
         "mode": "local",
         "codec": "openai_chat",
         "config_path": "./rails"
-    }))))
-    .unwrap_err();
+    })))
+    .unwrap();
 
-    match error {
-        crate::plugin::PluginError::RegistrationFailed(message) => {
-            assert!(message.contains("unavailable in this runtime"));
-        }
-        other => panic!("unexpected error: {other}"),
-    }
+    assert!(diagnostics.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("local mode requires a build with the 'python' feature enabled")
+    }));
 }
 
 #[test]
@@ -1022,35 +1015,6 @@ fn enabled_unknown_mode_initialization_fails_fast_when_policy_ignores_validation
         }
         other => panic!("unexpected error: {other}"),
     }
-}
-
-#[test]
-fn enabled_local_initialization_dispatches_through_installed_provider() {
-    let _guard = crate::plugins::nemo_guardrails::test_mutex()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    reset_runtime();
-
-    let provider_called = Arc::new(AtomicBool::new(false));
-    let provider_called_clone = Arc::clone(&provider_called);
-    crate::plugins::nemo_guardrails::component::register_local_backend_provider(Arc::new(
-        move |config, _ctx| {
-            provider_called_clone.store(true, Ordering::SeqCst);
-            assert_eq!(config.mode, "local");
-            assert_eq!(config.config_path.as_deref(), Some("./rails"));
-            Ok(())
-        },
-    ))
-    .unwrap();
-
-    futures::executor::block_on(initialize_plugins(plugin_config(json!({
-        "mode": "local",
-        "codec": "openai_chat",
-        "config_path": "./rails"
-    }))))
-    .unwrap();
-
-    assert!(provider_called.load(Ordering::SeqCst));
 }
 
 #[path = "remote_tests.rs"]

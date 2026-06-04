@@ -46,7 +46,8 @@ fn python_package_dir() -> PathBuf {
 }
 
 fn embedded_guardrails_local_source_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("embedded_python/_guardrails_local.py")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../core/src/plugins/nemo_guardrails/embedded_python/_guardrails_local.py")
 }
 
 fn fake_guardrails_module_prelude(module_name: &str, python_dir: &str) -> String {
@@ -60,6 +61,7 @@ sys.path.insert(0, {python_dir:?})
 MODULE_NAME = {module_name:?}
 
 fake_root = types.ModuleType(MODULE_NAME)
+fake_root.__version__ = "0.22.0"
 fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
 
 class Result:
@@ -126,14 +128,59 @@ import pathlib
 import sys
 import types
 
-import nemo_relay
+from nemo_relay._native import LLMRequest
+
+class _AnnotatedRequest:
+    def __init__(self, messages):
+        self.messages = [dict(message) for message in messages]
+
+class _AnnotatedResponse:
+    def __init__(self, response):
+        self._response = response
+
+    def response_text(self):
+        try:
+            return self._response["choices"][0]["message"]["content"]
+        except Exception:
+            return None
+
+class _BaseCodec:
+    def decode(self, request):
+        return _AnnotatedRequest(request.content.get("messages", []))
+
+    def encode(self, annotated, original):
+        content = dict(original.content)
+        content["messages"] = annotated.messages
+        return LLMRequest(original.headers, content)
+
+    def decode_response(self, response):
+        return _AnnotatedResponse(response)
+
+class OpenAIChatCodec(_BaseCodec):
+    pass
+
+class OpenAIResponsesCodec(_BaseCodec):
+    pass
+
+class AnthropicMessagesCodec(_BaseCodec):
+    pass
+
+class PluginContext:
+    pass
+
+runtime_module = types.ModuleType("_nemo_guardrails_local_runtime")
+runtime_module.LLMRequest = LLMRequest
+runtime_module.OpenAIChatCodec = OpenAIChatCodec
+runtime_module.OpenAIResponsesCodec = OpenAIResponsesCodec
+runtime_module.AnthropicMessagesCodec = AnthropicMessagesCodec
+runtime_module.PluginContext = PluginContext
+sys.modules["_nemo_guardrails_local_runtime"] = runtime_module
 
 GUARDRAILS_LOCAL_SOURCE_PATH = pathlib.Path({source_path:?})
-guardrails_local_module = types.ModuleType("nemo_relay._guardrails_local")
+guardrails_local_module = types.ModuleType("_nemo_guardrails_local")
 guardrails_local_module.__file__ = str(GUARDRAILS_LOCAL_SOURCE_PATH)
-guardrails_local_module.__package__ = "nemo_relay"
-sys.modules["nemo_relay._guardrails_local"] = guardrails_local_module
-setattr(nemo_relay, "_guardrails_local", guardrails_local_module)
+guardrails_local_module.__package__ = ""
+sys.modules["_nemo_guardrails_local"] = guardrails_local_module
 exec(
     compile(
         GUARDRAILS_LOCAL_SOURCE_PATH.read_text(),
@@ -234,7 +281,6 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
 
 fn reset_runtime_state() {
     let _ = clear_plugin_configuration();
-    nemo_relay::plugins::nemo_guardrails::component::clear_local_backend_provider().unwrap();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
 }
@@ -269,7 +315,7 @@ fn test_native_pymodule_entrypoint_registers_bindings() {
 }
 
 #[test]
-fn test_native_pymodule_entrypoint_installs_nemo_guardrails_local_provider() {
+fn test_native_pymodule_entrypoint_registers_bindings_without_local_provider_install() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
         let module = PyModule::new(py, "_native_guardrails_provider").unwrap();
@@ -350,7 +396,7 @@ class LLMRails:
 {embedded_loader}
 
 from nemo_relay._native import LLMRequest
-from nemo_relay._guardrails_local import register_local_backend
+from _nemo_guardrails_local import register_local_backend
 
 {context_class}
 
@@ -515,7 +561,7 @@ class LLMRails:
 
 {embedded_loader}
 
-from nemo_relay._guardrails_local import register_local_backend
+from _nemo_guardrails_local import register_local_backend
 
 {context_class}
 
@@ -615,7 +661,7 @@ class LLMRails:
 {embedded_loader}
 
 from nemo_relay._native import LLMRequest
-from nemo_relay._guardrails_local import register_local_backend
+from _nemo_guardrails_local import register_local_backend
 
 {context_class}
 

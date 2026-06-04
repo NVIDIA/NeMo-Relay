@@ -18,7 +18,7 @@ name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["otel", "openinference"] }
+nemo-relay = { workspace = true, features = ["otel", "openinference", "python"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 pyo3 = { version = "0.28.2", features = ["abi3", "abi3-py311", "experimental-inspect", "macros"] }
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }

@@ -11,15 +11,15 @@ import json
 from collections.abc import Callable
 from typing import Any, NamedTuple, Protocol, cast
 
-from nemo_relay import Json, LLMRequest
-from nemo_relay.codecs import (
+from _nemo_guardrails_local_runtime import (
     AnthropicMessagesCodec,
-    LlmCodec,
-    LlmResponseCodec,
+    LLMRequest,
     OpenAIChatCodec,
     OpenAIResponsesCodec,
+    PluginContext,
 )
-from nemo_relay.plugin import PluginContext
+
+Json = Any
 
 _DEFAULT_PRIORITY = 100
 _SUPPORTED_NEMOGUARDRAILS_VERSION = "0.22.0"
@@ -46,7 +46,7 @@ class NeMoGuardrailsViolation(RuntimeError):
         self.content = content
 
 
-class _GuardrailsCodec(LlmCodec, LlmResponseCodec, Protocol):
+class _GuardrailsCodec(Protocol):
     """Codec shape required by the local backend."""
 
 

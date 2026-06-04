@@ -158,7 +158,7 @@ pub(crate) struct PluginsCommand {
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
-    /// Interactively create or edit the Observability plugin in `plugins.toml`.
+    /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
     Edit(PluginsEditCommand),
 }
 

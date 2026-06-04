@@ -23,7 +23,6 @@ mod local;
 #[path = "remote.rs"]
 mod remote;
 use local::register_local_backend;
-pub use local::{clear_local_backend_provider, register_local_backend_provider};
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 use remote::register_remote_backend;
 
@@ -745,6 +744,15 @@ fn validate_local_config_shape(
     config: &NeMoGuardrailsConfig,
     flags: &ConfigShapeFlags,
 ) {
+    #[cfg(not(feature = "python"))]
+    push_config_shape_diag(
+        diagnostics,
+        policy.unsupported_value,
+        "nemo_guardrails.unavailable_backend",
+        Some("mode"),
+        "local mode requires a build with the 'python' feature enabled",
+    );
+
     if flags.has_config_path == flags.has_config_yaml {
         push_config_shape_diag(
             diagnostics,
