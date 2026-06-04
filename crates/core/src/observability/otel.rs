@@ -546,7 +546,9 @@ impl OtelEventProcessor {
             return;
         };
 
-        if let Some(metadata) = event.metadata() && let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str) {
+        if let Some(metadata) = event.metadata()
+            && let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str)
+        {
             let status = match status_code {
                 "OK" => Status::Ok,
                 "ERROR" => Status::error(
