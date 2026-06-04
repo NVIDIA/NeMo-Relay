@@ -299,7 +299,6 @@ fn reset_global() {
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
     clear_plugin_configuration().unwrap();
-    set_code_driven_plugin_config(None);
     recorded_names().lock().unwrap().clear();
     PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
     RESTORE_FAIL_REGISTRATIONS.store(0, Ordering::SeqCst);
@@ -316,151 +315,105 @@ fn reset_global() {
 }
 
 #[test]
-fn test_merge_plugin_config_layers_overlay_wins() {
-    // The overlay is the highest-precedence layer: it overrides shared component fields,
-    // deep-merges nested config objects, replaces arrays, appends overlay-only kinds, preserves
-    // base-only kinds, and supplies the effective top-level version/policy.
-    let base = PluginConfig {
-        version: 1,
-        components: vec![
-            PluginComponentSpec {
-                kind: "alpha".into(),
-                enabled: true,
-                config: serde_json::from_value(json!({
-                    "keep": "base",
-                    "override": "base",
-                    "nested": {"a": 1, "b": 2},
-                    "list": [1, 2, 3]
-                }))
-                .unwrap(),
+fn test_merge_plugin_config_overlay_wins() {
+    // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
+    // nested config objects, replaces arrays, appends overlay-only kinds, preserves base-only kinds,
+    // replaces top-level scalars, and recursively merges top-level objects (policy).
+    let base = json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "alpha",
+                "enabled": true,
+                "config": { "keep": "base", "override": "base", "nested": {"a": 1, "b": 2}, "list": [1, 2, 3] }
             },
-            PluginComponentSpec {
-                kind: "base_only".into(),
-                enabled: true,
-                config: Map::new(),
-            },
+            { "kind": "base_only", "enabled": true, "config": {} }
         ],
-        policy: ConfigPolicy::default(),
-    };
-    let overlay = PluginConfig {
-        version: 1,
-        components: vec![
-            PluginComponentSpec {
-                kind: "alpha".into(),
-                enabled: false,
-                config: serde_json::from_value(json!({
-                    "override": "overlay",
-                    "added": true,
-                    "nested": {"b": 20, "c": 30},
-                    "list": [9]
-                }))
-                .unwrap(),
+        "policy": { "unknown_component": "warn", "unknown_field": "warn" }
+    });
+    let overlay = json!({
+        "version": 2,
+        "components": [
+            {
+                "kind": "alpha",
+                "enabled": false,
+                "config": { "override": "overlay", "added": true, "nested": {"b": 20, "c": 30}, "list": [9] }
             },
-            PluginComponentSpec {
-                kind: "overlay_only".into(),
-                enabled: true,
-                config: Map::new(),
-            },
+            { "kind": "overlay_only", "enabled": true, "config": {} }
         ],
-        policy: ConfigPolicy {
-            unknown_component: UnsupportedBehavior::Error,
-            unknown_field: UnsupportedBehavior::Error,
-            unsupported_value: UnsupportedBehavior::Error,
-        },
-    };
+        "policy": { "unknown_component": "error" }
+    });
 
-    let merged = merge_plugin_config_layers(&base, &overlay);
+    let merged = merge_plugin_config(&base, &overlay);
+    let components = merged["components"].as_array().unwrap();
 
     // Ordering: base components first (in base order), then overlay-only components appended.
-    let kinds: Vec<&str> = merged
-        .components
+    let kinds: Vec<&str> = components
         .iter()
-        .map(|component| component.kind.as_str())
+        .map(|component| component["kind"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, vec!["alpha", "base_only", "overlay_only"]);
+    assert_eq!(kinds, ["alpha", "base_only", "overlay_only"]);
 
-    let alpha = &merged.components[0];
-    assert!(!alpha.enabled, "overlay enabled wins on a shared component");
+    let alpha = &components[0];
+    assert_eq!(alpha["enabled"], json!(false), "overlay enabled wins");
     assert_eq!(
-        alpha.config.get("keep"),
-        Some(&json!("base")),
-        "base-only key is preserved"
+        alpha["config"]["keep"],
+        json!("base"),
+        "base-only key preserved"
     );
     assert_eq!(
-        alpha.config.get("override"),
-        Some(&json!("overlay")),
+        alpha["config"]["override"],
+        json!("overlay"),
         "overlay scalar wins"
     );
+    assert_eq!(alpha["config"]["added"], json!(true), "overlay key added");
     assert_eq!(
-        alpha.config.get("added"),
-        Some(&json!(true)),
-        "overlay key is added"
-    );
-    assert_eq!(
-        alpha.config.get("nested"),
-        Some(&json!({"a": 1, "b": 20, "c": 30})),
+        alpha["config"]["nested"],
+        json!({"a": 1, "b": 20, "c": 30}),
         "nested objects merge recursively"
     );
     assert_eq!(
-        alpha.config.get("list"),
-        Some(&json!([9])),
+        alpha["config"]["list"],
+        json!([9]),
         "arrays are replaced, not merged"
     );
 
-    // Base-only component is preserved unchanged.
-    assert_eq!(merged.components[1].kind, "base_only");
-    assert!(merged.components[1].enabled);
+    // Base-only component is preserved.
+    assert_eq!(components[1]["kind"], json!("base_only"));
 
-    // Top-level version and policy come from the overlay.
-    assert_eq!(merged.version, 1);
-    assert!(matches!(
-        merged.policy.unknown_component,
-        UnsupportedBehavior::Error
-    ));
+    // Top-level scalars are replaced by the overlay; objects (policy) merge recursively.
+    assert_eq!(merged["version"], json!(2));
+    assert_eq!(merged["policy"]["unknown_component"], json!("error"));
+    assert_eq!(
+        merged["policy"]["unknown_field"],
+        json!("warn"),
+        "base-only policy field preserved"
+    );
 }
 
 #[test]
-fn test_merge_plugin_config_layers_preserves_multi_instance_kinds() {
+fn test_merge_plugin_config_preserves_multi_instance_kinds() {
     // A kind used more than once (multi-instance plugins) must not collapse into the first slot.
-    let base = PluginConfig {
-        components: vec![PluginComponentSpec {
-            kind: "multi".into(),
-            enabled: true,
-            config: serde_json::from_value(json!({ "n": 0 })).unwrap(),
-        }],
-        ..PluginConfig::default()
-    };
-    let overlay = PluginConfig {
-        components: vec![
-            PluginComponentSpec {
-                kind: "multi".into(),
-                enabled: true,
-                config: serde_json::from_value(json!({ "n": 1 })).unwrap(),
-            },
-            PluginComponentSpec {
-                kind: "multi".into(),
-                enabled: true,
-                config: serde_json::from_value(json!({ "tag": "second" })).unwrap(),
-            },
-        ],
-        ..PluginConfig::default()
-    };
+    let base = json!({ "components": [ { "kind": "multi", "config": { "n": 0 } } ] });
+    let overlay = json!({
+        "components": [
+            { "kind": "multi", "config": { "n": 1 } },
+            { "kind": "multi", "config": { "tag": "second" } }
+        ]
+    });
 
-    let merged = merge_plugin_config_layers(&base, &overlay);
+    let merged = merge_plugin_config(&base, &overlay);
+    let components = merged["components"].as_array().unwrap();
 
     // First overlay instance pairs with the base instance; the second is appended, not dropped.
-    assert_eq!(merged.components.len(), 2);
+    assert_eq!(components.len(), 2);
     assert!(
-        merged
-            .components
+        components
             .iter()
-            .all(|component| component.kind == "multi")
+            .all(|component| component["kind"] == json!("multi"))
     );
-    assert_eq!(merged.components[0].config.get("n"), Some(&json!(1)));
-    assert_eq!(
-        merged.components[1].config.get("tag"),
-        Some(&json!("second"))
-    );
+    assert_eq!(components[0]["config"]["n"], json!(1));
+    assert_eq!(components[1]["config"]["tag"], json!("second"));
 }
 
 #[test]

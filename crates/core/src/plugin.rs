@@ -44,8 +44,6 @@ type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
-static PLUGIN_CONFIG_CODE_DRIVEN_LAYER: LazyLock<Mutex<Option<PluginConfig>>> =
-    LazyLock::new(|| Mutex::new(None));
 static BUILTIN_PLUGIN_REGISTRATION: OnceLock<Result<()>> = OnceLock::new();
 
 /// Error type for generic plugin operations.
@@ -901,94 +899,91 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     report
 }
 
-/// Sets (or clears with `None`) the process-global code-driven plugin layer.
+/// Merges `overlay` (higher precedence) over `base`, returning the effective plugin
+/// configuration document.
 ///
-/// The layer is the highest-precedence source: [`initialize_plugins`] merges it on
-/// top of the config it is given. This Rust-only API is for embedding hosts and is
-/// not exposed to the language bindings.
-pub fn set_code_driven_plugin_config(config: Option<PluginConfig>) {
-    let mut guard = PLUGIN_CONFIG_CODE_DRIVEN_LAYER
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    *guard = config;
+/// Both arguments are canonical plugin config documents (the JSON shape of
+/// [`PluginConfig`]). Objects merge recursively and arrays/scalars are replaced by
+/// `overlay`, except the top-level `components` array, whose entries pair by `kind`
+/// in order of appearance — so a kind used by a multi-instance plugin keeps each
+/// instance instead of collapsing into the first. This is the shared layering
+/// primitive used by the gateway's file-layer discovery and by hosts composing a
+/// configuration in code before calling [`initialize_plugins`].
+pub fn merge_plugin_config(base: &Json, overlay: &Json) -> Json {
+    let (Json::Object(base_object), Json::Object(overlay_object)) = (base, overlay) else {
+        return overlay.clone();
+    };
+    let mut merged = base_object.clone();
+    for (key, overlay_value) in overlay_object {
+        let merged_value = match (key.as_str(), merged.get(key)) {
+            ("components", Some(base_components)) => {
+                merge_plugin_components(base_components, overlay_value)
+            }
+            (_, Some(base_value)) => merge_json_value(base_value, overlay_value),
+            (_, None) => overlay_value.clone(),
+        };
+        merged.insert(key.clone(), merged_value);
+    }
+    Json::Object(merged)
 }
 
-/// Returns the code-driven layer merged over `config`, or [`None`] when no layer
-/// is set (so `config` is already effective). `Some`/`None` also tells callers
-/// whether a layer contributed.
-pub fn apply_code_driven_plugin_config(config: &PluginConfig) -> Option<PluginConfig> {
-    let guard = PLUGIN_CONFIG_CODE_DRIVEN_LAYER
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    guard
-        .as_ref()
-        .map(|layer| merge_plugin_config_layers(config, layer))
-}
-
-/// Merges `overlay` (higher precedence) over `base`.
+/// Pairs `overlay` components with `base` components by `kind` in order of appearance.
 ///
-/// Components pair by `kind` in order of appearance, so a kind used by a
-/// multi-instance plugin keeps each instance instead of collapsing into the
-/// first. A paired component takes `overlay`'s `enabled` and deep-merges its
-/// `config` (nested objects merge; arrays and scalars are replaced); extra
-/// `overlay` components are appended. Top-level `version`/`policy` come from
-/// `overlay`.
-fn merge_plugin_config_layers(base: &PluginConfig, overlay: &PluginConfig) -> PluginConfig {
-    let mut components = base.components.clone();
-    // Base component positions grouped by kind, so the nth overlay component of a
-    // kind pairs with the nth base component of that kind rather than the first.
+/// The nth `overlay` component of a kind merges into the nth `base` component of that
+/// kind, so multi-instance kinds are not collapsed; unpaired `overlay` components are
+/// appended and `base`-only components are preserved. Non-array values are replaced.
+fn merge_plugin_components(base: &Json, overlay: &Json) -> Json {
+    let (Json::Array(base_components), Json::Array(overlay_components)) = (base, overlay) else {
+        return overlay.clone();
+    };
+    let mut components = base_components.clone();
     let mut base_slots: HashMap<String, Vec<usize>> = HashMap::new();
     for (index, component) in components.iter().enumerate() {
-        base_slots
-            .entry(component.kind.clone())
-            .or_default()
-            .push(index);
+        if let Some(kind) = component_kind(component) {
+            base_slots.entry(kind.to_string()).or_default().push(index);
+        }
     }
     let mut consumed: HashMap<String, usize> = HashMap::new();
-    for overlay_component in &overlay.components {
-        let nth = consumed.entry(overlay_component.kind.clone()).or_insert(0);
+    for overlay_component in overlay_components {
+        let Some(kind) = component_kind(overlay_component) else {
+            components.push(overlay_component.clone());
+            continue;
+        };
+        let nth = consumed.entry(kind.to_string()).or_insert(0);
         let slot = base_slots
-            .get(&overlay_component.kind)
+            .get(kind)
             .and_then(|slots| slots.get(*nth))
             .copied();
         *nth += 1;
         match slot {
             Some(index) => {
-                components[index].enabled = overlay_component.enabled;
-                merge_json_object(
-                    &mut components[index].config,
-                    overlay_component.config.clone(),
-                );
+                components[index] = merge_json_value(&components[index], overlay_component);
             }
             None => components.push(overlay_component.clone()),
         }
     }
-    PluginConfig {
-        version: overlay.version,
-        components,
-        policy: overlay.policy,
-    }
+    Json::Array(components)
 }
 
-/// Recursively merges `overlay` entries into a `base` JSON object.
-///
-/// Nested objects merge key-by-key; arrays and scalar values are replaced by
-/// the `overlay` value. This mirrors the gateway's recursive TOML table merge.
-fn merge_json_object(base: &mut Map<String, Json>, overlay: Map<String, Json>) {
-    for (key, overlay_value) in overlay {
-        match overlay_value {
-            Json::Object(overlay_object) => {
-                if let Some(Json::Object(base_object)) = base.get_mut(&key) {
-                    merge_json_object(base_object, overlay_object);
-                } else {
-                    base.insert(key, Json::Object(overlay_object));
-                }
-            }
-            other => {
-                base.insert(key, other);
-            }
-        }
+/// Recursively merges two JSON values: objects merge key-by-key, while arrays and
+/// scalars are replaced by `overlay`. Mirrors the gateway's recursive TOML table merge.
+fn merge_json_value(base: &Json, overlay: &Json) -> Json {
+    let (Json::Object(base_object), Json::Object(overlay_object)) = (base, overlay) else {
+        return overlay.clone();
+    };
+    let mut merged = base_object.clone();
+    for (key, overlay_value) in overlay_object {
+        let merged_value = match merged.get(key) {
+            Some(base_value) => merge_json_value(base_value, overlay_value),
+            None => overlay_value.clone(),
+        };
+        merged.insert(key.clone(), merged_value);
     }
+    Json::Object(merged)
+}
+
+fn component_kind(component: &Json) -> Option<&str> {
+    component.get("kind").and_then(Json::as_str)
 }
 
 /// Returns the JSON Schema for the canonical plugin configuration document.
@@ -1018,11 +1013,7 @@ pub fn plugin_config_schema() -> Json {
 /// # Notes
 /// Initialization is replace-with-rollback: the previous active configuration
 /// is removed before the new configuration is activated.
-///
-/// When a code-driven layer is set, it is merged on top of `config` first and the
-/// effective result is what gets validated, activated, and reported.
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
-    let config = apply_code_driven_plugin_config(&config).unwrap_or(config);
     let report = validate_plugin_config(&config);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
