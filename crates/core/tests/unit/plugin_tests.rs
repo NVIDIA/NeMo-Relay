@@ -420,6 +420,50 @@ fn test_merge_plugin_config_layers_overlay_wins() {
 }
 
 #[test]
+fn test_merge_plugin_config_layers_preserves_multi_instance_kinds() {
+    // A kind used more than once (multi-instance plugins) must not collapse into the first slot.
+    let base = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "multi".into(),
+            enabled: true,
+            config: serde_json::from_value(json!({ "n": 0 })).unwrap(),
+        }],
+        ..PluginConfig::default()
+    };
+    let overlay = PluginConfig {
+        components: vec![
+            PluginComponentSpec {
+                kind: "multi".into(),
+                enabled: true,
+                config: serde_json::from_value(json!({ "n": 1 })).unwrap(),
+            },
+            PluginComponentSpec {
+                kind: "multi".into(),
+                enabled: true,
+                config: serde_json::from_value(json!({ "tag": "second" })).unwrap(),
+            },
+        ],
+        ..PluginConfig::default()
+    };
+
+    let merged = merge_plugin_config_layers(&base, &overlay);
+
+    // First overlay instance pairs with the base instance; the second is appended, not dropped.
+    assert_eq!(merged.components.len(), 2);
+    assert!(
+        merged
+            .components
+            .iter()
+            .all(|component| component.kind == "multi")
+    );
+    assert_eq!(merged.components[0].config.get("n"), Some(&json!(1)));
+    assert_eq!(
+        merged.components[1].config.get("tag"),
+        Some(&json!("second"))
+    );
+}
+
+#[test]
 fn test_config_report_has_errors() {
     let report = ConfigReport {
         diagnostics: vec![ConfigDiagnostic {

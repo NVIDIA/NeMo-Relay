@@ -226,9 +226,9 @@ honoring operator files for everything the code does not set.
 
 The merge uses the same rules as the file precedence above:
 
-- Components are matched by `kind`. A component present in both layers is merged
-  in place; a component only in the code-driven layer is added; a component only
-  in the file configuration is preserved.
+- Components pair by `kind` in order of appearance, so a kind used more than once
+  (multi-instance plugins) keeps each instance; a component only in the code-driven
+  layer is added; a component only in the file configuration is preserved.
 - A merged component takes `enabled` from the code-driven layer and deep-merges
   its `config` object: nested tables merge recursively, while arrays and scalar
   values are replaced by the code-driven value.
