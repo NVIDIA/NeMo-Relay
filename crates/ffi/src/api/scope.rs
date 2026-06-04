@@ -157,12 +157,59 @@ pub unsafe extern "C" fn nemo_relay_pop_scope(
     output_json: *const c_char,
     timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus {
+    unsafe { pop_scope_impl(handle, output_json, std::ptr::null(), timestamp_unix_micros) }
+}
+
+/// Pop a scope from the scope stack by its handle with end metadata.
+///
+/// This emits a scope End event and removes scope-local registrations owned by
+/// the popped scope. Incoming metadata is merged over metadata stored on the
+/// scope handle.
+///
+/// # Parameters
+/// - `handle`: The current top-of-stack scope handle to pop.
+/// - `output_json`: Optional null-terminated JSON string exported as semantic
+///   scope output on the end event, or null.
+/// - `metadata_json`: Optional null-terminated JSON metadata string recorded
+///   on the end event, or null.
+/// - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the end
+///   event, or null to use the runtime default end timestamp.
+///
+/// # Errors
+/// Returns `InvalidJson` for invalid output or metadata JSON, `InvalidArg` when
+/// `timestamp_unix_micros` is outside the supported timestamp range, or an
+/// error status when `handle` is not the current top scope.
+///
+/// # Safety
+/// `handle` must be a valid, non-null `FfiScopeHandle` pointer. Optional
+/// pointer arguments may be null; when non-null, they must be valid for reads
+/// for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_pop_scope_with_metadata(
+    handle: *const FfiScopeHandle,
+    output_json: *const c_char,
+    metadata_json: *const c_char,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    unsafe { pop_scope_impl(handle, output_json, metadata_json, timestamp_unix_micros) }
+}
+
+unsafe fn pop_scope_impl(
+    handle: *const FfiScopeHandle,
+    output_json: *const c_char,
+    metadata_json: *const c_char,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
     clear_last_error();
     if handle.is_null() {
         set_last_error("handle is null");
         return NemoRelayStatus::NullPointer;
     }
     let output = match c_str_to_opt_json(output_json) {
+        Some(v) => v,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let metadata = match c_str_to_opt_json(metadata_json) {
         Some(v) => v,
         None => return NemoRelayStatus::InvalidJson,
     };
@@ -174,6 +221,7 @@ pub unsafe extern "C" fn nemo_relay_pop_scope(
         core_scope_api::PopScopeParams::builder()
             .handle_uuid(&unsafe { &*handle }.0.uuid)
             .output_opt(output)
+            .metadata_opt(metadata)
             .timestamp_opt(timestamp)
             .build(),
     ) {

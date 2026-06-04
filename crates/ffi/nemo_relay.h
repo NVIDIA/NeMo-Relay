@@ -1422,6 +1422,37 @@ NemoRelayStatus nemo_relay_pop_scope(const struct FfiScopeHandle *handle,
                                      const int64_t *timestamp_unix_micros);
 
 /**
+ * Pop a scope from the scope stack by its handle with end metadata.
+ *
+ * This emits a scope End event and removes scope-local registrations owned by
+ * the popped scope. Incoming metadata is merged over metadata stored on the
+ * scope handle.
+ *
+ * # Parameters
+ * - `handle`: The current top-of-stack scope handle to pop.
+ * - `output_json`: Optional null-terminated JSON string exported as semantic
+ *   scope output on the end event, or null.
+ * - `metadata_json`: Optional null-terminated JSON metadata string recorded
+ *   on the end event, or null.
+ * - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the end
+ *   event, or null to use the runtime default end timestamp.
+ *
+ * # Errors
+ * Returns `InvalidJson` for invalid output or metadata JSON, `InvalidArg` when
+ * `timestamp_unix_micros` is outside the supported timestamp range, or an
+ * error status when `handle` is not the current top scope.
+ *
+ * # Safety
+ * `handle` must be a valid, non-null `FfiScopeHandle` pointer. Optional
+ * pointer arguments may be null; when non-null, they must be valid for reads
+ * for the duration of the call.
+ */
+NemoRelayStatus nemo_relay_pop_scope_with_metadata(const struct FfiScopeHandle *handle,
+                                                   const char *output_json,
+                                                   const char *metadata_json,
+                                                   const int64_t *timestamp_unix_micros);
+
+/**
  * Emit a named lifecycle event.
  *
  * This creates a point-in-time Mark event without pushing or popping a scope.

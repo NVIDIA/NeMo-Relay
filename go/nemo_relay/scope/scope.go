@@ -22,8 +22,35 @@
 package scope
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 )
+
+func statusMetadata(statusCode, statusMessage string) nemo_relay.ScopeEndOption {
+	metadata := map[string]string{"otel.status_code": statusCode}
+	if statusMessage != "" {
+		metadata["otel.status_message"] = statusMessage
+	}
+	raw, _ := json.Marshal(metadata)
+	return nemo_relay.WithScopeEndMetadata(raw)
+}
+
+func cleanupScope(handle *nemo_relay.ScopeHandle) func() {
+	cleaned := false
+	return func() {
+		if cleaned {
+			return
+		}
+		cleaned = true
+		if recovered := recover(); recovered != nil {
+			_ = Pop(handle, statusMetadata("ERROR", fmt.Sprint(recovered)))
+			panic(recovered)
+		}
+		_ = Pop(handle, statusMetadata("OK", ""))
+	}
+}
 
 // GetHandle returns the handle for the scope currently at the top of the scope
 // stack. Returns an error if the scope stack is empty. This is a shorthand for
@@ -42,7 +69,8 @@ func Push(name string, scopeType nemo_relay.ScopeType, opts ...nemo_relay.ScopeO
 
 // Pop removes the given scope from the scope stack and emits an End event to
 // all registered subscribers. Optional arguments, including
-// [nemo_relay.WithScopeEndTimestamp], are forwarded to [nemo_relay.PopScope].
+// [nemo_relay.WithScopeEndMetadata] and [nemo_relay.WithScopeEndTimestamp],
+// are forwarded to [nemo_relay.PopScope].
 func Pop(handle *nemo_relay.ScopeHandle, opts ...nemo_relay.ScopeEndOption) error {
 	return nemo_relay.PopScope(handle, opts...)
 }
@@ -71,9 +99,7 @@ func WithScope(name string, scopeType nemo_relay.ScopeType, opts ...nemo_relay.S
 			// Push failed, so cleanup is intentionally a no-op.
 		}
 	}
-	return func() {
-		Pop(handle)
-	}
+	return cleanupScope(handle)
 }
 
 // WithScopeHandle pushes a new scope and returns both the scope handle and a
@@ -93,7 +119,5 @@ func WithScopeHandle(name string, scopeType nemo_relay.ScopeType, opts ...nemo_r
 			// Push failed, so cleanup is intentionally a no-op.
 		}
 	}
-	return handle, func() {
-		Pop(handle)
-	}
+	return handle, cleanupScope(handle)
 }

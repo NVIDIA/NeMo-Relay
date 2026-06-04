@@ -45,6 +45,7 @@ typedef void (*NemoRelayFreeFn)(void* user_data);
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_pop_scope_with_metadata(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 
 // Tool lifecycle
@@ -446,18 +447,29 @@ func WithScopeTimestamp(timestamp time.Time) ScopeOption {
 
 type scopeEndOptions struct {
 	output    *C.char
+	metadata  *C.char
 	timestamp *C.int64_t
 }
 
 // ScopeEndOption is a functional option that configures optional parameters for
-// [PopScope]. Available options include [WithOutput] and
-// [WithScopeEndTimestamp].
+// [PopScope]. Available options include [WithOutput],
+// [WithScopeEndMetadata], and [WithScopeEndTimestamp].
 type ScopeEndOption func(*scopeEndOptions)
 
 // WithOutput attaches an arbitrary JSON semantic output payload to the scope end event.
 func WithOutput(output json.RawMessage) ScopeEndOption {
 	return func(o *scopeEndOptions) {
 		o.output = C.CString(string(output))
+	}
+}
+
+// WithScopeEndMetadata attaches an arbitrary JSON metadata payload to the
+// scope End event. When the scope handle already has metadata, object keys in
+// this payload overwrite matching existing keys and preserve non-conflicting
+// keys.
+func WithScopeEndMetadata(metadata json.RawMessage) ScopeEndOption {
+	return func(o *scopeEndOptions) {
+		o.metadata = C.CString(string(metadata))
 	}
 }
 
@@ -526,8 +538,9 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 // PopScope removes the given scope from the scope stack and emits an End event
 // to all registered subscribers. The handle must have been returned by a
 // previous call to [PushScope]. Popping scopes out of stack order returns an
-// error. Optional end payloads can be attached via [WithOutput], and an
-// explicit event timestamp can be supplied with [WithScopeEndTimestamp].
+// error. Optional end payloads can be attached via [WithOutput] and
+// [WithScopeEndMetadata], and an explicit event timestamp can be supplied with
+// [WithScopeEndTimestamp].
 func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	o := &scopeEndOptions{}
 	for _, opt := range opts {
@@ -536,10 +549,13 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	if o.output != nil {
 		defer C.free(unsafe.Pointer(o.output))
 	}
+	if o.metadata != nil {
+		defer C.free(unsafe.Pointer(o.metadata))
+	}
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	return checkStatus(C.nemo_relay_pop_scope(handle.ptr, o.output, o.timestamp))
+	return checkStatus(C.nemo_relay_pop_scope_with_metadata(handle.ptr, o.output, o.metadata, o.timestamp))
 }
 
 // ---------------------------------------------------------------------------

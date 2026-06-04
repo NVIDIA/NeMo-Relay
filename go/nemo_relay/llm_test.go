@@ -153,6 +153,65 @@ func TestLlmCallExecuteBasic(t *testing.T) {
 	}
 }
 
+func TestLlmCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
+	metadataByName := map[string]json.RawMessage{}
+	var mu sync.Mutex
+
+	_ = DeregisterSubscriber("go_llm_status_metadata_sub")
+	if err := RegisterSubscriber("go_llm_status_metadata_sub", func(event Event) {
+		if event.Kind() == "scope" && event.Category() == "llm" && event.ScopeCategory() == "end" {
+			mu.Lock()
+			metadataByName[event.Name()] = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf(llmRegisterFailed, err)
+	}
+	defer DeregisterSubscriber("go_llm_status_metadata_sub")
+
+	_, err := LlmCallExecute("go_llm_status_ok", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+		WithLLMMetadata(json.RawMessage(`{"caller":"go-llm","otel.status_code":"USER"}`)),
+	)
+	if err != nil {
+		t.Fatalf(llmCallExecuteFailed, err)
+	}
+
+	_, err = LlmCallExecute("go_llm_status_error", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("go llm status failure")
+		},
+		WithLLMMetadata(json.RawMessage(`{"caller":"go-llm-error"}`)),
+	)
+	if err == nil {
+		t.Fatal("expected LLM execution error")
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(llmFlushSubscribersFailed, err)
+	}
+
+	mu.Lock()
+	okMetadata := metadataByName["go_llm_status_ok"]
+	errorMetadata := metadataByName["go_llm_status_error"]
+	mu.Unlock()
+
+	assertJSONFieldString(t, okMetadata, "caller", "go-llm")
+	assertJSONFieldString(t, okMetadata, "otel.status_code", "OK")
+	assertJSONFieldString(t, errorMetadata, "caller", "go-llm-error")
+	assertJSONFieldString(t, errorMetadata, "otel.status_code", "ERROR")
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(errorMetadata, &decoded); err != nil {
+		t.Fatalf("unmarshal error metadata failed: %v; raw=%s", err, errorMetadata)
+	}
+	statusMessage, _ := decoded["otel.status_message"].(string)
+	if !strings.Contains(statusMessage, "go llm status failure") {
+		t.Fatalf("expected status message to mention callback error, got %v", decoded["otel.status_message"])
+	}
+}
+
 func TestCodecHandleConstructors(t *testing.T) {
 	if NewOpenAIChatCodec() == nil {
 		t.Fatal("expected OpenAI chat codec handle")
