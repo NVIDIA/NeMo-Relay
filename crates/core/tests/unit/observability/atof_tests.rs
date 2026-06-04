@@ -746,6 +746,105 @@ fn subscriber_preserves_openclaw_model_timing_marks_as_raw_jsonl() {
 }
 
 #[test]
+fn subscriber_preserves_openclaw_hook_only_fallback_payloads_as_raw_jsonl() {
+    let dir = temp_dir("atof-openclaw-hook-fallbacks");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let events = [
+        openclaw_replay_llm_event(
+            stripped_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            json!({
+                "headers": {},
+                "content": {
+                    "provider": "openai",
+                    "model": "gpt-4",
+                    "messages": [],
+                    "imagesCount": 1,
+                    "source": "openclaw.llm_output"
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            stripped_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            json!({
+                "role": "assistant",
+                "assistant_texts_count": 1,
+                "usage": {
+                    "cost_usd": 0.001
+                },
+                "openclaw": {
+                    "assistant_tool_call_names": []
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            partial_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            json!({
+                "headers": {},
+                "content": {
+                    "provider": "openai",
+                    "model": "gpt-4",
+                    "prompt": "visible prompt",
+                    "messages": [{"role": "user", "content": "visible prompt"}],
+                    "imagesCount": 0,
+                    "source": "openclaw.llm_output"
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            partial_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            json!({
+                "role": "assistant",
+                "content": "visible answer",
+                "usage": {
+                    "prompt_tokens": 42
+                },
+                "openclaw": {
+                    "assistant_tool_call_names": []
+                }
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "scope");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+    }
+
+    assert!(lines[0]["data"]["content"].get("prompt").is_none());
+    assert_eq!(lines[0]["data"]["content"]["messages"], json!([]));
+    assert!(lines[1]["data"].get("content").is_none());
+    assert_eq!(lines[1]["data"]["usage"]["cost_usd"], 0.001);
+    assert_eq!(lines[3]["data"]["usage"]["prompt_tokens"], 42);
+    assert!(lines[3]["data"]["usage"].get("completion_tokens").is_none());
+}
+
+#[test]
 fn register_deregister_flush_and_shutdown_work_with_runtime_events() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_global();
