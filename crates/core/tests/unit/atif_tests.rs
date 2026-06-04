@@ -974,6 +974,75 @@ fn test_exporter_openclaw_placeholder_replay_preserves_empty_user_step_and_raw_r
 }
 
 #[test]
+fn test_exporter_openclaw_timing_marks_become_system_steps_with_payloads() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+
+    let ambiguous_payload = json!({
+        "runId": "run-1",
+        "sessionId": "session-1",
+        "provider": "openai",
+        "model": "gpt-4",
+        "candidateCount": 2
+    });
+    let unpaired_payload = json!({
+        "runId": "run-1",
+        "callId": "call-1",
+        "provider": "openai",
+        "model": "gpt-4",
+        "durationMs": 42,
+        "outcome": "completed"
+    });
+
+    let mut ambiguous = event_builder(Uuid::now_v7(), EventType::Mark)
+        .name("openclaw.model_call_timing_ambiguous")
+        .data(ambiguous_payload.clone())
+        .build();
+    let mut unpaired = event_builder(Uuid::now_v7(), EventType::Mark)
+        .name("openclaw.model_call_timing_unpaired")
+        .data(unpaired_payload.clone())
+        .build();
+
+    set_event_timestamp(&mut ambiguous, base);
+    set_event_timestamp(&mut unpaired, base + chrono::Duration::milliseconds(1));
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([ambiguous, unpaired]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let ambiguous_step = &trajectory.steps[0];
+    assert_eq!(ambiguous_step.source, "system");
+    assert_eq!(
+        ambiguous_step.message,
+        json!("openclaw.model_call_timing_ambiguous")
+    );
+    let ambiguous_extra: AtifStepExtra =
+        serde_json::from_value(ambiguous_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        ambiguous_extra.event_payload.as_ref(),
+        Some(&ambiguous_payload)
+    );
+
+    let unpaired_step = &trajectory.steps[1];
+    assert_eq!(unpaired_step.source, "system");
+    assert_eq!(
+        unpaired_step.message,
+        json!("openclaw.model_call_timing_unpaired")
+    );
+    let unpaired_extra: AtifStepExtra =
+        serde_json::from_value(unpaired_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        unpaired_extra.event_payload.as_ref(),
+        Some(&unpaired_payload)
+    );
+}
+
+#[test]
 fn test_openai_responses_input_extracts_latest_user_content_block() {
     let message = extract_user_messages(&json!({
         "input": [

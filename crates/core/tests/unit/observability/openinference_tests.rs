@@ -629,6 +629,115 @@ fn records_span_start_mark_and_end() {
 }
 
 #[test]
+fn openclaw_model_timing_marks_attach_to_parent_spans() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "openclaw.session",
+        ScopeType::Agent,
+        Some(json!({"sessionId": "session-1"})),
+    ));
+    processor.process(&make_mark_event(
+        Some(root_uuid),
+        "openclaw.model_call_timing_ambiguous",
+        Some(json!({
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "candidateCount": 2
+        })),
+    ));
+    processor.process(&make_mark_event(
+        Some(root_uuid),
+        "openclaw.model_call_timing_unpaired",
+        Some(json!({
+            "runId": "run-1",
+            "callId": "call-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "durationMs": 42,
+            "outcome": "completed"
+        })),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "openclaw.session",
+        ScopeType::Agent,
+        Some(json!({"status": "closed"})),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.name.as_ref(), "openclaw.session");
+    assert_eq!(span.events.events.len(), 2);
+    assert_eq!(
+        span.events.events[0].name.as_ref(),
+        "openclaw.model_call_timing_ambiguous"
+    );
+    assert_eq!(
+        span.events.events[1].name.as_ref(),
+        "openclaw.model_call_timing_unpaired"
+    );
+
+    let ambiguous_attributes = attr_map(&span.events.events[0].attributes);
+    assert_eq!(
+        ambiguous_attributes.get("nemo_relay.mark.parent_uuid"),
+        Some(&root_uuid.to_string())
+    );
+    let ambiguous_data: serde_json::Value = serde_json::from_str(
+        ambiguous_attributes
+            .get("nemo_relay.mark.data_json")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        ambiguous_data,
+        json!({
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "candidateCount": 2
+        })
+    );
+    assert!(!ambiguous_attributes.contains_key("nemo_relay.mark.metadata_json"));
+
+    let unpaired_attributes = attr_map(&span.events.events[1].attributes);
+    assert_eq!(
+        unpaired_attributes.get("nemo_relay.mark.parent_uuid"),
+        Some(&root_uuid.to_string())
+    );
+    let unpaired_data: serde_json::Value = serde_json::from_str(
+        unpaired_attributes
+            .get("nemo_relay.mark.data_json")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        unpaired_data,
+        json!({
+            "runId": "run-1",
+            "callId": "call-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "durationMs": 42,
+            "outcome": "completed"
+        })
+    );
+    assert!(!unpaired_attributes.contains_key("nemo_relay.mark.metadata_json"));
+}
+
+#[test]
 fn llm_input_value_omits_request_headers() {
     let (provider, exporter) = make_provider();
     let mut processor =

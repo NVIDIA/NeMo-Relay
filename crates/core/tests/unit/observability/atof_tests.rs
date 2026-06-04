@@ -197,6 +197,24 @@ fn openclaw_replay_llm_event(
     ))
 }
 
+fn openclaw_timing_mark_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    data: serde_json::Value,
+) -> Event {
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name(name)
+            .data(data)
+            .build(),
+        None,
+        None,
+    ))
+}
+
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
         .unwrap()
@@ -666,6 +684,65 @@ fn subscriber_preserves_openclaw_placeholder_replay_payloads_as_raw_jsonl() {
     assert_eq!(lines[0]["data"]["content"]["messages"], json!([]));
     assert_eq!(lines[1]["scope_category"], "end");
     assert_eq!(lines[1]["data"]["content"], "I will search.");
+}
+
+#[test]
+fn subscriber_preserves_openclaw_model_timing_marks_as_raw_jsonl() {
+    let dir = temp_dir("atof-openclaw-model-timing");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let parent_uuid = Uuid::now_v7();
+    let events = [
+        openclaw_timing_mark_event(
+            Uuid::now_v7(),
+            Some(parent_uuid),
+            "openclaw.model_call_timing_ambiguous",
+            json!({
+                "runId": "run-1",
+                "sessionId": "session-1",
+                "provider": "openai",
+                "model": "gpt-4",
+                "candidateCount": 2
+            }),
+        ),
+        openclaw_timing_mark_event(
+            Uuid::now_v7(),
+            Some(parent_uuid),
+            "openclaw.model_call_timing_unpaired",
+            json!({
+                "runId": "run-1",
+                "callId": "call-1",
+                "provider": "openai",
+                "model": "gpt-4",
+                "durationMs": 42,
+                "outcome": "completed"
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "mark");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+    }
+
+    assert_eq!(lines[0]["name"], "openclaw.model_call_timing_ambiguous");
+    assert_eq!(lines[0]["data"]["candidateCount"], 2);
+    assert_eq!(lines[1]["name"], "openclaw.model_call_timing_unpaired");
+    assert_eq!(lines[1]["data"]["durationMs"], 42);
 }
 
 #[test]
