@@ -883,6 +883,80 @@ fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
 }
 
 #[test]
+fn openclaw_placeholder_replay_falls_back_to_sanitized_json_input_value() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "prompt": "",
+                "messages": [],
+                "imagesCount": 0,
+                "placeholderRequest": true,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "assistant_texts_count": 1,
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.provider", "nvidia-inference");
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.0.message.content"));
+    assert_attr(&attributes, "input.mime_type", "application/json");
+
+    let input_value = attributes.get("input.value").expect("missing input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(input_value).unwrap();
+    assert!(parsed_input.get("headers").is_none());
+    assert_eq!(parsed_input["content"]["placeholderRequest"], json!(true));
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert_eq!(parsed_input["content"]["prompt"], json!(""));
+    assert_eq!(
+        parsed_input["content"]["source"],
+        json!("openclaw.llm_output")
+    );
+    assert_no_attr_contains(&attributes, "authorization");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
 fn generic_unannotated_llm_output_does_not_emit_flattened_output_message_attrs() {
     let (provider, exporter) = make_provider();
     let mut processor =
