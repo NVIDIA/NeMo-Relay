@@ -549,7 +549,9 @@ impl OpenInferenceEventProcessor {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
             return;
         };
-        if let Some(metadata) = event.metadata() && let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str) {
+        if let Some(metadata) = event.metadata()
+            && let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str)
+        {
             let status = match status_code {
                 "OK" => Status::Ok,
                 "ERROR" => Status::error(
@@ -566,7 +568,6 @@ impl OpenInferenceEventProcessor {
                 }
             };
             active_span.span.set_status(status);
-
         }
         active_span.span.set_attributes(end_attributes(event));
         active_span
