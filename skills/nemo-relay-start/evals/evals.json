@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-start",
+  "cases": [
+    {
+      "id": "first-python-scope-tool-llm",
+      "question": "Help me get started with NeMo Relay in Python: one scope, one tool call, and one LLM call.",
+      "expected_skill": "nemo-relay-start",
+      "expected_script": null,
+      "ground_truth": "Use the start skill to choose the Python binding, prefer managed execution APIs, create a minimal scoped example, and defer observability until the basic flow works.",
+      "expected_behavior": [
+        "Pick the Python binding based on the user's language",
+        "Prefer managed execution APIs over manual lifecycle APIs",
+        "Start with one scope, one tool call, and one LLM call",
+        "Mention observability only after the basic flow works"
+      ]
+    },
+    {
+      "id": "neg-existing-code-wrap",
+      "question": "My app already has tool and provider calls; wrap them without changing business logic.",
+      "expected_skill": "nemo-relay-instrument-calls",
+      "expected_script": null,
+      "ground_truth": "Wrapping existing calls belongs to nemo-relay-instrument-calls.",
+      "expected_behavior": [
+        "nemo-relay-start stays silent or redirects",
+        "nemo-relay-instrument-calls handles existing call wrapping"
+      ]
+    }
+  ]
+}

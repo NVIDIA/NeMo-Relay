@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-setup-observability",
+  "cases": [
+    {
+      "id": "choose-observability-path",
+      "question": "I want visibility into NeMo Relay activity but I do not know whether I need console events, ATIF, OTEL, or OpenInference.",
+      "expected_skill": "nemo-relay-setup-observability",
+      "expected_script": null,
+      "ground_truth": "Use the observability setup skill to choose between subscribers, ATIF, OpenTelemetry, and OpenInference based on the user's output target and then route to the narrower export skill if needed.",
+      "expected_behavior": [
+        "Ask or infer the desired observability output",
+        "Explain subscriber, ATIF, OTEL, and OpenInference choices",
+        "Register before scoped work and flush when deterministic delivery matters",
+        "Route to a narrower export skill once the target is known"
+      ]
+    },
+    {
+      "id": "neg-known-atif",
+      "question": "I already know I need ATIF trajectories for offline replay.",
+      "expected_skill": "nemo-relay-export-atif-trajectories",
+      "expected_script": null,
+      "ground_truth": "Known ATIF export belongs directly to nemo-relay-export-atif-trajectories.",
+      "expected_behavior": [
+        "nemo-relay-setup-observability stays silent or redirects",
+        "nemo-relay-export-atif-trajectories handles the task"
+      ]
+    }
+  ]
+}

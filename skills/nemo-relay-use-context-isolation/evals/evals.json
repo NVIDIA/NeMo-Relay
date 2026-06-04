@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-use-context-isolation",
+  "cases": [
+    {
+      "id": "isolate-concurrent-requests",
+      "question": "My service runs concurrent agent requests. Set up NeMo Relay scope-stack isolation so middleware and subscribers do not leak across users.",
+      "expected_skill": "nemo-relay-use-context-isolation",
+      "expected_script": null,
+      "ground_truth": "Use the context isolation skill to create/request scope stacks per concurrent unit, propagate context across async/thread hops, and clean up scope-local registrations.",
+      "expected_behavior": [
+        "Identify the concurrent request or worker boundary",
+        "Use isolated scope stacks for separate units of work",
+        "Handle context propagation across async tasks or threads",
+        "Ensure scope-local middleware and subscribers clean up when work finishes"
+      ]
+    },
+    {
+      "id": "neg-first-scope",
+      "question": "Show me the simplest first NeMo Relay scope example.",
+      "expected_skill": "nemo-relay-start",
+      "expected_script": null,
+      "ground_truth": "A first simple scope example belongs to nemo-relay-start.",
+      "expected_behavior": [
+        "nemo-relay-use-context-isolation stays silent or redirects",
+        "nemo-relay-start handles the first example"
+      ]
+    }
+  ]
+}
