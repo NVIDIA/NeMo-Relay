@@ -469,6 +469,8 @@ fn tool_call_end(
 ///     attributes: Optional ``ToolAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
+///         End events receive ``otel.status_code = "OK"`` on success, or
+///         ``otel.status_code = "ERROR"`` and ``otel.status_message`` on error.
 /// Returns:
 ///     An awaitable that resolves to the tool result after execution
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
@@ -679,6 +681,8 @@ fn llm_call_end(
 ///     attributes: Optional ``LlmAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
+///         End events receive ``otel.status_code = "OK"`` on success, or
+///         ``otel.status_code = "ERROR"`` and ``otel.status_message`` on error.
 ///     model_name: Optional normalized model name recorded in emitted LLM events.
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data

@@ -134,7 +134,7 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         )
         .unwrap();
 
-        pop_scope(&child, None, None).unwrap();
+        pop_scope(&child, None, None, None).unwrap();
         assert_eq!(get_handle().unwrap().inner.name, "root");
     });
 }
@@ -780,7 +780,7 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         assert!(deregister_subscriber(&global_subscriber).unwrap());
         assert!(!deregister_subscriber(&global_subscriber).unwrap());
 
-        pop_scope(&child, None, None).unwrap();
+        pop_scope(&child, None, None, None).unwrap();
     });
 }
 
