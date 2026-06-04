@@ -119,6 +119,10 @@ name = "api_surface_integration"
 path = "tests/integration/api_surface_tests.rs"
 
 [[test]]
+name = "plugin_layer_integration"
+path = "tests/integration/plugin_layer_tests.rs"
+
+[[test]]
 name = "atif_storage_integration"
 path = "tests/integration/atif_storage_tests.rs"
 required-features = ["object-store"]

@@ -44,6 +44,8 @@ type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
+static PLUGIN_CONFIG_CODE_DRIVEN_LAYER: LazyLock<Mutex<Option<PluginConfig>>> =
+    LazyLock::new(|| Mutex::new(None));
 static BUILTIN_PLUGIN_REGISTRATION: OnceLock<Result<()>> = OnceLock::new();
 
 /// Error type for generic plugin operations.
@@ -899,6 +901,124 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     report
 }
 
+/// Sets or clears the code-driven plugin configuration layer.
+///
+/// The code-driven layer is the highest-precedence plugin configuration source.
+/// When set, [`initialize_plugins`] merges this layer *on top of* the
+/// configuration passed by the caller, so code-driven values win over file- or
+/// CLI-resolved configuration. Passing [`None`] clears the layer and restores
+/// file-only behavior.
+///
+/// This is an additive, opt-in runtime API: when no layer is set,
+/// [`initialize_plugins`] behaves exactly as before. Language bindings do not
+/// expose this function; it is intended for Rust hosts (such as the
+/// `nemo-relay` gateway and embedding applications) that overlay code-driven
+/// configuration on top of discovered file/CLI configuration.
+///
+/// # Parameters
+/// - `config`: The code-driven layer to apply, or [`None`] to clear it.
+///
+/// # Notes
+/// The layer is process-global and is only consulted by [`initialize_plugins`]
+/// calls in the same process.
+pub fn set_code_driven_plugin_config(config: Option<PluginConfig>) {
+    let mut guard = PLUGIN_CONFIG_CODE_DRIVEN_LAYER
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    *guard = config;
+}
+
+/// Applies the code-driven plugin configuration layer on top of `config`.
+///
+/// When a code-driven layer is set via [`set_code_driven_plugin_config`], this
+/// returns [`Some`] containing the effective configuration — the layer merged
+/// over `config`, with code-driven values winning. When no layer is set, it
+/// returns [`None`], meaning `config` is already the effective configuration.
+///
+/// This is the single read entry point for the code-driven layer: callers such
+/// as [`initialize_plugins`] and `nemo-relay doctor` use it both to obtain the
+/// effective configuration and to detect whether a layer contributed.
+///
+/// # Parameters
+/// - `config`: The file/CLI-resolved configuration to layer over.
+///
+/// # Returns
+/// [`Some`] effective configuration when a layer is active, otherwise [`None`].
+pub fn apply_code_driven_plugin_config(config: &PluginConfig) -> Option<PluginConfig> {
+    let guard = PLUGIN_CONFIG_CODE_DRIVEN_LAYER
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    guard
+        .as_ref()
+        .map(|layer| merge_plugin_config_layers(config, layer))
+}
+
+/// Merges a higher-precedence plugin configuration layer over a lower one.
+///
+/// `overlay` is the higher-precedence layer; its values win. Component matching
+/// and component-`config` merging mirror the gateway's file merge semantics so
+/// the composed configuration is deterministic; top-level `version` and `policy`
+/// are instead replaced wholesale by `overlay` (unlike the field-by-field table
+/// merge used for file configuration):
+/// - `components` are matched by `kind`. A component present in both layers is
+///   merged in place (preserving `base` ordering); a component only in
+///   `overlay` is appended; a component only in `base` is preserved.
+/// - A merged component takes `enabled` from `overlay` and deep-merges its
+///   `config` object: nested objects merge recursively, while arrays and scalar
+///   values are replaced by the `overlay` value.
+/// - Top-level `version` and `policy` are taken from `overlay`. Both fields are
+///   always present once a [`PluginConfig`] is constructed, so the overlay
+///   fully specifies them; set them on the overlay to match the intended
+///   effective values.
+///
+/// # Parameters
+/// - `base`: The lower-precedence configuration.
+/// - `overlay`: The higher-precedence configuration whose values win.
+///
+/// # Returns
+/// The composed effective [`PluginConfig`].
+fn merge_plugin_config_layers(base: &PluginConfig, overlay: &PluginConfig) -> PluginConfig {
+    let mut components = base.components.clone();
+    for overlay_component in &overlay.components {
+        match components
+            .iter_mut()
+            .find(|candidate| candidate.kind == overlay_component.kind)
+        {
+            Some(existing) => {
+                existing.enabled = overlay_component.enabled;
+                merge_json_object(&mut existing.config, overlay_component.config.clone());
+            }
+            None => components.push(overlay_component.clone()),
+        }
+    }
+    PluginConfig {
+        version: overlay.version,
+        components,
+        policy: overlay.policy,
+    }
+}
+
+/// Recursively merges `overlay` entries into a `base` JSON object.
+///
+/// Nested objects merge key-by-key; arrays and scalar values are replaced by
+/// the `overlay` value. This mirrors the gateway's recursive TOML table merge.
+fn merge_json_object(base: &mut Map<String, Json>, overlay: Map<String, Json>) {
+    for (key, overlay_value) in overlay {
+        match overlay_value {
+            Json::Object(overlay_object) => {
+                if let Some(Json::Object(base_object)) = base.get_mut(&key) {
+                    merge_json_object(base_object, overlay_object);
+                } else {
+                    base.insert(key, Json::Object(overlay_object));
+                }
+            }
+            other => {
+                base.insert(key, other);
+            }
+        }
+    }
+}
+
 /// Returns the JSON Schema for the canonical plugin configuration document.
 #[cfg(feature = "schema")]
 pub fn plugin_config_schema() -> Json {
@@ -926,7 +1046,14 @@ pub fn plugin_config_schema() -> Json {
 /// # Notes
 /// Initialization is replace-with-rollback: the previous active configuration
 /// is removed before the new configuration is activated.
+///
+/// When a code-driven layer is set via [`set_code_driven_plugin_config`], it is
+/// merged on top of `config` first (code-driven values win), and the resulting
+/// effective configuration is what gets validated, activated, stored, and
+/// reported by [`active_plugin_report`]. When no layer is set, `config` is used
+/// unchanged.
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
+    let config = apply_code_driven_plugin_config(&config).unwrap_or(config);
     let report = validate_plugin_config(&config);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));

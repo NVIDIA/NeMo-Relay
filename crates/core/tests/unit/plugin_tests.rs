@@ -299,6 +299,7 @@ fn reset_global() {
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
     clear_plugin_configuration().unwrap();
+    set_code_driven_plugin_config(None);
     recorded_names().lock().unwrap().clear();
     PARTIAL_FAIL_ROLLBACKS.store(0, Ordering::SeqCst);
     RESTORE_FAIL_REGISTRATIONS.store(0, Ordering::SeqCst);
@@ -312,6 +313,110 @@ fn reset_global() {
     let _ = deregister_plugin("restore.break.plugin");
     let _ = deregister_plugin("partial.fail.plugin");
     let _ = deregister_plugin("vanishing.plugin");
+}
+
+#[test]
+fn test_merge_plugin_config_layers_overlay_wins() {
+    // The overlay is the highest-precedence layer: it overrides shared component fields,
+    // deep-merges nested config objects, replaces arrays, appends overlay-only kinds, preserves
+    // base-only kinds, and supplies the effective top-level version/policy.
+    let base = PluginConfig {
+        version: 1,
+        components: vec![
+            PluginComponentSpec {
+                kind: "alpha".into(),
+                enabled: true,
+                config: serde_json::from_value(json!({
+                    "keep": "base",
+                    "override": "base",
+                    "nested": {"a": 1, "b": 2},
+                    "list": [1, 2, 3]
+                }))
+                .unwrap(),
+            },
+            PluginComponentSpec {
+                kind: "base_only".into(),
+                enabled: true,
+                config: Map::new(),
+            },
+        ],
+        policy: ConfigPolicy::default(),
+    };
+    let overlay = PluginConfig {
+        version: 1,
+        components: vec![
+            PluginComponentSpec {
+                kind: "alpha".into(),
+                enabled: false,
+                config: serde_json::from_value(json!({
+                    "override": "overlay",
+                    "added": true,
+                    "nested": {"b": 20, "c": 30},
+                    "list": [9]
+                }))
+                .unwrap(),
+            },
+            PluginComponentSpec {
+                kind: "overlay_only".into(),
+                enabled: true,
+                config: Map::new(),
+            },
+        ],
+        policy: ConfigPolicy {
+            unknown_component: UnsupportedBehavior::Error,
+            unknown_field: UnsupportedBehavior::Error,
+            unsupported_value: UnsupportedBehavior::Error,
+        },
+    };
+
+    let merged = merge_plugin_config_layers(&base, &overlay);
+
+    // Ordering: base components first (in base order), then overlay-only components appended.
+    let kinds: Vec<&str> = merged
+        .components
+        .iter()
+        .map(|component| component.kind.as_str())
+        .collect();
+    assert_eq!(kinds, vec!["alpha", "base_only", "overlay_only"]);
+
+    let alpha = &merged.components[0];
+    assert!(!alpha.enabled, "overlay enabled wins on a shared component");
+    assert_eq!(
+        alpha.config.get("keep"),
+        Some(&json!("base")),
+        "base-only key is preserved"
+    );
+    assert_eq!(
+        alpha.config.get("override"),
+        Some(&json!("overlay")),
+        "overlay scalar wins"
+    );
+    assert_eq!(
+        alpha.config.get("added"),
+        Some(&json!(true)),
+        "overlay key is added"
+    );
+    assert_eq!(
+        alpha.config.get("nested"),
+        Some(&json!({"a": 1, "b": 20, "c": 30})),
+        "nested objects merge recursively"
+    );
+    assert_eq!(
+        alpha.config.get("list"),
+        Some(&json!([9])),
+        "arrays are replaced, not merged"
+    );
+
+    // Base-only component is preserved unchanged.
+    assert_eq!(merged.components[1].kind, "base_only");
+    assert!(merged.components[1].enabled);
+
+    // Top-level version and policy come from the overlay.
+    assert_eq!(merged.version, 1);
+    assert!(matches!(
+        merged.policy.unknown_component,
+        UnsupportedBehavior::Error
+    ));
 }
 
 #[test]

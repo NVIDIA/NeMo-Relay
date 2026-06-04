@@ -70,7 +70,10 @@ The gateway reads only files named `plugins.toml`.
 
 ## Discovery
 
-The gateway can receive plugin configuration from three source classes:
+The gateway resolves plugin configuration from two kinds of input: file/CLI
+sources and an optional code-driven layer.
+
+File/CLI configuration comes from one of three mutually exclusive source classes:
 
 | Source | Use case |
 |---|---|
@@ -78,9 +81,15 @@ The gateway can receive plugin configuration from three source classes:
 | `[plugins].config` in `config.toml` | Inline gateway config for small or generated setups. |
 | `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation. |
 
-Use only one source class for a given gateway run. The gateway fails clearly if
-file-based plugin config and `--plugin-config` are both present, or if
+Use only one file/CLI source class for a given gateway run. The gateway fails
+clearly if file-based plugin config and `--plugin-config` are both present, or if
 `plugins.toml` and `[plugins].config` are both present.
+
+A code-driven layer is a separate, programmatic source set through the runtime
+API. It is not a file and is not mutually exclusive with the file/CLI sources:
+when set, it is merged on top of the resolved file/CLI configuration as the
+highest-precedence layer. See
+[Code-Driven Configuration Layer](#code-driven-configuration-layer).
 
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
 to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
@@ -155,7 +164,9 @@ menu to reset, clear, preview, or save.
 
 When more than one `plugins.toml` file is discovered, later files have higher
 precedence. User config overrides project config, and project config overrides
-system config.
+system config. A code-driven layer, when set, sits above all of these as the
+highest-precedence source (see
+[Code-Driven Configuration Layer](#code-driven-configuration-layer)).
 
 TOML tables merge recursively:
 
@@ -194,6 +205,70 @@ components that reach plugin validation also fail validation.
 
 Arrays inside component config are replaced by the higher-precedence value.
 Tables inside component config merge recursively.
+
+## Code-Driven Configuration Layer
+
+A host application can supply a *code-driven* plugin configuration layer
+programmatically through the runtime API instead of through files. In Rust:
+
+```rust
+use nemo_relay::plugin::{set_code_driven_plugin_config, PluginConfig};
+
+set_code_driven_plugin_config(Some(my_plugin_config));
+// Pass `None` to clear the layer and restore file-only behavior.
+```
+
+The code-driven layer is the **highest-precedence** plugin configuration source.
+When set, `initialize_plugins` merges it on top of the configuration it is given
+(the resolved file/CLI configuration), so code-driven values win field-by-field.
+This lets an application apply programmatic overrides in code while still
+honoring operator files for everything the code does not set.
+
+The merge uses the same rules as the file precedence above:
+
+- Components are matched by `kind`. A component present in both layers is merged
+  in place; a component only in the code-driven layer is added; a component only
+  in the file configuration is preserved.
+- A merged component takes `enabled` from the code-driven layer and deep-merges
+  its `config` object: nested tables merge recursively, while arrays and scalar
+  values are replaced by the code-driven value.
+- Top-level `version` and `policy` are taken from the code-driven layer. A typed
+  `PluginConfig` always carries these fields, so set them on the layer to match
+  the values you want in effect.
+
+### Precedence And Conflicts
+
+The effective configuration is composed from lowest to highest precedence:
+
+1. Discovered `plugins.toml` files, merged in order: system
+   (`/etc/nemo-relay/plugins.toml`) is lowest, then project (nearest
+   `.nemo-relay/plugins.toml`), then user
+   (`$XDG_CONFIG_HOME/nemo-relay/plugins.toml`) is highest
+2. **or** a single inline `[plugins].config` block in `config.toml`
+3. **or** `--plugin-config '<json>'`
+4. Code-driven configuration layer (highest)
+
+Items 1–3 are the **file/CLI source classes** and are mutually exclusive: exactly
+one of them supplies the file/CLI configuration for a run, and the `plugins.toml`
+sub-layers (system, project, user) only merge with each other. The code-driven
+layer (item 4) is not a file/CLI source; when set it is always merged on top of
+whichever file/CLI source is active, so its values win.
+
+The gateway fails fast, naming the sources, in these conflict cases:
+
+| Situation | Result |
+|---|---|
+| `--plugin-config` and any file config (`plugins.toml` or `[plugins].config`) | Error: choose one source |
+| `plugins.toml` and `[plugins].config` both present | Error: choose one source |
+| `[plugins].config` defined in more than one `config.toml` file | Error: consolidate into one block |
+| Code-driven layer set together with any file/CLI source | No conflict — the layer overrides the file/CLI config field-by-field |
+
+The code-driven layer is process-local: it only affects `initialize_plugins`
+calls in the same process. It is a Rust runtime API and is not exposed to the
+Python, Node.js, or other language bindings, and it is not a file source, so the
+file discovery and conflict rules above are unchanged. `nemo-relay doctor`
+reports the effective configuration source and validates the merged result when a
+code-driven layer is active in the doctor process.
 
 ## Explicit Defaults And Overrides
 

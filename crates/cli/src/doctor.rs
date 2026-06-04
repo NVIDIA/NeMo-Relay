@@ -14,7 +14,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
-use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
+use nemo_relay::plugin::{
+    DiagnosticLevel, PluginConfig, apply_code_driven_plugin_config, validate_plugin_config,
+};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use serde::Serialize;
 use serde_json::Value;
@@ -571,28 +573,74 @@ async fn probe_version(binary: &Path) -> Option<String> {
 }
 
 async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
+    // Resolve the code-driven layer (if any) merged over the file/CLI config, so doctor validates
+    // and reports exactly what the runtime would activate. If the file config fails to parse we
+    // layer over an empty base here, but the inner function re-parses the raw value and reports the
+    // parse failure before the overlay is ever used.
+    let base = gateway
+        .plugin_config
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<PluginConfig>(value.clone()).ok())
+        .unwrap_or_default();
+    let effective_overlay = apply_code_driven_plugin_config(&base);
+    collect_observability_layered(gateway.plugin_config.as_ref(), effective_overlay.as_ref()).await
+}
+
+// Reports plugin/observability checks for the effective plugin configuration. `effective_overlay` is
+// `Some` only when a code-driven layer is active, and then carries the layer already merged over the
+// file/CLI config — the highest-precedence source, so its values win per-field. When it is `None`,
+// this validates the file config alone, producing output identical to file-only behavior. Sub-checks
+// (exporter directories/endpoints) run against the effective config so doctor reports what the
+// runtime would actually activate, not just the file layer.
+async fn collect_observability_layered(
+    file_value: Option<&Value>,
+    effective_overlay: Option<&PluginConfig>,
+) -> Vec<Check> {
     let mut checks = Vec::new();
 
-    let Some(plugin_value) = &gateway.plugin_config else {
-        checks.push(Check {
-            name: "Plugins",
-            status: Status::Info,
-            details: "plugins.toml not configured".into(),
-        });
-        return checks;
+    let file_config = match file_value {
+        Some(plugin_value) => match serde_json::from_value::<PluginConfig>(plugin_value.clone()) {
+            Ok(config) => Some(config),
+            Err(err) => {
+                checks.push(Check {
+                    name: "Plugins",
+                    status: Status::Fail,
+                    details: format!("invalid plugin config: {err}"),
+                });
+                return checks;
+            }
+        },
+        None => None,
     };
 
-    let plugin_config = match serde_json::from_value::<PluginConfig>(plugin_value.clone()) {
-        Ok(config) => config,
-        Err(err) => {
+    let layer_active = effective_overlay.is_some();
+    let effective_config = match (file_config.as_ref(), effective_overlay) {
+        (None, None) => {
             checks.push(Check {
                 name: "Plugins",
-                status: Status::Fail,
-                details: format!("invalid plugin config: {err}"),
+                status: Status::Info,
+                details: "plugins.toml not configured".into(),
             });
             return checks;
         }
+        (Some(file), None) => file.clone(),
+        (_, Some(overlay)) => overlay.clone(),
     };
+
+    // Surface where the effective config came from so conflicts have a clear winner. Only emitted
+    // when a code-driven layer is active; otherwise the file-only output is left unchanged.
+    if layer_active {
+        checks.push(Check {
+            name: "Plugin config source",
+            status: Status::Info,
+            details: if file_config.is_some() {
+                "code-driven layer active; overrides file/CLI plugin config".into()
+            } else {
+                "code-driven layer active; no file/CLI plugin config".into()
+            },
+        });
+    }
+
     if let Err(error) = register_adaptive_component() {
         checks.push(Check {
             name: "Adaptive plugin",
@@ -601,12 +649,19 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         });
         return checks;
     }
-    let report = validate_plugin_config(&plugin_config);
+    // Prefix diagnostics when a layer is active so the reported failure is attributed to the merged
+    // effective config rather than any single file/CLI source.
+    let detail_prefix = if layer_active {
+        "effective plugin config: "
+    } else {
+        ""
+    };
+    let report = validate_plugin_config(&effective_config);
     if report.diagnostics.is_empty() {
         checks.push(Check {
             name: "Plugins",
             status: Status::Pass,
-            details: "validation passed".into(),
+            details: format!("{detail_prefix}validation passed"),
         });
     } else {
         for diagnostic in report.diagnostics {
@@ -617,12 +672,19 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
                 } else {
                     Status::Warn
                 },
-                details: format!("{}: {}", diagnostic.code, diagnostic.message),
+                details: format!("{detail_prefix}{}: {}", diagnostic.code, diagnostic.message),
             });
         }
     }
 
-    if let Some(config) = observability_component_config(plugin_value) {
+    // Run exporter sub-checks against the effective config. When no layer is active this is the
+    // original file value (byte-identical output); otherwise it is the merged document.
+    let effective_value = if layer_active {
+        serde_json::to_value(&effective_config).unwrap_or(Value::Null)
+    } else {
+        file_value.cloned().unwrap_or(Value::Null)
+    };
+    if let Some(config) = observability_component_config(&effective_value) {
         collect_observability_component_checks(&mut checks, config).await;
     } else {
         checks.push(Check {
