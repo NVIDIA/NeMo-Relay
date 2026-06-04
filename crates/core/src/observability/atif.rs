@@ -646,6 +646,7 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     let completion = usage_u64(usage, &["completion_tokens", "output_tokens"]);
     let cached = usage_u64(usage, &["cached_tokens"])
         .or_else(|| prompt_tokens_detail_u64(usage, "cached_tokens"))
+        .or_else(|| input_tokens_detail_u64(usage, "cached_tokens"))
         .or_else(|| {
             sum_usage_u64(
                 usage,
@@ -779,6 +780,14 @@ fn sum_usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option
 fn prompt_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
     usage
         .get("prompt_tokens_details")
+        .and_then(Json::as_object)
+        .and_then(|details| details.get(key))
+        .and_then(Json::as_u64)
+}
+
+fn input_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
+    usage
+        .get("input_tokens_details")
         .and_then(Json::as_object)
         .and_then(|details| details.get(key))
         .and_then(Json::as_u64)

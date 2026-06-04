@@ -522,6 +522,298 @@ async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelit
 }
 
 #[tokio::test]
+async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    async fn anthropic_messages() -> TestServer {
+        async fn messages(_headers: HeaderMap, _request: Request<Body>) -> impl IntoResponse {
+            Json(json!({
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "stop_reason": "tool_use",
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }))
+        }
+
+        let app = Router::new().route("/v1/messages", post(messages));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        }
+    }
+
+    async fn openai_routed() -> TestServer {
+        async fn chat(_headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+            let path = request.uri().path().to_string();
+            if path == "/v1/responses" {
+                Json(json!({
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "I will check the weather."}]
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_weather_1",
+                            "name": "get_weather",
+                            "arguments": "{\"city\":\"SF\"}",
+                            "status": "completed"
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 75,
+                        "output_tokens": 20,
+                        "total_tokens": 95,
+                        "input_tokens_details": {"cached_tokens": 10},
+                        "cost_usd": 0.005
+                    }
+                }))
+            } else {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "I will inspect.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_read_1",
+                                    "type": "function",
+                                    "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 4,
+                        "total_tokens": 7,
+                        "prompt_tokens_details": {"cached_tokens": 2},
+                        "cost_usd": 0.001
+                    }
+                }))
+            }
+        }
+
+        let app = Router::new()
+            .route("/v1/chat/completions", post(chat))
+            .route("/v1/responses", post(chat));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+
+    let anthropic_upstream = anthropic_messages().await;
+    let openai_upstream = openai_routed().await;
+
+    let mut config = test_config();
+    config.anthropic_base_url = anthropic_upstream.url();
+    config.openai_base_url = openai_upstream.url();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/v1/messages"))
+        .header("content-type", "application/json")
+        .header("x-api-key", "sk-ant-test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "Find the file."}],
+            "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/v1/responses"))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "gpt-4o",
+            "input": "Find the weather.",
+            "tools": [{"type": "function", "name": "get_weather"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/v1/chat/completions"))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Inspect the files."}],
+            "tools": [{"type": "function", "function": {"name": "read"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        6,
+        "expected three routed LLM start/end pairs, got {llm_events:?}"
+    );
+
+    let anthropic_start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["name"] == "anthropic.messages"
+                && event["metadata"]["gateway_path"] == "/v1/messages"
+        })
+        .unwrap();
+    assert_eq!(
+        anthropic_start["category_profile"]["model_name"],
+        json!("claude-sonnet-4")
+    );
+    assert_eq!(
+        anthropic_start["data"]["content"]["messages"][0]["content"],
+        json!("Find the file.")
+    );
+
+    let anthropic_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "anthropic.messages"
+                && event["metadata"]["gateway_path"] == "/v1/messages"
+        })
+        .unwrap();
+    assert_eq!(
+        anthropic_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("toolu_01")
+    );
+    assert_eq!(anthropic_end["data"]["content"][1]["id"], json!("toolu_01"));
+    assert_eq!(anthropic_end["data"]["usage"]["input_tokens"], json!(11));
+    assert_eq!(
+        anthropic_end["data"]["usage"]["cost"]["total"],
+        json!(0.0042)
+    );
+
+    let responses_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "openai.responses"
+                && event["metadata"]["gateway_path"] == "/v1/responses"
+        })
+        .unwrap();
+    assert_eq!(
+        responses_end["category_profile"]["model_name"],
+        json!("gpt-4o")
+    );
+    assert_eq!(
+        responses_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(
+        responses_end["data"]["output"][1]["call_id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(
+        responses_end["data"]["usage"]["input_tokens_details"]["cached_tokens"],
+        json!(10)
+    );
+    assert_eq!(responses_end["data"]["usage"]["cost_usd"], json!(0.005));
+
+    let chat_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "openai.chat_completions"
+                && event["metadata"]["gateway_path"] == "/v1/chat/completions"
+        })
+        .unwrap();
+    assert_eq!(chat_end["category_profile"]["model_name"], json!("gpt-4o"));
+    assert_eq!(
+        chat_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("call_read_1")
+    );
+    assert_eq!(
+        chat_end["data"]["choices"][0]["message"]["tool_calls"][0]["id"],
+        json!("call_read_1")
+    );
+    assert_eq!(
+        chat_end["data"]["usage"]["prompt_tokens_details"]["cached_tokens"],
+        json!(2)
+    );
+    assert_eq!(chat_end["data"]["usage"]["cost_usd"], json!(0.001));
+}
+
+#[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
