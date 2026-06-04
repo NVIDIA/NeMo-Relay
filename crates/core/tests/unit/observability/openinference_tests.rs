@@ -2487,6 +2487,116 @@ fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
 }
 
 #[test]
+fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let start_metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+    let end_metadata = json!({
+        "provider_payload_exact": false,
+        "fidelity_source": "hermes_api_hooks"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .metadata(start_metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }))
+            .metadata(end_metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(attributes.get("output.value").unwrap()).unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            attributes.get("nemo_relay.end.output_json").unwrap(),
+        )
+        .unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":false");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks\"",
+    );
+}
+
+#[test]
 fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
     let (provider, exporter) = make_provider();
     let mut processor =

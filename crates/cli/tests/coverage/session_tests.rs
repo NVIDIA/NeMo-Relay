@@ -1563,6 +1563,128 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
 }
 
 #[tokio::test]
+async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-error"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "provider": "custom",
+                "model": "qwen",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-error"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-error");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["message"], json!("hello"));
+    assert_eq!(steps[1]["source"], json!("agent"));
+    assert_eq!(steps[1]["extra"]["llm_response"]["status_code"], json!(502));
+    assert_eq!(steps[1]["extra"]["llm_response"]["retry_count"], json!(1));
+    assert_eq!(steps[1]["extra"]["llm_response"]["retryable"], json!(true));
+    assert_eq!(
+        steps[1]["extra"]["llm_response"]["reason"],
+        json!("upstream")
+    );
+    assert_eq!(
+        steps[1]["extra"]["llm_response"]["error"]["message"],
+        json!("gateway upstream error")
+    );
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
+    assert!(
+        observed_events.len() >= 4,
+        "expected Hermes error trajectory to keep observed events, got {}",
+        serde_json::to_string_pretty(&atif["extra"]["observed_events"]).unwrap()
+    );
+    let error_event = observed_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == json!("end")
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    let request_event = observed_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == json!("start")
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    assert_eq!(
+        request_event["metadata"]["provider_payload_exact"],
+        json!(true)
+    );
+    assert_eq!(
+        request_event["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        error_event["metadata"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        error_event["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks")
+    );
+}
+
+#[tokio::test]
 async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
