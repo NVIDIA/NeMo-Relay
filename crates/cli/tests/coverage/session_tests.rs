@@ -1527,6 +1527,7 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-exact-atif");
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
     assert_eq!(atif["steps"][0]["message"], json!("summarize this file"));
     assert_eq!(
         atif["steps"][0]["extra"]["llm_request"]["temperature"],
@@ -1549,6 +1550,16 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(7));
     assert_eq!(atif["steps"][1]["metrics"]["cost_usd"], json!(0.0042));
     assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0042));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("pre_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(true)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks_sanitized")
+    }));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("post_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(true)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks_sanitized")
+    }));
 }
 
 #[tokio::test]
@@ -1609,6 +1620,7 @@ async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-lossy-atif");
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
     assert_eq!(
         atif["steps"][0]["extra"]["llm_request"]["fidelity"]["provider_payload_exact"],
         json!(false)
@@ -1628,6 +1640,16 @@ async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
     assert!(atif["steps"][1]["extra"]["llm_response"]["content"].is_null());
     assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(5));
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(3));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("pre_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(false)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks")
+    }));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("post_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(false)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks")
+    }));
 }
 
 #[tokio::test]
