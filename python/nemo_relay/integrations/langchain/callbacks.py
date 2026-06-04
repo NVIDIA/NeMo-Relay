@@ -81,7 +81,7 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         **kwargs: typing.Any,
     ) -> typing.Any:
         """Pop the NeMo Relay scope associated with a LangChain chain run."""
-        self._pop_scope(run_id, output=outputs)
+        self._pop_scope(run_id, output=outputs, metadata={"otel.status_code": "OK"})
 
     def on_chain_error(
         self,
@@ -92,15 +92,15 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         **kwargs: typing.Any,
     ) -> typing.Any:
         """Pop the NeMo Relay scope associated with a failed LangChain chain run."""
-        self._pop_scope(run_id, output={"error": repr(error)})
+        self._pop_scope(run_id, output={"error": repr(error)}, metadata={"otel.status_code": "ERROR", "otel.status_message": str(error)})
 
-    def _pop_scope(self, run_id: UUID, *, output: dict[str, typing.Any] | None = None) -> None:
+    def _pop_scope(self, run_id: UUID, *, output: dict[str, typing.Any] | None = None, metadata: nemo_relay.Json | None = None) -> None:
         handle = self._scope_handles.pop(run_id, None)
         if handle is None:
             return
 
         try:
             prepared_outputs = _prepare_lc_payloads(output) if output is not None else None
-            nemo_relay.scope.pop(handle, output=prepared_outputs)
+            nemo_relay.scope.pop(handle, output=prepared_outputs, metadata=metadata)
         except Exception:
             _logger.error("NeMo Relay: scope.pop failed", exc_info=True)
