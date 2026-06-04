@@ -657,16 +657,35 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
     push_serialized(&mut attributes, "nemo_relay.end.data_json", event.data());
+
+    let metadata = event.metadata();
     push_serialized(
         &mut attributes,
         "nemo_relay.end.metadata_json",
-        event.metadata(),
+        metadata,
     );
     push_serialized(
         &mut attributes,
         "nemo_relay.end.output_json",
         event.output(),
     );
+
+    if metadata.is_some() && metadata.unwrap()["otel.status_code"].is_string() {
+        let status_code = metadata.unwrap()["otel.status_code"].as_str();
+        push_serialized(
+            &mut attributes,
+            "StatusCode",
+            status_code,
+        );
+
+        if metadata.unwrap()["otel.status_message"].is_string() && status_code == Some("ERROR") {
+            push_serialized(
+                &mut attributes,
+                "Description",
+                metadata.unwrap()["otel.status_message"].as_str(),
+            );
+        }
+    }
     attributes
 }
 
