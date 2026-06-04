@@ -16,6 +16,7 @@ from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler
 
 _logger = logging.getLogger(__name__)
 
+
 def _interrupt_to_payload(interrupt: Any) -> dict[str, nemo_relay.Json]:
     return {
         "id": _prepare_lc_payloads(getattr(interrupt, "id", None)),

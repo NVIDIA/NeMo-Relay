@@ -147,7 +147,9 @@ def push(
     )
 
 
-def pop(handle: ScopeHandle, *, output: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None:
+def pop(
+    handle: ScopeHandle, *, output: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None
+) -> None:
     """Pop a scope previously returned by ``push()`` or ``scope()``.
 
     Args:
@@ -259,7 +261,7 @@ def scope(
     """
     _ensure_scope_stack()
     pushed_handle = None
-    statusCode = 'UNSET'
+    statusCode = "UNSET"
     statusMessage = None
     try:
         pushed_handle = _native_push_scope(
@@ -273,9 +275,9 @@ def scope(
             timestamp=timestamp,
         )
         yield pushed_handle
-        statusCode = 'OK'
+        statusCode = "OK"
     except Exception as e:
-        statusCode = 'ERROR'
+        statusCode = "ERROR"
         statusMessage = str(e)
         raise e
     finally:
