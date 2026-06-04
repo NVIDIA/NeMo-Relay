@@ -85,11 +85,6 @@ Use only one file/CLI source class for a given gateway run. The gateway fails
 clearly if file-based plugin config and `--plugin-config` are both present, or if
 `plugins.toml` and `[plugins].config` are both present.
 
-Configuration can also be composed in code: the same merge the gateway uses for
-file layers is exposed as the `layer_config` runtime API, so a Rust host
-can layer a programmatic document over a file-resolved one before activating it.
-See [Configuration Layering](#configuration-layering).
-
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
 to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
 not loaded for that run.
@@ -227,30 +222,13 @@ naming the sources, in these conflict cases:
 
 ## Configuration Layering
 
-The merge the gateway uses to layer files is exposed as a Rust runtime API,
-`layer_config`, so a host can compose a programmatic document over a
-file-resolved one before activating it:
-
-```rust
-use nemo_relay::plugin::{initialize_plugins, layer_config};
-
-// `effective` starts as the lower layer; `overlay` (higher precedence) is layered onto it.
-// Both are plugin config documents (the JSON shape of `PluginConfig`).
-let mut effective = base;
-layer_config(&mut effective, overlay);
-initialize_plugins(serde_json::from_value(effective)?).await?;
-```
-
-The merge is the same one applied to file layers:
-
-- Objects merge recursively; arrays and scalar values are replaced by `overlay`.
-- The top-level `components` array merges by `kind` in order of appearance, so a
-  kind used by a multi-instance plugin keeps each instance instead of collapsing;
-  components present in only one side are kept.
-
-`layer_config` is Rust-only (not exposed to the Python, Node.js, or other
-bindings) and holds no global state — the caller controls precedence by argument
-order, and `initialize_plugins` activates whatever document it is given.
+The file-layer merge described above is implemented by `layer_config` in
+`nemo_relay::plugin` — a Rust-only primitive, shared with the core crate, that the
+gateway uses internally to combine discovered layers. It is not a step operators
+or language bindings invoke: configuration is written in files and applied through
+plugin initialization, which performs the layering. (When the same component
+`kind` appears more than once, entries pair by order of appearance, so
+multi-instance plugins keep each instance rather than collapsing into the first.)
 
 ## Explicit Defaults And Overrides
 
