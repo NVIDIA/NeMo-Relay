@@ -433,12 +433,16 @@ fn unwrap_llm_request(input: &Json) -> Json {
 
 /// Extract the user-facing message content from a raw LLM response.
 ///
-/// Looks for OpenAI-compatible and Hermes-compatible response content fields.
+/// Looks for provider response content fields that can be represented as an
+/// ATIF agent message.
 /// Tool-call-only responses use an empty string message and keep the full
 /// response under `Step.extra.llm_response`.
 fn extract_llm_response_message(output: &Json) -> Json {
     if let Some(obj) = output.as_object() {
         if let Some(content) = non_null_object_field(obj, "content") {
+            if let Some(message) = anthropic_messages_content_message(output, &content) {
+                return message;
+            }
             return atif_content_value(&content);
         }
         if let Some(content) = obj
@@ -480,6 +484,38 @@ fn atif_content_value(value: &Json) -> Json {
         Json::Array(_) if is_atif_content_parts(value) => value.clone(),
         Json::Null => empty_message(),
         _ => Json::String(json_to_string(value)),
+    }
+}
+
+fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<Json> {
+    let object = output.as_object()?;
+    if object.get("type").and_then(Json::as_str) != Some("message") {
+        return None;
+    }
+    let blocks = content.as_array()?;
+    let mut text_parts = Vec::new();
+    let mut has_tool_use = false;
+    for block in blocks {
+        let Some(block_object) = block.as_object() else {
+            continue;
+        };
+        match block_object.get("type").and_then(Json::as_str) {
+            Some("text") => {
+                if let Some(text) = block_object.get("text").and_then(Json::as_str)
+                    && !text.trim().is_empty()
+                {
+                    text_parts.push(text.to_string());
+                }
+            }
+            Some("tool_use") => has_tool_use = true,
+            _ => {}
+        }
+    }
+    match text_parts.as_slice() {
+        [] if has_tool_use => Some(empty_message()),
+        [] => None,
+        [text] => Some(Json::String(text.clone())),
+        _ => Some(Json::String(text_parts.join("\n"))),
     }
 }
 
@@ -593,6 +629,7 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
     "completion_tokens",
     "cached_tokens",
     "cost_usd",
+    "cost",
     "prompt_token_ids",
     "completion_token_ids",
     "logprobs",
@@ -602,7 +639,7 @@ const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
 ///
 /// Supports NeMo Relay `token_usage` and provider-native `usage` payloads.
 /// Populates `extra` with any unknown usage keys (e.g. reasoning_tokens or total_tokens).
-/// Returns `None` if the response has no recognized token counts.
+/// Returns `None` if the response has no recognized token or cost metrics.
 fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     let usage = token_usage_object(output)?;
     let prompt = usage_u64(usage, &["prompt_tokens", "input_tokens"]);
@@ -615,7 +652,10 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
                 &["cache_read_input_tokens", "cache_creation_input_tokens"],
             )
         });
-    let cost = usage.get("cost_usd").and_then(Json::as_f64);
+    let cost = usage
+        .get("cost_usd")
+        .and_then(Json::as_f64)
+        .or_else(|| usage.get("cost")?.as_object()?.get("total")?.as_f64());
     let prompt_ids = usage
         .get("prompt_token_ids")
         .and_then(Json::as_array)
@@ -639,7 +679,7 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     } else {
         Some(Json::Object(extra_map))
     };
-    if prompt.is_none() && completion.is_none() && cached.is_none() {
+    if prompt.is_none() && completion.is_none() && cached.is_none() && cost.is_none() {
         return None;
     }
     Some(AtifMetrics {
@@ -865,7 +905,8 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
     let arr = tool_call_array(output)
         .filter(|arr| !arr.is_empty())
         .map(|arr| arr.iter().collect::<Vec<_>>())
-        .or_else(|| openai_responses_function_call_items(output))?;
+        .or_else(|| openai_responses_function_call_items(output))
+        .or_else(|| anthropic_messages_tool_use_items(output))?;
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
         let tc_obj = tc.as_object()?;
@@ -892,7 +933,8 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         let raw_arguments = func
             .and_then(|f| f.get("arguments"))
             .or_else(|| tc_obj.get("arguments"))
-            .or_else(|| tc_obj.get("args"));
+            .or_else(|| tc_obj.get("args"))
+            .or_else(|| tc_obj.get("input"));
         let arguments = normalize_tool_arguments(raw_arguments);
         // Skip entries with no id and no name — they are not meaningful.
         if id.is_empty() && name.is_empty() {
@@ -936,6 +978,19 @@ fn openai_responses_function_call_items(output: &Json) -> Option<Vec<&Json>> {
     (!function_call_items.is_empty()).then_some(function_call_items)
 }
 
+fn anthropic_messages_tool_use_items(output: &Json) -> Option<Vec<&Json>> {
+    let object = output.as_object()?;
+    if object.get("type").and_then(Json::as_str) != Some("message") {
+        return None;
+    }
+    let content_blocks = object.get("content").and_then(Json::as_array)?;
+    let tool_use_items = content_blocks
+        .iter()
+        .filter(|item| item.get("type").and_then(Json::as_str) == Some("tool_use"))
+        .collect::<Vec<_>>();
+    (!tool_use_items.is_empty()).then_some(tool_use_items)
+}
+
 fn normalize_tool_arguments(raw_arguments: Option<&Json>) -> Json {
     let Some(raw_arguments) = raw_arguments else {
         return serde_json::json!({});
@@ -968,6 +1023,7 @@ fn tool_call_extra(tool_call: &Json) -> Option<Json> {
                 | "function_name"
                 | "arguments"
                 | "args"
+                | "input"
         ) {
             extra.insert(key.clone(), value.clone());
         }
@@ -1012,44 +1068,50 @@ fn event_extra(event: &Event) -> Json {
     Json::Object(extra)
 }
 
-/// Compute aggregate `final_metrics` by summing token counts across all steps.
+/// Compute aggregate `final_metrics` by summing metrics across all steps.
 ///
-/// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Token/cost
-/// fields are populated when at least one step carries metrics.
+/// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Each token
+/// or cost total is populated only when at least one step provides that field.
 fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
     let mut total_prompt: u64 = 0;
     let mut total_completion: u64 = 0;
     let mut total_cached: u64 = 0;
     let mut total_cost: f64 = 0.0;
-    let mut has_any = false;
+    let mut has_prompt = false;
+    let mut has_completion = false;
+    let mut has_cached = false;
+    let mut has_cost = false;
 
     for step in steps {
         if let Some(m) = &step.metrics {
-            has_any = true;
-            total_prompt += m.prompt_tokens.unwrap_or(0);
-            total_completion += m.completion_tokens.unwrap_or(0);
-            total_cached += m.cached_tokens.unwrap_or(0);
-            total_cost += m.cost_usd.unwrap_or(0.0);
+            if let Some(prompt_tokens) = m.prompt_tokens {
+                has_prompt = true;
+                total_prompt += prompt_tokens;
+            }
+            if let Some(completion_tokens) = m.completion_tokens {
+                has_completion = true;
+                total_completion += completion_tokens;
+            }
+            if let Some(cached_tokens) = m.cached_tokens {
+                has_cached = true;
+                total_cached += cached_tokens;
+            }
+            if let Some(cost) = m.cost_usd {
+                has_cost = true;
+                total_cost += cost;
+            }
         }
     }
 
     Some(AtifFinalMetrics {
-        total_prompt_tokens: if has_any { Some(total_prompt) } else { None },
-        total_completion_tokens: if has_any {
+        total_prompt_tokens: if has_prompt { Some(total_prompt) } else { None },
+        total_completion_tokens: if has_completion {
             Some(total_completion)
         } else {
             None
         },
-        total_cached_tokens: if has_any && total_cached > 0 {
-            Some(total_cached)
-        } else {
-            None
-        },
-        total_cost_usd: if has_any && total_cost > 0.0 {
-            Some(total_cost)
-        } else {
-            None
-        },
+        total_cached_tokens: if has_cached { Some(total_cached) } else { None },
+        total_cost_usd: if has_cost { Some(total_cost) } else { None },
         total_steps: Some(steps.len() as u64),
         extra: None,
     })
@@ -1273,7 +1335,10 @@ fn llm_request_signature(input: &Json) -> String {
 }
 
 fn llm_response_signature(output: &Json) -> String {
-    json_to_string(&extract_llm_response_message(output))
+    json_to_string(&serde_json::json!({
+        "message": extract_llm_response_message(output),
+        "tool_calls": extract_tool_calls(output),
+    }))
 }
 
 fn llm_request_correlation_keys(start: &Event, end: &Event) -> HashSet<String> {

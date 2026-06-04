@@ -31,10 +31,33 @@ describe('HookReplayBackend', () => {
     assert.equal(session.resumedFrom, 'previous-session');
     assert.equal(backend.state().sessionAliases.get('session-key-1'), 'session-1');
     assert.equal(nf.calls.pushScope.length, 1);
+    assert.deepEqual(nf.calls.pushScope[0]?.metadata, {
+      source: 'openclaw.session_start',
+      hook_event_name: 'session_start',
+      sessionId: 'session-1',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+    });
+    assert.deepEqual(nf.calls.pushScope[0]?.input, {
+      sessionId: 'session-1',
+      source: 'session_start',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+      resumedFrom: 'previous-session',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.pushScope[0]?.metadata);
     assert.deepEqual(
       nf.calls.event.map((event) => event.name),
       ['openclaw.session_start'],
     );
+    assert.deepEqual(nf.calls.event[0]?.metadata, {
+      source: 'openclaw.session_start',
+      hook_event_name: 'session_start',
+      sessionId: 'session-1',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[0]?.metadata);
   });
 
   it('emits session_start when a session is created lazily from llm_input', () => {
@@ -63,6 +86,23 @@ describe('HookReplayBackend', () => {
       source: 'lazy_session',
       runId: 'run-1',
     });
+    assert.deepEqual(nf.calls.pushScope[0]?.metadata, {
+      source: 'openclaw.lazy_session',
+      sessionId: 'lazy-session',
+      runId: 'run-1',
+    });
+    assert.deepEqual(nf.calls.pushScope[0]?.input, {
+      sessionId: 'lazy-session',
+      source: 'lazy_session',
+      runId: 'run-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.pushScope[0]?.metadata);
+    assert.deepEqual(nf.calls.event[0]?.metadata, {
+      source: 'openclaw.lazy_session',
+      sessionId: 'lazy-session',
+      runId: 'run-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[0]?.metadata);
   });
 
   it('keeps concurrent sessions isolated by scope handle and alias', () => {
@@ -133,6 +173,12 @@ describe('HookReplayBackend', () => {
       nf.calls.event.map((event) => event.name),
       ['openclaw.session_start', 'openclaw.model_call_timing_unpaired', 'openclaw.session_end'],
     );
+    assert.deepEqual(nf.calls.event.at(-1)?.metadata, {
+      source: 'openclaw.session_end',
+      hook_event_name: 'session_end',
+      sessionId: 'session-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event.at(-1)?.metadata);
     assert.equal(nf.calls.popScope.length, 1);
   });
 
@@ -164,6 +210,15 @@ describe('HookReplayBackend', () => {
       deniedReason: 'policy',
       durationMs: 5,
     });
+    assert.deepEqual(nf.calls.event[1]?.metadata, {
+      source: 'openclaw.after_tool_call',
+      hook_event_name: 'after_tool_call',
+      sessionId: 'session-1',
+      sessionKey: 'sk',
+      runId: 'run-1',
+      toolCallId: 'tool-call-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
   });
 
   it('safe replay restores the previous scope stack and fails open', () => {
@@ -219,6 +274,14 @@ describe('HookReplayBackend', () => {
       nf.calls.event.map((event) => event.name),
       ['openclaw.session_start', 'openclaw.before_agent_finalize'],
     );
+    assert.deepEqual(nf.calls.event[1]?.metadata, {
+      source: 'openclaw.before_agent_finalize',
+      hook_event_name: 'before_agent_finalize',
+      sessionId: 'session-1',
+      runId: 'run-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
+    assert.equal(nf.calls.event[1]?.handle, nf.calls.event[0]?.handle);
   });
 
   it('keeps gateway stop reason out of the root session output when a final answer is known', async () => {
@@ -244,6 +307,14 @@ describe('HookReplayBackend', () => {
       runId: 'run-1',
       success: true,
     });
+    assert.deepEqual(nf.calls.event[1]?.metadata, {
+      source: 'openclaw.agent_end',
+      hook_event_name: 'agent_end',
+      sessionId: 'session-1',
+      runId: 'run-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
+    assert.equal(nf.calls.event[1]?.handle, nf.calls.event[0]?.handle);
     assert.deepEqual(nf.calls.event.at(-1)?.data, { reason: 'gateway stopping' });
   });
 
@@ -271,6 +342,50 @@ describe('HookReplayBackend', () => {
       nf.calls.event.map((event) => event.name),
       ['openclaw.session_start', 'openclaw.subagent_spawned'],
     );
+    assert.deepEqual(nf.calls.event[1]?.metadata, {
+      source: 'openclaw.subagent_spawned',
+      hook_event_name: 'subagent_spawned',
+      sessionId: 'parent-session',
+      sessionKey: 'parent-key',
+      runId: 'child-run',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
+    assert.equal(nf.calls.event[1]?.handle, nf.calls.event[0]?.handle);
+  });
+
+  it('records subagent end marks under the requester alias without merging child session identity', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    backend.onSessionStart(
+      { sessionId: 'parent-session', sessionKey: 'parent-key' },
+      { sessionId: 'parent-session', sessionKey: 'parent-key' },
+    );
+    backend.onSubagentEnded(
+      {
+        targetSessionKey: 'child-key',
+        targetKind: 'subagent',
+        reason: 'completed',
+        outcome: 'ok',
+        runId: 'child-run',
+      },
+      { requesterSessionKey: 'parent-key', childSessionKey: 'child-key', runId: 'child-run' },
+    );
+
+    assert.equal(backend.state().sessionAliases.get('child-key'), undefined);
+    assert.deepEqual(
+      nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start', 'openclaw.subagent_ended'],
+    );
+    assert.deepEqual(nf.calls.event[1]?.metadata, {
+      source: 'openclaw.subagent_ended',
+      hook_event_name: 'subagent_ended',
+      sessionId: 'parent-session',
+      sessionKey: 'parent-key',
+      runId: 'child-run',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
+    assert.equal(nf.calls.event[1]?.handle, nf.calls.event[0]?.handle);
   });
 
   it('uses child session key as a lazy-session fallback without aliasing it away', () => {
@@ -336,9 +451,9 @@ describe('HookReplayBackend', () => {
 type TestNemoRelayRuntime = NemoRelayRuntimeModule & {
   previousStack: { id: 'previous' };
   calls: {
-    pushScope: Array<{ name: string; scopeType: number; data: unknown }>;
+    pushScope: Array<{ name: string; scopeType: number; data: unknown; metadata: unknown; input: unknown }>;
     popScope: Array<{ handle: unknown; output: unknown }>;
-    event: Array<{ name: string; handle: unknown; data: unknown }>;
+    event: Array<{ name: string; handle: unknown; data: unknown; metadata: unknown }>;
     setThreadScopeStack: unknown[];
     toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
@@ -394,13 +509,17 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (name, scopeType, _handle, _attributes, data) => {
+    pushScope: (...args: Parameters<NemoRelayRuntimeModule['pushScope']>) => {
+      const [name, scopeType, , , data, metadata, input] = args;
       const handle = { id: `scope-${nextScopeId++}` };
-      calls.pushScope.push({ name, scopeType, data });
+      calls.pushScope.push({ name, scopeType, data, metadata, input });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
-    event: (name, handle, data) => calls.event.push({ name, handle, data }),
+    event: (...args: Parameters<NemoRelayRuntimeModule['event']>) => {
+      const [name, handle, data, metadata] = args;
+      calls.event.push({ name, handle, data, metadata });
+    },
     llmCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>,
     llmCallEnd: () => {},
     toolCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>,
@@ -409,4 +528,15 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       calls.toolConditionalExecution.push({ name, args });
     },
   };
+}
+
+function assertNoOverclaimedHookMetadata(metadata: unknown): void {
+  assert.ok(metadata && typeof metadata === 'object');
+  const record = metadata as Record<string, unknown>;
+  assert.equal('agent_kind' in record, false);
+  assert.equal('provider_payload_exact' in record, false);
+  assert.equal('fidelity_source' in record, false);
+  assert.equal('gateway_path' in record, false);
+  assert.equal('gateway_route' in record, false);
+  assert.equal('correlation' in record, false);
 }

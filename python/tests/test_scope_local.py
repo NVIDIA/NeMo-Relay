@@ -70,6 +70,7 @@ class TestScopeLocalGuardrail:
             scope_local.register_tool_sanitize_request(handle, "sl_sanitizer", 1, sanitizer)
             scope_local.register_subscriber(handle, "sl_sanitizer_sub", lambda e: events.append(e))
             result = await tools.execute("sanitized_tool", {"input": "data"}, my_tool)
+        subscribers.flush()
 
         # Sanitize guardrails are observability-only: they do NOT modify args
         # flowing through the execution pipeline.

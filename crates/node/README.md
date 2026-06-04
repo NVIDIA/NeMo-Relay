@@ -66,6 +66,7 @@ const {
   ScopeType,
   deregisterSubscriber,
   event,
+  flushSubscribers,
   registerSubscriber,
   withScope,
 } = require("nemo-relay-node");
@@ -80,6 +81,7 @@ async function main() {
     event("initialized", handle, { binding: "node" }, null);
   });
 
+  flushSubscribers();
   deregisterSubscriber("printer");
 }
 

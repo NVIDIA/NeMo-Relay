@@ -119,7 +119,17 @@ export class HookReplayBackend {
       return;
     }
 
-    await this.closeSession(session, sessionEndSummary(event));
+    await this.closeSession(
+      session,
+      sessionEndSummary(event),
+      toJsonRecord({
+        source: 'openclaw.session_end',
+        hook_event_name: 'session_end',
+        sessionId: session.sessionId,
+        sessionKey: event.sessionKey ?? ctx.sessionKey,
+        agentId: ctx.agentId,
+      }),
+    );
   }
 
   /** Buffer an LLM request snapshot until a matching response or trajectory replay arrives. */
@@ -373,9 +383,9 @@ export class HookReplayBackend {
   }
 
   /** Drain, close, export, and delete one session. */
-  private async closeSession(session: SessionState, summary: JsonRecord): Promise<void> {
+  private async closeSession(session: SessionState, summary: JsonRecord, metadata?: JsonRecord): Promise<void> {
     drainSession(this.sessionManager(), session);
-    closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary);
+    closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary, metadata);
     this.flushSubscriberDelivery('session_close');
     deleteSession(this.stateValue, session);
   }
@@ -389,6 +399,14 @@ export class HookReplayBackend {
         session,
         name,
         data,
+        metadata: toJsonRecord({
+          source: name,
+          hook_event_name: name.startsWith('openclaw.') ? name.slice('openclaw.'.length) : undefined,
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
+          agentId: session.agentId,
+          runId: typeof data.runId === 'string' ? data.runId : undefined,
+        }),
       });
     });
   }

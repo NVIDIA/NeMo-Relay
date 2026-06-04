@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, MarkEvent, ScopeCategory,
+    ScopeEvent,
 };
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
@@ -100,6 +101,40 @@ fn make_annotated_llm_event(name: &str) -> Event {
                 .annotated_request(Arc::new(request))
                 .build(),
         ),
+    ))
+}
+
+fn wire_format_llm_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    scope_category: ScopeCategory,
+    name: &str,
+    model_name: &str,
+    gateway_path: &str,
+    data: serde_json::Value,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name(name)
+            .data(data)
+            .data_schema(
+                DataSchema::builder()
+                    .name("llm.provider_payload")
+                    .version("1")
+                    .build(),
+            )
+            .metadata(json!({
+                "source": "openclaw.public_plugin",
+                "gateway_path": gateway_path,
+                "provider_payload_exact": true
+            }))
+            .build(),
+        scope_category,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name(model_name).build()),
     ))
 }
 
@@ -216,6 +251,190 @@ fn subscriber_writes_canonical_event_jsonl() {
         lines[0]["category_profile"]["annotated_request"]["model"],
         "demo-model"
     );
+}
+
+#[test]
+fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
+    let dir = temp_dir("atof-wire-formats");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let anthropic_uuid = Uuid::now_v7();
+    let responses_uuid = Uuid::now_v7();
+    let chat_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+
+    let events = [
+        wire_format_llm_event(
+            anthropic_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            "anthropic.messages",
+            "claude-sonnet-4",
+            "/v1/messages",
+            json!({
+                "model": "claude-sonnet-4",
+                "messages": [{"role": "user", "content": "Find the file."}],
+                "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+            }),
+        ),
+        wire_format_llm_event(
+            anthropic_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            "anthropic.messages",
+            "claude-sonnet-4",
+            "/v1/messages",
+            json!({
+                "id": "msg_01",
+                "type": "message",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cache_creation_input_tokens": 5,
+                    "cost": {"total": 0.0042}
+                }
+            }),
+        ),
+        wire_format_llm_event(
+            responses_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            "openai.responses",
+            "gpt-4o",
+            "/v1/responses",
+            json!({
+                "model": "gpt-4o",
+                "input": "Find the weather.",
+                "tools": [{"type": "function", "name": "get_weather"}]
+            }),
+        ),
+        wire_format_llm_event(
+            responses_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            "openai.responses",
+            "gpt-4o",
+            "/v1/responses",
+            json!({
+                "id": "resp_1",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "I will check."}]},
+                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
+                ],
+                "usage": {
+                    "input_tokens": 75,
+                    "output_tokens": 20,
+                    "total_tokens": 95,
+                    "input_tokens_details": {"cached_tokens": 10},
+                    "cost_usd": 0.005
+                }
+            }),
+        ),
+        wire_format_llm_event(
+            chat_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            "openai.chat_completions",
+            "gpt-4o",
+            "/v1/chat/completions",
+            json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Inspect the files."}],
+                "tools": [{"type": "function", "function": {"name": "read"}}]
+            }),
+        ),
+        wire_format_llm_event(
+            chat_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            "openai.chat_completions",
+            "gpt-4o",
+            "/v1/chat/completions",
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect.",
+                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "cost_usd": 0.001
+                }
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "scope");
+        assert_eq!(line["atof_version"], "0.1");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+        assert_eq!(line["category"], "llm");
+        assert_eq!(line["data_schema"]["name"], "llm.provider_payload");
+        assert_eq!(line["data_schema"]["version"], "1");
+        assert_eq!(line["metadata"]["source"], "openclaw.public_plugin");
+        assert_eq!(line["metadata"]["provider_payload_exact"], true);
+    }
+
+    assert_eq!(lines[0]["name"], "anthropic.messages");
+    assert_eq!(lines[0]["scope_category"], "start");
+    assert_eq!(lines[0]["metadata"]["gateway_path"], "/v1/messages");
+    assert_eq!(
+        lines[0]["category_profile"]["model_name"],
+        "claude-sonnet-4"
+    );
+    assert_eq!(lines[0]["data"]["messages"][0]["content"], "Find the file.");
+    assert_eq!(lines[1]["scope_category"], "end");
+    assert_eq!(lines[1]["data"]["content"][1]["type"], "tool_use");
+    assert_eq!(lines[1]["data"]["usage"]["cache_creation_input_tokens"], 5);
+    assert_eq!(lines[1]["data"]["usage"]["cost"]["total"], 0.0042);
+
+    assert_eq!(lines[2]["metadata"]["gateway_path"], "/v1/responses");
+    assert_eq!(lines[2]["data"]["input"], "Find the weather.");
+    assert_eq!(lines[3]["data"]["output"][1]["type"], "function_call");
+    assert_eq!(
+        lines[3]["data"]["usage"]["input_tokens_details"]["cached_tokens"],
+        10
+    );
+    assert_eq!(lines[3]["data"]["usage"]["cost_usd"], 0.005);
+
+    assert_eq!(lines[4]["metadata"]["gateway_path"], "/v1/chat/completions");
+    assert_eq!(
+        lines[4]["data"]["messages"][0]["content"],
+        "Inspect the files."
+    );
+    assert_eq!(
+        lines[5]["data"]["choices"][0]["message"]["tool_calls"][0]["id"],
+        "call_read_1"
+    );
+    assert_eq!(
+        lines[5]["data"]["usage"]["prompt_tokens_details"]["cached_tokens"],
+        2
+    );
+    assert_eq!(lines[5]["data"]["usage"]["cost_usd"], 0.001);
 }
 
 #[test]

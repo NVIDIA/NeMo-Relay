@@ -404,10 +404,12 @@ def test_agent_integration(use_async: bool, nemo_relay_middleware: NemoRelayMidd
             else:
                 result = agent.invoke(input_payload)
     finally:
+        nemo_relay.subscribers.flush()
         nemo_relay.subscribers.deregister("event_recorder")
 
     assert any(
         message.content == "The weather in San Francisco is sunny and 72 degrees." for message in result["messages"]
     )
     assert result["messages"][-1].content == _DEFAULT_MOCK_RESPONSE_MSG
+
     assert events == expected_events

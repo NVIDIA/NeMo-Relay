@@ -315,6 +315,7 @@ fn drops_uncorrelatable_hermes_pre_tool_call() {
         json!({
             "hook_event_name": "pre_tool_call",
             "task_id": "task-1",
+            "tool_call_id": "toolcall-1",
             "tool_name": "terminal",
             "tool_input": { "command": "pwd" }
         }),
