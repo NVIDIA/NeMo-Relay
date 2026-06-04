@@ -1,29 +1,57 @@
-{
-  "skill": "nemo-relay-setup-observability",
-  "cases": [
-    {
-      "id": "choose-observability-path",
-      "question": "I want visibility into NeMo Relay activity but I do not know whether I need console events, ATIF, OTEL, or OpenInference.",
-      "expected_skill": "nemo-relay-setup-observability",
-      "expected_script": null,
-      "ground_truth": "Use the observability setup skill to choose between subscribers, ATIF, OpenTelemetry, and OpenInference based on the user's output target and then route to the narrower export skill if needed.",
-      "expected_behavior": [
-        "Ask or infer the desired observability output",
-        "Explain subscriber, ATIF, OTEL, and OpenInference choices",
-        "Register before scoped work and flush when deterministic delivery matters",
-        "Route to a narrower export skill once the target is known"
-      ]
-    },
-    {
-      "id": "neg-known-atif",
-      "question": "I already know I need ATIF trajectories for offline replay.",
-      "expected_skill": "nemo-relay-export-atif-trajectories",
-      "expected_script": null,
-      "ground_truth": "Known ATIF export belongs directly to nemo-relay-export-atif-trajectories.",
-      "expected_behavior": [
-        "nemo-relay-setup-observability stays silent or redirects",
-        "nemo-relay-export-atif-trajectories handles the task"
-      ]
-    }
-  ]
-}
+[
+  {
+    "id": "nemo-relay-setup-observability-001",
+    "question": "I want to use the nemo-relay-setup-observability skill to add monitoring to my NeMo Relay application. Can you walk me through choosing the right observability path?",
+    "expected_skill": "nemo-relay-setup-observability",
+    "expected_script": null,
+    "ground_truth": "The agent used nemo-relay-setup-observability and guided the user through the decision matrix of observability outputs (console/subscribers, AtifExporter, OpenTelemetry, OpenInference), explained the shared lifecycle steps, and provided relevant binding names for their language.",
+    "expected_behavior": [
+      "The agent read the nemo-relay-setup-observability SKILL.md before responding",
+      "The agent presented the four observability output options (console/custom, AtifExporter, OpenTelemetry, OpenInference) with guidance on when to use each",
+      "The agent explained the shared lifecycle of creating, registering, running instrumented work, deregistering, and flushing",
+      "The agent referenced the appropriate binding names for the user's language or listed multiple language bindings",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  },
+  {
+    "id": "nemo-relay-setup-observability-002",
+    "question": "I have a Python application using NeMo Relay and I want to get visibility into what's happening during LLM calls and tool invocations. I'm not sure whether I should use tracing, logging, or some kind of event export. What are my options and how do I set one up?",
+    "expected_skill": "nemo-relay-setup-observability",
+    "expected_script": null,
+    "ground_truth": "The agent identified this as an observability setup task, presented the available NeMo Relay observability paths (subscribers for console/custom handling, AtifExporter for portable trajectories, OpenTelemetrySubscriber for OTLP tracing, OpenInferenceSubscriber for OI-aware backends), and showed how to register a subscriber in Python using nemo_relay.subscribers.register(...).",
+    "expected_behavior": [
+      "The agent identified the user's need as choosing and setting up NeMo Relay observability without the skill being explicitly named",
+      "The agent described the embedded event and subscriber model including global, scope-local, and plugin-installed subscribers",
+      "The agent provided Python-specific binding examples using nemo_relay.subscribers.register(...) and relevant exporter classes",
+      "The agent outlined the shared lifecycle steps (create, register, run, deregister, flush)",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  },
+  {
+    "id": "nemo-relay-setup-observability-003",
+    "question": "We're building a multi-service AI agent platform on NeMo Relay. Our SRE team wants to integrate telemetry into our existing Grafana/Jaeger stack, but our ML team wants portable execution traces they can replay for debugging. Can we support both at the same time, and how would we wire that up in Node.js?",
+    "expected_skill": "nemo-relay-setup-observability",
+    "expected_script": null,
+    "ground_truth": "The agent recognized the dual observability requirement, recommended using OpenTelemetrySubscriber for the Grafana/Jaeger integration and AtifExporter for portable execution trajectories, explained that multiple subscribers can observe the same event stream simultaneously, and provided Node.js-specific setup guidance using registerSubscriber(...), OpenTelemetrySubscriber, and AtifExporter.",
+    "expected_behavior": [
+      "The agent confirmed that multiple subscribers can observe the same NeMo Relay event stream concurrently",
+      "The agent recommended OpenTelemetrySubscriber for the OTLP/Jaeger/Grafana use case and AtifExporter for portable replay trajectories",
+      "The agent provided Node.js binding references including registerSubscriber(...), AtifExporter, and OpenTelemetrySubscriber",
+      "The agent walked through the shared lifecycle for registering both subscribers before scoped work begins",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  },
+  {
+    "id": "nemo-relay-setup-observability-004",
+    "question": "How do I configure NeMo Relay's rate limiting and retry policies for upstream LLM API calls?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent recognized this question is about rate limiting and retry configuration for LLM API calls, not about observability setup, and did not invoke the nemo-relay-setup-observability skill.",
+    "expected_behavior": [
+      "The agent did not invoke or reference the nemo-relay-setup-observability skill",
+      "The agent addressed the rate limiting and retry topic or indicated it requires a different skill or resource",
+      "The agent did not conflate observability/telemetry concepts with request retry and rate limiting configuration",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  }
+]
