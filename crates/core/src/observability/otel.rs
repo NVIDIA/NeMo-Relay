@@ -28,8 +28,10 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::error::FlowError;
 use chrono::{DateTime, Utc};
 use opentelemetry::trace::{
-    Span as _, SpanContext, SpanKind, TraceContextExt, Tracer, TracerProvider as _,
+    Span as _, SpanContext, SpanKind, Status, TraceContextExt, Tracer, TracerProvider as _,
 };
+
+use crate::json::Json;
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
@@ -543,6 +545,23 @@ impl OtelEventProcessor {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
             return;
         };
+
+        if let Some(metadata) = event.metadata() {
+            if let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str) {
+                let status = match status_code {
+                    "OK" => Status::Ok,
+                    "ERROR" => Status::error(
+                        metadata.get("otel.status_message").and_then(Json::as_str).unwrap_or_default().to_string(),
+                    ),
+                    "UNSET" => Status::Unset,
+                    other => {
+                        eprintln!("Unrecognized OTEL status code in event metadata: {other}");
+                        Status::Unset
+                    }
+                };
+                active_span.span.set_status(status);
+            }
+        }
         active_span.span.set_attributes(end_attributes(event));
         active_span
             .span
@@ -659,33 +678,13 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     push_serialized(&mut attributes, "nemo_relay.end.data_json", event.data());
 
     let metadata = event.metadata();
-    push_serialized(
-        &mut attributes,
-        "nemo_relay.end.metadata_json",
-        metadata,
-    );
+    push_serialized(&mut attributes, "nemo_relay.end.metadata_json", metadata);
     push_serialized(
         &mut attributes,
         "nemo_relay.end.output_json",
         event.output(),
     );
 
-    if metadata.is_some() && metadata.unwrap()["otel.status_code"].is_string() {
-        let status_code = metadata.unwrap()["otel.status_code"].as_str();
-        push_serialized(
-            &mut attributes,
-            "StatusCode",
-            status_code,
-        );
-
-        if metadata.unwrap()["otel.status_message"].is_string() && status_code == Some("ERROR") {
-            push_serialized(
-                &mut attributes,
-                "Description",
-                metadata.unwrap()["otel.status_message"].as_str(),
-            );
-        }
-    }
     attributes
 }
 
