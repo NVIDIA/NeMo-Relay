@@ -424,11 +424,7 @@ describe('HookReplayBackend', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf);
 
-    withMockedNow([1000, 2000, 3000, 4000, 5000], () => {
-      backend.onSessionStart(
-        { sessionId: 'parent-session', sessionKey: 'parent-key' },
-        { sessionId: 'parent-session', sessionKey: 'parent-key' },
-      );
+    withMockedNow([1000, 2000, 3000, 4000], () => {
       backend.onSubagentSpawned(
         {
           childSessionKey: 'agent:child-agent:subagent:child-key',
@@ -442,6 +438,10 @@ describe('HookReplayBackend', () => {
           childSessionKey: 'agent:child-agent:subagent:child-key',
           runId: 'child-run',
         },
+      );
+      backend.onSessionStart(
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
       );
       backend.onSessionStart(
         { sessionId: 'child-session', sessionKey: 'agent:child-agent:subagent:child-key' },
@@ -482,8 +482,133 @@ describe('HookReplayBackend', () => {
     const childAgentEnd = nf.calls.event.find((event) => event.name === 'openclaw.agent_end');
     assert.equal(spawnMark?.handle, nf.calls.pushScope[0]?.handle);
     assert.equal(childAgentEnd?.handle, nf.calls.pushScope[1]?.handle);
-    assert.equal(spawnMark?.timestamp, 2000 * 1000);
+    assert.equal(spawnMark?.timestamp, 1000 * 1000);
     assert.equal(childAgentEnd?.timestamp, 4000 * 1000);
+  });
+
+  it('keeps spawn-first child activity deferred until the requester root exists', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    withMockedNow([1000, 2000, 3000, 4000], () => {
+      backend.onSubagentSpawned(
+        {
+          childSessionKey: 'agent:child-agent:subagent:child-key',
+          agentId: 'child-agent',
+          mode: 'run',
+          threadRequested: false,
+          runId: 'child-run',
+        },
+        {
+          requesterSessionKey: 'parent-key',
+          childSessionKey: 'agent:child-agent:subagent:child-key',
+          runId: 'child-run',
+        },
+      );
+      backend.onSessionStart(
+        { sessionId: 'child-session', sessionKey: 'agent:child-agent:subagent:child-key' },
+        {
+          sessionId: 'child-session',
+          sessionKey: 'agent:child-agent:subagent:child-key',
+        },
+      );
+      backend.onAgentEnd(
+        {
+          runId: 'child-run',
+          messages: [{ role: 'assistant', provider: 'openai', model: 'gpt', content: 'Child answer.' }],
+          success: true,
+        },
+        {
+          runId: 'child-run',
+          sessionId: 'child-session',
+          sessionKey: 'agent:child-agent:subagent:child-key',
+          agentId: 'child-agent',
+        },
+      );
+      backend.onSessionStart(
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+      );
+    });
+
+    assert.equal(nf.calls.pushScope.length, 2);
+    assert.equal(nf.calls.pushScope[1]?.parentHandle, nf.calls.pushScope[0]?.handle);
+    assert.equal(nf.calls.pushScope[0]?.timestamp, 4000 * 1000);
+    assert.equal(nf.calls.pushScope[1]?.timestamp, 2000 * 1000);
+    assert.deepEqual(nf.calls.pushScope[1]?.metadata, {
+      source: 'openclaw.session_start',
+      hook_event_name: 'session_start',
+      sessionId: 'child-session',
+      sessionKey: 'agent:child-agent:subagent:child-key',
+      agentId: 'child-agent',
+      runId: 'child-run',
+      nemo_relay_scope_role: 'subagent',
+    });
+
+    const spawnMark = nf.calls.event.find((event) => event.name === 'openclaw.subagent_spawned');
+    const childAgentEnd = nf.calls.event.find((event) => event.name === 'openclaw.agent_end');
+    assert.equal(spawnMark?.handle, nf.calls.pushScope[0]?.handle);
+    assert.equal(spawnMark?.timestamp, 1000 * 1000);
+    assert.equal(childAgentEnd?.handle, nf.calls.pushScope[1]?.handle);
+    assert.equal(childAgentEnd?.timestamp, 3000 * 1000);
+  });
+
+  it('keeps a spawn-first child nested when the child closes before requester session_start', async () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    withMockedNow([1000, 2000, 3000, 4000], () => {
+      backend.onSubagentSpawned(
+        {
+          childSessionKey: 'agent:child-agent:subagent:child-key',
+          agentId: 'child-agent',
+          mode: 'run',
+          threadRequested: false,
+          runId: 'child-run',
+        },
+        {
+          requesterSessionKey: 'parent-key',
+          childSessionKey: 'agent:child-agent:subagent:child-key',
+          runId: 'child-run',
+        },
+      );
+      backend.onSessionStart(
+        { sessionId: 'child-session', sessionKey: 'agent:child-agent:subagent:child-key' },
+        {
+          sessionId: 'child-session',
+          sessionKey: 'agent:child-agent:subagent:child-key',
+        },
+      );
+    });
+
+    await withMockedNow([3000], () =>
+      backend.onSessionEnd(
+        { sessionId: 'child-session', sessionKey: 'agent:child-agent:subagent:child-key', messageCount: 1, reason: 'idle' },
+        { sessionId: 'child-session', sessionKey: 'agent:child-agent:subagent:child-key' },
+      ),
+    );
+
+    withMockedNow([4000], () => {
+      backend.onSessionStart(
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+      );
+    });
+
+    assert.equal(nf.calls.pushScope.length, 2);
+    assert.equal(nf.calls.pushScope[1]?.parentHandle, nf.calls.pushScope[0]?.handle);
+    assert.equal(nf.calls.pushScope[0]?.timestamp, 1000 * 1000);
+    assert.equal(nf.calls.pushScope[1]?.timestamp, 2000 * 1000);
+    assert.equal(nf.calls.popScope.length, 1);
+
+    const sessionStartEvents = nf.calls.event.filter((event) => event.name === 'openclaw.session_start');
+    const spawnMark = nf.calls.event.find((event) => event.name === 'openclaw.subagent_spawned');
+    const childSessionEnd = nf.calls.event.find(
+      (event) => event.name === 'openclaw.session_end' && event.handle === nf.calls.pushScope[1]?.handle,
+    );
+    assert.equal(sessionStartEvents.length, 2);
+    assert.equal(spawnMark?.handle, nf.calls.pushScope[0]?.handle);
+    assert.ok(childSessionEnd);
   });
 
   it('keeps session_start-first child activity on the existing child scope after subagent_spawned', () => {

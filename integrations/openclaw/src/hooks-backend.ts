@@ -108,7 +108,7 @@ export class HookReplayBackend {
   /** Open or alias an explicit OpenClaw session root. */
   onSessionStart(event: PluginHookSessionStartEvent, ctx: PluginHookSessionContext): void {
     const observedAtMicros = nowMicros();
-    this.ensureSession({
+    const session = this.ensureSession({
       sessionId: event.sessionId,
       sessionKey: event.sessionKey ?? ctx.sessionKey,
       agentId: ctx.agentId,
@@ -116,6 +116,8 @@ export class HookReplayBackend {
       resumedFrom: event.resumedFrom,
       timestamp: observedAtMicros,
     });
+
+    this.promoteDeferredSubagentSessionsForRequester(session?.sessionKey ?? event.sessionKey ?? ctx.sessionKey);
 
     // ensureSession opens the root scope and emits openclaw.session_start for both explicit and lazy sessions.
   }
@@ -127,7 +129,6 @@ export class HookReplayBackend {
       sessionKey: event.sessionKey ?? ctx.sessionKey,
       agentId: ctx.agentId,
       source: 'lazy_session',
-      deferRootOpen: false,
     });
 
     if (!session) {
@@ -262,14 +263,12 @@ export class HookReplayBackend {
   onSubagentSpawned(event: PluginHookSubagentSpawnedEvent, ctx: PluginHookSubagentContext): void {
     const observedAtMicros = nowMicros();
     this.trackPendingSubagentLineage(event, ctx, Math.trunc(observedAtMicros / 1000));
+    const requesterSession = this.ensureRequesterSessionAnchor(ctx.requesterSessionKey, observedAtMicros);
+    const childSessionKey = ctx.childSessionKey ?? event.childSessionKey;
     const session =
+      requesterSession ??
       this.ensureSession({
-        requesterSessionKey: ctx.requesterSessionKey,
-        source: 'lazy_session',
-        timestamp: observedAtMicros,
-      }) ??
-      this.ensureSession({
-        childSessionKey: ctx.childSessionKey ?? event.childSessionKey,
+        childSessionKey,
         runId: ctx.runId ?? event.runId,
         agentId: event.agentId,
         source: 'lazy_session',
@@ -294,7 +293,9 @@ export class HookReplayBackend {
       observedAtMicros,
     );
 
-    this.promoteDeferredSubagentSession(event.childSessionKey);
+    if (!ctx.requesterSessionKey || requesterSession?.rootHandle) {
+      this.promoteDeferredSubagentSession(event.childSessionKey);
+    }
   }
 
   /** Attach subagent completion metadata to the requester or child session. */
@@ -545,6 +546,25 @@ export class HookReplayBackend {
     }
   }
 
+  /** Resolve the requester session if it exists, or seed a deferred lazy root placeholder for later promotion. */
+  private ensureRequesterSessionAnchor(requesterSessionKey: string | undefined, timestampMicros?: number): SessionState | undefined {
+    const trimmedRequesterSessionKey = requesterSessionKey?.trim();
+    if (!trimmedRequesterSessionKey) {
+      return undefined;
+    }
+
+    return (
+      this.resolveTrackedSession({ requesterSessionKey: trimmedRequesterSessionKey }) ??
+      this.ensureSession({
+        sessionKey: trimmedRequesterSessionKey,
+        requesterSessionKey: trimmedRequesterSessionKey,
+        source: 'lazy_session',
+        timestamp: timestampMicros,
+        deferRootOpen: true,
+      })
+    );
+  }
+
   /** Open a deferred child session root once the requester scope is known. */
   private promoteDeferredSubagentSession(childSessionKey: string): void {
     const session = this.resolveTrackedSession({ sessionKey: childSessionKey, childSessionKey });
@@ -553,6 +573,25 @@ export class HookReplayBackend {
     }
 
     this.materializeDeferredSessionRoot(session);
+  }
+
+  /** Promote any deferred child sessions waiting on a requester root once it exists. */
+  private promoteDeferredSubagentSessionsForRequester(requesterSessionKey: string | undefined): void {
+    const trimmedRequesterSessionKey = requesterSessionKey?.trim();
+    if (!trimmedRequesterSessionKey) {
+      return;
+    }
+
+    const requesterSession = this.resolveTrackedSession({ requesterSessionKey: trimmedRequesterSessionKey });
+    if (!requesterSession?.rootHandle) {
+      return;
+    }
+
+    for (const lineage of this.pendingSubagentLineageByChildSessionKey.values()) {
+      if (lineage.requesterSessionKey === trimmedRequesterSessionKey) {
+        this.promoteDeferredSubagentSession(lineage.childSessionKey);
+      }
+    }
   }
 
   /** Materialize one deferred session root with nested lineage when available. */
@@ -566,10 +605,20 @@ export class HookReplayBackend {
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
     });
-    const parentHandle =
+    const parentSession =
       lineage === undefined
         ? undefined
-        : this.resolveTrackedSession({ requesterSessionKey: lineage.requesterSessionKey })?.rootHandle;
+        : this.ensureRequesterSessionAnchor(lineage.requesterSessionKey, session.pendingRootTimestampMicros);
+    if (parentSession && !parentSession.rootHandle) {
+      materializeSessionRoot(this.sessionManager(), parentSession, {
+        sessionId: parentSession.sessionId,
+        sessionKey: parentSession.sessionKey ?? lineage?.requesterSessionKey,
+        source: parentSession.source,
+        resumedFrom: parentSession.resumedFrom,
+        timestamp: parentSession.pendingRootTimestampMicros,
+      });
+    }
+    const parentHandle = parentSession?.rootHandle;
 
     materializeSessionRoot(this.sessionManager(), session, {
       sessionId: session.sessionId,
