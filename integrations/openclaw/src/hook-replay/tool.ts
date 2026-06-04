@@ -52,14 +52,15 @@ export function replayAfterToolCall(
   event: PluginHookAfterToolCallEvent,
   ctx: PluginHookToolContext,
 ): void {
-  const observedAtMicros = nowMicros();
+  const endMicros = nowMicros();
+  const sessionTimestamp = startMicrosFromDuration(endMicros, event.durationMs) ?? endMicros;
   const session = ensureSession(manager, {
     sessionId: ctx.sessionId,
     sessionKey: ctx.sessionKey,
     runId: event.runId ?? ctx.runId,
     agentId: ctx.agentId,
     source: 'lazy_session',
-    timestamp: observedAtMicros,
+    timestamp: sessionTimestamp,
   });
 
   const blockedDetails = blockedToolDetails(event, { runId: event.runId ?? ctx.runId });
@@ -80,7 +81,7 @@ export function replayAfterToolCall(
           runId: event.runId ?? ctx.runId,
           toolCallId: event.toolCallId ?? ctx.toolCallId,
         }),
-        timestamp: observedAtMicros,
+        timestamp: endMicros,
       });
     });
     return;
@@ -90,7 +91,6 @@ export function replayAfterToolCall(
     return;
   }
 
-  const endMicros = nowMicros();
   const metadata = toJsonRecord({
     source: 'openclaw.after_tool_call',
     runId: event.runId ?? ctx.runId,

@@ -73,6 +73,7 @@ type PendingSubagentLineage = {
   requesterSessionKey: string;
   runId?: string;
   agentId?: string;
+  observedAtMs: number;
 };
 
 /** Replays OpenClaw public hook events into NeMo Relay scopes, spans, and marks. */
@@ -260,7 +261,7 @@ export class HookReplayBackend {
   /** Attach subagent spawn metadata to the requester session when possible. */
   onSubagentSpawned(event: PluginHookSubagentSpawnedEvent, ctx: PluginHookSubagentContext): void {
     const observedAtMicros = nowMicros();
-    this.trackPendingSubagentLineage(event, ctx);
+    this.trackPendingSubagentLineage(event, ctx, Math.trunc(observedAtMicros / 1000));
     const session =
       this.ensureSession({
         requesterSessionKey: ctx.requesterSessionKey,
@@ -495,6 +496,7 @@ export class HookReplayBackend {
 
   /** Prefer nested child scopes only when the hook surface provides real subagent lineage. */
   private resolveSessionRootContext(input: Parameters<typeof ensureSession>[1]): Partial<Parameters<typeof ensureSession>[1]> | undefined {
+    this.pruneExpiredPendingSubagentLineage(microsToMs(input.timestamp) ?? Date.now());
     const lineage = this.resolvePendingSubagentLineage(input);
     if (lineage) {
       const parentSession = this.resolveTrackedSession({ requesterSessionKey: lineage.requesterSessionKey });
@@ -519,7 +521,12 @@ export class HookReplayBackend {
   }
 
   /** Track stable parent/child lineage from subagent hooks until child session hooks can use it. */
-  private trackPendingSubagentLineage(event: PluginHookSubagentSpawnedEvent, ctx: PluginHookSubagentContext): void {
+  private trackPendingSubagentLineage(
+    event: PluginHookSubagentSpawnedEvent,
+    ctx: PluginHookSubagentContext,
+    observedAtMs: number,
+  ): void {
+    this.pruneExpiredPendingSubagentLineage(observedAtMs);
     const requesterSessionKey = ctx.requesterSessionKey?.trim();
     const childSessionKey = (ctx.childSessionKey ?? event.childSessionKey)?.trim();
     if (!requesterSessionKey || !childSessionKey) {
@@ -531,6 +538,7 @@ export class HookReplayBackend {
       requesterSessionKey,
       runId: ctx.runId ?? event.runId,
       agentId: event.agentId,
+      observedAtMs,
     });
     if (ctx.runId ?? event.runId) {
       this.pendingSubagentChildKeyByRunId.set(ctx.runId ?? event.runId, childSessionKey);
@@ -553,6 +561,7 @@ export class HookReplayBackend {
       return;
     }
 
+    this.pruneExpiredPendingSubagentLineage(Date.now());
     const lineage = this.resolvePendingSubagentLineage({
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
@@ -586,6 +595,22 @@ export class HookReplayBackend {
     const runChildSessionKey =
       typeof input.runId === 'string' && input.runId.length > 0 ? this.pendingSubagentChildKeyByRunId.get(input.runId) : undefined;
     return runChildSessionKey === undefined ? undefined : this.pendingSubagentLineageByChildSessionKey.get(runChildSessionKey);
+  }
+
+  /** Drop stale pending lineage entries so abandoned subagent spawns do not accumulate indefinitely. */
+  private pruneExpiredPendingSubagentLineage(nowMs: number): void {
+    const ttlMs = this.config.correlation.recordTtlMs;
+    for (const [childSessionKey, lineage] of this.pendingSubagentLineageByChildSessionKey) {
+      if (nowMs - lineage.observedAtMs > ttlMs) {
+        this.pendingSubagentLineageByChildSessionKey.delete(childSessionKey);
+      }
+    }
+
+    for (const [runId, childSessionKey] of this.pendingSubagentChildKeyByRunId) {
+      if (!this.pendingSubagentLineageByChildSessionKey.has(childSessionKey)) {
+        this.pendingSubagentChildKeyByRunId.delete(runId);
+      }
+    }
   }
 
   /** Resolve one session through the same alias map used by the replay state. */
@@ -631,6 +656,10 @@ export function resolveBackendSessionOwnerKey(
   input: Parameters<typeof resolveSessionOwnerKey>[1],
 ): string | undefined {
   return resolveSessionOwnerKey(state, input);
+}
+
+function microsToMs(timestampMicros: number | undefined): number | undefined {
+  return timestampMicros === undefined ? undefined : Math.trunc(timestampMicros / 1000);
 }
 
 /** Build the lifecycle summary stored as the session_end mark payload. */

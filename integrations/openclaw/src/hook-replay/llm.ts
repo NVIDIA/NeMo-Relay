@@ -1189,7 +1189,7 @@ function incrementHookLlmOutputReplayCount(session: SessionState, runId: string 
 
 /** Build the per-session run key used for trajectory de-duplication. */
 function trajectoryRunKey(session: SessionState, runId?: string): string {
-  return runId ?? session.sessionId;
+  return runId ?? session.ownerKey;
 }
 
 /** Normalize provider usage into NeMo Relay token and cost fields. */

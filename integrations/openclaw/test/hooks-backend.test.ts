@@ -221,6 +221,38 @@ describe('HookReplayBackend', () => {
     assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
   });
 
+  it('backdates a lazy session root to tool start when after_tool_call is the first hook', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    withMockedNow([1000], () => {
+      backend.onAfterToolCall(
+        {
+          toolName: 'read_file',
+          params: { path: '/workspace/file.txt' },
+          toolCallId: 'tool-call-1',
+          runId: 'run-1',
+          result: { text: 'ok' },
+          durationMs: 7,
+        },
+        {
+          runId: 'run-1',
+          sessionId: 'session-1',
+          sessionKey: 'session-key-1',
+          toolCallId: 'tool-call-1',
+        },
+      );
+    });
+
+    assert.equal(nf.calls.pushScope.length, 1);
+    assert.equal(nf.calls.pushScope[0]?.timestamp, 993_000);
+    assert.deepEqual(
+      nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start'],
+    );
+    assert.equal(nf.calls.event[0]?.timestamp, 993_000);
+  });
+
   it('safe replay restores the previous scope stack and fails open', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf);
@@ -514,6 +546,47 @@ describe('HookReplayBackend', () => {
     );
     assert.equal(childAgentEndEvents.length, 1);
     assert.equal(childAgentEndEvents[0]?.timestamp, 4000 * 1000);
+  });
+
+  it('expires stale pending subagent lineage before a late child session_start can reuse it', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf, createLogger(), {
+      config: parseConfig({ correlation: { recordTtlMs: 1 } }),
+    });
+
+    withMockedNow([1000, 1000, 1002], () => {
+      backend.onSessionStart(
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+        { sessionId: 'parent-session', sessionKey: 'parent-key' },
+      );
+      backend.onSubagentSpawned(
+        {
+          childSessionKey: 'agent:child-agent:subagent:child-key',
+          agentId: 'child-agent',
+          mode: 'run',
+          threadRequested: false,
+          runId: 'child-run',
+        },
+        {
+          requesterSessionKey: 'parent-key',
+          childSessionKey: 'agent:child-agent:subagent:child-key',
+          runId: 'child-run',
+        },
+      );
+      backend.onSessionStart(
+        { sessionId: 'child-session', sessionKey: 'agent:child-agent:subagent:child-key' },
+        {
+          sessionId: 'child-session',
+          sessionKey: 'agent:child-agent:subagent:child-key',
+        },
+      );
+    });
+
+    assert.equal(nf.calls.pushScope.length, 1);
+    assert.deepEqual(
+      nf.calls.event.map((event) => event.name),
+      ['openclaw.session_start', 'openclaw.subagent_spawned'],
+    );
   });
 
   it('reconciles a deferred child session with later session_start before lineage promotion', () => {
