@@ -22,6 +22,7 @@ from nemo_relay.codecs import (
 from nemo_relay.plugin import PluginContext
 
 _DEFAULT_PRIORITY = 100
+_SUPPORTED_NEMOGUARDRAILS_VERSION = "0.22.0"
 
 
 class NeMoGuardrailsDependencyError(RuntimeError):
@@ -74,12 +75,20 @@ def _load_nemoguardrails(module_name: str | None) -> _GuardrailsRuntimeImports:
         if error.name == root_module:
             raise NeMoGuardrailsDependencyError(
                 "NeMo Guardrails is required for the built-in NeMo Guardrails local backend. "
-                "Install it with: pip install nemoguardrails"
+                "Install it with: pip install nemoguardrails==0.22.0"
             ) from error
         raise NeMoGuardrailsDependencyError(
             "NeMo Guardrails local backend could not import a required dependency: "
             f"{error.name or error}. Install the full NeMo Guardrails runtime dependencies."
         ) from error
+
+    version = getattr(guardrails, "__version__", None)
+    if version != _SUPPORTED_NEMOGUARDRAILS_VERSION:
+        raise NeMoGuardrailsDependencyError(
+            "NeMo Guardrails local backend requires nemoguardrails=="
+            f"{_SUPPORTED_NEMOGUARDRAILS_VERSION}, but found {version!r}. "
+            "Install it with: pip install nemoguardrails==0.22.0"
+        )
 
     return _GuardrailsRuntimeImports(
         rails_config_cls=guardrails.RailsConfig,

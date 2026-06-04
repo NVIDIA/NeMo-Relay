@@ -225,12 +225,13 @@ through the Python runtime instead of a separate Guardrails service.
 ### Requirements
 
 To use `mode = "local"`, the running Python environment must be able to import
-`nemoguardrails`.
+`nemoguardrails==0.22.0`.
 
 The built-in local backend is installed by the Python binding and runs
 Guardrails in process. Use it when the runtime has direct access to the Python
 Guardrails dependency and configuration files rather than a separate Guardrails
-service.
+service. Install the tested local-mode Guardrails dependency with
+`pip install nemoguardrails==0.22.0`.
 
 The same ownership boundary still applies:
 

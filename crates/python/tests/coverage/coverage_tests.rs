@@ -45,6 +45,10 @@ fn python_package_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python")
 }
 
+fn embedded_guardrails_local_source_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("embedded_python/_guardrails_local.py")
+}
+
 fn fake_guardrails_module_prelude(module_name: &str, python_dir: &str) -> String {
     format!(
         r#"
@@ -113,6 +117,34 @@ class Context:
     def register_tool_execution_intercept(self, name, priority, callback):
         self.tool = callback
 "#
+}
+
+fn embedded_guardrails_local_loader_python(source_path: &str) -> String {
+    format!(
+        r#"
+import pathlib
+import sys
+import types
+
+import nemo_relay
+
+GUARDRAILS_LOCAL_SOURCE_PATH = pathlib.Path({source_path:?})
+guardrails_local_module = types.ModuleType("nemo_relay._guardrails_local")
+guardrails_local_module.__file__ = str(GUARDRAILS_LOCAL_SOURCE_PATH)
+guardrails_local_module.__package__ = "nemo_relay"
+sys.modules["nemo_relay._guardrails_local"] = guardrails_local_module
+setattr(nemo_relay, "_guardrails_local", guardrails_local_module)
+exec(
+    compile(
+        GUARDRAILS_LOCAL_SOURCE_PATH.read_text(),
+        str(GUARDRAILS_LOCAL_SOURCE_PATH),
+        "exec",
+    ),
+    guardrails_local_module.__dict__,
+)
+"#,
+        source_path = source_path,
+    )
 }
 
 fn with_isolated_nemo_relay_modules<T>(
@@ -291,6 +323,11 @@ fn test_guardrails_local_helper_registers_and_enforces_llm_and_tool_checks() {
             );
             let epilogue = register_fake_guardrails_module_epilogue();
             let context_class = local_plugin_context_python();
+            let embedded_loader = embedded_guardrails_local_loader_python(
+                &embedded_guardrails_local_source_path()
+                    .display()
+                    .to_string(),
+            );
             let module = load_module(
                 py,
                 &format!(
@@ -309,6 +346,8 @@ class LLMRails:
         return check_results.pop(0)
 
 {epilogue}
+
+{embedded_loader}
 
 from nemo_relay._native import LLMRequest
 from nemo_relay._guardrails_local import register_local_backend
@@ -381,6 +420,7 @@ async def run_case():
                     prelude = prelude,
                     epilogue = epilogue,
                     context_class = context_class,
+                    embedded_loader = embedded_loader,
                 ),
             );
 
@@ -437,6 +477,86 @@ async def run_case():
 }
 
 #[test]
+fn test_guardrails_local_helper_rejects_unsupported_nemoguardrails_version() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let native_module = PyModule::new(py, "_native_guardrails_version").unwrap();
+        crate::_native(&native_module).unwrap();
+
+        with_isolated_nemo_relay_modules(py, &native_module, || {
+            let python_dir = python_package_dir();
+            let prelude = fake_guardrails_module_prelude(
+                "fake_guardrails_bad_version",
+                &python_dir.display().to_string(),
+            );
+            let epilogue = register_fake_guardrails_module_epilogue();
+            let context_class = local_plugin_context_python();
+            let embedded_loader = embedded_guardrails_local_loader_python(
+                &embedded_guardrails_local_source_path()
+                    .display()
+                    .to_string(),
+            );
+            let module = load_module(
+                py,
+                &format!(
+                    r#"
+{prelude}
+
+fake_root.__version__ = "0.21.0"
+
+class LLMRails:
+    def __init__(self, config):
+        self.config = config
+
+    async def check_async(self, messages, rail_types):
+        return Result(RailStatus.PASSED)
+
+{epilogue}
+
+{embedded_loader}
+
+from nemo_relay._guardrails_local import register_local_backend
+
+{context_class}
+
+async def run_case():
+    ctx = Context()
+    register_local_backend(
+        {{
+            "mode": "local",
+            "codec": "openai_chat",
+            "config_yaml": "models: []",
+            "input": True,
+            "local": {{"python_module": MODULE_NAME}},
+        }},
+        ctx,
+    )
+"#,
+                    prelude = prelude,
+                    epilogue = epilogue,
+                    embedded_loader = embedded_loader,
+                    context_class = context_class,
+                ),
+            );
+
+            let error = with_event_loop(py, |event_loop| {
+                let coroutine = module.getattr("run_case").unwrap().call0().unwrap();
+                event_loop
+                    .call_method1("run_until_complete", (coroutine,))
+                    .unwrap_err()
+                    .to_string()
+            });
+
+            assert!(
+                error.contains("requires nemoguardrails==0.22.0"),
+                "unexpected error: {error}"
+            );
+            assert!(error.contains("0.21.0"), "unexpected error: {error}");
+        });
+    });
+}
+
+#[test]
 fn test_guardrails_local_helper_enforces_streamed_output_rails() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
@@ -451,6 +571,11 @@ fn test_guardrails_local_helper_enforces_streamed_output_rails() {
             );
             let epilogue = register_fake_guardrails_module_epilogue();
             let context_class = local_plugin_context_python();
+            let embedded_loader = embedded_guardrails_local_loader_python(
+                &embedded_guardrails_local_source_path()
+                    .display()
+                    .to_string(),
+            );
             let module = load_module(
                 py,
                 &format!(
@@ -486,6 +611,8 @@ class LLMRails:
         return _run()
 
 {epilogue}
+
+{embedded_loader}
 
 from nemo_relay._native import LLMRequest
 from nemo_relay._guardrails_local import register_local_backend
@@ -583,6 +710,7 @@ async def run_case():
                     prelude = prelude,
                     epilogue = epilogue,
                     context_class = context_class,
+                    embedded_loader = embedded_loader,
                 ),
             );
 

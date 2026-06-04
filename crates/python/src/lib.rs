@@ -27,7 +27,9 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyModule};
 use serde_json::Value as Json;
+use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -45,6 +47,11 @@ mod py_storage;
 pub mod py_types;
 #[cfg(test)]
 mod test_support;
+
+const EMBEDDED_GUARDRAILS_LOCAL_MODULE_NAME: &str = "nemo_relay._guardrails_local";
+const EMBEDDED_GUARDRAILS_LOCAL_FILENAME: &str = "nemo_relay/_guardrails_local.py";
+const EMBEDDED_GUARDRAILS_LOCAL_SOURCE: &str =
+    include_str!("../embedded_python/_guardrails_local.py");
 
 /// The `_native` PyO3 module entry point. Registers all types and functions.
 #[pymodule]
@@ -70,6 +77,18 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py_api::register(m)?;
     py_plugin::register(m)?;
     py_adaptive::register(m)?;
+    install_native_module_alias(m)?;
+    Ok(())
+}
+
+fn install_native_module_alias(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+    let sys = py.import("sys")?;
+    let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
+    modules.set_item("nemo_relay._native", m)?;
+    if let Ok(package) = py.import("nemo_relay") {
+        let _ = package.setattr("_native", m);
+    }
     Ok(())
 }
 
@@ -109,43 +128,46 @@ fn register_python_local_guardrails_backend(
 }
 
 fn load_guardrails_local_register_fn(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    let module = match py.import("nemo_relay._guardrails_local") {
-        Ok(module) => module,
-        Err(err) => {
-            if !is_missing_guardrails_local_module(py, &err)? {
-                return Err(err);
-            }
-
-            let source_python_dir = guardrails_local_source_python_dir();
-            if !source_python_dir.exists() {
-                return Err(err);
-            }
-
-            prepend_python_path_if_missing(py, &source_python_dir)?;
-            py.import("nemo_relay._guardrails_local")?
-        }
-    };
+    let module = load_embedded_guardrails_local_module(py)?;
     module.getattr("register_local_backend")
 }
 
-fn is_missing_guardrails_local_module(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
-    if !err.is_instance_of::<pyo3::exceptions::PyModuleNotFoundError>(py) {
-        return Ok(false);
+fn load_embedded_guardrails_local_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    ensure_nemo_relay_package_importable(py)?;
+
+    let sys = py.import("sys")?;
+    let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
+    if let Some(existing) = modules.get_item(EMBEDDED_GUARDRAILS_LOCAL_MODULE_NAME)? {
+        return Ok(existing.cast_into::<PyModule>()?);
     }
 
-    let err_value = err.value(py);
-    let module_name = err_value
-        .getattr("name")
-        .ok()
-        .and_then(|name| name.extract::<String>().ok());
-
-    Ok(matches!(
-        module_name.as_deref(),
-        Some("nemo_relay") | Some("nemo_relay._guardrails_local")
-    ))
+    let source = CString::new(EMBEDDED_GUARDRAILS_LOCAL_SOURCE).unwrap();
+    let filename = CString::new(EMBEDDED_GUARDRAILS_LOCAL_FILENAME).unwrap();
+    let module_name = CString::new(EMBEDDED_GUARDRAILS_LOCAL_MODULE_NAME).unwrap();
+    let module = PyModule::from_code(py, &source, &filename, &module_name)?;
+    modules.set_item(EMBEDDED_GUARDRAILS_LOCAL_MODULE_NAME, &module)?;
+    if let Ok(package) = py.import("nemo_relay") {
+        let _ = package.setattr("_guardrails_local", &module);
+    }
+    Ok(module)
 }
 
-fn guardrails_local_source_python_dir() -> PathBuf {
+fn ensure_nemo_relay_package_importable(py: Python<'_>) -> PyResult<()> {
+    if py.import("nemo_relay").is_ok() {
+        return Ok(());
+    }
+
+    let source_python_dir = embedded_guardrails_source_python_dir();
+    if !source_python_dir.exists() {
+        return Ok(());
+    }
+
+    prepend_python_path_if_missing(py, &source_python_dir)?;
+    let _ = py.import("nemo_relay")?;
+    Ok(())
+}
+
+fn embedded_guardrails_source_python_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python")
 }
 
@@ -155,8 +177,6 @@ fn prepend_python_path_if_missing(py: Python<'_>, path: &Path) -> PyResult<()> {
     let path_str = path.to_string_lossy();
 
     if !sys_path.contains(path_str.as_ref())? {
-        // Source-tree fallback for local development and in-repo tests where the
-        // Python package has not been installed into the active environment yet.
         sys_path.call_method1("insert", (0, path_str.as_ref()))?;
     }
 
