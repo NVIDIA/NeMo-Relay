@@ -261,8 +261,8 @@ def scope(
     """
     _ensure_scope_stack()
     pushed_handle = None
-    statusCode = "UNSET"
-    statusMessage = None
+    status_code = "UNSET"
+    status_message = None
     try:
         pushed_handle = _native_push_scope(
             name,
@@ -275,16 +275,16 @@ def scope(
             timestamp=timestamp,
         )
         yield pushed_handle
-        statusCode = "OK"
+        status_code = "OK"
     except Exception as e:
-        statusCode = "ERROR"
-        statusMessage = str(e)
-        raise e
+        status_code = "ERROR"
+        status_message = str(e)
+        raise
     finally:
         if pushed_handle is not None:
-            metadata = {"otel.status_code": statusCode}
-            if statusMessage is not None:
-                metadata["otel.status_message"] = statusMessage
+            metadata = {"otel.status_code": status_code}
+            if status_message is not None:
+                metadata["otel.status_message"] = status_message
             _native_pop_scope(pushed_handle, metadata=metadata, timestamp=end_timestamp)
 
 
