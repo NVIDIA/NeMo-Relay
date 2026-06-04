@@ -138,6 +138,37 @@ fn wire_format_llm_event(
     ))
 }
 
+fn openclaw_agent_scope_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    scope_category: ScopeCategory,
+    name: &str,
+    session_id: &str,
+    scope_role: Option<&str>,
+) -> Event {
+    let mut metadata = Map::new();
+    metadata.insert("source".to_string(), json!("openclaw.session_start"));
+    metadata.insert("hook_event_name".to_string(), json!("session_start"));
+    metadata.insert("session_id".to_string(), json!(session_id));
+    if let Some(scope_role) = scope_role {
+        metadata.insert("nemo_relay_scope_role".to_string(), json!(scope_role));
+    }
+
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name(name)
+            .data(json!({"session_id": session_id}))
+            .metadata(serde_json::Value::Object(metadata))
+            .build(),
+        scope_category,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ))
+}
+
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
         .unwrap()
@@ -435,6 +466,108 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         2
     );
     assert_eq!(lines[5]["data"]["usage"]["cost_usd"], 0.001);
+}
+
+#[test]
+fn openclaw_subagent_events_preserve_nested_and_fallback_parent_uuid() {
+    let dir = temp_dir("atof-openclaw-subagent-parentage");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+    let parent_uuid = Uuid::now_v7();
+    let nested_child_uuid = Uuid::now_v7();
+    let fallback_child_uuid = Uuid::now_v7();
+
+    let events = [
+        openclaw_agent_scope_event(
+            parent_uuid,
+            None,
+            ScopeCategory::Start,
+            "requester-agent",
+            "parent-session",
+            None,
+        ),
+        openclaw_agent_scope_event(
+            nested_child_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            "nested-worker",
+            "nested-child-session",
+            Some("subagent"),
+        ),
+        openclaw_agent_scope_event(
+            nested_child_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            "nested-worker",
+            "nested-child-session",
+            Some("subagent"),
+        ),
+        openclaw_agent_scope_event(
+            parent_uuid,
+            None,
+            ScopeCategory::End,
+            "requester-agent",
+            "parent-session",
+            None,
+        ),
+        openclaw_agent_scope_event(
+            fallback_child_uuid,
+            None,
+            ScopeCategory::Start,
+            "fallback-worker",
+            "fallback-child-session",
+            Some("subagent"),
+        ),
+        openclaw_agent_scope_event(
+            fallback_child_uuid,
+            None,
+            ScopeCategory::End,
+            "fallback-worker",
+            "fallback-child-session",
+            Some("subagent"),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    let nested_start = lines
+        .iter()
+        .find(|line| {
+            line["uuid"] == nested_child_uuid.to_string() && line["scope_category"] == "start"
+        })
+        .unwrap();
+    assert_eq!(nested_start["parent_uuid"], parent_uuid.to_string());
+    assert_eq!(
+        nested_start["metadata"]["nemo_relay_scope_role"],
+        json!("subagent")
+    );
+
+    let fallback_start = lines
+        .iter()
+        .find(|line| {
+            line["uuid"] == fallback_child_uuid.to_string() && line["scope_category"] == "start"
+        })
+        .unwrap();
+    assert!(
+        !fallback_start
+            .as_object()
+            .unwrap()
+            .contains_key("parent_uuid")
+            || fallback_start["parent_uuid"].is_null()
+    );
+    assert_eq!(
+        fallback_start["metadata"]["nemo_relay_scope_role"],
+        json!("subagent")
+    );
 }
 
 #[test]

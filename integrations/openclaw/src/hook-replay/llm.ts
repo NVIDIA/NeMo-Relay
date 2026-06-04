@@ -28,7 +28,7 @@ import {
   evictExpiredCorrelationRecords,
   ensureSession,
   insertBoundedRecord,
-  resolveSessionKey,
+  resolveSessionOwnerKey,
   type LlmInputRecord,
   type ModelCallRecord,
   type PendingLlmOutputRecord,
@@ -47,12 +47,14 @@ export function recordLlmInput(
   ctx: PluginHookAgentContext,
 ): void {
   evictExpiredReplayRecords(manager);
+  const observedAtMicros = nowMicros();
   const session = ensureSession(manager, {
     sessionId: event.sessionId,
     sessionKey: ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
     source: 'lazy_session',
+    timestamp: observedAtMicros,
   });
   if (!session) {
     return;
@@ -76,7 +78,7 @@ export function recordLlmInput(
   const pending = shiftOldest(
     manager.state.llmOutputsPendingInput,
     key,
-    (record) => record.sessionKey === session.sessionId,
+    (record) => record.sessionOwnerKey === session.ownerKey,
   );
   if (!pending) {
     return;
@@ -105,12 +107,14 @@ export function recordLlmOutput(
   ctx: PluginHookAgentContext,
 ): void {
   evictExpiredReplayRecords(manager);
+  const observedAtMicros = nowMicros();
   const session = ensureSession(manager, {
     sessionId: event.sessionId,
     sessionKey: ctx.sessionKey,
     runId: event.runId,
     agentId: ctx.agentId,
     source: 'lazy_session',
+    timestamp: observedAtMicros,
   });
   if (!session) {
     return;
@@ -118,11 +122,11 @@ export function recordLlmOutput(
 
   const key = llmKey(event);
   if (hasTrajectoryReplay(session, event.runId)) {
-    shiftOldest(manager.state.llmInputs, key, (record) => record.sessionKey === session.sessionId);
+    shiftOldest(manager.state.llmInputs, key, (record) => record.sessionOwnerKey === session.ownerKey);
     return;
   }
 
-  const input = shiftOldest(manager.state.llmInputs, key, (record) => record.sessionKey === session.sessionId);
+  const input = shiftOldest(manager.state.llmInputs, key, (record) => record.sessionOwnerKey === session.ownerKey);
   if (input) {
     replayLlmOutput({
       manager,
@@ -135,7 +139,7 @@ export function recordLlmOutput(
   }
 
   const pending: PendingLlmOutputRecord = {
-    sessionKey: session.sessionId,
+    sessionOwnerKey: session.ownerKey,
     sessionId: event.sessionId,
     runId: event.runId,
     provider: event.provider,
@@ -191,7 +195,7 @@ export function recordBeforeMessageWrite(
     if (provider && model && (assistantTexts.length > 0 || assistantToolCalls.length > 0 || usage !== undefined)) {
       session.assistantMessageWrites ??= [];
       session.assistantMessageWrites.push({
-        sessionKey: session.sessionId,
+        sessionOwnerKey: session.ownerKey,
         provider,
         model,
         assistantTexts,
@@ -239,7 +243,7 @@ export function recordModelCallStarted(
     manager.state.modelCallsByCallId,
     modelTimingKey(event),
     {
-      sessionKey: session.sessionId,
+      sessionOwnerKey: session.ownerKey,
       sessionId: session.sessionId,
       runId: event.runId,
       callId: event.callId,
@@ -281,7 +285,7 @@ export function recordModelCallEnded(
   const record =
     existing ??
     ({
-      sessionKey: session.sessionId,
+      sessionOwnerKey: session.ownerKey,
       sessionId: session.sessionId,
       runId: event.runId,
       callId: event.callId,
@@ -303,7 +307,7 @@ export function recordModelCallEnded(
   insertBoundedRecord(
     manager.state.modelTimingsByLlmKey,
     modelTimingLlmKey({
-      sessionId: session.sessionId,
+      sessionId: session.ownerKey,
       runId: event.runId,
       provider: event.provider,
       model: event.model,
@@ -325,7 +329,7 @@ export function replayPendingLlmOutputsForSession(
   for (const [key, records] of [...manager.state.llmOutputsPendingInput]) {
     const remaining: PendingLlmOutputRecord[] = [];
     for (const record of records) {
-      if (record.sessionKey !== session.sessionId) {
+      if (record.sessionOwnerKey !== session.ownerKey) {
         remaining.push(record);
         continue;
       }
@@ -389,7 +393,7 @@ export function replayAgentEndMessages(
 export function emitUnpairedModelCallTimingMarks(manager: SessionManager, session: SessionState): void {
   for (const records of manager.state.modelCallsByCallId.values()) {
     for (const record of records) {
-      if (record.sessionKey !== session.sessionId || record.consumed || record.endedAtMs !== undefined) {
+      if (record.sessionOwnerKey !== session.ownerKey || record.consumed || record.endedAtMs !== undefined) {
         continue;
       }
       emitModelTimingMark(manager, session, 'openclaw.model_call_timing_unpaired', record);
@@ -400,7 +404,7 @@ export function emitUnpairedModelCallTimingMarks(manager: SessionManager, sessio
   const unpairedEnded: ModelCallRecord[] = [];
   for (const records of manager.state.modelTimingsByLlmKey.values()) {
     for (const record of records) {
-      if (record.sessionKey !== session.sessionId || record.consumed) {
+      if (record.sessionOwnerKey !== session.ownerKey || record.consumed) {
         continue;
       }
       unpairedEnded.push(record);
@@ -494,7 +498,7 @@ function replayExpiredPendingOutput(manager: SessionManager, key: string, record
     if (!removeRecord(manager.state.llmOutputsPendingInput, key, record)) {
       return;
     }
-    const session = manager.state.sessions.get(record.sessionKey);
+    const session = manager.state.sessions.get(record.sessionOwnerKey);
     if (!session) {
       manager.state.counters.skippedEvents += 1;
       return;
@@ -616,7 +620,7 @@ function replayAssistantMessageWrites(
       },
       ctx,
       input: {
-        sessionKey: session.sessionId,
+        sessionOwnerKey: session.ownerKey,
         sessionId: session.sessionId,
         runId,
         provider: record.provider,
@@ -645,13 +649,13 @@ function consumeNextTimingCandidate(
   input: { runId?: string | undefined; provider: string; model: string },
 ): ModelCallRecord | undefined {
   const key = modelTimingLlmKey({
-    sessionId: session.sessionId,
+    sessionId: session.ownerKey,
     runId: input.runId,
     provider: input.provider,
     model: input.model,
   });
   const records = manager.state.modelTimingsByLlmKey.get(key) ?? [];
-  const candidate = records.find((record) => record.sessionKey === session.sessionId && !record.consumed);
+  const candidate = records.find((record) => record.sessionOwnerKey === session.ownerKey && !record.consumed);
   if (!candidate) {
     return undefined;
   }
@@ -666,13 +670,13 @@ function consumeTimingCandidate(
   event: PluginHookLlmOutputEvent,
 ): ModelCallRecord | undefined {
   const key = modelTimingLlmKey({
-    sessionId: session.sessionId,
+    sessionId: session.ownerKey,
     runId: event.runId,
     provider: event.provider,
     model: event.model,
   });
   const candidates = (manager.state.modelTimingsByLlmKey.get(key) ?? []).filter(
-    (record) => record.sessionKey === session.sessionId && !record.consumed,
+    (record) => record.sessionOwnerKey === session.ownerKey && !record.consumed,
   );
   if (candidates.length === 1) {
     const candidate = candidates[0];
@@ -771,7 +775,7 @@ function emitModelTimingSummaryMark(manager: SessionManager, session: SessionSta
 /** Convert an OpenClaw llm_input event into the buffered request record. */
 function createInputRecord(session: SessionState, event: PluginHookLlmInputEvent): LlmInputRecord {
   return {
-    sessionKey: session.sessionId,
+    sessionOwnerKey: session.ownerKey,
     sessionId: event.sessionId,
     runId: event.runId,
     provider: event.provider,
@@ -790,7 +794,7 @@ function existingSessionForMessageWrite(
   event: PluginHookBeforeMessageWriteEvent,
   ctx: PluginHookBeforeMessageWriteContext,
 ): SessionState | undefined {
-  const key = resolveSessionKey(manager.state, {
+  const key = resolveSessionOwnerKey(manager.state, {
     sessionKey: event.sessionKey ?? ctx.sessionKey,
   });
   if (key === undefined) {
@@ -807,7 +811,7 @@ function existingSessionForMessageWrite(
 /** Build a minimal request placeholder when only an llm_output hook is available. */
 function placeholderInputRecord(record: PendingLlmOutputRecord): LlmInputRecord {
   return {
-    sessionKey: record.sessionKey,
+    sessionOwnerKey: record.sessionOwnerKey,
     sessionId: record.sessionId,
     runId: record.runId,
     provider: record.provider,
@@ -1185,7 +1189,7 @@ function incrementHookLlmOutputReplayCount(session: SessionState, runId: string 
 
 /** Build the per-session run key used for trajectory de-duplication. */
 function trajectoryRunKey(session: SessionState, runId?: string): string {
-  return runId ?? session.sessionId;
+  return runId ?? session.ownerKey;
 }
 
 /** Normalize provider usage into NeMo Relay token and cost fields. */
@@ -1291,7 +1295,7 @@ function latestUnendedRecord(
   }
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
-    if (record?.sessionKey === session.sessionId && record.endedAtMs === undefined) {
+    if (record?.sessionOwnerKey === session.ownerKey && record.endedAtMs === undefined) {
       return record;
     }
   }

@@ -760,6 +760,129 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
 }
 
 #[test]
+fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let parent_uuid = Uuid::now_v7();
+    let nested_child_uuid = Uuid::now_v7();
+    let fallback_child_uuid = Uuid::now_v7();
+
+    let nested_parent_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "parent-session"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "nested-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_parent_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "fallback-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+
+    for event in [
+        nested_parent_start,
+        nested_child_start,
+        nested_child_end,
+        nested_parent_end,
+        fallback_child_start,
+        fallback_child_end,
+    ] {
+        processor.process(&event);
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let nested_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "nested-worker")
+        .unwrap();
+    let fallback_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "fallback-worker")
+        .unwrap();
+    let nested_child_attributes = attr_map(&nested_child_span.attributes);
+    let fallback_child_attributes = attr_map(&fallback_child_span.attributes);
+
+    assert_eq!(
+        nested_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&parent_uuid.to_string())
+    );
+    assert_eq!(
+        fallback_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&String::new())
+    );
+}
+
+#[test]
 fn generic_unannotated_llm_output_does_not_emit_flattened_output_message_attrs() {
     let (provider, exporter) = make_provider();
     let mut processor =

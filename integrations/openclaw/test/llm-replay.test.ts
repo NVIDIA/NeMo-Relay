@@ -943,7 +943,7 @@ describe('LLM replay', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf, { recordTtlMs: 1 });
     const stalePendingOutput = {
-      sessionKey: 'session-1',
+      sessionOwnerKey: 'session-1',
       sessionId: 'session-1',
       runId: 'old-run',
       provider: 'openai',
@@ -956,7 +956,7 @@ describe('LLM replay', () => {
 
     backend.state().llmInputs.set('stale-input', [
       {
-        sessionKey: 'session-1',
+        sessionOwnerKey: 'session-1',
         sessionId: 'session-1',
         runId: 'old-run',
         provider: 'openai',
@@ -970,7 +970,7 @@ describe('LLM replay', () => {
     backend.state().llmOutputsPendingInput.set('stale-output', [stalePendingOutput]);
     backend.state().modelTimingsByLlmKey.set('stale-timing', [
       {
-        sessionKey: 'session-1',
+        sessionOwnerKey: 'session-1',
         sessionId: 'session-1',
         runId: 'old-run',
         callId: 'old-call',

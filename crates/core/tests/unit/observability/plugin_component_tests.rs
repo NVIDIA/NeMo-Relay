@@ -4,7 +4,7 @@
 //! Unit tests for the built-in observability plugin component.
 
 use super::*;
-use crate::api::event::{BaseEvent, EventCategory, ScopeEvent};
+use crate::api::event::{BaseEvent, EventCategory, MarkEvent, ScopeEvent};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{PopScopeParams, PushScopeParams};
@@ -768,6 +768,119 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
         child_uuid.to_string()
     );
     pop(&agent);
+}
+
+#[test]
+fn atif_keeps_openclaw_child_only_fallback_as_a_top_level_trajectory() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-openclaw-child-fallback");
+    let root_uuid = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid();
+    let child_uuid = Uuid::now_v7();
+    let child_mark_uuid = Uuid::now_v7();
+    let manager = Arc::new(Mutex::new(AtifDispatcher::new(AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(dir.clone()),
+        ..AtifSectionConfig::default()
+    })));
+    let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
+
+    let child_start_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(child_uuid)
+            .parent_uuid(root_uuid)
+            .name("worker-agent")
+            .metadata(json!({
+                "session_id": "child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &child_start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let child_mark_event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(child_mark_uuid)
+            .parent_uuid(child_uuid)
+            .name("worker-started")
+            .data(json!({"status": "started"}))
+            .build(),
+        None,
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &child_mark_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let child_end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(child_uuid)
+            .parent_uuid(root_uuid)
+            .name("worker-agent")
+            .build(),
+        ScopeCategory::End,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    let (pending_write, targets) = manager
+        .lock()
+        .unwrap()
+        .observe_global(
+            &child_end_event,
+            "__test__",
+            Arc::clone(&manager),
+            Arc::clone(&empty_storage),
+        )
+        .unwrap();
+    let path = dir.join(format!("nemo-relay-atif-{child_uuid}.json"));
+    let results = write_atif(&pending_write, empty_storage.as_slice(), &targets);
+    for (label, result) in &results {
+        assert!(result.is_ok(), "{label:?}: {result:?}");
+    }
+    let scope_subscriber = manager
+        .lock()
+        .unwrap()
+        .complete_scope_write(child_uuid, results);
+    if let Some((scope_uuid, name)) = scope_subscriber {
+        let _ = scope_deregister_subscriber(&scope_uuid, &name);
+    }
+
+    let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(value["trajectory_id"], child_uuid.to_string());
+    assert_eq!(value["steps"].as_array().unwrap().len(), 1);
+    assert_eq!(value["steps"][0]["message"], "worker-started");
+    assert!(
+        value.get("subagent_trajectories").is_none() || value["subagent_trajectories"].is_null()
+    );
+    assert!(!value.to_string().contains("subagent_trajectory_ref"));
 }
 
 #[test]
