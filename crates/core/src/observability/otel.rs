@@ -28,10 +28,8 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::error::FlowError;
 use chrono::{DateTime, Utc};
 use opentelemetry::trace::{
-    Span as _, SpanContext, SpanKind, Status, TraceContextExt, Tracer, TracerProvider as _,
+    Span as _, SpanContext, SpanKind, TraceContextExt, Tracer, TracerProvider as _,
 };
-
-use crate::json::Json;
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
@@ -546,26 +544,7 @@ impl OtelEventProcessor {
             return;
         };
 
-        if let Some(metadata) = event.metadata()
-            && let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str)
-        {
-            let status = match status_code {
-                "OK" => Status::Ok,
-                "ERROR" => Status::error(
-                    metadata
-                        .get("otel.status_message")
-                        .and_then(Json::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                ),
-                "UNSET" => Status::Unset,
-                other => {
-                    eprintln!("Unrecognized OTEL status code in event metadata: {other}");
-                    Status::Unset
-                }
-            };
-            active_span.span.set_status(status);
-        }
+        super::set_span_status_from_event_metadata(&mut active_span.span, event);
         active_span.span.set_attributes(end_attributes(event));
         active_span
             .span
