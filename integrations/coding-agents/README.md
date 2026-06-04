@@ -22,11 +22,14 @@ environment variables, or shared TOML config.
 
 ## Packages
 
-- `claude-code/` installs Claude Code hook entries targeting
-  `POST /hooks/claude-code`.
-- `codex/` installs Codex hook entries targeting `POST /hooks/codex` and enables
-  `features.hooks = true`. Use `nemo-relay run` or a gateway provider alias
-  for Codex LLM gateway routing.
+- `claude-code/` is a Claude Code plugin package. It installs hook entries
+  targeting `POST /hooks/claude-code` through `nemo-relay` on `PATH`.
+- `codex/` is a Codex plugin package. `nemo-relay install codex` creates the
+  marketplace, installs the plugin, enables `features.hooks = true`, and
+  configures a local `nemo-relay-openai` provider alias. Codex plugin delivery
+  uses hook-supervised lazy sidecar startup only: no wrapper, user-level daemon,
+  login item, launchd agent, systemd user service, scheduled task, or persistent
+  supervisor.
 - `cursor/` installs a Cursor `.cursor/hooks.json` bundle targeting
   `POST /hooks/cursor`.
 - Hermes does not require a static bundle in this directory. The setup wizard
@@ -64,6 +67,62 @@ nemo-relay doctor hermes --json
 
 The command is read-only: it reports missing ATIF directories, hook files, and
 agent commands instead of creating or patching them.
+
+## Plugin Installation
+
+The Claude Code and Codex plugins are installed by the `nemo-relay` CLI. The
+CLI must already be installed and discoverable on `$PATH` or `%PATH%`; no
+separate npm installer, release bundle download, or plugin-local Relay binary is
+required.
+
+Claude Code can start the sidecar from plugin hooks or helper commands and route
+model traffic by setting `ANTHROPIC_BASE_URL` to the sidecar URL.
+
+Codex does not use a daemon in plugin mode. Installed Codex hooks call the
+`nemo-relay plugin-shim hook codex` command. The shim checks `/healthz`, starts
+the local `nemo-relay` sidecar if needed, waits briefly for readiness, and then
+forwards the hook payload. Codex model traffic is routed through the stable
+provider alias at `http://127.0.0.1:47632`.
+
+End users install local host marketplaces with:
+
+```bash
+nemo-relay install claude-code
+nemo-relay install codex
+nemo-relay install all
+```
+
+`nemo-relay install` writes local marketplace files, registers the selected host
+plugin, and performs the required host provider and hook setup. Use
+`nemo-relay uninstall <host>` to roll back and `nemo-relay doctor --plugin
+<host>` to check an installed plugin.
+
+Codex users can also add this repository as a marketplace for source/dev
+discovery:
+
+```bash
+codex plugin marketplace add NVIDIA/NeMo-Relay
+codex plugin add nemo-relay-plugin@nemo-relay
+```
+
+That path relies on `nemo-relay` being available on `PATH`; source plugin hooks
+invoke `nemo-relay plugin-shim hook codex` directly.
+
+Use the source marketplace path for discovery or manifest validation. Remove
+the source-installed Codex plugin before running `nemo-relay install codex`;
+keeping both active can forward the same Codex hook twice.
+
+Claude Code users can add this repository as a marketplace the same way:
+
+```bash
+claude plugin marketplace add NVIDIA/NeMo-Relay \
+  --sparse .claude-plugin integrations/coding-agents/claude-code
+claude plugin install nemo-relay-plugin@nemo-relay --scope user
+```
+
+That path reads `.claude-plugin/marketplace.json` from the repository. Source
+plugin hooks invoke `nemo-relay plugin-shim hook claude` directly. Use
+`nemo-relay install claude-code` for the complete provider-routing setup.
 
 Hermes transparent runs export the dynamic `NEMO_RELAY_GATEWAY_URL`, but Hermes
 hooks must already be present in `.hermes/config.yaml` before they can call the
@@ -105,14 +164,20 @@ endpoint = "http://127.0.0.1:4318/v1/traces"
 
 ## Hook Forwarding
 
-Hooks call `nemo-relay hook-forward <agent>` with the canonical hook payload on
-stdin. The wrapper injects `NEMO_RELAY_GATEWAY_URL` so the same hook command
-reaches the ephemeral per-run gateway; hermes hooks fall back to an embedded
-`--gateway-url` when running outside the wrapper.
+Transparent wrapper hooks call `nemo-relay hook-forward <agent>` with the
+canonical hook payload on stdin. The wrapper injects `NEMO_RELAY_GATEWAY_URL` so
+the same hook command reaches the ephemeral per-run gateway; hermes hooks fall
+back to an embedded `--gateway-url` when running outside the wrapper.
 
-`hook-forward` prints the vendor-specific response and fails open by default
-(observability outages do not block the coding agent). Add `--fail-closed` to
-generated hook commands when policy requires hook delivery to block the agent.
+Claude Code and Codex plugin hooks call `nemo-relay plugin-shim hook <agent>`.
+The plugin shim ensures the local sidecar is reachable, then forwards the hook
+payload to the plugin sidecar endpoint.
+
+Hook forwarding fails open by default, so observability outages do not block the
+coding agent. For wrapper-generated `hook-forward` commands, add
+`--fail-closed` when policy requires hook delivery to block the agent. For
+plugin shim hooks, set `NEMO_RELAY_FAIL_CLOSED=1` in the hook execution
+environment.
 
 Useful wrapper options:
 

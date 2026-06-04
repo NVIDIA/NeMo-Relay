@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::CliError;
+use crate::plugin_shim::PluginShimCommand;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "nemo-relay")]
@@ -79,6 +80,10 @@ pub(crate) enum Command {
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
     Plugins(PluginsCommand),
+    /// Install coding-agent plugins from the local nemo-relay CLI.
+    Install(InstallCommand),
+    /// Uninstall coding-agent plugins installed by `nemo-relay install`.
+    Uninstall(UninstallCommand),
     /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
@@ -90,6 +95,9 @@ pub(crate) enum Command {
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
     #[command(hide = true)]
     HookForward(HookForwardCommand),
+    /// Internal: plugin-local hook and sidecar supervisor. Not typed by humans.
+    #[command(hide = true)]
+    PluginShim(PluginShimCommand),
 }
 
 /// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
@@ -99,10 +107,40 @@ pub(crate) struct DoctorCommand {
     /// Limit readiness checks to one supported agent.
     #[arg(value_enum)]
     pub(crate) agent: Option<CodingAgent>,
+    /// Diagnose an installed coding-agent plugin instead of the normal relay config.
+    #[arg(long, value_enum)]
+    pub(crate) plugin: Option<PluginHost>,
+    /// Plugin install state directory. Defaults to the platform data directory.
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
     /// Emit machine-readable JSON instead of the formatted human report. Versioned via
     /// `schema_version`; stable shape for CI / evaluation harness consumption.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "plugin")]
     pub(crate) json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct InstallCommand {
+    #[arg(value_enum)]
+    pub(crate) host: PluginHost,
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) force: bool,
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    #[arg(long)]
+    pub(crate) skip_doctor: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct UninstallCommand {
+    #[arg(value_enum)]
+    pub(crate) host: PluginHost,
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 /// Args for `nemo-relay agents`. Shares the `--json` shape with `nemo-relay doctor`'s
@@ -287,6 +325,15 @@ pub(crate) enum CodingAgent {
     Codex,
     Cursor,
     Hermes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(crate) enum PluginHost {
+    Codex,
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    All,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

@@ -1,7 +1,7 @@
 {
-  "name": "nemo-relay-codex-observability",
-  "version": "0.1.0",
-  "description": "Codex hooks that forward canonical lifecycle payloads to nemo-relay-sidecar.",
+  "name": "nemo-relay-plugin",
+  "version": "0.4.0",
+  "description": "Codex hooks that forward canonical lifecycle payloads to nemo-relay.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",
     "url": "https://github.com/NVIDIA/NeMo-Relay"
@@ -15,15 +15,17 @@
     "hooks",
     "observability"
   ],
-  "hooks": "../hooks/hooks.json",
   "interface": {
-    "displayName": "NeMo Relay Codex Observability",
+    "displayName": "NeMo Relay Plugin",
     "shortDescription": "Forward Codex lifecycle hooks to a local NeMo Relay sidecar.",
-    "longDescription": "Installs command hooks that preserve Codex hook payloads and forward them to nemo-relay-sidecar for agent, subagent, tool, and lifecycle observability. Full LLM capture also requires sidecar provider routing.",
+    "longDescription": "Installs command hooks that preserve Codex hook payloads and forward them to nemo-relay for agent, subagent, tool, and lifecycle observability. Full LLM capture also requires sidecar provider routing.",
     "developerName": "NVIDIA",
     "category": "Coding",
     "capabilities": [
       "Read"
+    ],
+    "defaultPrompt": [
+      "Capture this Codex session with NeMo Relay observability."
     ],
     "websiteURL": "https://github.com/NVIDIA/NeMo-Relay",
     "brandColor": "#76B900"

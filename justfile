@@ -388,6 +388,33 @@ try {
 NODE
 }
 
+set_coding_agent_plugin_versions() {
+    local version="$1"
+
+    node - "$version" <<'NODE'
+const fs = require('fs');
+const version = process.argv[2];
+const manifests = [
+  'integrations/coding-agents/claude-code/.claude-plugin/plugin.json',
+  'integrations/coding-agents/codex/.codex-plugin/plugin.json',
+];
+
+for (const manifestPath of manifests) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!manifest.version) {
+    throw new Error(`${manifestPath} missing version field`);
+  }
+  if (manifest.version === version) {
+    console.log(`${manifestPath} already set to ${version}`);
+    continue;
+  }
+  manifest.version = version;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  console.log(`${manifestPath} version updated to ${version}`);
+}
+NODE
+}
+
 read_workspace_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -527,6 +554,7 @@ set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
+    set_coding_agent_plugin_versions "$version"
 }
 
 set_python_package_version() {

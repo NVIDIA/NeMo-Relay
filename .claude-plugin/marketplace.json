@@ -1,0 +1,16 @@
+{
+  "name": "nemo-relay",
+  "description": "NeMo Relay plugins for coding-agent observability.",
+  "owner": {
+    "name": "NVIDIA Corporation and Affiliates",
+    "email": "noreply@nvidia.com"
+  },
+  "plugins": [
+    {
+      "name": "nemo-relay-plugin",
+      "description": "Forward Claude Code lifecycle hooks to a local NeMo Relay sidecar.",
+      "source": "./integrations/coding-agents/claude-code",
+      "category": "development"
+    }
+  ]
+}

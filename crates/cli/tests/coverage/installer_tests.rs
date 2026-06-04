@@ -159,6 +159,8 @@ fn packaged_hook_configs_are_valid_json() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../integrations/coding-agents");
     for path in [
+        root.join("../../.agents/plugins/marketplace.json"),
+        root.join("../../.claude-plugin/marketplace.json"),
         root.join("claude-code/hooks/hooks.json"),
         root.join("codex/hooks/hooks.json"),
         root.join("cursor/.cursor/hooks.json"),
@@ -168,5 +170,110 @@ fn packaged_hook_configs_are_valid_json() {
         let raw = std::fs::read_to_string(&path).unwrap();
         serde_json::from_str::<Value>(&raw)
             .unwrap_or_else(|error| panic!("{} is invalid JSON: {error}", path.display()));
+    }
+}
+
+#[test]
+fn packaged_plugin_hooks_use_expected_shim_commands() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../integrations/coding-agents");
+    let claude = serde_json::from_str::<Value>(
+        &std::fs::read_to_string(root.join("claude-code/hooks/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    let codex = serde_json::from_str::<Value>(
+        &std::fs::read_to_string(root.join("codex/hooks/hooks.json")).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        claude["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        json!("nemo-relay plugin-shim hook claude")
+    );
+    assert_eq!(
+        codex["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        json!("nemo-relay plugin-shim hook codex")
+    );
+    assert!(
+        claude["hooks"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|groups| groups.as_array().unwrap())
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .all(|hook| hook["command"]
+                .as_str()
+                .is_some_and(|command| command.starts_with("nemo-relay ")))
+    );
+    assert!(
+        codex["hooks"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|groups| groups.as_array().unwrap())
+            .flat_map(|group| group["hooks"].as_array().unwrap())
+            .all(|hook| hook["command"]
+                .as_str()
+                .is_some_and(|command| command.starts_with("nemo-relay ")))
+    );
+}
+
+#[test]
+fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../integrations/coding-agents");
+    let claude_path = root.join("claude-code/.claude-plugin/plugin.json");
+    let claude =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&claude_path).unwrap()).unwrap();
+    assert_eq!(claude["name"], json!("nemo-relay-plugin"));
+    assert_eq!(claude["version"], json!(env!("CARGO_PKG_VERSION")));
+    assert!(claude.get("hooks").is_none());
+
+    let codex_path = root.join("codex/.codex-plugin/plugin.json");
+    let codex =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&codex_path).unwrap()).unwrap();
+    assert_eq!(codex["name"], json!("nemo-relay-plugin"));
+    assert_eq!(codex["version"], json!(env!("CARGO_PKG_VERSION")));
+
+    let codex_marketplace_path = root.join("../../.agents/plugins/marketplace.json");
+    let codex_marketplace =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&codex_marketplace_path).unwrap())
+            .unwrap();
+    assert_eq!(codex_marketplace["name"], json!("nemo-relay"));
+    assert_eq!(
+        codex_marketplace["plugins"][0]["name"],
+        json!("nemo-relay-plugin")
+    );
+    assert_eq!(
+        codex_marketplace["plugins"][0]["source"]["path"],
+        json!("./integrations/coding-agents/codex")
+    );
+
+    let claude_marketplace_path = root.join("../../.claude-plugin/marketplace.json");
+    let claude_marketplace =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&claude_marketplace_path).unwrap())
+            .unwrap();
+    assert_eq!(claude_marketplace["name"], json!("nemo-relay"));
+    assert_eq!(
+        claude_marketplace["plugins"][0]["name"],
+        json!("nemo-relay-plugin")
+    );
+    assert_eq!(
+        claude_marketplace["plugins"][0]["source"],
+        json!("./integrations/coding-agents/claude-code")
+    );
+}
+
+#[test]
+fn packaged_plugin_helpers_are_present() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../integrations/coding-agents");
+    for path in [
+        root.join("claude-code/hooks/hooks.json"),
+        root.join("codex/hooks/hooks.json"),
+    ] {
+        let metadata = std::fs::metadata(&path)
+            .unwrap_or_else(|error| panic!("{} missing: {error}", path.display()));
+        assert!(metadata.is_file(), "{} is not a file", path.display());
     }
 }

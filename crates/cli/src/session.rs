@@ -441,6 +441,19 @@ impl SessionManager {
         }
     }
 
+    /// Returns true while any session still owns active observable work.
+    ///
+    /// Codex plugin sessions can emit `SessionStart` without a matching `SessionEnd`, so metadata-only
+    /// sessions must not keep the hook-supervised sidecar alive forever. Open scopes and in-flight
+    /// tool, LLM, or gateway work still block plugin idle shutdown.
+    pub(crate) async fn has_open_sessions(&self) -> bool {
+        self.inner
+            .lock()
+            .await
+            .values()
+            .any(Session::blocks_plugin_idle_shutdown)
+    }
+
     /// Legacy manual-lifecycle close paired with [`Self::start_llm`]. Production gateway traffic
     /// no longer needs this helper because managed execution emits the end event automatically.
     ///
@@ -879,6 +892,17 @@ impl Session {
             && self.subagent_stack.is_empty()
             && self.llms.is_empty()
             && self.tools.is_empty()
+    }
+
+    fn blocks_plugin_idle_shutdown(&self) -> bool {
+        self.agent_scope.is_some()
+            || self.turn_scope.is_some()
+            || !self.subagents.is_empty()
+            || !self.subagent_stacks.is_empty()
+            || !self.subagent_stack.is_empty()
+            || !self.llms.is_empty()
+            || !self.tools.is_empty()
+            || self.active_gateway_calls > 0
     }
 
     fn touch_activity(&mut self) {

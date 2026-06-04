@@ -35,6 +35,33 @@ const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
+struct EnvVarGuard {
+    key: &'static str,
+    old: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let old = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, old }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(old) = self.old.take() {
+                std::env::set_var(self.key, old);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
 struct ToolGuardrailCleanup(&'static str);
 
 impl Drop for ToolGuardrailCleanup {
@@ -151,6 +178,112 @@ async fn healthz_returns_ok() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({ "status": "ok" }));
+}
+
+#[tokio::test]
+async fn serve_listener_honors_plugin_idle_timeout_env() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+
+    wait_for_gateway(&url).await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop the sidecar")
+        .unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn serve_listener_waits_for_active_turn_before_plugin_idle_shutdown() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+    let client = test_http_client();
+
+    wait_for_gateway(&url).await;
+    let response = client
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "plugin-idle-open-session",
+            "hook_event_name": "sessionStart"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let response = client
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "plugin-idle-open-session",
+            "hook_event_name": "UserPromptSubmit"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert!(
+        !handle.is_finished(),
+        "plugin sidecar exited before the active turn ended"
+    );
+
+    let response = client
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "plugin-idle-open-session",
+            "hook_event_name": "Stop"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop after Stop closes the turn")
+        .unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn serve_listener_exits_after_codex_stop_without_session_end() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+    let client = test_http_client();
+
+    wait_for_gateway(&url).await;
+    for hook_event_name in ["sessionStart", "Stop"] {
+        let response = client
+            .post(format!("{url}/hooks/codex"))
+            .json(&json!({
+                "session_id": "plugin-idle-metadata-only-session",
+                "hook_event_name": hook_event_name
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop without a Codex SessionEnd")
+        .unwrap();
+    result.unwrap();
 }
 
 #[tokio::test]
