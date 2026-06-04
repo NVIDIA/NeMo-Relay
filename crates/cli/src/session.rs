@@ -93,6 +93,7 @@ pub(crate) struct GatewayCallPrep {
     pub(crate) model_name: Option<String>,
     pub(crate) owner_subagent_id: Option<String>,
     pub(crate) bypass_managed_pipeline: bool,
+    pub(crate) prune_empty_session_on_finish: bool,
 }
 
 struct Session {
@@ -395,10 +396,30 @@ impl SessionManager {
         // request beats its SessionStart hook), label the session by the provider so ATIF and
         // Phoenix scopes carry the agent identity instead of freezing on "gateway".
         let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
+        let created_session = !sessions.contains_key(&session_id);
         let session = sessions
             .entry(session_id.clone())
-            .or_insert_with(|| Session::new(session_id, inferred_agent_kind, config));
-        session.prepare_gateway_call(start).await
+            .or_insert_with(|| Session::new(session_id.clone(), inferred_agent_kind, config));
+        let result = session.prepare_gateway_call(start).await;
+        match result {
+            Ok(mut prep) => {
+                prep.prune_empty_session_on_finish = prep.bypass_managed_pipeline
+                    && sessions
+                        .get(&session_id)
+                        .is_some_and(|session| session.is_empty());
+                Ok(prep)
+            }
+            Err(error) => {
+                if created_session
+                    && sessions
+                        .get(&session_id)
+                        .is_some_and(|session| session.is_empty())
+                {
+                    sessions.remove(&session_id);
+                }
+                Err(error)
+            }
+        }
     }
 
     /// Marks a managed gateway LLM call as finished for idle-timeout purposes.
@@ -406,10 +427,17 @@ impl SessionManager {
     /// Runtime-managed LLM spans are emitted outside the session lock, so the session keeps a small
     /// in-flight counter to prevent the idle sweeper from closing a turn while an upstream
     /// provider request or streaming response is still active.
-    pub(crate) async fn finish_gateway_call(&self, session_id: &str) {
+    pub(crate) async fn finish_gateway_call(&self, session_id: &str, prune_empty_session: bool) {
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.finish_gateway_call();
+        }
+        if prune_empty_session
+            && sessions
+                .get(session_id)
+                .is_some_and(|session| session.is_empty() && session.active_gateway_calls == 0)
+        {
+            sessions.remove(session_id);
         }
     }
 
@@ -1005,6 +1033,7 @@ impl Session {
                     model_name: start.model_name,
                     owner_subagent_id: owner.subagent_id,
                     bypass_managed_pipeline: policy.bypasses_managed_pipeline(),
+                    prune_empty_session_on_finish: false,
                 })
             })
             .await;

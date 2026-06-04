@@ -2223,7 +2223,9 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         prep.metadata["llm_correlation_source"],
         json!("claude_startup_probe")
     );
-    manager.finish_gateway_call(&prep.session_id).await;
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
 
     manager
         .apply_events(
@@ -2260,6 +2262,39 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
     assert_eq!(starts[0]["metadata"]["turn_source"], json!("user_prompt"));
 
     deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn claude_startup_probe_only_session_is_pruned_after_finish() {
+    let manager = SessionManager::new(session_test_config());
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), claude_startup_probe_start("probe-only"))
+        .await
+        .unwrap();
+
+    assert!(prep.bypass_managed_pipeline);
+    assert!(prep.prune_empty_session_on_finish);
+    assert!(manager.inner.lock().await.contains_key("probe-only"));
+
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
+    assert!(!manager.inner.lock().await.contains_key("probe-only"));
+
+    let next = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next.session_id, "gateway-gateway",
+        "probe-only sessions must not become the single-active fallback"
+    );
 }
 
 #[tokio::test]
@@ -3930,7 +3965,7 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
             .contains_key("active-gateway-call")
     );
 
-    manager.finish_gateway_call(&prep.session_id).await;
+    manager.finish_gateway_call(&prep.session_id, false).await;
     let closed = manager
         .close_idle_sessions_at(
             Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
@@ -4663,6 +4698,28 @@ fn llm_start() -> LlmGatewayStart {
         },
         streaming: false,
         metadata: json!({}),
+    }
+}
+
+fn claude_startup_probe_start(session_id: &str) -> LlmGatewayStart {
+    LlmGatewayStart {
+        session_id: Some(session_id.into()),
+        provider: "anthropic.messages".into(),
+        model_name: Some("claude-opus-4-8[1m]".into()),
+        request: LlmRequest {
+            headers: Map::from_iter([("x-claude-code-session-id".to_string(), json!(session_id))]),
+            content: json!({
+                "model": "claude-opus-4-8[1m]",
+                "max_tokens": 1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "test"
+                    }
+                ]
+            }),
+        },
+        ..llm_start()
     }
 }
 
