@@ -322,6 +322,206 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
 }
 
 #[tokio::test]
+async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelity() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-exact",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ],
+                        "tools": [
+                            { "type": "function", "function": { "name": "search_files" } }
+                        ]
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-atof-exact",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "response": {
+                    "model": "qwen",
+                    "finish_reason": "tool_calls",
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_files",
+                                    "arguments": "{\"query\":\"needle\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "cost": { "total": 0.0042 }
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-lossy",
+            "extra": {
+                "task_id": "task-2",
+                "api_call_count": 4,
+                "model": "qwen",
+                "provider": "custom",
+                "request": null,
+                "message_count": 2
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        4,
+        "expected Hermes LLM exports, got {llm_events:?}"
+    );
+
+    let start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:2")
+        })
+        .unwrap();
+    assert_eq!(start["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(
+        start["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        start["data"]["content"]["messages"][0]["content"],
+        json!("hello")
+    );
+    assert_eq!(
+        start["data"]["content"]["tools"][0]["function"]["name"],
+        json!("search_files")
+    );
+
+    let end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:2")
+        })
+        .unwrap();
+    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(end["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(end["data"]["tool_calls"][0]["id"], json!("call-1"));
+    assert_eq!(
+        end["data"]["tool_calls"][0]["function"]["name"],
+        json!("search_files")
+    );
+    assert_eq!(end["data"]["usage"]["prompt_tokens"], json!(10));
+    assert_eq!(end["data"]["usage"]["completion_tokens"], json!(5));
+
+    let lossy_start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("hermes-atof-lossy:task-2:4")
+        })
+        .unwrap();
+    assert_eq!(lossy_start["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(
+        lossy_start["metadata"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        lossy_start["data"]["content"]["fidelity"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(lossy_start["data"]["content"]["message_count"], json!(2));
+}
+
+#[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();

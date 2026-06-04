@@ -763,6 +763,52 @@ async fn dry_run_does_not_spawn_agent() {
 }
 
 #[tokio::test]
+async fn dry_run_does_not_allocate_gateway_listener() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "http://file-openai"
+anthropic_base_url = "http://file-anthropic"
+
+[agents.hermes]
+command = "hermes chat"
+"#,
+    )
+    .unwrap();
+    let command = RunCommand {
+        agent: Some(CodingAgent::Hermes),
+        config: Some(config),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: true,
+        print: true,
+        command: vec![],
+    };
+
+    let run = TransparentRun::new(command, None).await.unwrap();
+
+    assert!(run.listener.is_none());
+    assert_eq!(run.gateway_url, "http://127.0.0.1:<ephemeral>");
+    assert_eq!(run.resolved.gateway.bind, "127.0.0.1:0".parse().unwrap());
+    assert!(
+        run.prepared
+            .env
+            .contains(&("NEMO_RELAY_GATEWAY_URL".into(), run.gateway_url.clone()))
+    );
+    assert!(
+        run.prepared
+            .notes
+            .iter()
+            .any(|note| note.contains("would temporarily merge NeMo Relay hooks"))
+    );
+}
+
+#[tokio::test]
 async fn wait_for_health_reports_unready_gateway() {
     let error = wait_for_health("http://127.0.0.1:1")
         .await

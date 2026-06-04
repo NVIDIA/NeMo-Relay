@@ -2137,6 +2137,105 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
 }
 
 #[test]
+fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }],
+                "tools": [
+                    { "type": "function", "function": { "name": "search_files" } }
+                ]
+            }))
+            .metadata(metadata.clone())
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search_files",
+                            "arguments": "{\"query\":\"needle\"}"
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost": { "total": 0.0042 }
+                },
+                "model": "qwen",
+                "finish_reason": "tool_calls"
+            }))
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"Requested tools: search_files".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"10".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"5".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.0042".to_string())
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":true");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks_sanitized\"",
+    );
+}
+
+#[test]
 fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
     let (provider, exporter) = make_provider();
     let mut processor =

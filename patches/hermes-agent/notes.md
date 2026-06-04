@@ -6,12 +6,20 @@ SPDX-License-Identifier: Apache-2.0
 # NeMo-Relay Hermes Integration — Operator Notes
 
 These notes are the operator runbook for installing the tracked Hermes +
-NeMo-Relay integration from a fresh NeMo-Relay checkout. The maintained patch is
-runtime-only: it wires Hermes to the NeMo-Relay plugin entry point, hooks, and
-ACG override seam, but it does not carry Hermes-side tests or smoke harnesses.
-At runtime, the plugin emits a NeMo-Relay session scope plus manual LLM/tool
-lifecycle spans and uses `AtifExporter` to materialize trajectory JSON on
-session finalization.
+NeMo-Relay integration from a fresh NeMo-Relay checkout.
+
+Priority note:
+
+- The wrapped gateway path in `docs/nemo-relay-cli/hermes.mdx` is the P0
+  release-safe Hermes validation path.
+- This patch runbook is the P1 comparison and compatibility path until Hermes
+  ships a tagged release that includes the built-in NeMo Relay plugin.
+
+The maintained patch is runtime-only: it wires Hermes to the NeMo-Relay plugin
+entry point, hooks, and ACG override seam, but it does not carry Hermes-side
+tests or smoke harnesses. At runtime, the plugin emits a NeMo-Relay session
+scope plus manual LLM/tool lifecycle spans and uses `AtifExporter` to
+materialize trajectory JSON on session finalization.
 All commands assume your working directory is the NeMo-Relay repo root unless a
 step says otherwise.
 
