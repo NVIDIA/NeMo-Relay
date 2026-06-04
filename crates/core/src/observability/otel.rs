@@ -551,7 +551,11 @@ impl OtelEventProcessor {
                 let status = match status_code {
                     "OK" => Status::Ok,
                     "ERROR" => Status::error(
-                        metadata.get("otel.status_message").and_then(Json::as_str).unwrap_or_default().to_string(),
+                        metadata
+                            .get("otel.status_message")
+                            .and_then(Json::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                     ),
                     "UNSET" => Status::Unset,
                     other => {

@@ -34,7 +34,7 @@ use chrono::{DateTime, Utc};
 use openinference_semantic_conventions::SpanKind as OpenInferenceSpanKind;
 use openinference_semantic_conventions::attributes as oi;
 use opentelemetry::trace::{
-    Span as _, SpanContext, SpanKind, TraceContextExt, Tracer, TracerProvider as _,
+    Span as _, SpanContext, SpanKind, Status, TraceContextExt, Tracer, TracerProvider as _,
 };
 use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
@@ -549,6 +549,26 @@ impl OpenInferenceEventProcessor {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
             return;
         };
+        if let Some(metadata) = event.metadata() {
+            if let Some(status_code) = metadata.get("otel.status_code").and_then(Json::as_str) {
+                let status = match status_code {
+                    "OK" => Status::Ok,
+                    "ERROR" => Status::error(
+                        metadata
+                            .get("otel.status_message")
+                            .and_then(Json::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                    "UNSET" => Status::Unset,
+                    other => {
+                        eprintln!("Unrecognized OTEL status code in event metadata: {other}");
+                        Status::Unset
+                    }
+                };
+                active_span.span.set_status(status);
+            }
+        }
         active_span.span.set_attributes(end_attributes(event));
         active_span
             .span

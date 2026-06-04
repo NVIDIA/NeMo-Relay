@@ -20,6 +20,7 @@ use crate::codec::request::{
 use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use opentelemetry::trace::Status;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
@@ -1355,6 +1356,51 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
         .unwrap(),
         json!({"status": "done", "metrics": {"tokens": 42}})
     );
+}
+
+#[test]
+fn scope_end_metadata_sets_openinference_span_status() {
+    let cases = [
+        (
+            json!({"otel.status_code": "ERROR", "otel.status_message": "failed"}),
+            Status::error("failed".to_string()),
+        ),
+        (json!({"otel.status_code": "OK"}), Status::Ok),
+        (json!({}), Status::Unset),
+    ];
+
+    for (metadata, expected_status) in cases {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+        let scope_uuid = Uuid::now_v7();
+
+        processor.process(&make_start_event(
+            scope_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            Some(json!({"task": "summarize"})),
+        ));
+        processor.process(&Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(scope_uuid)
+                .name("agent")
+                .metadata(metadata)
+                .data(json!({"status": "done"}))
+                .build(),
+            ScopeCategory::End,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )));
+
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].status, expected_status);
+    }
 }
 
 #[test]
