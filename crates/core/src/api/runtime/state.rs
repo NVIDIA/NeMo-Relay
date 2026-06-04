@@ -247,19 +247,29 @@ impl NemoRelayContextState {
     /// # Parameters
     /// - `handle`: Scope handle to serialize into an event.
     /// - `data`: Optional data payload returned from the scope.
+    /// - `metadata`: Optional metadata payload merged over `handle.metadata`.
     ///
     /// # Returns
     /// A scope-end [`Event`] derived from the provided handle.
-    pub fn end_scope_handle(&self, handle: &ScopeHandle, data: Option<Json>) -> Event {
+    pub fn end_scope_handle(
+        &self,
+        handle: &ScopeHandle,
+        data: Option<Json>,
+        metadata: Option<Json>,
+    ) -> Event {
         self.build_scope_end_event(
             EndScopeHandleParams::builder()
                 .handle(handle)
                 .data_opt(data)
+                .metadata_opt(metadata)
                 .build(),
         )
     }
 
     /// Build a scope-end event from builder parameters.
+    ///
+    /// The `metadata` payload is merged over the metadata already stored on
+    /// the handle.
     ///
     /// # Parameters
     /// - `params`: Scope end-event builder parameters.
@@ -279,7 +289,7 @@ impl NemoRelayContextState {
                 )
                 .name(handle.name.as_str())
                 .data_opt(params.data)
-                .metadata_opt(handle.metadata.clone())
+                .metadata_opt(merge_json(handle.metadata.clone(), params.metadata))
                 .build(),
             ScopeCategory::End,
             scope_attributes_to_strings(handle.attributes),

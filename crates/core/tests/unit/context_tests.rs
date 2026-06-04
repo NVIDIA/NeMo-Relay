@@ -15,7 +15,7 @@ use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::ScopeStack;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{NemoRelayContextState, flush_subscribers};
-use crate::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
+use crate::api::scope::{EndScopeHandleParams, ScopeAttributes, ScopeHandle, ScopeType};
 use crate::api::tool::CreateToolHandleParams;
 use crate::context::registries::{
     merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
@@ -303,6 +303,35 @@ fn context_state_supports_extensions_events_and_builders() {
     NemoRelayContextState::emit_event(&event, &subscribers);
     flush_subscribers().unwrap();
     assert_eq!(events.lock().unwrap().as_slice(), ["mark"]);
+}
+
+#[test]
+fn scope_end_metadata_merges_with_handle_metadata() {
+    let state = NemoRelayContextState::new();
+    let scope = state.create_scope_handle(
+        crate::api::scope::CreateScopeHandleParams::builder()
+            .name("agent")
+            .scope_type(ScopeType::Agent)
+            .metadata(json!({"a": 1, "b": 2, "c": 3}))
+            .build(),
+    );
+
+    let scope_end = state.build_scope_end_event(
+        EndScopeHandleParams::builder()
+            .handle(&scope)
+            .metadata(json!({"c": 3.5, "d": 4}))
+            .build(),
+    );
+    assert_eq!(
+        scope_end.metadata(),
+        Some(&json!({"a": 1, "b": 2, "c": 3.5, "d": 4}))
+    );
+
+    let scope_end = state.end_scope_handle(&scope, None, Some(json!({"c": 5, "e": 6})));
+    assert_eq!(
+        scope_end.metadata(),
+        Some(&json!({"a": 1, "b": 2, "c": 5, "e": 6}))
+    );
 }
 
 #[test]
