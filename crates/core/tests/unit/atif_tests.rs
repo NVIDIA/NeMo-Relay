@@ -901,6 +901,148 @@ fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
 }
 
 #[test]
+fn test_exporter_openclaw_placeholder_replay_preserves_empty_user_step_and_raw_request() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut start = event_builder(llm_uuid, EventType::Start)
+        .name("openclaw-model-call")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "headers": {},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "prompt": "",
+                "messages": [],
+                "imagesCount": 0,
+                "placeholderRequest": true,
+                "source": "openclaw.llm_output"
+            }
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+    let mut end = event_builder(llm_uuid, EventType::End)
+        .name("openclaw-model-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "assistant_texts_count": 1,
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        }))
+        .model_name("claude-sonnet-4")
+        .build();
+
+    for (offset, event) in [&mut start, &mut end].into_iter().enumerate() {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([start, end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let user_step = &trajectory.steps[0];
+    assert_eq!(user_step.source, "user");
+    assert_eq!(user_step.message, json!(""));
+    let user_extra: AtifStepExtra =
+        serde_json::from_value(user_step.extra.clone().unwrap()).unwrap();
+    let llm_request = user_extra.llm_request.unwrap();
+    assert!(llm_request.get("headers").is_none());
+    assert_eq!(llm_request["placeholderRequest"], json!(true));
+    assert_eq!(llm_request["messages"], json!([]));
+    assert_eq!(llm_request["prompt"], json!(""));
+    assert_eq!(llm_request["source"], json!("openclaw.llm_output"));
+
+    let agent_step = &trajectory.steps[1];
+    assert_eq!(agent_step.source, "agent");
+    assert_eq!(agent_step.message, json!("I will search."));
+    assert_eq!(agent_step.model_name, Some("claude-sonnet-4".to_string()));
+    let agent_extra: AtifStepExtra =
+        serde_json::from_value(agent_step.extra.clone().unwrap()).unwrap();
+    let llm_response = agent_extra.llm_response.unwrap();
+    assert_eq!(llm_response["role"], json!("assistant"));
+    assert_eq!(llm_response["content"], json!("I will search."));
+}
+
+#[test]
+fn test_exporter_openclaw_timing_marks_become_system_steps_with_payloads() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let base = base_timestamp();
+
+    let ambiguous_payload = json!({
+        "runId": "run-1",
+        "sessionId": "session-1",
+        "provider": "openai",
+        "model": "gpt-4",
+        "candidateCount": 2
+    });
+    let unpaired_payload = json!({
+        "runId": "run-1",
+        "callId": "call-1",
+        "provider": "openai",
+        "model": "gpt-4",
+        "durationMs": 42,
+        "outcome": "completed"
+    });
+
+    let mut ambiguous = event_builder(Uuid::now_v7(), EventType::Mark)
+        .name("openclaw.model_call_timing_ambiguous")
+        .data(ambiguous_payload.clone())
+        .build();
+    let mut unpaired = event_builder(Uuid::now_v7(), EventType::Mark)
+        .name("openclaw.model_call_timing_unpaired")
+        .data(unpaired_payload.clone())
+        .build();
+
+    set_event_timestamp(&mut ambiguous, base);
+    set_event_timestamp(&mut unpaired, base + chrono::Duration::milliseconds(1));
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([ambiguous, unpaired]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let ambiguous_step = &trajectory.steps[0];
+    assert_eq!(ambiguous_step.source, "system");
+    assert_eq!(
+        ambiguous_step.message,
+        json!("openclaw.model_call_timing_ambiguous")
+    );
+    let ambiguous_extra: AtifStepExtra =
+        serde_json::from_value(ambiguous_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        ambiguous_extra.event_payload.as_ref(),
+        Some(&ambiguous_payload)
+    );
+
+    let unpaired_step = &trajectory.steps[1];
+    assert_eq!(unpaired_step.source, "system");
+    assert_eq!(
+        unpaired_step.message,
+        json!("openclaw.model_call_timing_unpaired")
+    );
+    let unpaired_extra: AtifStepExtra =
+        serde_json::from_value(unpaired_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        unpaired_extra.event_payload.as_ref(),
+        Some(&unpaired_payload)
+    );
+}
+
+#[test]
 fn test_openai_responses_input_extracts_latest_user_content_block() {
     let message = extract_user_messages(&json!({
         "input": [
