@@ -1452,6 +1452,185 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 }
 
 #[tokio::test]
+async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-exact-atif"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-exact-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "temperature": 0.1,
+                        "messages": [
+                            { "role": "user", "content": "summarize this file" }
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": { "name": "read_file" }
+                            }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-exact-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "summary ready"
+                    },
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 7,
+                        "cost": { "total": 0.0042 }
+                    },
+                    "finish_reason": "stop"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-exact-atif"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-exact-atif");
+    assert_eq!(atif["steps"][0]["message"], json!("summarize this file"));
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["temperature"],
+        json!(0.1)
+    );
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["tools"][0]["function"]["name"],
+        json!("read_file")
+    );
+    assert_eq!(atif["steps"][1]["message"], json!("summary ready"));
+    assert_eq!(
+        atif["steps"][1]["extra"]["llm_response"]["content"],
+        json!("summary ready")
+    );
+    assert_eq!(
+        atif["steps"][1]["extra"]["llm_response"]["usage"]["cost"]["total"],
+        json!(0.0042)
+    );
+    assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(11));
+    assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(7));
+    assert_eq!(atif["steps"][1]["metrics"]["cost_usd"], json!(0.0042));
+    assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0042));
+}
+
+#[tokio::test]
+async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-lossy-atif"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-lossy-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "message_count": 1,
+                "tool_count": 0,
+                "request_char_count": 42
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-lossy-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "assistant_content_chars": 13,
+                "finish_reason": "stop",
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 3
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-lossy-atif"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-lossy-atif");
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["fidelity"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["fidelity"]["source"],
+        json!("hermes_pre_api_request")
+    );
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["request_char_count"],
+        json!(42)
+    );
+    assert_eq!(
+        atif["steps"][1]["extra"]["llm_response"]["assistant_content_chars"],
+        json!(13)
+    );
+    assert!(atif["steps"][1]["extra"]["llm_response"]["content"].is_null());
+    assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(5));
+    assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(3));
+}
+
+#[tokio::test]
 async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
