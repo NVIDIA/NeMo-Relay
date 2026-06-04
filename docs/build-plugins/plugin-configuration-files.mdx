@@ -266,9 +266,7 @@ The gateway fails fast, naming the sources, in these conflict cases:
 The code-driven layer is process-local: it only affects `initialize_plugins`
 calls in the same process. It is a Rust runtime API and is not exposed to the
 Python, Node.js, or other language bindings, and it is not a file source, so the
-file discovery and conflict rules above are unchanged. `nemo-relay doctor`
-reports the effective configuration source and validates the merged result when a
-code-driven layer is active in the doctor process.
+file discovery and conflict rules above are unchanged.
 
 ## Explicit Defaults And Overrides
 
