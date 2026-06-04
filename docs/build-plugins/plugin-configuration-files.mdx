@@ -70,16 +70,14 @@ The gateway reads only files named `plugins.toml`.
 
 ## Discovery
 
-The gateway can receive plugin configuration from three source classes:
+The gateway can receive plugin configuration from two source classes:
 
 | Source | Use case |
 |---|---|
 | `plugins.toml` | Normal operator- and project-managed gateway plugin configuration. |
 | `[plugins].config` in `config.toml` | Inline gateway config for small or generated setups. |
-| `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation. |
 
 Use only one source class for a given gateway run. The gateway fails clearly if
-file-based plugin config and `--plugin-config` are both present, or if
 `plugins.toml` and `[plugins].config` are both present.
 
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
@@ -253,8 +251,7 @@ installed by the plugin system.
 
 Keep long-lived plugin setup in `plugins.toml`. Use `[plugins].config` in
 `config.toml` only when a generated or embedded config must keep all gateway
-settings in one file. Use `--plugin-config` for automation that should not write
-files.
+settings in one file.
 
 Legacy observability config sections in `config.toml`, such as `[exporters]`,
 `[observability]`, and `[export.openinference]`, are not supported. Configure

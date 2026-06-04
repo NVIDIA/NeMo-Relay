@@ -195,9 +195,6 @@ pub(crate) struct ServerArgs {
     /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
     #[arg(long, env = "NEMO_RELAY_ANTHROPIC_BASE_URL")]
     pub(crate) anthropic_base_url: Option<String>,
-    /// Generic plugin configuration JSON for process-level gateway plugin activation.
-    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG")]
-    pub(crate) plugin_config: Option<String>,
 }
 
 impl ServerArgs {
@@ -210,7 +207,6 @@ impl ServerArgs {
         self.bind.is_some()
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
-            || self.plugin_config.is_some()
             || self.config.is_some()
     }
 }
@@ -266,8 +262,6 @@ pub(crate) struct RunCommand {
     pub(crate) anthropic_base_url: Option<String>,
     #[arg(long)]
     pub(crate) session_metadata: Option<String>,
-    #[arg(long)]
-    pub(crate) plugin_config: Option<String>,
     #[arg(long)]
     pub(crate) dry_run: bool,
     #[arg(long)]
@@ -440,8 +434,8 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
 ///
 /// Explicit run arguments override inherited top-level server flags, which override shared config.
-/// Session metadata and plugin config are parsed as JSON here so malformed CLI values fail before
-/// the child agent is spawned.
+/// Session metadata is parsed as JSON here so malformed CLI values fail before the child agent is
+/// spawned.
 pub(crate) fn resolve_run_config(
     command: &RunCommand,
     inherited: Option<&ServerArgs>,
@@ -452,16 +446,7 @@ pub(crate) fn resolve_run_config(
         .or_else(|| inherited.and_then(|args| args.config.as_ref()));
     let mut resolved = load_shared_config(config)?;
     if let Some(args) = inherited {
-        // Run-subcommand plugin config has higher precedence than inherited top-level plugin
-        // config. Skip only that inherited field so file/plugins.toml conflicts are still caught
-        // when the run-level override is applied below.
-        if command.plugin_config.is_some() && args.plugin_config.is_some() {
-            let mut inherited = args.clone();
-            inherited.plugin_config = None;
-            apply_server_overrides(&mut resolved.gateway, &inherited)?;
-        } else {
-            apply_server_overrides(&mut resolved.gateway, args)?;
-        }
+        apply_server_overrides(&mut resolved.gateway, args)?;
     }
     apply_run_overrides(&mut resolved.gateway, command)?;
     resolved.gateway.bind = "127.0.0.1:0"
@@ -471,7 +456,7 @@ pub(crate) fn resolve_run_config(
 }
 
 // Applies subcommand-specific `run` overrides after inherited top-level flags. JSON-bearing fields
-// are parsed here so invalid metadata or plugin config fails before the gateway binds a port.
+// are parsed here so invalid session metadata fails before the gateway binds a port.
 fn apply_run_overrides(config: &mut GatewayConfig, command: &RunCommand) -> Result<(), CliError> {
     apply_run_url_overrides(config, command);
     apply_run_json_overrides(config, command)?;
@@ -489,17 +474,14 @@ fn apply_run_url_overrides(config: &mut GatewayConfig, command: &RunCommand) {
     }
 }
 
-// Parses JSON-bearing run overrides after simple values. Invalid metadata or plugin config fails
-// before transparent run mode binds its ephemeral gateway listener.
+// Parses JSON-bearing run overrides after simple values. Invalid session metadata fails before
+// transparent run mode binds its ephemeral gateway listener.
 fn apply_run_json_overrides(
     config: &mut GatewayConfig,
     command: &RunCommand,
 ) -> Result<(), CliError> {
     if let Some(value) = &command.session_metadata {
         config.metadata = Some(parse_json_option("session metadata", value)?);
-    }
-    if let Some(value) = &command.plugin_config {
-        apply_cli_plugin_config(config, value)?;
     }
     Ok(())
 }
@@ -515,9 +497,6 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Resu
     }
     if let Some(value) = &args.anthropic_base_url {
         config.anthropic_base_url = value.clone();
-    }
-    if let Some(value) = &args.plugin_config {
-        apply_cli_plugin_config(config, value)?;
     }
     Ok(())
 }
@@ -787,16 +766,6 @@ fn apply_plugin_toml_config(
         )));
     }
     gateway.plugin_config = Some(plugin_toml.value);
-    Ok(())
-}
-
-fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<(), CliError> {
-    if config.plugin_config.is_some() {
-        return Err(CliError::Config(
-            "plugin config is defined by both --plugin-config and file configuration; choose one source".into(),
-        ));
-    }
-    config.plugin_config = Some(parse_json_option("plugin config", value)?);
     Ok(())
 }
 
