@@ -234,9 +234,10 @@ file-resolved one before activating it:
 ```rust
 use nemo_relay::plugin::{initialize_plugins, layer_config};
 
-// `base` and `overlay` are plugin config documents (the JSON shape of `PluginConfig`);
-// `overlay` is the higher-precedence layer.
-let effective = layer_config(&base, &overlay);
+// `effective` starts as the lower layer; `overlay` (higher precedence) is layered onto it.
+// Both are plugin config documents (the JSON shape of `PluginConfig`).
+let mut effective = base;
+layer_config(&mut effective, overlay);
 initialize_plugins(serde_json::from_value(effective)?).await?;
 ```
 

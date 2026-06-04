@@ -344,7 +344,8 @@ fn test_layer_config_overlay_wins() {
         "policy": { "unknown_component": "error" }
     });
 
-    let merged = layer_config(&base, &overlay);
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
     let components = merged["components"].as_array().unwrap();
 
     // Ordering: base components first (in base order), then overlay-only components appended.
@@ -402,7 +403,8 @@ fn test_layer_config_preserves_multi_instance_kinds() {
         ]
     });
 
-    let merged = layer_config(&base, &overlay);
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
     let components = merged["components"].as_array().unwrap();
 
     // First overlay instance pairs with the base instance; the second is appended, not dropped.

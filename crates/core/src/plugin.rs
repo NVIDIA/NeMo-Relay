@@ -899,77 +899,78 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     report
 }
 
-/// Merges `overlay` (higher precedence) over `base` into the effective config document.
+/// Layers `right` (higher precedence) onto `left` in place.
 ///
-/// Objects merge recursively and arrays/scalars are replaced by `overlay`, except the
+/// Objects merge recursively and arrays/scalars are replaced by `right`, except the
 /// top-level `components` array, whose entries pair by `kind` in order of appearance so
 /// multi-instance kinds are not collapsed. Shared by the gateway's file-layer merge.
-pub fn layer_config(base: &Json, overlay: &Json) -> Json {
-    let (Json::Object(base_object), Json::Object(overlay_object)) = (base, overlay) else {
-        return overlay.clone();
-    };
-    let mut merged = base_object.clone();
-    for (key, overlay_value) in overlay_object {
-        let merged_value = match (key.as_str(), merged.get(key)) {
-            ("components", Some(base_components)) => {
-                merge_plugin_components(base_components, overlay_value)
+pub fn layer_config(left: &mut Json, right: Json) {
+    match (left, right) {
+        (Json::Object(left), Json::Object(right)) => {
+            for (key, value) in right {
+                match (key.as_str(), left.get_mut(&key)) {
+                    ("components", Some(existing)) => merge_plugin_components(existing, value),
+                    (_, Some(existing)) => merge_json_value(existing, value),
+                    (_, _) => {
+                        left.insert(key, value);
+                    }
+                }
             }
-            (_, Some(base_value)) => merge_json_value(base_value, overlay_value),
-            (_, None) => overlay_value.clone(),
-        };
-        merged.insert(key.clone(), merged_value);
+        }
+        (left, right) => *left = right,
     }
-    Json::Object(merged)
 }
 
-/// Merges `overlay` components into `base` by `kind`, pairing repeated kinds positionally.
-fn merge_plugin_components(base: &Json, overlay: &Json) -> Json {
-    let (Json::Array(base_components), Json::Array(overlay_components)) = (base, overlay) else {
-        return overlay.clone();
+/// Merges `right` components into `left` by `kind`, pairing repeated kinds positionally.
+fn merge_plugin_components(left: &mut Json, right: Json) {
+    let Json::Array(left_components) = left else {
+        *left = right;
+        return;
     };
-    let mut components = base_components.clone();
+    let Json::Array(right_components) = right else {
+        *left = right;
+        return;
+    };
     let mut base_slots: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, component) in components.iter().enumerate() {
+    for (index, component) in left_components.iter().enumerate() {
         if let Some(kind) = component_kind(component) {
             base_slots.entry(kind.to_string()).or_default().push(index);
         }
     }
     let mut consumed: HashMap<String, usize> = HashMap::new();
-    for overlay_component in overlay_components {
-        let Some(kind) = component_kind(overlay_component) else {
-            components.push(overlay_component.clone());
+    for component in right_components {
+        let Some(kind) = component_kind(&component).map(str::to_owned) else {
+            left_components.push(component);
             continue;
         };
-        let nth = consumed.entry(kind.to_string()).or_insert(0);
+        let nth = consumed.entry(kind.clone()).or_insert(0);
         let slot = base_slots
-            .get(kind)
+            .get(&kind)
             .and_then(|slots| slots.get(*nth))
             .copied();
         *nth += 1;
         match slot {
-            Some(index) => {
-                components[index] = merge_json_value(&components[index], overlay_component);
-            }
-            None => components.push(overlay_component.clone()),
+            Some(index) => merge_json_value(&mut left_components[index], component),
+            None => left_components.push(component),
         }
     }
-    Json::Array(components)
 }
 
-/// Recursively merges JSON objects; arrays and scalars are replaced by `overlay`.
-fn merge_json_value(base: &Json, overlay: &Json) -> Json {
-    let (Json::Object(base_object), Json::Object(overlay_object)) = (base, overlay) else {
-        return overlay.clone();
-    };
-    let mut merged = base_object.clone();
-    for (key, overlay_value) in overlay_object {
-        let merged_value = match merged.get(key) {
-            Some(base_value) => merge_json_value(base_value, overlay_value),
-            None => overlay_value.clone(),
-        };
-        merged.insert(key.clone(), merged_value);
+/// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.
+fn merge_json_value(left: &mut Json, right: Json) {
+    match (left, right) {
+        (Json::Object(left), Json::Object(right)) => {
+            for (key, value) in right {
+                match left.get_mut(&key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
     }
-    Json::Object(merged)
 }
 
 fn component_kind(component: &Json) -> Option<&str> {

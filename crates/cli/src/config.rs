@@ -767,7 +767,7 @@ where
                     path.display()
                 ))
             })?;
-            merged = layer_config(&merged, &document);
+            layer_config(&mut merged, document);
             sources.push(path);
         }
     }
