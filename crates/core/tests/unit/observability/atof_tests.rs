@@ -169,6 +169,34 @@ fn openclaw_agent_scope_event(
     ))
 }
 
+fn openclaw_replay_llm_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    scope_category: ScopeCategory,
+    data: serde_json::Value,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name("openclaw-model-call")
+            .data(data)
+            .metadata(json!({
+                "source": "openclaw.llm_output",
+                "hook_event_name": "llm_output"
+            }))
+            .build(),
+        scope_category,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("claude-sonnet-4")
+                .build(),
+        ),
+    ))
+}
+
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
         .unwrap()
@@ -568,6 +596,76 @@ fn openclaw_subagent_events_preserve_nested_and_fallback_parent_uuid() {
         fallback_start["metadata"]["nemo_relay_scope_role"],
         json!("subagent")
     );
+}
+
+#[test]
+fn subscriber_preserves_openclaw_placeholder_replay_payloads_as_raw_jsonl() {
+    let dir = temp_dir("atof-openclaw-placeholder");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let events = [
+        openclaw_replay_llm_event(
+            uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            json!({
+                "headers": {},
+                "content": {
+                    "provider": "nvidia-inference",
+                    "model": "claude-sonnet-4",
+                    "prompt": "",
+                    "messages": [],
+                    "imagesCount": 0,
+                    "placeholderRequest": true,
+                    "source": "openclaw.llm_output"
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            json!({
+                "role": "assistant",
+                "content": "I will search.",
+                "assistant_texts_count": 1,
+                "openclaw": {
+                    "assistant_tool_call_names": []
+                }
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "scope");
+        assert_eq!(line["atof_version"], "0.1");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+        assert_eq!(line["category"], "llm");
+        assert_eq!(line["metadata"]["source"], "openclaw.llm_output");
+        assert_eq!(line["metadata"]["hook_event_name"], "llm_output");
+    }
+
+    assert_eq!(lines[0]["scope_category"], "start");
+    assert_eq!(lines[0]["data"]["content"]["placeholderRequest"], true);
+    assert_eq!(lines[0]["data"]["content"]["messages"], json!([]));
+    assert_eq!(lines[1]["scope_category"], "end");
+    assert_eq!(lines[1]["data"]["content"], "I will search.");
 }
 
 #[test]
