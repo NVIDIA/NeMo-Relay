@@ -629,6 +629,257 @@ fn records_span_start_mark_and_end() {
 }
 
 #[test]
+fn openclaw_model_timing_marks_attach_to_parent_spans() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "openclaw.session",
+        ScopeType::Agent,
+        Some(json!({"sessionId": "session-1"})),
+    ));
+    processor.process(&make_mark_event(
+        Some(root_uuid),
+        "openclaw.model_call_timing_ambiguous",
+        Some(json!({
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "candidateCount": 2
+        })),
+    ));
+    processor.process(&make_mark_event(
+        Some(root_uuid),
+        "openclaw.model_call_timing_unpaired",
+        Some(json!({
+            "runId": "run-1",
+            "callId": "call-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "durationMs": 42,
+            "outcome": "completed"
+        })),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "openclaw.session",
+        ScopeType::Agent,
+        Some(json!({"status": "closed"})),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.name.as_ref(), "openclaw.session");
+    assert_eq!(span.events.events.len(), 2);
+    assert_eq!(
+        span.events.events[0].name.as_ref(),
+        "openclaw.model_call_timing_ambiguous"
+    );
+    assert_eq!(
+        span.events.events[1].name.as_ref(),
+        "openclaw.model_call_timing_unpaired"
+    );
+
+    let ambiguous_attributes = attr_map(&span.events.events[0].attributes);
+    assert_eq!(
+        ambiguous_attributes.get("nemo_relay.mark.parent_uuid"),
+        Some(&root_uuid.to_string())
+    );
+    let ambiguous_data: serde_json::Value = serde_json::from_str(
+        ambiguous_attributes
+            .get("nemo_relay.mark.data_json")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        ambiguous_data,
+        json!({
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "candidateCount": 2
+        })
+    );
+    assert!(!ambiguous_attributes.contains_key("nemo_relay.mark.metadata_json"));
+
+    let unpaired_attributes = attr_map(&span.events.events[1].attributes);
+    assert_eq!(
+        unpaired_attributes.get("nemo_relay.mark.parent_uuid"),
+        Some(&root_uuid.to_string())
+    );
+    let unpaired_data: serde_json::Value = serde_json::from_str(
+        unpaired_attributes
+            .get("nemo_relay.mark.data_json")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        unpaired_data,
+        json!({
+            "runId": "run-1",
+            "callId": "call-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "durationMs": 42,
+            "outcome": "completed"
+        })
+    );
+    assert!(!unpaired_attributes.contains_key("nemo_relay.mark.metadata_json"));
+}
+
+#[test]
+fn openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_usage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "messages": [],
+                "imagesCount": 1,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "assistant_texts_count": 1,
+            "usage": {
+                "cost_usd": 0.001
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.process(&make_start_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "prompt": "visible prompt",
+                "messages": [{"role": "user", "content": "visible prompt"}],
+                "imagesCount": 0,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "visible answer",
+            "usage": {
+                "prompt_tokens": 42
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+
+    let stripped_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.cost.total") == Some(&"0.001".to_string())
+        })
+        .expect("missing stripped OpenClaw fallback span");
+    let stripped_attributes = attr_map(&stripped_span.attributes);
+    assert_eq!(
+        stripped_attributes.get("input.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_input = stripped_attributes
+        .get("input.value")
+        .expect("missing stripped input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(stripped_input).unwrap();
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert!(parsed_input["headers"].is_null() || parsed_input.get("headers").is_none());
+    assert_eq!(
+        stripped_attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_output = stripped_attributes
+        .get("output.value")
+        .expect("missing stripped output.value");
+    let parsed_output: serde_json::Value = serde_json::from_str(stripped_output).unwrap();
+    assert!(parsed_output.get("content").is_none());
+    assert_eq!(parsed_output["assistant_texts_count"], json!(1));
+    assert_eq!(
+        stripped_attributes.get("llm.cost.total"),
+        Some(&"0.001".to_string())
+    );
+    assert!(!stripped_attributes.contains_key("llm.token_count.prompt"));
+    assert!(!stripped_attributes.contains_key("llm.output_messages.0.message.content"));
+    assert!(!stripped_attributes.contains_key("llm.input_messages.0.message.role"));
+    assert_no_attr_contains(&stripped_attributes, "secret-token");
+
+    let partial_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.token_count.prompt") == Some(&"42".to_string())
+        })
+        .expect("missing partial-usage OpenClaw fallback span");
+    let partial_attributes = attr_map(&partial_span.attributes);
+    assert_eq!(
+        partial_attributes.get("input.value"),
+        Some(&"user: visible prompt".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("output.value"),
+        Some(&"visible answer".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("llm.token_count.prompt"),
+        Some(&"42".to_string())
+    );
+    assert!(!partial_attributes.contains_key("llm.token_count.completion"));
+    assert!(!partial_attributes.contains_key("llm.token_count.total"));
+    assert!(!partial_attributes.contains_key("llm.cost.total"));
+}
+
+#[test]
 fn llm_input_value_omits_request_headers() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -756,6 +1007,203 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
     assert!(!attributes.contains_key("llm.invocation_parameters"));
     assert!(!attributes.contains_key("llm.finish_reason"));
     assert_no_attr_contains(&attributes, "headers");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let parent_uuid = Uuid::now_v7();
+    let nested_child_uuid = Uuid::now_v7();
+    let fallback_child_uuid = Uuid::now_v7();
+
+    let nested_parent_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "parent-session"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "nested-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_parent_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "fallback-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+
+    for event in [
+        nested_parent_start,
+        nested_child_start,
+        nested_child_end,
+        nested_parent_end,
+        fallback_child_start,
+        fallback_child_end,
+    ] {
+        processor.process(&event);
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let nested_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "nested-worker")
+        .unwrap();
+    let fallback_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "fallback-worker")
+        .unwrap();
+    let nested_child_attributes = attr_map(&nested_child_span.attributes);
+    let fallback_child_attributes = attr_map(&fallback_child_span.attributes);
+
+    assert_eq!(
+        nested_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&parent_uuid.to_string())
+    );
+    assert_eq!(
+        fallback_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&String::new())
+    );
+}
+
+#[test]
+fn openclaw_placeholder_replay_falls_back_to_sanitized_json_input_value() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "prompt": "",
+                "messages": [],
+                "imagesCount": 0,
+                "placeholderRequest": true,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "assistant_texts_count": 1,
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.provider", "nvidia-inference");
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.0.message.content"));
+    assert_attr(&attributes, "input.mime_type", "application/json");
+
+    let input_value = attributes.get("input.value").expect("missing input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(input_value).unwrap();
+    assert!(parsed_input.get("headers").is_none());
+    assert_eq!(parsed_input["content"]["placeholderRequest"], json!(true));
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert_eq!(parsed_input["content"]["prompt"], json!(""));
+    assert_eq!(
+        parsed_input["content"]["source"],
+        json!("openclaw.llm_output")
+    );
+    assert_no_attr_contains(&attributes, "authorization");
     assert_no_attr_contains(&attributes, "secret-token");
 }
 
@@ -1937,6 +2385,215 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
         "{\"query\":\"docs\"}",
     );
     assert_attr(&attributes, "llm.finish_reason", "tool_use");
+}
+
+#[test]
+fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }],
+                "tools": [
+                    { "type": "function", "function": { "name": "search_files" } }
+                ]
+            }))
+            .metadata(metadata.clone())
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search_files",
+                            "arguments": "{\"query\":\"needle\"}"
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost": { "total": 0.0042 }
+                },
+                "model": "qwen",
+                "finish_reason": "tool_calls"
+            }))
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"Requested tools: search_files".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"10".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"5".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.0042".to_string())
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":true");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks_sanitized\"",
+    );
+}
+
+#[test]
+fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let start_metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+    let end_metadata = json!({
+        "provider_payload_exact": false,
+        "fidelity_source": "hermes_api_hooks"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .metadata(start_metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }))
+            .metadata(end_metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(attributes.get("output.value").unwrap()).unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            attributes.get("nemo_relay.end.output_json").unwrap(),
+        )
+        .unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":false");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks\"",
+    );
 }
 
 #[test]

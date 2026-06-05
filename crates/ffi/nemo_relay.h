@@ -965,6 +965,19 @@ NemoRelayStatus nemo_relay_atof_exporter_create(const char *output_directory,
                                                 struct FfiAtofExporter **out);
 
 /**
+ * Creates a new ATOF exporter from a JSON config object.
+ *
+ * # Parameters
+ * - `config_json`: JSON object matching `AtofExporterConfig`.
+ * - `out`: On success, receives a heap-allocated `FfiAtofExporter`.
+ *
+ * # Safety
+ * `config_json` must be a valid C string. `out` must be valid.
+ */
+NemoRelayStatus nemo_relay_atof_exporter_create_from_json(const char *config_json,
+                                                          struct FfiAtofExporter **out);
+
+/**
  * Registers the ATOF exporter as an event subscriber.
  *
  * # Safety

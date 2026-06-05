@@ -47,6 +47,9 @@ from nemo_relay._native import (
     AtifExporter as AtifExporter,
 )
 from nemo_relay._native import (
+    AtofEndpointConfig as AtofEndpointConfig,
+)
+from nemo_relay._native import (
     AtofExporter as AtofExporter,
 )
 from nemo_relay._native import (

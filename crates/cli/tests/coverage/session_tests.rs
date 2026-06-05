@@ -1553,6 +1553,10 @@ async fn codex_stop_snapshots_atif_without_session_end() {
     );
     assert_eq!(
         steps[1]["observation"]["results"][0]["content"],
+        json!(null)
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["extra"]["tool_result"],
         json!({ "content": "hello" })
     );
     assert_eq!(
@@ -1766,6 +1770,329 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(10));
     assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(5));
     assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(3));
+}
+
+#[tokio::test]
+async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-exact-atif"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-exact-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "temperature": 0.1,
+                        "messages": [
+                            { "role": "user", "content": "summarize this file" }
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": { "name": "read_file" }
+                            }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-exact-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "summary ready"
+                    },
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 7,
+                        "cost": { "total": 0.0042 }
+                    },
+                    "finish_reason": "stop"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-exact-atif"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-exact-atif");
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
+    assert_eq!(atif["steps"][0]["message"], json!("summarize this file"));
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["temperature"],
+        json!(0.1)
+    );
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["tools"][0]["function"]["name"],
+        json!("read_file")
+    );
+    assert_eq!(atif["steps"][1]["message"], json!("summary ready"));
+    assert_eq!(
+        atif["steps"][1]["extra"]["llm_response"]["content"],
+        json!("summary ready")
+    );
+    assert_eq!(
+        atif["steps"][1]["extra"]["llm_response"]["usage"]["cost"]["total"],
+        json!(0.0042)
+    );
+    assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(11));
+    assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(7));
+    assert_eq!(atif["steps"][1]["metrics"]["cost_usd"], json!(0.0042));
+    assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0042));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("pre_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(true)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks_sanitized")
+    }));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("post_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(true)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks_sanitized")
+    }));
+}
+
+#[tokio::test]
+async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-error"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "provider": "custom",
+                "model": "qwen",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-error"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-error");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["message"], json!("hello"));
+    assert_eq!(steps[1]["source"], json!("agent"));
+    assert_eq!(steps[1]["extra"]["llm_response"]["status_code"], json!(502));
+    assert_eq!(steps[1]["extra"]["llm_response"]["retry_count"], json!(1));
+    assert_eq!(steps[1]["extra"]["llm_response"]["retryable"], json!(true));
+    assert_eq!(
+        steps[1]["extra"]["llm_response"]["reason"],
+        json!("upstream")
+    );
+    assert_eq!(
+        steps[1]["extra"]["llm_response"]["error"]["message"],
+        json!("gateway upstream error")
+    );
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
+    assert!(
+        observed_events.len() >= 4,
+        "expected Hermes error trajectory to keep observed events, got {}",
+        serde_json::to_string_pretty(&atif["extra"]["observed_events"]).unwrap()
+    );
+    let error_event = observed_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == json!("end")
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    let request_event = observed_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == json!("start")
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    assert_eq!(
+        request_event["metadata"]["provider_payload_exact"],
+        json!(true)
+    );
+    assert_eq!(
+        request_event["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        error_event["metadata"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        error_event["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks")
+    );
+}
+
+#[tokio::test]
+async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-lossy-atif"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-lossy-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "message_count": 1,
+                "tool_count": 0,
+                "request_char_count": 42
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-lossy-atif",
+            "extra": {
+                "task_id": "task-1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "assistant_content_chars": 13,
+                "finish_reason": "stop",
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 3
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-lossy-atif"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-lossy-atif");
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["fidelity"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["fidelity"]["source"],
+        json!("hermes_pre_api_request")
+    );
+    assert_eq!(
+        atif["steps"][0]["extra"]["llm_request"]["request_char_count"],
+        json!(42)
+    );
+    assert_eq!(
+        atif["steps"][1]["extra"]["llm_response"]["assistant_content_chars"],
+        json!(13)
+    );
+    assert!(atif["steps"][1]["extra"]["llm_response"]["content"].is_null());
+    assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(5));
+    assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(3));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("pre_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(false)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks")
+    }));
+    assert!(observed_events.iter().any(|event| {
+        event["metadata"]["hook_event_name"] == json!("post_api_request")
+            && event["metadata"]["provider_payload_exact"] == json!(false)
+            && event["metadata"]["fidelity_source"] == json!("hermes_api_hooks")
+    }));
 }
 
 #[tokio::test]
@@ -1996,6 +2323,134 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
 }
 
 #[tokio::test]
+async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-tool-result"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-tool-result",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "search for needle" }
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": { "name": "search_files" }
+                            }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-tool-result",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-search-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_files",
+                                    "arguments": "{\"query\":\"needle\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-tool-result",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-tool-result",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "tool_response": { "total_count": 6 },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-tool-result"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-tool-result");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["message"], json!("search for needle"));
+
+    let agent = &steps[1];
+    assert_eq!(agent["source"], json!("agent"));
+    assert_eq!(
+        agent["tool_calls"][0]["tool_call_id"],
+        json!("call-search-1")
+    );
+    assert_eq!(
+        agent["tool_calls"][0]["function_name"],
+        json!("search_files")
+    );
+    assert_eq!(
+        agent["observation"]["results"][0]["source_call_id"],
+        json!("call-search-1")
+    );
+    assert!(agent["observation"]["results"][0].get("content").is_none());
+    assert_eq!(
+        agent["observation"]["results"][0]["extra"]["tool_result"]["total_count"],
+        json!(6)
+    );
+}
+
+#[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -2172,6 +2627,224 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
             .unwrap()
             .contains("subagent_end_without_start")
     );
+}
+
+#[tokio::test]
+async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "hermes-routed".into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_start".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let anthropic = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("hermes-routed".into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-sonnet-4".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("msg-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "claude-sonnet-4",
+                        "messages": [{"role": "user", "content": "Find the file."}],
+                        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: json!({ "gateway_path": "/v1/messages" }),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            anthropic,
+            json!({
+                "id": "msg_01",
+                "type": "message",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let responses = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("hermes-routed".into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("resp-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "input": "Find the weather.",
+                        "tools": [{"type": "function", "name": "get_weather"}]
+                    }),
+                },
+                streaming: false,
+                metadata: json!({ "gateway_path": "/v1/responses" }),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            responses,
+            json!({
+                "id": "resp_1",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "I will check the weather."}]},
+                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
+                ],
+                "usage": {
+                    "input_tokens": 75,
+                    "output_tokens": 20,
+                    "total_tokens": 95,
+                    "input_tokens_details": {"cached_tokens": 10},
+                    "cost_usd": 0.005
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let chat = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("hermes-routed".into()),
+                provider: "openai.chat_completions".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("chat-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": "Inspect the files."}],
+                        "tools": [{"type": "function", "function": {"name": "read"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: json!({ "gateway_path": "/v1/chat/completions" }),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            chat,
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect.",
+                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "cost_usd": 0.001
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: "hermes-routed".into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_finalize".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-routed");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 6);
+
+    assert_eq!(steps[0]["message"], json!("Find the file."));
+    assert_eq!(steps[1]["message"], json!("I will search."));
+    assert_eq!(steps[1]["tool_calls"][0]["tool_call_id"], json!("toolu_01"));
+    assert_eq!(steps[1]["metrics"]["prompt_tokens"], json!(11));
+    assert_eq!(steps[1]["metrics"]["cached_tokens"], json!(3));
+    assert_eq!(steps[1]["metrics"]["cost_usd"], json!(0.0042));
+
+    assert_eq!(steps[2]["message"], json!("Find the weather."));
+    assert_eq!(steps[3]["message"], json!("I will check the weather."));
+    assert_eq!(
+        steps[3]["tool_calls"][0]["tool_call_id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(steps[3]["metrics"]["prompt_tokens"], json!(75));
+    assert_eq!(steps[3]["metrics"]["cached_tokens"], json!(10));
+    assert_eq!(steps[3]["metrics"]["cost_usd"], json!(0.005));
+
+    assert_eq!(steps[4]["message"], json!("Inspect the files."));
+    assert_eq!(steps[5]["message"], json!("I will inspect."));
+    assert_eq!(
+        steps[5]["tool_calls"][0]["tool_call_id"],
+        json!("call_read_1")
+    );
+    assert_eq!(steps[5]["metrics"]["prompt_tokens"], json!(3));
+    assert_eq!(steps[5]["metrics"]["cached_tokens"], json!(2));
+    assert_eq!(steps[5]["metrics"]["cost_usd"], json!(0.001));
+
+    assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(89));
+    assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(31));
+    assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(15));
+    assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0102));
 }
 
 #[tokio::test]
@@ -2463,6 +3136,331 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
 
     let sessions = manager.inner.lock().await;
     assert!(sessions.contains_key("llm-session"));
+}
+
+#[tokio::test]
+async fn claude_startup_probe_does_not_open_null_input_turn() {
+    let subscriber_name = "cli-claude-startup-probe-turn-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_turn_starts = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let captured = captured_turn_starts.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "claude-code-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("claude-probe")
+            {
+                captured.lock().unwrap().push(json!({
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "claude-probe",
+                "SessionStart",
+            ))],
+        )
+        .await
+        .unwrap();
+
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("claude-probe".into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-opus-4-8[1m]".into()),
+                request: LlmRequest {
+                    headers: Map::from_iter([(
+                        "x-claude-code-session-id".to_string(),
+                        json!("claude-probe"),
+                    )]),
+                    content: json!({
+                        "model": "claude-opus-4-8[1m]",
+                        "max_tokens": 1,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "test"
+                            }
+                        ]
+                    }),
+                },
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(prep.parent.is_none());
+    assert_eq!(
+        prep.metadata["llm_correlation_status"],
+        json!("pre_turn_probe")
+    );
+    assert_eq!(
+        prep.metadata["llm_correlation_source"],
+        json!("claude_startup_probe")
+    );
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::PromptSubmitted(SessionEvent {
+                session_id: "claude-probe".into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "UserPromptSubmit".into(),
+                payload: json!({ "prompt": "list contents of this dir" }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    {
+        let sessions = manager.inner.lock().await;
+        let session = sessions.get("claude-probe").expect("session retained");
+        assert!(
+            session.turn_scope.is_some(),
+            "prompt should open a Claude turn after the pre-turn probe"
+        );
+    }
+
+    flush_subscribers().unwrap();
+    let starts = captured_turn_starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 1, "expected one user-visible Claude turn");
+    assert_eq!(
+        starts[0]["input"],
+        json!({ "prompt": "list contents of this dir" }),
+        "startup probe must not create a null-input Claude turn"
+    );
+    assert_eq!(starts[0]["metadata"]["turn_index"], json!(1));
+    assert_eq!(starts[0]["metadata"]["turn_source"], json!("user_prompt"));
+
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn claude_startup_probe_only_session_is_pruned_after_finish() {
+    let manager = SessionManager::new(session_test_config());
+    let prep = manager
+        .prepare_gateway_call(&HeaderMap::new(), claude_startup_probe_start("probe-only"))
+        .await
+        .unwrap();
+
+    assert!(prep.bypass_managed_pipeline);
+    assert!(prep.prune_empty_session_on_finish);
+    assert!(manager.inner.lock().await.contains_key("probe-only"));
+
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
+    assert!(!manager.inner.lock().await.contains_key("probe-only"));
+
+    let next = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next.session_id, "gateway-gateway",
+        "probe-only sessions must not become the single-active fallback"
+    );
+}
+
+#[tokio::test]
+async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let subscriber_name = "cli-claude-orphan-subagent-stop-no-null-turn-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_events = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let event_session_id = event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str);
+            if event_session_id != Some("claude-orphan-stop") {
+                return;
+            }
+            if event.name() == "claude-code-turn" {
+                captured.lock().unwrap().push(json!({
+                    "kind": "turn",
+                    "scope_category": event.scope_category(),
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "output": event.output().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            } else if event.name() == "subagent_end_without_start" {
+                captured.lock().unwrap().push(json!({
+                    "kind": "orphan_mark",
+                    "data": event.data().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("claude-orphan-stop", "SessionStart")),
+                NormalizedEvent::PromptSubmitted(SessionEvent {
+                    session_id: "claude-orphan-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptSubmit".into(),
+                    payload: json!({ "prompt": "thanks!" }),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    let active_llm = manager
+        .start_llm(
+            &HeaderMap::new(),
+            llm_start_with_messages_task("claude-orphan-stop", "thanks!"),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            active_llm,
+            json!({
+                "id": "msg_thanks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-test",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You're welcome!"
+                    }
+                ],
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 2,
+                    "output_tokens": 4
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::TurnEnded(SessionEvent {
+                    session_id: "claude-orphan-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "Stop".into(),
+                    payload: json!({ "content": "You're welcome!" }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::SubagentEnded(SubagentEvent {
+                    session_id: "claude-orphan-stop".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SubagentStop".into(),
+                    subagent_id: "missing-worker".into(),
+                    payload: json!({
+                        "hook_event_name": "SubagentStop",
+                        "last_assistant_message": "add the event logs to .gitignore"
+                    }),
+                    metadata: json!({
+                        "hook_event_name": "SubagentStop",
+                        "agent_id": "missing-worker"
+                    }),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let closed = manager
+        .close_idle_sessions_at(
+            Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
+            AGENT_IDLE_TIMEOUT,
+            "idle_timeout",
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    clear_plugin_configuration().unwrap();
+    let events = captured_events.lock().unwrap().clone();
+    let turn_starts: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["kind"] == json!("turn") && event["scope_category"] == json!(ScopeCategory::Start)
+        })
+        .collect();
+    let idle_turn_closes: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["kind"] == json!("turn")
+                && event["scope_category"] == json!(ScopeCategory::End)
+                && event["output"]["status"] == json!("idle_timeout")
+        })
+        .collect();
+
+    assert_eq!(closed, 0, "orphan SubagentStop must not open an idle turn");
+    assert_eq!(
+        turn_starts.len(),
+        1,
+        "orphan SubagentStop must not create a second Claude turn: {events:#?}"
+    );
+    assert_eq!(turn_starts[0]["input"], json!({ "prompt": "thanks!" }));
+    assert_eq!(
+        idle_turn_closes.len(),
+        0,
+        "orphan SubagentStop must not create a turn later closed by idle timeout: {events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| event["kind"] != json!("orphan_mark")),
+        "uncorrelatable Claude SubagentStop should not emit a turn-scoped orphan mark: {events:#?}"
+    );
+
+    let atif = read_atif_for_session(&atif_dir, "claude-orphan-stop");
+    assert_eq!(atif["steps"].as_array().unwrap().len(), 2);
+    assert!(
+        !serde_json::to_string(&atif)
+            .unwrap()
+            .contains("subagent_end_without_start"),
+        "ATIF should not include uncorrelatable Claude orphan stop diagnostics: {}",
+        serde_json::to_string_pretty(&atif).unwrap()
+    );
+
+    deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]
@@ -3957,7 +4955,7 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
             .contains_key("active-gateway-call")
     );
 
-    manager.finish_gateway_call(&prep.session_id).await;
+    manager.finish_gateway_call(&prep.session_id, false).await;
     let closed = manager
         .close_idle_sessions_at(
             Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),
@@ -4690,6 +5688,28 @@ fn llm_start() -> LlmGatewayStart {
         },
         streaming: false,
         metadata: json!({}),
+    }
+}
+
+fn claude_startup_probe_start(session_id: &str) -> LlmGatewayStart {
+    LlmGatewayStart {
+        session_id: Some(session_id.into()),
+        provider: "anthropic.messages".into(),
+        model_name: Some("claude-opus-4-8[1m]".into()),
+        request: LlmRequest {
+            headers: Map::from_iter([("x-claude-code-session-id".to_string(), json!(session_id))]),
+            content: json!({
+                "model": "claude-opus-4-8[1m]",
+                "max_tokens": 1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "test"
+                    }
+                ]
+            }),
+        },
+        ..llm_start()
     }
 }
 

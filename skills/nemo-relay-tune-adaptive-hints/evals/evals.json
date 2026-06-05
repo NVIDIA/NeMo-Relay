@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-tune-adaptive-hints",
+  "cases": [
+    {
+      "id": "consume-adaptive-hints",
+      "question": "The adaptive plugin is already configured. Use its latency sensitivity and tool-parallelism hints safely in my application.",
+      "expected_skill": "nemo-relay-tune-adaptive-hints",
+      "expected_script": null,
+      "ground_truth": "Use the adaptive hints skill to consume predictions and diagnostics safely after the adaptive plugin is configured, with fallbacks and measured behavior.",
+      "expected_behavior": [
+        "Confirm the adaptive plugin is already configured",
+        "Consume latency sensitivity, ACG diagnostics, or tool parallelism guidance safely",
+        "Keep fallback behavior when hints are absent or uncertain",
+        "Recommend measurement before broad rollout"
+      ]
+    },
+    {
+      "id": "neg-configure-plugin",
+      "question": "Set up the adaptive plugin configuration from scratch.",
+      "expected_skill": "nemo-relay-tune-adaptive-config",
+      "expected_script": null,
+      "ground_truth": "Initial adaptive plugin setup belongs to nemo-relay-tune-adaptive-config.",
+      "expected_behavior": [
+        "nemo-relay-tune-adaptive-hints stays silent or redirects",
+        "nemo-relay-tune-adaptive-config handles setup"
+      ]
+    }
+  ]
+}

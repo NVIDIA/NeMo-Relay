@@ -160,6 +160,29 @@ fn build_atof_config(
         };
         config = config.with_mode(mode);
     }
+    let mut endpoints = Vec::new();
+    for endpoint in options.endpoints.unwrap_or_default() {
+        let transport = endpoint
+            .transport
+            .unwrap_or_else(|| "http_post".to_string());
+        let Some(transport) =
+            nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
+        else {
+            return Err(napi::Error::from_reason(
+                "endpoint transport must be 'http_post', 'websocket', or 'ndjson'",
+            ));
+        };
+        let mut endpoint_config =
+            nemo_relay::observability::atof::AtofEndpointConfig::new(endpoint.url, transport);
+        if let Some(timeout_millis) = endpoint.timeout_millis {
+            endpoint_config = endpoint_config.with_timeout_millis(timeout_millis.into());
+        }
+        for (key, value) in parse_string_map(endpoint.headers, "endpoint.headers")? {
+            endpoint_config = endpoint_config.with_header(key, value);
+        }
+        endpoints.push(endpoint_config);
+    }
+    config = config.with_endpoints(endpoints);
 
     Ok(config)
 }
@@ -2990,6 +3013,22 @@ pub struct AtofExporterConfig {
     pub mode: Option<String>,
     /// Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
     pub filename: Option<String>,
+    /// Streaming endpoints that receive every raw ATOF event.
+    pub endpoints: Option<Vec<AtofEndpointConfig>>,
+}
+
+/// Mutable configuration object for one ATOF streaming endpoint.
+#[napi(object)]
+#[derive(Default)]
+pub struct AtofEndpointConfig {
+    /// Endpoint URL.
+    pub url: String,
+    /// `"http_post"` (default), `"websocket"`, or `"ndjson"`.
+    pub transport: Option<String>,
+    /// Extra endpoint headers as string key/value pairs.
+    pub headers: Option<Json>,
+    /// Per-endpoint timeout in milliseconds.
+    pub timeout_millis: Option<u32>,
 }
 
 /// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.

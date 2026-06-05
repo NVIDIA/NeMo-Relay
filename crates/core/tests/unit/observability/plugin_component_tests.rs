@@ -4,7 +4,7 @@
 //! Unit tests for the built-in observability plugin component.
 
 use super::*;
-use crate::api::event::{BaseEvent, EventCategory, ScopeEvent};
+use crate::api::event::{BaseEvent, EventCategory, MarkEvent, ScopeEvent};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{PopScopeParams, PushScopeParams};
@@ -67,6 +67,11 @@ fn editor_schema_tracks_observability_config_types() {
     let mode = atof_schema.field("mode").expect("atof mode field");
     assert_eq!(mode.kind, EditorFieldKind::Enum);
     assert_eq!(mode.enum_values, &["append", "overwrite"]);
+    let endpoints = atof_schema
+        .field("endpoints")
+        .expect("atof endpoints field");
+    assert_eq!(endpoints.kind, EditorFieldKind::Json);
+    assert!(endpoints.optional);
 
     let otlp = schema
         .field("openinference")
@@ -213,6 +218,7 @@ fn schema_contains_every_supported_observability_option() {
         "output_directory",
         "filename",
         "mode",
+        "endpoints",
         "agent_name",
         "agent_version",
         "model_name",
@@ -455,6 +461,51 @@ fn invalid_shapes_and_strict_policy_are_reported() {
             .diagnostics
             .iter()
             .any(|diag| diag.field.as_deref() == Some("transport"))
+    );
+}
+
+#[test]
+fn atof_endpoint_validation_rejects_bad_values() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "endpoints": [
+                {"url": "", "transport": "http_post"},
+                {"url": "http://localhost/events", "transport": "bogus"},
+                {"url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
+                {"url": "not a url", "transport": "http_post"}
+            ]
+        }
+    })));
+
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[0].url") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[1].transport") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[2].timeout_millis") })
+    );
+    #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[3].url") })
     );
 }
 
@@ -771,6 +822,119 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
 }
 
 #[test]
+fn atif_keeps_openclaw_child_only_fallback_as_a_top_level_trajectory() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-openclaw-child-fallback");
+    let root_uuid = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid();
+    let child_uuid = Uuid::now_v7();
+    let child_mark_uuid = Uuid::now_v7();
+    let manager = Arc::new(Mutex::new(AtifDispatcher::new(AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(dir.clone()),
+        ..AtifSectionConfig::default()
+    })));
+    let empty_storage: Arc<Vec<Arc<AtifRemoteStorage>>> = Arc::new(Vec::new());
+
+    let child_start_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(child_uuid)
+            .parent_uuid(root_uuid)
+            .name("worker-agent")
+            .metadata(json!({
+                "session_id": "child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &child_start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let child_mark_event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(child_mark_uuid)
+            .parent_uuid(child_uuid)
+            .name("worker-started")
+            .data(json!({"status": "started"}))
+            .build(),
+        None,
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &child_mark_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let child_end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(child_uuid)
+            .parent_uuid(root_uuid)
+            .name("worker-agent")
+            .build(),
+        ScopeCategory::End,
+        vec![],
+        EventCategory::agent(),
+        None,
+    ));
+    let (pending_write, targets) = manager
+        .lock()
+        .unwrap()
+        .observe_global(
+            &child_end_event,
+            "__test__",
+            Arc::clone(&manager),
+            Arc::clone(&empty_storage),
+        )
+        .unwrap();
+    let path = dir.join(format!("nemo-relay-atif-{child_uuid}.json"));
+    let results = write_atif(&pending_write, empty_storage.as_slice(), &targets);
+    for (label, result) in &results {
+        assert!(result.is_ok(), "{label:?}: {result:?}");
+    }
+    let scope_subscriber = manager
+        .lock()
+        .unwrap()
+        .complete_scope_write(child_uuid, results);
+    if let Some((scope_uuid, name)) = scope_subscriber {
+        let _ = scope_deregister_subscriber(&scope_uuid, &name);
+    }
+
+    let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(value["trajectory_id"], child_uuid.to_string());
+    assert_eq!(value["steps"].as_array().unwrap().len(), 1);
+    assert_eq!(value["steps"][0]["message"], "worker-started");
+    assert!(
+        value.get("subagent_trajectories").is_none() || value["subagent_trajectories"].is_null()
+    );
+    assert!(!value.to_string().contains("subagent_trajectory_ref"));
+}
+
+#[test]
 fn atif_completed_top_level_agent_is_evicted_after_write() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -897,7 +1061,7 @@ fn atif_dispatcher_records_failed_agent_writes() {
             .map(String::as_str),
         Some("disk full")
     );
-    assert!(dispatcher.last_error_result().is_err());
+    assert!(dispatcher.last_error_result().is_ok());
     drop(dispatcher);
     pop(&agent);
 }
@@ -1053,10 +1217,43 @@ fn atif_storage_section_parses_s3_variant() {
     .expect("valid storage section should parse");
     assert_eq!(parsed.storage.len(), 1);
     match &parsed.storage[0] {
+        AtifStorageConfig::Http(_) => panic!("expected s3 storage"),
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
         }
+    }
+}
+
+#[test]
+fn atif_storage_section_parses_http_variant() {
+    let parsed: AtifSectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": [{
+            "type": "http",
+            "endpoint": "https://example.com/atif",
+            "timeout_millis": 1500,
+            "headers": {"x-static": "value"},
+            "header_env": {"authorization": "NEMO_RELAY_ATIF_HTTP_TOKEN"}
+        }]
+    }))
+    .expect("valid HTTP storage section should parse");
+    assert_eq!(parsed.storage.len(), 1);
+    match &parsed.storage[0] {
+        AtifStorageConfig::Http(http) => {
+            assert_eq!(http.endpoint, "https://example.com/atif");
+            assert_eq!(http.timeout_millis, 1500);
+            assert_eq!(
+                http.headers.get("x-static").map(String::as_str),
+                Some("value")
+            );
+            assert_eq!(
+                http.header_env.get("authorization").map(String::as_str),
+                Some("NEMO_RELAY_ATIF_HTTP_TOKEN")
+            );
+        }
+        AtifStorageConfig::S3(_) => panic!("expected HTTP storage"),
     }
 }
 
@@ -1084,19 +1281,20 @@ fn atif_storage_section_parses_array_of_tables() {
         "filename_template": "trajectory-{session_id}.json",
         "storage": [
             {"type": "s3", "bucket": "primary", "key_prefix": "p/"},
-            {"type": "s3", "bucket": "archive", "endpoint_url": "http://minio:9000"}
+            {"type": "http", "endpoint": "http://127.0.0.1:3000/atif"}
         ]
     }))
     .expect("array-of-tables form should parse");
     assert_eq!(parsed.storage.len(), 2);
     match &parsed.storage[0] {
+        AtifStorageConfig::Http(_) => panic!("expected s3 storage"),
         AtifStorageConfig::S3(s3) => assert_eq!(s3.bucket, "primary"),
     }
     match &parsed.storage[1] {
-        AtifStorageConfig::S3(s3) => {
-            assert_eq!(s3.bucket, "archive");
-            assert_eq!(s3.endpoint_url.as_deref(), Some("http://minio:9000"));
+        AtifStorageConfig::Http(http) => {
+            assert_eq!(http.endpoint, "http://127.0.0.1:3000/atif");
         }
+        AtifStorageConfig::S3(_) => panic!("expected HTTP storage"),
     }
 }
 
@@ -1171,6 +1369,210 @@ fn atif_storage_diagnostics_carry_sink_index() {
 }
 
 #[test]
+fn atif_storage_empty_http_endpoint_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "http", "endpoint": "  "}]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].endpoint")),
+        "expected diagnostic for empty endpoint: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_malformed_http_endpoint_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "http", "endpoint": "ftp://example.com/atif"}]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].endpoint")),
+        "expected diagnostic for malformed endpoint: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_timeout_must_be_positive() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "timeout_millis": 0
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].timeout_millis")),
+        "expected diagnostic for non-positive timeout: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_invalid_literal_header_name_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "headers": {"bad header": "value"}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].headers.bad header")),
+        "expected diagnostic for invalid header name: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_invalid_literal_header_value_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "headers": {"x-bad": "bad\nvalue"}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].headers.x-bad")),
+        "expected diagnostic for invalid header value: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_header_env_missing_env_is_rejected() {
+    let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_MISSING_ZZZZ";
+    // SAFETY: tests in this binary do not concurrently observe this uniquely
+    // named env var, so removing it is safe.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": var_name}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].header_env.authorization")),
+        "expected diagnostic for missing header env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_header_env_empty_env_is_rejected() {
+    let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_EMPTY_ZZZZ";
+    // SAFETY: this uniquely named env var is only touched by this test.
+    unsafe {
+        std::env::set_var(var_name, "");
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": var_name}
+            }]
+        }
+    })));
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].header_env.authorization")),
+        "expected diagnostic for empty header env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_header_env_present_env_is_accepted() {
+    let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_OK_ZZZZ";
+    // SAFETY: this uniquely named env var is only touched by this test.
+    unsafe {
+        std::env::set_var(var_name, "Bearer test-token");
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": var_name}
+            }]
+        }
+    })));
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    assert!(
+        !report.has_errors(),
+        "validation should pass when header env var is set: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn atif_storage_editor_field_is_optional_json() {
     let schema = AtifSectionConfig::editor_schema();
     let storage = schema.field("storage").expect("storage editor field");
@@ -1198,6 +1600,7 @@ fn atif_storage_s3_parses_full_credential_block() {
     .expect("full credential block should parse");
     assert_eq!(parsed.storage.len(), 1);
     match &parsed.storage[0] {
+        AtifStorageConfig::Http(_) => panic!("expected s3 storage"),
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));

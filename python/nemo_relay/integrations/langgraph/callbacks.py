@@ -11,7 +11,7 @@ from typing import Any
 from langgraph.callbacks import GraphCallbackHandler, GraphInterruptEvent, GraphResumeEvent
 
 import nemo_relay
-from nemo_relay.integrations.langchain._serialization import _prepare_outputs
+from nemo_relay.integrations.langchain._serialization import _prepare_lc_payloads
 from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler as LangChainNemoRelayCallbackHandler
 
 _logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ _logger = logging.getLogger(__name__)
 def _json_safe(value: Any) -> nemo_relay.Json:
     """Return a conservative JSON-compatible representation for mark payloads."""
     try:
-        value = _prepare_outputs(value)
+        value = _prepare_lc_payloads(value)
     except Exception:
         pass
 

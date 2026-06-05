@@ -520,7 +520,29 @@ fn anthropic_messages_content_message(output: &Json, content: &Json) -> Option<J
 }
 
 fn observation_content_value(value: &Json) -> Option<Json> {
-    (!value.is_null()).then(|| value.clone())
+    match value {
+        Json::String(_) => Some(value.clone()),
+        Json::Array(_) if is_atif_content_parts(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn observation_extra(event: &Event, output: &Json) -> Json {
+    let mut extra = event_extra(event);
+    if let Some(tool_result) = observation_tool_result_extra(output)
+        && let Json::Object(extra_object) = &mut extra
+    {
+        extra_object.insert("tool_result".to_string(), tool_result);
+    }
+    extra
+}
+
+fn observation_tool_result_extra(value: &Json) -> Option<Json> {
+    match value {
+        Json::Null | Json::String(_) => None,
+        Json::Array(_) if is_atif_content_parts(value) => None,
+        _ => Some(value.clone()),
+    }
 }
 
 fn is_atif_content_parts(value: &Json) -> bool {
@@ -646,6 +668,7 @@ fn extract_metrics(output: &Json) -> Option<AtifMetrics> {
     let completion = usage_u64(usage, &["completion_tokens", "output_tokens"]);
     let cached = usage_u64(usage, &["cached_tokens"])
         .or_else(|| prompt_tokens_detail_u64(usage, "cached_tokens"))
+        .or_else(|| input_tokens_detail_u64(usage, "cached_tokens"))
         .or_else(|| {
             sum_usage_u64(
                 usage,
@@ -779,6 +802,14 @@ fn sum_usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option
 fn prompt_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
     usage
         .get("prompt_tokens_details")
+        .and_then(Json::as_object)
+        .and_then(|details| details.get(key))
+        .and_then(Json::as_u64)
+}
+
+fn input_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
+    usage
+        .get("input_tokens_details")
         .and_then(Json::as_object)
         .and_then(|details| details.get(key))
         .and_then(Json::as_u64)
@@ -2309,7 +2340,7 @@ impl StepConversionState {
                 source_call_id: source_call_id.clone(),
                 content: observation_content_value(output),
                 subagent_trajectory_ref: None,
-                extra: Some(event_extra(event)),
+                extra: Some(observation_extra(event, output)),
             });
         }
 
@@ -2652,13 +2683,27 @@ fn merge_observation_result(observation: &mut AtifObservation, mut result: AtifO
                 .get_or_insert_with(Vec::new)
                 .append(&mut refs);
         }
-        if existing.extra.is_none() {
-            existing.extra = result.extra.take();
+        if let Some(extra) = result.extra.take() {
+            merge_observation_extra(&mut existing.extra, extra);
         }
         return;
     }
 
     observation.results.push(result);
+}
+
+fn merge_observation_extra(existing: &mut Option<Json>, incoming: Json) {
+    let Some(existing_extra) = existing.as_mut() else {
+        *existing = Some(incoming);
+        return;
+    };
+    let (Json::Object(existing_object), Json::Object(incoming_object)) = (existing_extra, incoming)
+    else {
+        return;
+    };
+    for (key, value) in incoming_object {
+        existing_object.entry(key).or_insert(value);
+    }
 }
 
 fn subagent_dispatch_arguments(child: &AgentScopeNode, event: &Event) -> Json {
@@ -2692,7 +2737,9 @@ fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &HashSet
                     result.subagent_trajectory_ref = None;
                 }
             }
-            result.content.is_some() || result.subagent_trajectory_ref.is_some()
+            result.content.is_some()
+                || result.subagent_trajectory_ref.is_some()
+                || observation_result_has_tool_result_extra(result)
         });
         if observation.results.is_empty() {
             step.observation = None;
@@ -2716,6 +2763,14 @@ fn renumber_steps(steps: &mut [AtifStep]) {
     for (index, step) in steps.iter_mut().enumerate() {
         step.step_id = index + 1;
     }
+}
+
+fn observation_result_has_tool_result_extra(result: &AtifObservationResult) -> bool {
+    result
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.as_object())
+        .is_some_and(|extra| extra.contains_key("tool_result"))
 }
 
 fn refresh_tool_call_lookup(

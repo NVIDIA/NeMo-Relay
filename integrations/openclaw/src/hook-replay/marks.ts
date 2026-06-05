@@ -20,6 +20,7 @@ export function emitMark(params: {
   session: SessionState;
   name: string;
   data: JsonRecord;
+  metadata?: JsonRecord | null;
   timestamp?: number;
 }): void {
   if (!params.session.rootHandle) {
@@ -27,7 +28,7 @@ export function emitMark(params: {
     return;
   }
 
-  params.nf.event(params.name, params.session.rootHandle, params.data, null, params.timestamp ?? null);
+  params.nf.event(params.name, params.session.rootHandle, params.data, params.metadata ?? null, params.timestamp ?? null);
   params.state.counters.marksEmitted += 1;
 }
 

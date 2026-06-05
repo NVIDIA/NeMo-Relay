@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-typed-wrappers-codecs",
+  "cases": [
+    {
+      "id": "typed-wrapper-preserve-middleware",
+      "question": "Use NeMo Relay typed wrappers and codecs for my LLM request without losing middleware behavior or trace metadata.",
+      "expected_skill": "nemo-relay-typed-wrappers-codecs",
+      "expected_script": null,
+      "ground_truth": "Use the typed wrappers skill to keep typed request/response codecs compatible with managed execution, middleware, and exported semantic metadata.",
+      "expected_behavior": [
+        "Choose typed wrappers/codecs only when typed payloads are needed",
+        "Preserve managed execution and middleware behavior",
+        "Keep semantic metadata available for subscribers and exporters",
+        "Avoid bypassing NeMo Relay with direct provider calls"
+      ]
+    },
+    {
+      "id": "neg-basic-call-wrapping",
+      "question": "Wrap a plain JSON-compatible tool call with NeMo Relay.",
+      "expected_skill": "nemo-relay-instrument-calls",
+      "expected_script": null,
+      "ground_truth": "Basic call wrapping belongs to nemo-relay-instrument-calls.",
+      "expected_behavior": [
+        "nemo-relay-typed-wrappers-codecs stays silent or redirects",
+        "nemo-relay-instrument-calls handles basic wrapping"
+      ]
+    }
+  ]
+}

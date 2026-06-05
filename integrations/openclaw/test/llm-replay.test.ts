@@ -52,9 +52,27 @@ describe('LLM replay', () => {
     assert.deepEqual(request.content.messages, [{ role: 'user', content: 'hello' }]);
     assert.equal(request.content.systemPrompt, 'be concise');
     assert.equal(nf.calls.llmCall[0]?.data, null);
+    assert.deepEqual(nf.calls.llmCall[0]?.metadata, {
+      source: 'openclaw.llm_output',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      provider: 'openai',
+      model: 'gpt-4',
+    });
+    assertNoOverclaimedReplayMetadata(nf.calls.llmCall[0]?.metadata);
     const response = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
     assert.equal(response.content, 'hi');
     assert.equal(nf.calls.llmCallEnd[0]?.data, null);
+    assert.deepEqual(nf.calls.llmCallEnd[0]?.metadata, {
+      source: 'openclaw.llm_output',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      agentId: 'agent-1',
+      provider: 'openai',
+      model: 'gpt-4',
+    });
+    assertNoOverclaimedReplayMetadata(nf.calls.llmCallEnd[0]?.metadata);
     assert.deepEqual(response.usage, {
       prompt_tokens: 2,
       completion_tokens: 3,
@@ -509,9 +527,29 @@ describe('LLM replay', () => {
     const firstResponse = nf.calls.llmCallEnd[0]?.response as ReplayResponse;
     const firstRequest = nf.calls.llmCall[0]?.request as ReplayRequest;
     assert.deepEqual(firstRequest.content.messages, [{ role: 'user', content: 'Find the answer.' }]);
+    assert.deepEqual(nf.calls.llmCall[0]?.metadata, {
+      source: 'openclaw.before_message_write',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      sessionKey: 'session-1',
+      provider: 'openai',
+      model: 'gpt-4',
+      callId: 'call-1',
+      correlation: 'fifo_model_call_timing',
+    });
     assert.equal(firstResponse.content, 'tool calls: web_search');
     assert.equal((firstResponse.openclaw as ResponseOpenClaw).assistant_tool_call_names?.[0], 'web_search');
     assert.equal(firstResponse.openclaw.duration_ms, 42);
+    assert.deepEqual(nf.calls.llmCallEnd[0]?.metadata, {
+      source: 'openclaw.before_message_write',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      sessionKey: 'session-1',
+      provider: 'openai',
+      model: 'gpt-4',
+      callId: 'call-1',
+      correlation: 'fifo_model_call_timing',
+    });
     assert.deepEqual(firstResponse.usage, {
       prompt_tokens: 10,
       completion_tokens: 5,
@@ -533,6 +571,17 @@ describe('LLM replay', () => {
     assert.deepEqual(secondRequest.content.messages?.at(-1), { role: 'toolResult', content: { stripped: true } });
     assert.equal(secondResponse.content, 'Final answer.');
     assert.equal(secondResponse.openclaw.duration_ms, 55);
+    assert.deepEqual(nf.calls.llmCallEnd[1]?.metadata, {
+      source: 'openclaw.before_message_write',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      sessionKey: 'session-1',
+      provider: 'openai',
+      model: 'gpt-4',
+      callId: 'call-2',
+      correlation: 'fifo_model_call_timing',
+    });
+    assertNoOverclaimedReplayMetadata(nf.calls.llmCallEnd[1]?.metadata);
     assert.deepEqual(secondResponse.usage, {
       prompt_tokens: 20,
       completion_tokens: 7,
@@ -894,7 +943,7 @@ describe('LLM replay', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf, { recordTtlMs: 1 });
     const stalePendingOutput = {
-      sessionKey: 'session-1',
+      sessionOwnerKey: 'session-1',
       sessionId: 'session-1',
       runId: 'old-run',
       provider: 'openai',
@@ -907,7 +956,7 @@ describe('LLM replay', () => {
 
     backend.state().llmInputs.set('stale-input', [
       {
-        sessionKey: 'session-1',
+        sessionOwnerKey: 'session-1',
         sessionId: 'session-1',
         runId: 'old-run',
         provider: 'openai',
@@ -921,7 +970,7 @@ describe('LLM replay', () => {
     backend.state().llmOutputsPendingInput.set('stale-output', [stalePendingOutput]);
     backend.state().modelTimingsByLlmKey.set('stale-timing', [
       {
-        sessionKey: 'session-1',
+        sessionOwnerKey: 'session-1',
         sessionId: 'session-1',
         runId: 'old-run',
         callId: 'old-call',
@@ -967,20 +1016,34 @@ type ResponseOpenClaw = {
 
 type TestNemoRelayRuntime = NemoRelayRuntimeModule & {
   calls: {
-    pushScope: Array<{ name: string; scopeType: number; data: unknown; timestamp: number | null | undefined }>;
+    pushScope: Array<{
+      name: string;
+      scopeType: number;
+      data: unknown;
+      metadata: unknown;
+      input: unknown;
+      timestamp: number | null | undefined;
+    }>;
     popScope: Array<{ handle: unknown; output: unknown }>;
-    event: Array<{ name: string; handle: unknown; data: unknown }>;
+    event: Array<{ name: string; handle: unknown; data: unknown; metadata: unknown }>;
     setThreadScopeStack: unknown[];
     llmCall: Array<{
       name: string;
       request: unknown;
       data: unknown;
+      metadata: unknown;
       modelName: string | null | undefined;
       timestamp: number | null | undefined;
     }>;
-    llmCallEnd: Array<{ handle: unknown; response: unknown; data: unknown; timestamp: number | null | undefined }>;
-    toolCall: Array<{ name: string; args: unknown }>;
-    toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown }>;
+    llmCallEnd: Array<{
+      handle: unknown;
+      response: unknown;
+      data: unknown;
+      metadata: unknown;
+      timestamp: number | null | undefined;
+    }>;
+    toolCall: Array<{ name: string; args: unknown; metadata: unknown }>;
+    toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown; metadata: unknown }>;
     toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
 };
@@ -1031,26 +1094,37 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (name, scopeType, _handle, _attributes, data, _links, _metadata, timestamp) => {
+    pushScope: (...args: Parameters<NemoRelayRuntimeModule['pushScope']>) => {
+      const [name, scopeType, , , data, metadata, input, timestamp] = args;
       const handle = { id: `scope-${nextScopeId++}` };
-      calls.pushScope.push({ name, scopeType, data, timestamp });
+      calls.pushScope.push({ name, scopeType, data, metadata, input, timestamp });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
-    event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: (name, request, _handle, _attributes, data, _metadata, modelName, timestamp) => {
+    event: (...args: Parameters<NemoRelayRuntimeModule['event']>) => {
+      const [name, handle, data, metadata] = args;
+      calls.event.push({ name, handle, data, metadata });
+    },
+    llmCall: (...args: Parameters<NemoRelayRuntimeModule['llmCall']>) => {
+      const [name, request, , , data, metadata, modelName, timestamp] = args;
       const handle = { id: `llm-${nextScopeId++}` };
-      calls.llmCall.push({ name, request, data, modelName, timestamp });
+      calls.llmCall.push({ name, request, data, metadata, modelName, timestamp });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>;
     },
-    llmCallEnd: (handle, response, data, _metadata, timestamp) =>
-      calls.llmCallEnd.push({ handle, response, data, timestamp }),
-    toolCall: (name, args) => {
+    llmCallEnd: (...args: Parameters<NemoRelayRuntimeModule['llmCallEnd']>) => {
+      const [handle, response, data, metadata, timestamp] = args;
+      calls.llmCallEnd.push({ handle, response, data, metadata, timestamp });
+    },
+    toolCall: (...args: Parameters<NemoRelayRuntimeModule['toolCall']>) => {
+      const [name, argsValue, , , , metadata] = args;
       const handle = { id: `tool-${nextScopeId++}` };
-      calls.toolCall.push({ name, args });
+      calls.toolCall.push({ name, args: argsValue, metadata });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>;
     },
-    toolCallEnd: (handle, result, data) => calls.toolCallEnd.push({ handle, result, data }),
+    toolCallEnd: (...args: Parameters<NemoRelayRuntimeModule['toolCallEnd']>) => {
+      const [handle, result, data, metadata] = args;
+      calls.toolCallEnd.push({ handle, result, data, metadata });
+    },
     toolConditionalExecution: async (name, args) => {
       calls.toolConditionalExecution.push({ name, args });
     },
@@ -1077,6 +1151,16 @@ function llmOutput() {
     model: 'gpt-4',
     assistantTexts: ['hi'],
   };
+}
+
+function assertNoOverclaimedReplayMetadata(metadata: unknown): void {
+  assert.ok(metadata && typeof metadata === 'object');
+  const record = metadata as Record<string, unknown>;
+  assert.equal('agent_kind' in record, false);
+  assert.equal('provider_payload_exact' in record, false);
+  assert.equal('fidelity_source' in record, false);
+  assert.equal('gateway_path' in record, false);
+  assert.equal('gateway_route' in record, false);
 }
 
 function modelStarted(callId: string) {

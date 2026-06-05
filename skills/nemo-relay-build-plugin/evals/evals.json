@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-build-plugin",
+  "cases": [
+    {
+      "id": "build-subscriber-plugin",
+      "question": "Package my NeMo Relay subscriber setup as a reusable plugin that can be enabled from config and rolled back safely.",
+      "expected_skill": "nemo-relay-build-plugin",
+      "expected_script": null,
+      "ground_truth": "Use the plugin skill to define a stable kind, JSON-compatible config, deterministic validation, PluginContext-based registration, rollback behavior, and tests.",
+      "expected_behavior": [
+        "Decide that reusable config-activated behavior needs a plugin",
+        "Choose a stable plugin kind and JSON-compatible config shape",
+        "Validate config before registering runtime behavior",
+        "Register through PluginContext and cover rollback on activation failure"
+      ]
+    },
+    {
+      "id": "neg-direct-tool-wrapper",
+      "question": "I only need to wrap one existing Python tool call with NeMo Relay events.",
+      "expected_skill": "nemo-relay-instrument-calls",
+      "expected_script": null,
+      "ground_truth": "A one-off direct tool wrapper belongs to nemo-relay-instrument-calls, not plugin packaging.",
+      "expected_behavior": [
+        "nemo-relay-build-plugin stays silent",
+        "nemo-relay-instrument-calls handles the direct wrapping task"
+      ]
+    }
+  ]
+}

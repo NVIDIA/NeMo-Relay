@@ -50,6 +50,28 @@ pub(crate) enum GatewayRouteKind {
     AnthropicCountTokens,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatewayManagementPolicy {
+    Managed,
+    UnmanagedProbe {
+        status: &'static str,
+        source: &'static str,
+    },
+}
+
+impl GatewayManagementPolicy {
+    pub(crate) fn bypasses_managed_pipeline(self) -> bool {
+        matches!(self, Self::UnmanagedProbe { .. })
+    }
+
+    pub(crate) fn bypass_correlation(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Managed => None,
+            Self::UnmanagedProbe { status, source } => Some((status, source)),
+        }
+    }
+}
+
 // Records that a provider-created child session is really a subagent under another session. The
 // session manager stores this until the child emits its terminal AgentEnded event, then removes the
 // alias so future unrelated events cannot be reparented through stale state.
@@ -403,6 +425,24 @@ pub(crate) fn agent_kind_for_gateway_provider(provider: &str) -> AgentKind {
         AgentKind::Codex
     } else {
         AgentKind::Gateway
+    }
+}
+
+pub(crate) fn gateway_management_policy(
+    agent_kind: AgentKind,
+    provider: &str,
+    model_name: Option<&str>,
+    request: &LlmRequest,
+) -> GatewayManagementPolicy {
+    if agent_kind == AgentKind::ClaudeCode
+        && claude_code::is_startup_probe(provider, model_name, request)
+    {
+        GatewayManagementPolicy::UnmanagedProbe {
+            status: "pre_turn_probe",
+            source: "claude_startup_probe",
+        }
+    } else {
+        GatewayManagementPolicy::Managed
     }
 }
 

@@ -647,6 +647,11 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let is_llm = event
         .category()
         .is_some_and(|category| category.as_str() == "llm");
+    if is_llm {
+        // Final span metadata should reflect the completed event, especially for mixed-fidelity
+        // Hermes flows where the request can be exact but the terminal error is lossy.
+        attributes.retain(|attribute| attribute.key.as_str() != oi::METADATA.as_str());
+    }
     let handle_attributes = event.attributes();
     if handle_attributes.is_some_and(|attributes| !attributes.is_empty()) {
         push_serialized(
@@ -699,6 +704,10 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let is_llm = event
         .category()
         .is_some_and(|category| category.as_str() == "llm");
+
+    if let Some(metadata) = event.metadata().and_then(to_json_string) {
+        attributes.push(KeyValue::new(oi::METADATA, metadata));
+    }
 
     push_serialized(
         &mut attributes,
