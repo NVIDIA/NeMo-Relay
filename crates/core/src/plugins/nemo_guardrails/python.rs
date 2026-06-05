@@ -895,19 +895,22 @@ async fn forward_guarded_provider_stream(
 
         let text = extract_stream_text(codec, &chunk);
 
-        if chunk_tx.send(Ok(chunk)).await.is_err() {
-            let _ = text_tx.send(None).await;
-            let _ = monitor.await;
-            return;
-        }
-        tokio::task::yield_now().await;
-
         if let Some(text) = text {
-            let _ = text_tx.send(Some(text)).await;
+            if text_tx.send(Some(text)).await.is_err() {
+                finish_stream_monitor(monitor, &chunk_tx, &blocked).await;
+                return;
+            }
+            tokio::task::yield_now().await;
+
+            if let Some(message) = blocked_message(&blocked) {
+                let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+                let _ = text_tx.send(None).await;
+                let _ = monitor.await;
+                return;
+            }
         }
 
-        if let Some(message) = blocked_message(&blocked) {
-            let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+        if chunk_tx.send(Ok(chunk)).await.is_err() {
             let _ = text_tx.send(None).await;
             let _ = monitor.await;
             return;
@@ -915,6 +918,14 @@ async fn forward_guarded_provider_stream(
     }
 
     let _ = text_tx.send(None).await;
+    finish_stream_monitor(monitor, &chunk_tx, &blocked).await;
+}
+
+async fn finish_stream_monitor(
+    monitor: JoinHandle<FlowResult<()>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+) {
     match monitor.await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
@@ -931,7 +942,7 @@ async fn forward_guarded_provider_stream(
         }
     }
 
-    if let Some(message) = blocked_message(&blocked) {
+    if let Some(message) = blocked_message(blocked) {
         let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
     }
 }

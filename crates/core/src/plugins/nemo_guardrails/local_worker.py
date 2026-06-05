@@ -9,6 +9,7 @@ import traceback
 
 DEFAULT_MODULE_NAME = "nemoguardrails"
 SUPPORTED_NEMOGUARDRAILS_VERSION = "0.22.0"
+STREAM_QUEUE_MAXSIZE = 32
 
 _PROTOCOL_STDOUT = sys.stdout
 sys.stdout = sys.stderr
@@ -232,7 +233,7 @@ async def handle_message(message):
             worker.ensure_streaming_output_supported()
             response(request_id)
         elif command == "stream_start":
-            queue = asyncio.Queue()
+            queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAXSIZE)
             streams[request_id] = queue
             asyncio.create_task(worker.monitor_stream(request_id, message.get("messages") or [], queue, streams))
         elif command == "stream_text":

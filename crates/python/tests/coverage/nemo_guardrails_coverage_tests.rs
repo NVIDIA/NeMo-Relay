@@ -7,8 +7,11 @@ use std::ffi::CString;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::process;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::process::{self, Command, Stdio};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use nemo_relay::api::runtime::{NemoRelayContextState, global_context};
 use nemo_relay::plugin::{
@@ -19,6 +22,7 @@ use pyo3::types::{PyDict, PyModule};
 use serde_json::json;
 
 static NEXT_FAKE_GUARDRAILS_ID: AtomicUsize = AtomicUsize::new(1);
+static SERIAL_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -38,7 +42,7 @@ struct FakeGuardrailsPackage {
 }
 
 impl FakeGuardrailsPackage {
-    fn new(_py: Python<'_>, module_name: &str, version: &str, implementation: &str) -> Self {
+    fn new(py: Python<'_>, module_name: &str, version: &str, implementation: &str) -> Self {
         let id = NEXT_FAKE_GUARDRAILS_ID.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
             "nemo_relay_python_fake_guardrails_{}_{}",
@@ -56,13 +60,34 @@ impl FakeGuardrailsPackage {
         )
         .unwrap();
 
-        let python_executable = write_python_wrapper(&root);
+        let python_executable = write_python_wrapper(&root, &python_executable_for_worker(py));
 
         Self {
             root,
             module_name: module_name.to_string(),
             python_executable,
         }
+    }
+}
+
+fn python_executable_for_worker(py: Python<'_>) -> String {
+    let executable = py
+        .import("sys")
+        .and_then(|sys| sys.getattr("executable"))
+        .and_then(|executable| executable.extract::<String>())
+        .unwrap_or_else(|_| "python3".to_string());
+    if Command::new(&executable)
+        .arg("-c")
+        .arg("import sys")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+    {
+        executable
+    } else {
+        "python3".to_string()
     }
 }
 
@@ -140,6 +165,23 @@ class LLMRails:
         self.config = config
         self._check_results = [
             Result(RailStatus.MODIFIED, content="sanitized user"),
+            Result(RailStatus.BLOCKED, rail="output-policy"),
+            Result(RailStatus.MODIFIED, content='{"arguments": {"city": "Boston"}}'),
+            Result(RailStatus.MODIFIED, content='{"result": {"ok": true}}'),
+        ]
+
+    async def check_async(self, messages, rail_types):
+        return self._check_results.pop(0)
+"#
+}
+
+fn tool_sequence_guardrails() -> &'static str {
+    r#"
+class LLMRails:
+    def __init__(self, config):
+        self.config = config
+        self._check_results = [
+            Result(RailStatus.MODIFIED, content="sanitized user"),
             Result(RailStatus.PASSED),
             Result(RailStatus.MODIFIED, content='{"arguments": {"city": "Boston"}}'),
             Result(RailStatus.MODIFIED, content='{"result": {"ok": true}}'),
@@ -183,15 +225,16 @@ class LLMRails:
 }
 
 #[cfg(unix)]
-fn write_python_wrapper(root: &Path) -> PathBuf {
+fn write_python_wrapper(root: &Path, python_executable: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let wrapper = root.join("python-wrapper");
     fs::write(
         &wrapper,
         format!(
-            "#!/bin/sh\nPYTHONPATH='{}' exec python3 \"$@\"\n",
-            shell_single_quote(root)
+            "#!/bin/sh\nPYTHONPATH='{}' exec '{}' \"$@\"\n",
+            shell_single_quote(root),
+            shell_single_quote(Path::new(python_executable))
         ),
     )
     .unwrap();
@@ -202,13 +245,14 @@ fn write_python_wrapper(root: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn write_python_wrapper(root: &Path) -> PathBuf {
+fn write_python_wrapper(root: &Path, python_executable: &str) -> PathBuf {
     let wrapper = root.join("python-wrapper.cmd");
     fs::write(
         &wrapper,
         format!(
-            "@echo off\r\nset \"PYTHONPATH={};%PYTHONPATH%\"\r\npython3 %*\r\n",
-            root.display()
+            "@echo off\r\nset \"PYTHONPATH={};%PYTHONPATH%\"\r\n\"{}\" %*\r\n",
+            root.display(),
+            python_executable.replace('"', "\"\"")
         ),
     )
     .unwrap();
@@ -225,6 +269,7 @@ fn with_isolated_nemo_relay_modules<T>(
     native_module: &Bound<'_, PyModule>,
     f: impl FnOnce() -> T,
 ) -> T {
+    let _serial_guard = SERIAL_TEST_MUTEX.lock().unwrap();
     let sys = py.import("sys").unwrap();
     let modules = sys
         .getattr("modules")
@@ -254,6 +299,7 @@ fn with_isolated_nemo_relay_modules<T>(
     for (name, module) in saved_modules {
         modules.set_item(name, module).unwrap();
     }
+    reset_runtime_state();
 
     match result {
         Ok(value) => value,
@@ -290,12 +336,19 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
     asyncio
         .call_method1("set_event_loop", (&event_loop,))
         .unwrap();
-    let result = f(event_loop.clone().into_any());
+    let result = catch_unwind(AssertUnwindSafe(|| f(event_loop.clone().into_any())));
     asyncio
         .call_method1("set_event_loop", (py.None(),))
         .unwrap();
     event_loop.call_method0("close").unwrap();
-    result
+    #[cfg(windows)]
+    asyncio
+        .call_method1("set_event_loop_policy", (py.None(),))
+        .unwrap();
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 fn reset_runtime_state() {
@@ -307,6 +360,7 @@ fn reset_runtime_state() {
 #[test]
 fn test_native_pymodule_entrypoint_registers_bindings_without_local_provider_install() {
     let _python = crate::test_support::init_python_test();
+    let _serial_guard = SERIAL_TEST_MUTEX.lock().unwrap();
     reset_runtime_state();
     Python::attach(|py| {
         let module = PyModule::new(py, "_native_guardrails_provider").unwrap();
@@ -346,7 +400,7 @@ fn test_native_pymodule_entrypoint_registers_bindings_without_local_provider_ins
 }
 
 #[test]
-fn test_guardrails_local_runtime_registers_and_enforces_llm_and_tool_checks() {
+fn test_guardrails_local_runtime_enforces_llm_input_and_output_checks() {
     let _python = crate::test_support::init_python_test();
     reset_runtime_state();
 
@@ -420,26 +474,21 @@ async def run_case():
             "model": "gpt-4o-mini",
         }}
 
-    llm_result = await nemo_relay.llm.execute(
-        "demo",
-        request,
-        next_call,
-        response_codec=nemo_relay.codecs.OpenAIChatCodec(),
-    )
-
-    seen_tool_args = []
-
-    async def next_tool(args):
-        seen_tool_args.append(args)
-        return {{"raw": True}}
-
-    tool_result = await nemo_relay.tools.execute("weather_lookup", {{"city": "Phoenix"}}, next_tool)
+    try:
+        await nemo_relay.llm.execute(
+            "demo",
+            request,
+            next_call,
+            response_codec=nemo_relay.codecs.OpenAIChatCodec(),
+        )
+    except RuntimeError as error:
+        llm_error = str(error)
+    else:
+        raise AssertionError("expected output rail block")
 
     return {{
-        "llm_result": llm_result,
-        "tool_result": tool_result,
+        "llm_error": llm_error,
         "seen_request_messages": seen_request_messages,
-        "seen_tool_args": seen_tool_args,
     }}
 "#,
                     prelude = prelude,
@@ -458,14 +507,21 @@ async def run_case():
                 result_json["seen_request_messages"][0],
                 json!("sanitized user")
             );
-            assert_eq!(result_json["tool_result"], json!({ "ok": true }));
-            assert_eq!(
-                result_json["seen_tool_args"][0],
-                json!({ "city": "Boston" })
+            assert!(
+                result_json["llm_error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("output rail blocked the LLM call"),
+                "unexpected error: {}",
+                result_json["llm_error"]
             );
-            assert_eq!(
-                result_json["llm_result"]["choices"][0]["message"]["content"],
-                json!("safe reply")
+            assert!(
+                result_json["llm_error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("output-policy"),
+                "unexpected error: {}",
+                result_json["llm_error"]
             );
         });
     });
@@ -744,7 +800,7 @@ fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() 
                 py,
                 "fake_guardrails_local_e2e",
                 "0.22.0",
-                check_sequence_guardrails(),
+                tool_sequence_guardrails(),
             );
             let python_dir = python_package_dir();
             let prelude = fake_guardrails_module_prelude(

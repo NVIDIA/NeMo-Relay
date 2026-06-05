@@ -23,7 +23,7 @@
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::PyModule;
 
 mod convert;
 #[doc(hidden)]
@@ -57,18 +57,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py_api::register(m)?;
     py_plugin::register(m)?;
     py_adaptive::register(m)?;
-    install_native_module_alias(m)?;
-    Ok(())
-}
-
-fn install_native_module_alias(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = m.py();
-    let sys = py.import("sys")?;
-    let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
-    modules.set_item("nemo_relay._native", m)?;
-    if let Ok(package) = py.import("nemo_relay") {
-        let _ = package.setattr("_native", m);
-    }
     Ok(())
 }
 
