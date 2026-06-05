@@ -36,11 +36,7 @@ guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
 ]
-python = [
-    "dep:pyo3",
-    "dep:pyo3-async-runtimes",
-    "dep:pythonize",
-]
+python = []
 object-store = [
     "dep:object_store",
     "dep:reqwest",
@@ -102,9 +98,6 @@ opentelemetry-http = { version = "0.31", default-features = false, optional = tr
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", features = ["Headers", "Request", "RequestInit", "Response", "Window", "console"], optional = true }
-pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
-pyo3-async-runtimes = { workspace = true, features = ["tokio-runtime"], optional = true }
-pythonize = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }

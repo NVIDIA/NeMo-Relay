@@ -25,7 +25,7 @@ default = ["atof-streaming"]
 atof-streaming = ["nemo-relay/atof-streaming"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "openinference", "python"] }
+nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 async-stream = "0.3"
 axum = "0.8"

@@ -20,8 +20,8 @@ The plugin is designed around backend modes:
   - Calls a Guardrails service over HTTP(S), including streaming over the same
     remote contract.
 - `local`
-  - Calls `nemoguardrails` in process through the Python runtime instead of a
-    separate Guardrails service.
+  - Calls `nemoguardrails` through a local `python3` worker subprocess instead
+    of a separate Guardrails service.
 
 ## Use This Plugin When
 
@@ -40,7 +40,7 @@ Start here when you need to:
 The built-in plugin currently exposes two user-facing modes:
 
 - `remote` for Guardrails-service integration over HTTP(S)
-- `local` for in-process `nemoguardrails` integration through the Python runtime
+- `local` for `nemoguardrails` integration through a local Python worker
 
 Both modes support managed LLM `input` and `output`. The current mode-specific
 differences are:
@@ -50,9 +50,9 @@ differences are:
 - `local` supports managed `tool_input` and broader LLM codec coverage, but it
   does not support `request_defaults`
 
-The `local` backend is a Python-backed runtime feature, not a universal
-cross-binding backend. Runtimes that do not install the local backend provider
-report `local` mode as unavailable during plugin initialization.
+The `local` backend requires a `python3 >= 3.11` executable that can import the
+tested `nemoguardrails` dependency. It does not embed Python into the NeMo Relay
+binary.
 
 ## Managed Surfaces Versus Request Defaults
 

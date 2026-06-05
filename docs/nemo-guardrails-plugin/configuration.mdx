@@ -56,7 +56,7 @@ At least one managed Guardrails surface must be enabled.
 | Managed `tool_output` | Supported | Supported |
 | `request_defaults` pass-through | Supported | Not supported |
 | Codec support | `openai_chat` | `openai_chat`, `openai_responses`, `anthropic_messages` |
-| Runtime availability | Any runtime that includes the remote backend | Python-enabled runtimes that can import `nemoguardrails` |
+| Runtime availability | Any runtime that includes the remote backend | Runtimes that can start `python3 >= 3.11` with `nemoguardrails==0.22.0` installed |
 
 ## Remote Mode
 
@@ -219,18 +219,18 @@ Guardrails activity:
 
 ## Local Mode
 
-Use `local` mode when NeMo Relay should call `nemoguardrails` in process
-through the Python runtime instead of a separate Guardrails service.
+Use `local` mode when NeMo Relay should call `nemoguardrails` through a local
+Python worker subprocess instead of a separate Guardrails service.
 
 ### Requirements
 
-To use `mode = "local"`, the running Python environment must be able to import
-`nemoguardrails==0.22.0`.
+To use `mode = "local"`, NeMo Relay must be able to start a `python3 >= 3.11`
+executable that can import `nemoguardrails==0.22.0`.
 
-The built-in local backend is installed by the Python binding and runs
-Guardrails in process. Use it when the runtime has direct access to the Python
-Guardrails dependency and configuration files rather than a separate Guardrails
-service. Install the tested local-mode Guardrails dependency with
+The built-in local backend starts a Python worker process and sends Guardrails
+checks over a JSON-lines protocol. Use it when the runtime has direct access to
+the Python Guardrails dependency and configuration files rather than a separate
+Guardrails service. Install the tested local-mode Guardrails dependency with
 `pip install nemoguardrails==0.22.0`.
 
 The same ownership boundary still applies:
@@ -262,15 +262,18 @@ tool_input = true
 tool_output = true
 config_path = "./rails"
 
+[components.config.local]
+python_executable = "python3"
+
 [components.config.policy]
 unknown_component = "warn"
 unknown_field = "warn"
 unsupported_value = "error"
 ```
 
-This example configures the built-in local mode for a Python-enabled runtime
-that can import `nemoguardrails` and read a native Guardrails config directory
-from `./rails`.
+This example configures the built-in local mode for a runtime that can start
+`python3`, import `nemoguardrails`, and read a native Guardrails config
+directory from `./rails`.
 
 For example, the Guardrails-side policy can look like this:
 
@@ -298,6 +301,8 @@ When `mode = "local"`:
 - `local.python_module` is optional and only needed when the runtime should
   import the Guardrails dependency from a custom Python module path instead of
   the default `nemoguardrails` package.
+- `local.python_executable` is optional and defaults to the
+  `NEMO_RELAY_PYTHON` environment variable when set, otherwise `python3`.
 
 ### Codec Boundary
 

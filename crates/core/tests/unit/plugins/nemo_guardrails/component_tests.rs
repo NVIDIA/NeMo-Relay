@@ -361,6 +361,7 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
         "headers",
         "timeout_millis",
         "python_module",
+        "python_executable",
         "context",
         "thread_id",
         "state",
@@ -761,7 +762,7 @@ fn invalid_shapes_and_values_are_reported() {
         "config_yaml": "",
         "colang_content": "",
         "codec": "openai_chat",
-        "local": {"python_module": ""}
+        "local": {"python_module": "", "python_executable": ""}
     })));
     assert!(local_empty_fields.has_errors());
     assert!(
@@ -787,6 +788,12 @@ fn invalid_shapes_and_values_are_reported() {
             .diagnostics
             .iter()
             .any(|diag| diag.field.as_deref() == Some("local.python_module"))
+    );
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("local.python_executable"))
     );
 
     let local_request_defaults = validate_plugin_config(&plugin_config(json!({
@@ -973,22 +980,6 @@ fn unknown_fields_follow_policy() {
     })));
     assert!(!ignored.has_errors());
     assert!(ignored.diagnostics.is_empty());
-}
-
-#[cfg(not(feature = "python"))]
-#[test]
-fn local_mode_validation_reports_missing_python_feature() {
-    let diagnostics = validate_plugin_config(&plugin_config(json!({
-        "mode": "local",
-        "codec": "openai_chat",
-        "config_path": "./rails"
-    })))
-    .unwrap();
-
-    assert!(diagnostics.diagnostics.iter().any(|diag| {
-        diag.message
-            .contains("local mode requires a build with the 'python' feature enabled")
-    }));
 }
 
 #[test]

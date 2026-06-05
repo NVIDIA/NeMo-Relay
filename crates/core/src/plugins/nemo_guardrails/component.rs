@@ -192,6 +192,9 @@ pub struct LocalBackendConfig {
     /// Optional import path for the Python runtime module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python_module: Option<String>,
+    /// Optional Python executable used to run the local Guardrails worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_executable: Option<String>,
 }
 
 /// Default request semantics applied by the selected Guardrails backend.
@@ -326,6 +329,7 @@ crate::editor_config! {
 crate::editor_config! {
     impl LocalBackendConfig {
         python_module => { label: "python_module", kind: String, optional: true },
+        python_executable => { label: "python_executable", kind: String, optional: true },
     }
 }
 
@@ -526,7 +530,7 @@ fn validate_nemo_guardrails_plugin_config(
         &config.policy,
         plugin_config,
         "local",
-        &["python_module"],
+        &["python_module", "python_executable"],
     );
     validate_section_fields(
         &mut diagnostics,
@@ -694,6 +698,20 @@ fn validate_non_empty_strings(
             "local.python_module must not be empty".to_string(),
         );
     }
+
+    if let Some(local) = &config.local
+        && let Some(python_executable) = &local.python_executable
+        && python_executable.trim().is_empty()
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some("local.python_executable".to_string()),
+            "local.python_executable must not be empty".to_string(),
+        );
+    }
 }
 
 fn validate_config_shape(
@@ -744,15 +762,6 @@ fn validate_local_config_shape(
     config: &NeMoGuardrailsConfig,
     flags: &ConfigShapeFlags,
 ) {
-    #[cfg(not(feature = "python"))]
-    push_config_shape_diag(
-        diagnostics,
-        policy.unsupported_value,
-        "nemo_guardrails.unavailable_backend",
-        Some("mode"),
-        "local mode requires a build with the 'python' feature enabled",
-    );
-
     if flags.has_config_path == flags.has_config_yaml {
         push_config_shape_diag(
             diagnostics,

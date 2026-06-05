@@ -200,6 +200,10 @@ fn typed_editor_model_contains_nemo_guardrails_options() {
         EditorFieldKind::String
     );
     assert_eq!(
+        local.field("python_executable").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
         schema.field("config_path").unwrap().kind,
         EditorFieldKind::String
     );
@@ -1345,6 +1349,7 @@ fn nemo_guardrails_config_map_serializes_local_mode_fields() {
         tool_output: true,
         local: Some(LocalBackendConfig {
             python_module: Some("custom_guardrails".into()),
+            python_executable: Some("/opt/python/bin/python3".into()),
         }),
         ..NeMoGuardrailsConfig::default()
     })
@@ -1355,6 +1360,10 @@ fn nemo_guardrails_config_map_serializes_local_mode_fields() {
     assert_eq!(map.get("config_path"), Some(&json!("./rails")));
     assert_eq!(map.get("tool_input"), Some(&json!(true)));
     assert_eq!(map["local"]["python_module"], json!("custom_guardrails"));
+    assert_eq!(
+        map["local"]["python_executable"],
+        json!("/opt/python/bin/python3")
+    );
 }
 
 #[test]
