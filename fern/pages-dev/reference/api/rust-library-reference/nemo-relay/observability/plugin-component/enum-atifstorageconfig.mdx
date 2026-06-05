@@ -3,20 +3,26 @@ title: "Enum Atif Storage Config"
 sidebar-title: "AtifStorageConfig"
 slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/enum-atifstorageconfig"
 description: "Remote storage destination for ATIF trajectory files."
-position: 7
+position: 8
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum AtifStorageConfig &#123;\n    S3(<a href=\"struct-s3storageconfig\">S3StorageConfig</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum AtifStorageConfig &#123;\n    Http(<a href=\"struct-httpstorageconfig\">HttpStorageConfig</a>),\n    S3(<a href=\"struct-s3storageconfig\">S3StorageConfig</a>),\n&#125;"}} /></pre>
 
 Remote storage destination for ATIF trajectory files.
 
 When [`AtifSectionConfig::storage`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is non-empty, the ATIF dispatcher uploads each completed trajectory to every configured backend instead of writing it to the local filesystem. The shape is tagged with a `type` discriminator so additional backends (for example, Azure Blob Storage) can be added without breaking existing configs.
 
 ## Variants
+
+### `Http(HttpStorageConfig)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Http(<a href=\"struct-httpstorageconfig\">HttpStorageConfig</a>)"}} /></pre>
+
+HTTP endpoint storage.
 
 ### `S3(S3StorageConfig)`
 

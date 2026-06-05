@@ -41,6 +41,18 @@ export interface S3StorageConfig {
 }
 ```
 
+### `HttpStorageConfig`
+
+```ts
+export interface HttpStorageConfig {
+  type: 'http';
+  endpoint: string;
+  headers?: Record<string, string>;
+  header_env?: Record<string, string>;
+  timeout_millis?: number;
+}
+```
+
 ### `AtifConfig`
 
 ```ts
@@ -53,7 +65,7 @@ export interface AtifConfig {
   extra?: Record<string, Json>;
   output_directory?: string;
   filename_template?: string;
-  storage?: S3StorageConfig | S3StorageConfig[];
+  storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
 }
 ```
 
