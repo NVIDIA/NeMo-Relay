@@ -39,9 +39,17 @@ function rejectWithPrimitive(value) {
   return Promise.reject(value);
 }
 
-async function flushSubscriberCallbacks() {
+async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
   flushSubscribers();
-  for (let i = 0; i < 10; i += 1) {
+  // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
+  // subscriber callbacks are queued onto Node's event loop through N-API
+  // ThreadsafeFunction. Yield event-loop turns until the observed JS-side
+  // callback state is ready, with a timeout to avoid hanging the test forever.
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('timed out waiting for subscriber callbacks');
+    }
     await new Promise((resolve) => setImmediate(resolve));
   }
 }
@@ -286,7 +294,22 @@ describe('Tool execute', () => {
         /tool status failure/,
       );
 
-      await flushSubscriberCallbacks();
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (e) =>
+            e.name === 'exec_status_ok_tool' &&
+            e.kind === 'scope' &&
+            e.category === 'tool' &&
+            e.scope_category === 'end',
+        ) &&
+        events.some(
+          (e) =>
+            e.name === 'exec_status_error_tool' &&
+            e.kind === 'scope' &&
+            e.category === 'tool' &&
+            e.scope_category === 'end',
+        ),
+      );
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
