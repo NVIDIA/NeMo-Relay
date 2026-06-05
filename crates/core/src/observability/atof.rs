@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
-use futures_util::SinkExt;
+use futures_util::{SinkExt, stream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
@@ -428,6 +428,21 @@ enum EndpointMessage {
     Close(std_mpsc::Sender<()>),
 }
 
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+enum NdjsonBodyMessage {
+    Event(Vec<u8>),
+    Flush(std_mpsc::Sender<()>),
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+impl NdjsonBodyMessage {
+    fn acknowledge_if_flush(self) {
+        if let Self::Flush(done) = self {
+            let _ = done.send(());
+        }
+    }
+}
+
 struct AtofEndpointWorker {
     sender: tokio::sync::mpsc::UnboundedSender<EndpointMessage>,
     timeout: Duration,
@@ -783,10 +798,20 @@ async fn run_ndjson_endpoint(
         }
     };
 
-    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel::<std::io::Result<Vec<u8>>>();
-    let body = reqwest::Body::wrap_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(
-        body_rx,
-    ));
+    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel::<NdjsonBodyMessage>();
+    let body_stream = stream::unfold(body_rx, |mut body_rx| async {
+        loop {
+            match body_rx.recv().await? {
+                NdjsonBodyMessage::Event(bytes) => {
+                    return Some((Ok::<_, std::io::Error>(bytes), body_rx));
+                }
+                NdjsonBodyMessage::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
+        }
+    });
+    let body = reqwest::Body::wrap_stream(body_stream);
     let request = tokio::spawn(async move {
         client
             .post(config.url)
@@ -800,12 +825,17 @@ async fn run_ndjson_endpoint(
     while let Some(message) = rx.recv().await {
         match message {
             EndpointMessage::Event(raw_json) => {
-                if let Err(error) = body_tx.send(Ok(format!("{raw_json}\n").into_bytes())) {
+                if let Err(error) = body_tx.send(NdjsonBodyMessage::Event(
+                    format!("{raw_json}\n").into_bytes(),
+                )) {
                     eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON send failed: {error}");
                 }
             }
             EndpointMessage::Flush(done) => {
-                let _ = done.send(());
+                if let Err(error) = body_tx.send(NdjsonBodyMessage::Flush(done)) {
+                    eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON flush failed: {error}");
+                    error.0.acknowledge_if_flush();
+                }
             }
             EndpointMessage::Close(done) => {
                 drop(body_tx);

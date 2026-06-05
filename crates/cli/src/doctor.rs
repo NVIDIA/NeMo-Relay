@@ -995,22 +995,31 @@ async fn probe_atof_websocket(
     }
     match timeout(timeout_duration, tokio_tungstenite::connect_async(request)).await {
         Ok(Ok((mut socket, _))) => {
-            let send = socket
-                .send(tokio_tungstenite::tungstenite::Message::Text(
+            let send = timeout(
+                timeout_duration,
+                socket.send(tokio_tungstenite::tungstenite::Message::Text(
                     payload.into(),
-                ))
-                .await;
-            let _ = socket.close(None).await;
+                )),
+            )
+            .await;
+            let _ = timeout(timeout_duration, socket.close(None)).await;
             match send {
-                Ok(()) => Check {
+                Ok(Ok(())) => Check {
                     name: "ATOF endpoint",
                     status: Status::Pass,
                     details: format!("endpoints[{index}] websocket {url}"),
                 },
-                Err(err) => Check {
+                Ok(Err(err)) => Check {
                     name: "ATOF endpoint",
                     status: Status::Fail,
                     details: format!("endpoints[{index}] websocket {url}: {err}"),
+                },
+                Err(_) => Check {
+                    name: "ATOF endpoint",
+                    status: Status::Fail,
+                    details: format!(
+                        "endpoints[{index}] websocket {url}: timed out sending probe payload"
+                    ),
                 },
             }
         }

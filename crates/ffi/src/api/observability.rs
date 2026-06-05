@@ -23,6 +23,7 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
     set_last_error(&error.to_string());
     match error {
         AtofExporterError::Runtime(error) => status_from_error(error),
+        AtofExporterError::InvalidEndpoint(_) => NemoRelayStatus::InvalidArg,
         _ => NemoRelayStatus::Internal,
     }
 }
