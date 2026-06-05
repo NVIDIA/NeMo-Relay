@@ -747,7 +747,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             Ok(Box::pin(wrapper) as LlmJsonStream)
         }
         Err(error) => {
-            let _ = emit_llm_end_without_output(&handle, metadata);
+            let end_metadata =
+                metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+            let _ = emit_llm_end_without_output(&handle, end_metadata);
             Err(error)
         }
     }
