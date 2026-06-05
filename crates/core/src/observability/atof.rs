@@ -8,12 +8,20 @@
 //! canonical NeMo Relay Agent Trajectory Observability Format (ATOF) event as
 //! one JSON object per JSONL line.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::time::Duration;
 
 use chrono::Utc;
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+use futures_util::{SinkExt, stream};
+use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
@@ -53,6 +61,9 @@ pub enum AtofExporterError {
         /// Stored failure message.
         message: String,
     },
+    /// A streaming endpoint configuration is invalid.
+    #[error("invalid ATOF streaming endpoint: {0}")]
+    InvalidEndpoint(String),
     /// The internal exporter state lock was poisoned.
     #[error("the ATOF exporter state lock was poisoned")]
     LockPoisoned,
@@ -62,7 +73,8 @@ pub enum AtofExporterError {
 }
 
 /// File write behavior for [`AtofExporter`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AtofExporterMode {
     /// Append events to an existing file or create it if missing.
     #[default]
@@ -90,15 +102,95 @@ impl AtofExporterMode {
     }
 }
 
+/// Streaming transport used by an ATOF endpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AtofEndpointTransport {
+    /// POST each event as one JSONL record.
+    #[default]
+    HttpPost,
+    /// Send each event as one WebSocket JSON text message.
+    Websocket,
+    /// Stream events over one long-lived HTTP NDJSON upload.
+    Ndjson,
+}
+
+impl AtofEndpointTransport {
+    /// Parse a string transport used by configuration and bindings.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "http_post" => Some(Self::HttpPost),
+            "websocket" => Some(Self::Websocket),
+            "ndjson" => Some(Self::Ndjson),
+            _ => None,
+        }
+    }
+
+    /// Return the stable string representation used by configuration and bindings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HttpPost => "http_post",
+            Self::Websocket => "websocket",
+            Self::Ndjson => "ndjson",
+        }
+    }
+}
+
+/// Streaming destination for raw ATOF events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AtofEndpointConfig {
+    /// Endpoint URL.
+    pub url: String,
+    /// Endpoint transport.
+    #[serde(default)]
+    pub transport: AtofEndpointTransport,
+    /// Headers applied to endpoint requests or handshakes.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+    /// Per-endpoint timeout in milliseconds.
+    #[serde(default = "default_endpoint_timeout_millis")]
+    pub timeout_millis: u64,
+}
+
+impl AtofEndpointConfig {
+    /// Create a streaming endpoint with defaults.
+    pub fn new(url: impl Into<String>, transport: AtofEndpointTransport) -> Self {
+        Self {
+            url: url.into(),
+            transport,
+            headers: HashMap::new(),
+            timeout_millis: default_endpoint_timeout_millis(),
+        }
+    }
+
+    /// Add a header to this endpoint config.
+    pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Override the endpoint timeout.
+    pub fn with_timeout_millis(mut self, timeout_millis: u64) -> Self {
+        self.timeout_millis = timeout_millis;
+        self
+    }
+}
+
 /// Configuration for [`AtofExporter`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AtofExporterConfig {
     /// Directory that contains the JSONL output file.
+    #[serde(default = "default_output_directory")]
     pub output_directory: PathBuf,
     /// Append or overwrite behavior used when opening the file.
+    #[serde(default)]
     pub mode: AtofExporterMode,
     /// Output filename.
+    #[serde(default = "default_filename")]
     pub filename: String,
+    /// Optional streaming endpoints that receive every raw ATOF event.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<AtofEndpointConfig>,
 }
 
 impl Default for AtofExporterConfig {
@@ -107,6 +199,7 @@ impl Default for AtofExporterConfig {
             output_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             mode: AtofExporterMode::Append,
             filename: default_filename(),
+            endpoints: Vec::new(),
         }
     }
 }
@@ -135,6 +228,18 @@ impl AtofExporterConfig {
         self
     }
 
+    /// Override streaming endpoints.
+    pub fn with_endpoints(mut self, endpoints: Vec<AtofEndpointConfig>) -> Self {
+        self.endpoints = endpoints;
+        self
+    }
+
+    /// Add one streaming endpoint.
+    pub fn with_endpoint(mut self, endpoint: AtofEndpointConfig) -> Self {
+        self.endpoints.push(endpoint);
+        self
+    }
+
     /// Return the full output path for this config.
     pub fn path(&self) -> PathBuf {
         self.output_directory.join(&self.filename)
@@ -144,6 +249,8 @@ impl AtofExporterConfig {
 struct AtofExporterState {
     writer: BufWriter<File>,
     last_error: Option<String>,
+    endpoints: Vec<AtofEndpointWorker>,
+    closed: bool,
 }
 
 /// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
@@ -157,11 +264,14 @@ impl AtofExporter {
     pub fn new(config: AtofExporterConfig) -> Result<Self> {
         let path = config.path();
         let file = open_file(&path, config.mode)?;
+        let endpoints = start_endpoint_workers(&config.endpoints)?;
         Ok(Self {
             path,
             state: Arc::new(Mutex::new(AtofExporterState {
                 writer: BufWriter::new(file),
                 last_error: None,
+                endpoints,
+                closed: false,
             })),
         })
     }
@@ -178,11 +288,23 @@ impl AtofExporter {
             let Ok(mut state) = state.lock() else {
                 return;
             };
-            if state.last_error.is_some() {
+            if state.closed || state.last_error.is_some() {
                 return;
             }
-            if let Err(error) = write_event(&mut state.writer, event) {
+            let Ok(value) = event.try_to_json_value() else {
+                state.last_error = Some("failed to serialize ATOF event".to_string());
+                return;
+            };
+            if let Err(error) = write_json_value(&mut state.writer, &value) {
                 state.last_error = Some(error);
+                return;
+            }
+            let Ok(raw_json) = serde_json::to_string(&value) else {
+                state.last_error = Some("failed to serialize ATOF event".to_string());
+                return;
+            };
+            for endpoint in &state.endpoints {
+                endpoint.enqueue(raw_json.clone());
             }
         })
     }
@@ -197,13 +319,16 @@ impl AtofExporter {
         deregister_subscriber(name).map_err(Into::into)
     }
 
-    /// Flush the underlying file and report any stored write error.
+    /// Flush the underlying file and drain queued endpoint events.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| AtofExporterError::LockPoisoned)?;
+        if state.closed {
+            return stored_failure_result(&self.path, &state);
+        }
         state
             .writer
             .flush()
@@ -211,18 +336,35 @@ impl AtofExporter {
                 path: self.path.clone(),
                 source,
             })?;
-        if let Some(message) = &state.last_error {
-            return Err(AtofExporterError::StoredFailure {
-                path: self.path.clone(),
-                message: message.clone(),
-            });
+        for endpoint in &state.endpoints {
+            endpoint.flush();
         }
-        Ok(())
+        stored_failure_result(&self.path, &state)
     }
 
-    /// Shut down the exporter by flushing any buffered data.
+    /// Shut down the exporter by flushing buffered data and closing endpoints.
     pub fn shutdown(&self) -> Result<()> {
-        self.force_flush()
+        flush_subscribers()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AtofExporterError::LockPoisoned)?;
+        if state.closed {
+            return stored_failure_result(&self.path, &state);
+        }
+        state.closed = true;
+        let flush_result = state
+            .writer
+            .flush()
+            .map_err(|source| AtofExporterError::Flush {
+                path: self.path.clone(),
+                source,
+            });
+        for endpoint in &state.endpoints {
+            endpoint.close();
+        }
+        flush_result?;
+        stored_failure_result(&self.path, &state)
     }
 }
 
@@ -231,6 +373,14 @@ fn default_filename() -> String {
         "nemo-relay-events-{}.jsonl",
         Utc::now().format("%Y-%m-%d-%H.%M.%S")
     )
+}
+
+fn default_output_directory() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn default_endpoint_timeout_millis() -> u64 {
+    3_000
 }
 
 fn open_file(path: &Path, mode: AtofExporterMode) -> Result<File> {
@@ -252,13 +402,482 @@ fn open_file(path: &Path, mode: AtofExporterMode) -> Result<File> {
         })
 }
 
-fn write_event(writer: &mut BufWriter<File>, event: &Event) -> std::result::Result<(), String> {
-    let value = event
-        .try_to_json_value()
-        .map_err(|error| error.to_string())?;
-    serde_json::to_writer(&mut *writer, &value).map_err(|error| error.to_string())?;
+fn write_json_value(writer: &mut BufWriter<File>, value: &Json) -> std::result::Result<(), String> {
+    serde_json::to_writer(&mut *writer, value).map_err(|error| error.to_string())?;
     writer.write_all(b"\n").map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())
+}
+
+fn stored_failure_result(path: &Path, state: &AtofExporterState) -> Result<()> {
+    if let Some(message) = &state.last_error {
+        return Err(AtofExporterError::StoredFailure {
+            path: path.to_path_buf(),
+            message: message.clone(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg_attr(
+    any(not(feature = "atof-streaming"), target_arch = "wasm32"),
+    allow(dead_code)
+)]
+enum EndpointMessage {
+    Event(String),
+    Flush(std_mpsc::Sender<()>),
+    Close(std_mpsc::Sender<()>),
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+enum NdjsonBodyMessage {
+    Event(Vec<u8>),
+    Flush(std_mpsc::Sender<()>),
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+impl NdjsonBodyMessage {
+    fn acknowledge_if_flush(self) {
+        if let Self::Flush(done) = self {
+            let _ = done.send(());
+        }
+    }
+}
+
+struct AtofEndpointWorker {
+    sender: tokio::sync::mpsc::UnboundedSender<EndpointMessage>,
+    timeout: Duration,
+}
+
+impl AtofEndpointWorker {
+    fn enqueue(&self, raw_json: String) {
+        let _ = self.sender.send(EndpointMessage::Event(raw_json));
+    }
+
+    fn flush(&self) {
+        let (tx, rx) = std_mpsc::channel();
+        if self.sender.send(EndpointMessage::Flush(tx)).is_ok()
+            && rx.recv_timeout(self.timeout).is_err()
+        {
+            eprintln!("nemo_relay: timed out flushing ATOF endpoint");
+        }
+    }
+
+    fn close(&self) {
+        let (tx, rx) = std_mpsc::channel();
+        if self.sender.send(EndpointMessage::Close(tx)).is_ok()
+            && rx.recv_timeout(self.timeout).is_err()
+        {
+            eprintln!("nemo_relay: timed out closing ATOF endpoint");
+        }
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndpointWorker>> {
+    let mut workers = Vec::with_capacity(configs.len());
+    for (index, config) in configs.iter().enumerate() {
+        match start_endpoint_worker(index, config.clone()) {
+            Ok(worker) => workers.push(worker),
+            Err(error) => {
+                eprintln!("nemo_relay: invalid ATOF endpoint[{index}]: {error}");
+                return Err(AtofExporterError::InvalidEndpoint(format!(
+                    "endpoints[{index}]: {error}"
+                )));
+            }
+        }
+    }
+    Ok(workers)
+}
+
+#[cfg(any(not(feature = "atof-streaming"), target_arch = "wasm32"))]
+fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndpointWorker>> {
+    if configs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let message = "ATOF streaming endpoints are not supported in this build".to_string();
+    eprintln!("nemo_relay: {message}");
+    Err(AtofExporterError::InvalidEndpoint(message))
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<AtofEndpointWorker> {
+    validate_endpoint_config(&config)?;
+    let timeout = Duration::from_millis(config.timeout_millis);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    std::thread::Builder::new()
+        .name(format!("nemo-relay-atof-endpoint-{index}"))
+        .spawn(move || run_endpoint_worker(index, config, rx))
+        .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+    Ok(AtofEndpointWorker {
+        sender: tx,
+        timeout,
+    })
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn validate_endpoint_config(config: &AtofEndpointConfig) -> Result<()> {
+    if config.url.trim().is_empty() {
+        return Err(AtofExporterError::InvalidEndpoint(
+            "endpoint url must be non-empty".to_string(),
+        ));
+    }
+    if config.timeout_millis == 0 {
+        return Err(AtofExporterError::InvalidEndpoint(
+            "endpoint timeout_millis must be greater than 0".to_string(),
+        ));
+    }
+    let url = reqwest::Url::parse(&config.url)
+        .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+    let valid_scheme = match config.transport {
+        AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
+            matches!(url.scheme(), "http" | "https")
+        }
+        AtofEndpointTransport::Websocket => matches!(url.scheme(), "ws" | "wss"),
+    };
+    if !valid_scheme {
+        return Err(AtofExporterError::InvalidEndpoint(format!(
+            "endpoint {} transport does not support URL scheme {:?}",
+            config.transport.as_str(),
+            url.scheme()
+        )));
+    }
+    build_header_map(&config.headers)?;
+    Ok(())
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn build_header_map(headers: &HashMap<String, String>) -> Result<reqwest::header::HeaderMap> {
+    let mut out = reqwest::header::HeaderMap::new();
+    for (key, value) in headers {
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+        let value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+        out.insert(name, value);
+    }
+    Ok(out)
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn run_endpoint_worker(
+    index: usize,
+    config: AtofEndpointConfig,
+    rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] runtime failed: {error}");
+            return;
+        }
+    };
+    runtime.block_on(async move {
+        match config.transport {
+            AtofEndpointTransport::HttpPost => run_http_post_endpoint(index, config, rx).await,
+            AtofEndpointTransport::Websocket => run_websocket_endpoint(index, config, rx).await,
+            AtofEndpointTransport::Ndjson => run_ndjson_endpoint(index, config, rx).await,
+        }
+    });
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn run_http_post_endpoint(
+    index: usize,
+    config: AtofEndpointConfig,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
+) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_millis(config.timeout_millis))
+        .default_headers(match build_header_map(&config.headers) {
+            Ok(headers) => headers,
+            Err(error) => {
+                eprintln!("nemo_relay: ATOF endpoint[{index}] disabled: {error}");
+                drain_closed(rx).await;
+                return;
+            }
+        })
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] client build failed: {error}");
+            drain_closed(rx).await;
+            return;
+        }
+    };
+    while let Some(message) = rx.recv().await {
+        match message {
+            EndpointMessage::Event(raw_json) => {
+                let body = format!("{raw_json}\n");
+                let result = client
+                    .post(&config.url)
+                    .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+                    .body(body)
+                    .send()
+                    .await;
+                match result {
+                    Ok(response) if response.status().is_success() => {}
+                    Ok(response) => eprintln!(
+                        "nemo_relay: ATOF endpoint[{index}] HTTP status {}",
+                        response.status()
+                    ),
+                    Err(error) => {
+                        eprintln!("nemo_relay: ATOF endpoint[{index}] send failed: {error}")
+                    }
+                }
+            }
+            EndpointMessage::Flush(done) => {
+                let _ = done.send(());
+            }
+            EndpointMessage::Close(done) => {
+                let _ = done.send(());
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn run_websocket_endpoint(
+    index: usize,
+    config: AtofEndpointConfig,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
+) {
+    let mut pending = std::collections::VecDeque::new();
+    let mut socket = match connect_websocket(&config).await {
+        Ok(socket) => Some(socket),
+        Err(error) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] websocket startup failed: {error}");
+            None
+        }
+    };
+    while let Some(message) = rx.recv().await {
+        match message {
+            EndpointMessage::Event(raw_json) => {
+                pending.push_back(raw_json);
+                let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
+            }
+            EndpointMessage::Flush(done) => {
+                let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
+                let _ = done.send(());
+            }
+            EndpointMessage::Close(done) => {
+                let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
+                if let Some(mut ws) = socket.take() {
+                    let _ = ws.close(None).await;
+                }
+                let _ = done.send(());
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+type AtofWebSocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn drain_websocket_pending(
+    index: usize,
+    config: &AtofEndpointConfig,
+    socket: &mut Option<AtofWebSocket>,
+    pending: &mut std::collections::VecDeque<String>,
+) -> bool {
+    let timeout = Duration::from_millis(config.timeout_millis);
+    match tokio::time::timeout(
+        timeout,
+        drain_websocket_pending_inner(index, config, socket, pending),
+    )
+    .await
+    {
+        Ok(drained) => drained,
+        Err(_) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] websocket drain timed out");
+            false
+        }
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn drain_websocket_pending_inner(
+    index: usize,
+    config: &AtofEndpointConfig,
+    socket: &mut Option<AtofWebSocket>,
+    pending: &mut std::collections::VecDeque<String>,
+) -> bool {
+    while let Some(raw_json) = pending.front().cloned() {
+        if socket.is_none() {
+            match connect_websocket(config).await {
+                Ok(ws) => *socket = Some(ws),
+                Err(error) => {
+                    eprintln!(
+                        "nemo_relay: ATOF endpoint[{index}] websocket reconnect failed: {error}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            }
+        }
+
+        let Some(ws) = socket.as_mut() else {
+            continue;
+        };
+        match ws
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                raw_json.into(),
+            ))
+            .await
+        {
+            Ok(()) => {
+                pending.pop_front();
+            }
+            Err(error) => {
+                eprintln!("nemo_relay: ATOF endpoint[{index}] websocket send failed: {error}");
+                *socket = None;
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn connect_websocket(
+    config: &AtofEndpointConfig,
+) -> std::result::Result<AtofWebSocket, String> {
+    let mut request = config
+        .url
+        .as_str()
+        .into_client_request()
+        .map_err(|error| error.to_string())?;
+    for (key, value) in &config.headers {
+        let name =
+            tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
+        let value = tokio_tungstenite::tungstenite::http::header::HeaderValue::from_str(value)
+            .map_err(|error| error.to_string())?;
+        request.headers_mut().insert(name, value);
+    }
+    tokio::time::timeout(
+        Duration::from_millis(config.timeout_millis),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .map_err(|error| error.to_string())?
+    .map(|(socket, _)| socket)
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn run_ndjson_endpoint(
+    index: usize,
+    config: AtofEndpointConfig,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
+) {
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(config.timeout_millis))
+        .default_headers(match build_header_map(&config.headers) {
+            Ok(headers) => headers,
+            Err(error) => {
+                eprintln!("nemo_relay: ATOF endpoint[{index}] disabled: {error}");
+                drain_closed(rx).await;
+                return;
+            }
+        })
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] client build failed: {error}");
+            drain_closed(rx).await;
+            return;
+        }
+    };
+
+    let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel::<NdjsonBodyMessage>();
+    let body_stream = stream::unfold(body_rx, |mut body_rx| async {
+        loop {
+            match body_rx.recv().await? {
+                NdjsonBodyMessage::Event(bytes) => {
+                    return Some((Ok::<_, std::io::Error>(bytes), body_rx));
+                }
+                NdjsonBodyMessage::Flush(done) => {
+                    let _ = done.send(());
+                }
+            }
+        }
+    });
+    let body = reqwest::Body::wrap_stream(body_stream);
+    let request = tokio::spawn(async move {
+        client
+            .post(config.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+            .body(body)
+            .send()
+            .await
+    });
+    let close_timeout = Duration::from_millis(config.timeout_millis);
+
+    while let Some(message) = rx.recv().await {
+        match message {
+            EndpointMessage::Event(raw_json) => {
+                if let Err(error) = body_tx.send(NdjsonBodyMessage::Event(
+                    format!("{raw_json}\n").into_bytes(),
+                )) {
+                    eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON send failed: {error}");
+                }
+            }
+            EndpointMessage::Flush(done) => {
+                if let Err(error) = body_tx.send(NdjsonBodyMessage::Flush(done)) {
+                    eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON flush failed: {error}");
+                    error.0.acknowledge_if_flush();
+                }
+            }
+            EndpointMessage::Close(done) => {
+                drop(body_tx);
+                match tokio::time::timeout(close_timeout, request).await {
+                    Ok(Ok(Ok(response))) if response.status().is_success() => {}
+                    Ok(Ok(Ok(response))) => eprintln!(
+                        "nemo_relay: ATOF endpoint[{index}] NDJSON HTTP status {}",
+                        response.status()
+                    ),
+                    Ok(Ok(Err(error))) => {
+                        eprintln!(
+                            "nemo_relay: ATOF endpoint[{index}] NDJSON upload failed: {error}"
+                        )
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON task failed: {error}")
+                    }
+                    Err(_) => {
+                        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON close timed out")
+                    }
+                }
+                let _ = done.send(());
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn drain_closed(mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>) {
+    while let Some(message) = rx.recv().await {
+        match message {
+            EndpointMessage::Flush(done) => {
+                let _ = done.send(());
+            }
+            EndpointMessage::Close(done) => {
+                let _ = done.send(());
+                return;
+            }
+            EndpointMessage::Event(_) => {}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
     AtofConfig,
+    AtofEndpointConfig,
     ComponentSpec,
     HttpStorageConfig,
     ObservabilityConfig,
@@ -95,6 +96,21 @@ class TestObservabilityConfigHelpers:
         }
         atif = AtifConfig(enabled=True, storage=[storage])
         assert atif.to_dict()["storage"] == [storage.to_dict()]
+
+    def test_atof_endpoint_config_serializes_streaming_fields(self):
+        endpoint = AtofEndpointConfig(
+            url="http://localhost:8080/events",
+            transport="http_post",
+            headers={"X-Test": "yes"},
+            timeout_millis=1000,
+        )
+        assert endpoint.to_dict() == {
+            "url": "http://localhost:8080/events",
+            "transport": "http_post",
+            "headers": {"X-Test": "yes"},
+            "timeout_millis": 1000,
+        }
+        assert AtofConfig(endpoints=[endpoint]).to_dict()["endpoints"] == [endpoint.to_dict()]
 
     def test_http_storage_config_serializes_headers(self):
         s3 = S3StorageConfig(bucket="archive")

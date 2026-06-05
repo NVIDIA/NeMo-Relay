@@ -140,6 +140,15 @@ For file or trajectory export, confirm these settings:
 - ATIF export is scoped to the intended agent root and does not mix concurrent
   root scopes.
 
+For ATOF streaming endpoints, confirm these settings:
+
+- Endpoint URLs, transports, headers, and timeouts match the downstream
+  collector.
+- `nemo-relay doctor` can send the synthetic
+  `nemo_relay.doctor.atof_probe` mark event to each configured endpoint.
+- A failed streaming endpoint is isolated from file output and from other
+  configured endpoints.
+
 For OpenTelemetry or OpenInference export, confirm these settings:
 
 - The OpenTelemetry Protocol (OTLP) endpoint, headers, credentials, and network

@@ -13,6 +13,7 @@ import pytest
 
 from nemo_relay import (
     AtifExporter,
+    AtofEndpointConfig,
     AtofExporter,
     AtofExporterConfig,
     AtofExporterMode,
@@ -457,15 +458,27 @@ class TestAtofExporterType:
         assert config.mode == AtofExporterMode.Append
         assert config.filename.startswith("nemo-relay-events-")
         assert config.filename.endswith(".jsonl")
+        assert config.endpoints == []
         assert "AtofExporterConfig" in repr(config)
 
         config.output_directory = str(tmp_path)
         config.mode = AtofExporterMode.Overwrite
         config.filename = "events.jsonl"
+        endpoint = AtofEndpointConfig(
+            "http://localhost:8080/events",
+            transport="http_post",
+            headers={"X-Test": "yes"},
+            timeout_millis=1000,
+        )
+        config.endpoints = [endpoint]
 
         assert config.output_directory == str(tmp_path)
         assert config.mode == AtofExporterMode.Overwrite
         assert config.filename == "events.jsonl"
+        assert config.endpoints[0].url == "http://localhost:8080/events"
+        assert config.endpoints[0].transport == "http_post"
+        assert config.endpoints[0].headers == {"X-Test": "yes"}
+        assert config.endpoints[0].timeout_millis == 1000
 
     def test_exporter_lifecycle_writes_raw_jsonl_events(self, tmp_path):
         config = AtofExporterConfig()

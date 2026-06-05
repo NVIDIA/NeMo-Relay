@@ -30,6 +30,14 @@ describe('AtofExporter', () => {
     exporter.shutdown();
 
     assert.throws(() => new AtofExporter({ mode: 'invalid' }), /mode must be/i);
+    assert.throws(
+      () =>
+        new AtofExporter({
+          outputDirectory: tempDir('node-atof-invalid-endpoint'),
+          endpoints: [{ url: 'http://localhost:8080/events', transport: 'bogus' }],
+        }),
+      /endpoint transport/i,
+    );
   });
 
   it('writes raw ATOF JSONL events and supports lifecycle methods', () => {
