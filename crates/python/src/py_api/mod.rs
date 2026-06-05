@@ -259,6 +259,7 @@ fn push_scope(
 /// Raises:
 ///     RuntimeError: If the scope is not the current top scope or is not found
 ///         on the stack.
+///     ValueError: If ``output`` or ``metadata`` cannot be converted to JSON-compatible data.
 ///     TypeError: If ``timestamp`` is not a ``datetime.datetime``.
 ///     ValueError: If ``timestamp`` is a naive datetime.
 #[pyfunction]

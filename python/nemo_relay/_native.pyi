@@ -1178,8 +1178,8 @@ def pop_scope(
 
     Exceptional flow:
         Raises native runtime errors if ``handle`` is not the current scope or
-        if ``output`` cannot be converted to JSON-compatible data. Raises for
-        invalid timestamp types or naive datetimes.
+        if ``output`` or ``metadata`` cannot be converted to JSON-compatible data.
+        Raises for invalid timestamp types or naive datetimes.
     """
     ...
 
