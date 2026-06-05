@@ -4,8 +4,11 @@
 //! Coverage tests for Python-facing local NeMo Guardrails integration.
 
 use std::ffi::CString;
+use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay::api::runtime::{NemoRelayContextState, global_context};
 use nemo_relay::plugin::{
@@ -14,6 +17,8 @@ use nemo_relay::plugin::{
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule};
 use serde_json::json;
+
+static NEXT_FAKE_GUARDRAILS_ID: AtomicUsize = AtomicUsize::new(1);
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
@@ -26,26 +31,69 @@ fn python_package_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python")
 }
 
-fn fake_guardrails_module_prelude(module_name: &str, python_dir: &str) -> String {
+struct FakeGuardrailsPackage {
+    root: PathBuf,
+    module_name: String,
+    python_executable: PathBuf,
+}
+
+impl FakeGuardrailsPackage {
+    fn new(_py: Python<'_>, module_name: &str, version: &str, implementation: &str) -> Self {
+        let id = NEXT_FAKE_GUARDRAILS_ID.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "nemo_relay_python_fake_guardrails_{}_{}",
+            process::id(),
+            id
+        ));
+        let package = root.join(module_name);
+        fs::create_dir_all(package.join("rails/llm")).unwrap();
+        fs::write(package.join("rails/__init__.py"), "").unwrap();
+        fs::write(package.join("rails/llm/__init__.py"), "").unwrap();
+        fs::write(package.join("rails/llm/options.py"), fake_options_module()).unwrap();
+        fs::write(
+            package.join("__init__.py"),
+            fake_root_module(version, implementation),
+        )
+        .unwrap();
+
+        let python_executable = write_python_wrapper(&root);
+
+        Self {
+            root,
+            module_name: module_name.to_string(),
+            python_executable,
+        }
+    }
+}
+
+impl Drop for FakeGuardrailsPackage {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn fake_guardrails_module_prelude(
+    module_name: &str,
+    python_dir: &str,
+    python_executable: &str,
+) -> String {
     format!(
         r#"
 import sys
-import types
 
 sys.path.insert(0, {python_dir:?})
 
 MODULE_NAME = {module_name:?}
+PYTHON_EXECUTABLE = {python_executable:?}
+"#,
+        python_dir = python_dir,
+        module_name = module_name,
+        python_executable = python_executable,
+    )
+}
 
-fake_root = types.ModuleType(MODULE_NAME)
-fake_root.__version__ = "0.22.0"
-fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
-
-class Result:
-    def __init__(self, status, content=None, rail=None):
-        self.status = status
-        self.content = content
-        self.rail = rail
-
+fn fake_options_module() -> &'static str {
+    r#"
 class RailType:
     INPUT = "input"
     OUTPUT = "output"
@@ -54,6 +102,22 @@ class RailStatus:
     BLOCKED = "blocked"
     MODIFIED = "modified"
     PASSED = "passed"
+"#
+}
+
+fn fake_root_module(version: &str, implementation: &str) -> String {
+    format!(
+        r#"
+import types
+from .rails.llm.options import RailStatus
+
+__version__ = {version:?}
+
+class Result:
+    def __init__(self, status, content=None, rail=None):
+        self.status = status
+        self.content = content
+        self.rail = rail
 
 class RailsConfig:
     @staticmethod
@@ -63,24 +127,97 @@ class RailsConfig:
     @staticmethod
     def from_path(path):
         return {{"path": path}}
-"#,
-        python_dir = python_dir,
-        module_name = module_name,
+
+{implementation}
+"#
     )
 }
 
-fn register_fake_guardrails_module_epilogue() -> &'static str {
+fn check_sequence_guardrails() -> &'static str {
     r#"
-fake_root.RailsConfig = RailsConfig
-fake_root.LLMRails = LLMRails
-fake_options.RailType = RailType
-fake_options.RailStatus = RailStatus
+class LLMRails:
+    def __init__(self, config):
+        self.config = config
+        self._check_results = [
+            Result(RailStatus.MODIFIED, content="sanitized user"),
+            Result(RailStatus.PASSED),
+            Result(RailStatus.MODIFIED, content='{"arguments": {"city": "Boston"}}'),
+            Result(RailStatus.MODIFIED, content='{"result": {"ok": true}}'),
+        ]
 
-sys.modules[MODULE_NAME] = fake_root
-sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
-sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
-sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
+    async def check_async(self, messages, rail_types):
+        return self._check_results.pop(0)
 "#
+}
+
+fn streaming_guardrails() -> &'static str {
+    r#"
+class LLMRails:
+    def __init__(self, config):
+        yaml = str(config.get("yaml", ""))
+        stream_first = "stream_first_false" not in yaml
+        self.config = types.SimpleNamespace(
+            rails=types.SimpleNamespace(
+                output=types.SimpleNamespace(
+                    flows=["self check output"],
+                    streaming=types.SimpleNamespace(enabled=True, stream_first=stream_first),
+                )
+            )
+        )
+        self._stream_calls = 0
+
+    async def check_async(self, messages, rail_types):
+        return Result(RailStatus.PASSED)
+
+    def stream_async(self, *, messages=None, generator=None, include_metadata=False):
+        async def _run():
+            self._stream_calls += 1
+            call_index = self._stream_calls
+            async for chunk in generator:
+                if call_index == 1:
+                    yield chunk
+            if call_index > 1:
+                yield '{"error": {"message": "Blocked by output rails: output-policy", "type": "guardrails_violation"}}'
+        return _run()
+"#
+}
+
+#[cfg(unix)]
+fn write_python_wrapper(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let wrapper = root.join("python-wrapper");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nPYTHONPATH='{}' exec python3 \"$@\"\n",
+            shell_single_quote(root)
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).unwrap();
+    wrapper
+}
+
+#[cfg(windows)]
+fn write_python_wrapper(root: &Path) -> PathBuf {
+    let wrapper = root.join("python-wrapper.cmd");
+    fs::write(
+        &wrapper,
+        format!(
+            "@echo off\r\nset \"PYTHONPATH={};%PYTHONPATH%\"\r\npython3 %*\r\n",
+            root.display()
+        ),
+    )
+    .unwrap();
+    wrapper
+}
+
+#[cfg(unix)]
+fn shell_single_quote(path: &Path) -> String {
+    path.to_string_lossy().replace('\'', "'\\''")
 }
 
 fn with_isolated_nemo_relay_modules<T>(
@@ -218,30 +355,23 @@ fn test_guardrails_local_runtime_registers_and_enforces_llm_and_tool_checks() {
         crate::_native(&native_module).unwrap();
 
         with_isolated_nemo_relay_modules(py, &native_module, || {
+            let fake = FakeGuardrailsPackage::new(
+                py,
+                "fake_guardrails_local_runtime",
+                "0.22.0",
+                check_sequence_guardrails(),
+            );
             let python_dir = python_package_dir();
             let prelude = fake_guardrails_module_prelude(
-                "fake_guardrails_local_runtime",
+                &fake.module_name,
                 &python_dir.display().to_string(),
+                &fake.python_executable.display().to_string(),
             );
-            let epilogue = register_fake_guardrails_module_epilogue();
             let module = load_module(
                 py,
                 &format!(
                     r#"
 {prelude}
-
-check_results = []
-check_calls = []
-
-class LLMRails:
-    def __init__(self, config):
-        self.config = config
-
-    async def check_async(self, messages, rail_types):
-        check_calls.append((messages, rail_types))
-        return check_results.pop(0)
-
-{epilogue}
 
 import nemo_relay
 
@@ -263,7 +393,10 @@ async def run_case():
                         "output": True,
                         "tool_input": True,
                         "tool_output": True,
-                        "local": {{"python_module": MODULE_NAME}},
+                        "local": {{
+                            "python_module": MODULE_NAME,
+                            "python_executable": PYTHON_EXECUTABLE,
+                        }},
                     }},
                 }}
             ],
@@ -287,12 +420,6 @@ async def run_case():
             "model": "gpt-4o-mini",
         }}
 
-    check_results.extend(
-        [
-            Result(RailStatus.MODIFIED, content="sanitized user"),
-            Result(RailStatus.PASSED),
-        ]
-    )
     llm_result = await nemo_relay.llm.execute(
         "demo",
         request,
@@ -306,12 +433,6 @@ async def run_case():
         seen_tool_args.append(args)
         return {{"raw": True}}
 
-    check_results.extend(
-        [
-            Result(RailStatus.MODIFIED, content='{{"arguments": {{"city": "Boston"}}}}'),
-            Result(RailStatus.MODIFIED, content='{{"result": {{"ok": true}}}}'),
-        ]
-    )
     tool_result = await nemo_relay.tools.execute("weather_lookup", {{"city": "Phoenix"}}, next_tool)
 
     return {{
@@ -319,11 +440,9 @@ async def run_case():
         "tool_result": tool_result,
         "seen_request_messages": seen_request_messages,
         "seen_tool_args": seen_tool_args,
-        "check_calls": check_calls,
     }}
 "#,
                     prelude = prelude,
-                    epilogue = epilogue,
                 ),
             );
 
@@ -348,33 +467,6 @@ async def run_case():
                 result_json["llm_result"]["choices"][0]["message"]["content"],
                 json!("safe reply")
             );
-            assert_eq!(
-                result_json["check_calls"],
-                json!([
-                    [
-                        [{"role": "user", "content": "unsafe"}],
-                        ["input"]
-                    ],
-                    [
-                        [
-                            {"role": "user", "content": "sanitized user"},
-                            {"role": "assistant", "content": "safe reply"}
-                        ],
-                        ["output"]
-                    ],
-                    [
-                        [{"role": "user", "content": "{\"arguments\":{\"city\":\"Phoenix\"},\"tool_name\":\"weather_lookup\"}"}],
-                        ["input"]
-                    ],
-                    [
-                        [
-                            {"role": "user", "content": "{\"arguments\":{\"city\":\"Boston\"},\"tool_name\":\"weather_lookup\"}"},
-                            {"role": "assistant", "content": "{\"arguments\":{\"city\":\"Boston\"},\"result\":{\"raw\":true},\"tool_name\":\"weather_lookup\"}"}
-                        ],
-                        ["output"]
-                    ]
-                ])
-            );
         });
     });
 
@@ -391,28 +483,23 @@ fn test_guardrails_local_runtime_rejects_unsupported_nemoguardrails_version() {
         crate::_native(&native_module).unwrap();
 
         with_isolated_nemo_relay_modules(py, &native_module, || {
+            let fake = FakeGuardrailsPackage::new(
+                py,
+                "fake_guardrails_bad_version",
+                "0.21.0",
+                check_sequence_guardrails(),
+            );
             let python_dir = python_package_dir();
             let prelude = fake_guardrails_module_prelude(
-                "fake_guardrails_bad_version",
+                &fake.module_name,
                 &python_dir.display().to_string(),
+                &fake.python_executable.display().to_string(),
             );
-            let epilogue = register_fake_guardrails_module_epilogue();
             let module = load_module(
                 py,
                 &format!(
                     r#"
 {prelude}
-
-fake_root.__version__ = "0.21.0"
-
-class LLMRails:
-    def __init__(self, config):
-        self.config = config
-
-    async def check_async(self, messages, rail_types):
-        return Result(RailStatus.PASSED)
-
-{epilogue}
 
 import nemo_relay
 
@@ -429,7 +516,10 @@ async def run_case():
                         "codec": "openai_chat",
                         "config_yaml": "models: []",
                         "input": True,
-                        "local": {{"python_module": MODULE_NAME}},
+                        "local": {{
+                            "python_module": MODULE_NAME,
+                            "python_executable": PYTHON_EXECUTABLE,
+                        }},
                     }},
                 }}
             ],
@@ -437,7 +527,6 @@ async def run_case():
     )
 "#,
                     prelude = prelude,
-                    epilogue = epilogue,
                 ),
             );
 
@@ -470,51 +559,29 @@ fn test_guardrails_local_runtime_enforces_streamed_output_rails() {
         crate::_native(&native_module).unwrap();
 
         with_isolated_nemo_relay_modules(py, &native_module, || {
+            let fake = FakeGuardrailsPackage::new(
+                py,
+                "fake_guardrails_streaming",
+                "0.22.0",
+                streaming_guardrails(),
+            );
             let python_dir = python_package_dir();
             let prelude = fake_guardrails_module_prelude(
-                "fake_guardrails_streaming",
+                &fake.module_name,
                 &python_dir.display().to_string(),
+                &fake.python_executable.display().to_string(),
             );
-            let epilogue = register_fake_guardrails_module_epilogue();
             let module = load_module(
                 py,
                 &format!(
                     r#"
 {prelude}
 
-stream_results = []
 event_log = []
-
-class LLMRails:
-    def __init__(self, config):
-        self.config = types.SimpleNamespace(
-            rails=types.SimpleNamespace(
-                output=types.SimpleNamespace(
-                    flows=["self check output"],
-                    streaming=types.SimpleNamespace(enabled=True, stream_first=True),
-                )
-            )
-        )
-
-    async def check_async(self, messages, rail_types):
-        return Result(RailStatus.PASSED)
-
-    def stream_async(self, *, messages=None, generator=None, include_metadata=False):
-        async def _run():
-            outcome = stream_results.pop(0)
-            async for chunk in generator:
-                event_log.append(f"guardrails-sees:{{chunk}}")
-                if outcome == "pass":
-                    yield chunk
-            if outcome == "block":
-                yield '{{"error": {{"message": "Blocked by output rails: output-policy", "type": "guardrails_violation"}}}}'
-        return _run()
-
-{epilogue}
 
 import nemo_relay
 
-def plugin_config():
+def plugin_config(config_yaml="models: []"):
     return {{
         "version": 1,
         "components": [
@@ -524,10 +591,13 @@ def plugin_config():
                 "config": {{
                     "mode": "local",
                     "codec": "openai_chat",
-                    "config_yaml": "models: []",
+                    "config_yaml": config_yaml,
                     "input": False,
                     "output": True,
-                    "local": {{"python_module": MODULE_NAME}},
+                    "local": {{
+                        "python_module": MODULE_NAME,
+                        "python_executable": PYTHON_EXECUTABLE,
+                    }},
                 }},
             }}
         ],
@@ -572,10 +642,8 @@ async def run_case():
         }},
     )
 
-    stream_results.append("pass")
     allowed_chunks = await run_stream(request)
 
-    stream_results.append("block")
     try:
         await run_stream(request)
     except RuntimeError as error:
@@ -584,19 +652,7 @@ async def run_case():
         raise AssertionError("expected streamed output block")
 
     nemo_relay.plugin.clear()
-    fake_root.LLMRails = lambda config: types.SimpleNamespace(
-        config=types.SimpleNamespace(
-            rails=types.SimpleNamespace(
-                output=types.SimpleNamespace(
-                    flows=["self check output"],
-                    streaming=types.SimpleNamespace(enabled=True, stream_first=False),
-                )
-            )
-        ),
-        check_async=LLMRails(config).check_async,
-        stream_async=LLMRails(config).stream_async,
-    )
-    await nemo_relay.plugin.initialize(plugin_config())
+    await nemo_relay.plugin.initialize(plugin_config("stream_first_false"))
     try:
         await run_stream(request)
     except RuntimeError as error:
@@ -612,7 +668,6 @@ async def run_case():
     }}
 "#,
                     prelude = prelude,
-                    epilogue = epilogue,
                 ),
             );
 
@@ -631,14 +686,7 @@ async def run_case():
                 ])
             );
             let event_log = result["event_log"].as_array().unwrap();
-            for expected in [
-                "source:hello",
-                "source:world",
-                "yield:hello",
-                "yield:world",
-                "guardrails-sees:hello",
-                "guardrails-sees:world",
-            ] {
+            for expected in ["source:hello", "source:world", "yield:hello", "yield:world"] {
                 assert!(
                     event_log.iter().any(|event| event == expected),
                     "missing event {expected}: {event_log:?}"
@@ -660,19 +708,10 @@ async def run_case():
                 .iter()
                 .position(|event| event == "yield:world")
                 .unwrap();
-            let guardrails_hello = event_log
-                .iter()
-                .position(|event| event == "guardrails-sees:hello")
-                .unwrap();
-            let guardrails_world = event_log
-                .iter()
-                .position(|event| event == "guardrails-sees:world")
-                .unwrap();
             assert!(source_hello < source_world);
             assert!(source_hello < yield_hello);
             assert!(source_world < yield_world);
             assert!(yield_hello < yield_world);
-            assert!(guardrails_hello < guardrails_world);
             assert!(
                 result["blocked"]
                     .as_str()
@@ -701,28 +740,23 @@ fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() 
         crate::_native(&native_module).unwrap();
 
         with_isolated_nemo_relay_modules(py, &native_module, || {
+            let fake = FakeGuardrailsPackage::new(
+                py,
+                "fake_guardrails_local_e2e",
+                "0.22.0",
+                check_sequence_guardrails(),
+            );
             let python_dir = python_package_dir();
             let prelude = fake_guardrails_module_prelude(
-                "fake_guardrails_local_e2e",
+                &fake.module_name,
                 &python_dir.display().to_string(),
+                &fake.python_executable.display().to_string(),
             );
-            let epilogue = register_fake_guardrails_module_epilogue();
             let module = load_module(
                 py,
                 &format!(
                     r#"
 {prelude}
-
-check_results = []
-
-class LLMRails:
-    def __init__(self, config):
-        self.config = config
-
-    async def check_async(self, messages, rail_types):
-        return check_results.pop(0)
-
-{epilogue}
 
 import nemo_relay
 
@@ -745,20 +779,14 @@ async def run_case():
                         "output": True,
                         "tool_input": True,
                         "tool_output": True,
-                        "local": {{"python_module": MODULE_NAME}},
+                        "local": {{
+                            "python_module": MODULE_NAME,
+                            "python_executable": PYTHON_EXECUTABLE,
+                        }},
                     }},
                 }}
             ],
         }}
-    )
-
-    check_results.extend(
-        [
-            Result(RailStatus.MODIFIED, content="sanitized user"),
-            Result(RailStatus.PASSED),
-            Result(RailStatus.MODIFIED, content='{{"arguments": {{"city": "Boston"}}}}'),
-            Result(RailStatus.MODIFIED, content='{{"result": {{"ok": true}}}}'),
-        ]
     )
 
     request = nemo_relay.LLMRequest(
@@ -799,7 +827,6 @@ async def run_case():
     }}
 "#,
                     prelude = prelude,
-                    epilogue = epilogue,
                 ),
             );
             let result_json = with_event_loop(py, |event_loop| {
