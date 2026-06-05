@@ -56,6 +56,26 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'mode']);
   });
 
+  it('passes through mixed ATIF remote storage config', () => {
+    const s3 = {
+      type: 's3',
+      bucket: 'archive',
+      key_prefix: 'runs/',
+    };
+    const http = {
+      type: 'http',
+      endpoint: 'https://example.com/atif',
+      headers: { 'x-static': 'value' },
+      header_env: { authorization: 'NEMO_RELAY_ATIF_HTTP_AUTH' },
+      timeout_millis: 1500,
+    };
+    const config = observability.atifConfig({
+      enabled: true,
+      storage: [s3, http],
+    });
+    assert.deepEqual(config.storage, [s3, http]);
+  });
+
   it('activates ATOF and ATIF file sinks', async () => {
     const outputDirectory = tempDir('node-observability-plugin');
     const config = {
