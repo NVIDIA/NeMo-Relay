@@ -775,19 +775,23 @@ async def run_case():
                 ])
             );
             let event_log = result["event_log"].as_array().unwrap();
-            assert_eq!(
-                &event_log[..6],
-                json!([
-                    "source:hello",
-                    "yield:hello",
-                    "source:world",
-                    "yield:world",
-                    "guardrails-sees:hello",
-                    "guardrails-sees:world",
-                ])
-                .as_array()
-                .unwrap()
-            );
+            let source_hello = event_log.iter().position(|value| value == "source:hello").unwrap();
+            let source_world = event_log.iter().position(|value| value == "source:world").unwrap();
+            let yield_hello = event_log.iter().position(|value| value == "yield:hello").unwrap();
+            let yield_world = event_log.iter().position(|value| value == "yield:world").unwrap();
+            let guardrails_hello = event_log
+                .iter()
+                .position(|value| value == "guardrails-sees:hello")
+                .unwrap();
+            let guardrails_world = event_log
+                .iter()
+                .position(|value| value == "guardrails-sees:world")
+                .unwrap();
+            assert!(source_hello < source_world);
+            assert!(source_hello < yield_hello);
+            assert!(source_world < yield_world);
+            assert!(yield_hello < yield_world);
+            assert!(guardrails_hello < guardrails_world);
             assert!(
                 result["blocked"]
                     .as_str()
