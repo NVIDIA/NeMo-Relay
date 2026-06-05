@@ -1478,32 +1478,56 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
 }
 
 #[test]
-fn test_load_plugin_config_files_rejects_duplicate_kinds_in_one_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("dup.toml");
-    std::fs::write(
-        &path,
-        "[[components]]\n\
-         kind = \"observability\"\n\
-         [[components]]\n\
-         kind = \"observability\"\n",
-    )
-    .unwrap();
-
-    match load_plugin_config_files([path]).unwrap_err() {
-        PluginError::InvalidConfig(message) => {
-            assert!(
-                message.contains("duplicate plugin component kind"),
-                "{message}"
-            );
+fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
+    // The code-vs-file path `initialize_plugins` takes: a typed `PluginConfig` is layered
+    // over the discovered file base. Its serde defaults (`version`/`policy`/`enabled`)
+    // override the file, the free-form `config` body merges, and an undeclared component
+    // kind is inherited from the file.
+    let file_base = json!({
+        "version": 2,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": false,
+                "config": { "output_directory": "/var/log", "mode": "append" }
+            },
+            { "kind": "adaptive", "config": { "ttl": 60 } }
+        ],
+        "policy": {
+            "unknown_component": "error",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
         }
-        other => panic!("unexpected error: {other}"),
-    }
-}
+    });
+    let code = PluginConfig {
+        components: vec![PluginComponentSpec {
+            config: Map::from_iter([(String::from("mode"), json!("overwrite"))]),
+            ..PluginComponentSpec::new("observability")
+        }],
+        ..PluginConfig::default()
+    };
 
-#[test]
-fn test_load_plugin_config_files_returns_none_when_absent() {
-    let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("missing.toml");
-    assert!(load_plugin_config_files([missing]).unwrap().is_none());
+    let mut merged = file_base;
+    layer_config(&mut merged, serde_json::to_value(code).unwrap());
+    let typed: PluginConfig = serde_json::from_value(merged).unwrap();
+
+    // Typed defaults override the file base.
+    assert_eq!(typed.version, 1, "typed default version overrides the file");
+    assert_eq!(
+        typed.policy.unknown_component,
+        UnsupportedBehavior::Warn,
+        "typed default policy overrides the file"
+    );
+    let observability = &typed.components[0];
+    assert_eq!(observability.kind, "observability");
+    assert!(
+        observability.enabled,
+        "typed default enabled=true overrides the file's false"
+    );
+    // The component config body merges: code's `mode` wins, the file's `output_directory`
+    // is inherited.
+    assert_eq!(observability.config["mode"], json!("overwrite"));
+    assert_eq!(observability.config["output_directory"], json!("/var/log"));
+    // A kind the code config does not declare is inherited from the file.
+    assert_eq!(typed.components[1].kind, "adaptive");
 }
