@@ -2,14 +2,14 @@
 title: "Enum Atof Exporter Error"
 sidebar-title: "AtofExporterError"
 description: "Errors produced while configuring or operating the ATOF JSONL exporter."
-position: 3
+position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum AtofExporterError &#123;\n    CurrentDirectory(<a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>),\n    OpenFile &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    Flush &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    StoredFailure &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    LockPoisoned,\n    Runtime(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum AtofExporterError &#123;\n    CurrentDirectory(<a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>),\n    OpenFile &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    Flush &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    StoredFailure &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidEndpoint(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    LockPoisoned,\n    Runtime(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
 
 Errors produced while configuring or operating the ATOF JSONL exporter.
 
@@ -68,6 +68,12 @@ Output path associated with the failure.
 ### `message: String`
 
 Stored failure message.
+
+### `InvalidEndpoint(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidEndpoint(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+A streaming endpoint configuration is invalid.
 
 ### `LockPoisoned`
 

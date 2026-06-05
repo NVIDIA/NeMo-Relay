@@ -26,6 +26,25 @@ export interface AtofExporterConfig {
   mode?: string
   /** Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`. */
   filename?: string
+  /** Streaming endpoints that receive every raw ATOF event. */
+  endpoints?: Array<AtofEndpointConfig>
+}
+```
+
+### `AtofEndpointConfig`
+
+Mutable configuration object for one ATOF streaming endpoint.
+
+```ts
+export interface AtofEndpointConfig {
+  /** Endpoint URL. */
+  url: string
+  /** `"http_post"` (default), `"websocket"`, or `"ndjson"`. */
+  transport?: string
+  /** Extra endpoint headers as string key/value pairs. */
+  headers?: Json
+  /** Per-endpoint timeout in milliseconds. */
+  timeoutMillis?: number
 }
 ```
 
