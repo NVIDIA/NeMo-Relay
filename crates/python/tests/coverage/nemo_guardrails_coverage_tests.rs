@@ -644,24 +644,35 @@ async def run_case():
                     "missing event {expected}: {event_log:?}"
                 );
             }
+            let source_hello = event_log
+                .iter()
+                .position(|event| event == "source:hello")
+                .unwrap();
+            let source_world = event_log
+                .iter()
+                .position(|event| event == "source:world")
+                .unwrap();
             let yield_hello = event_log
                 .iter()
                 .position(|event| event == "yield:hello")
-                .unwrap();
-            let guardrails_hello = event_log
-                .iter()
-                .position(|event| event == "guardrails-sees:hello")
                 .unwrap();
             let yield_world = event_log
                 .iter()
                 .position(|event| event == "yield:world")
                 .unwrap();
+            let guardrails_hello = event_log
+                .iter()
+                .position(|event| event == "guardrails-sees:hello")
+                .unwrap();
             let guardrails_world = event_log
                 .iter()
                 .position(|event| event == "guardrails-sees:world")
                 .unwrap();
-            assert!(yield_hello < guardrails_hello);
-            assert!(yield_world < guardrails_world);
+            assert!(source_hello < source_world);
+            assert!(source_hello < yield_hello);
+            assert!(source_world < yield_world);
+            assert!(yield_hello < yield_world);
+            assert!(guardrails_hello < guardrails_world);
             assert!(
                 result["blocked"]
                     .as_str()
