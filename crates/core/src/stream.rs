@@ -36,6 +36,7 @@ use crate::api::llm::LlmHandle;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
+use crate::api::shared::metadata_with_otel_status;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::Result;
@@ -127,14 +128,24 @@ impl LlmStreamWrapper {
             return;
         }
         self.ended = true;
-        self.emit_end_event();
+        self.emit_end_event(self.metadata.clone());
+    }
+
+    fn finish_with_status(&mut self, status_code: &'static str, status_message: Option<String>) {
+        if self.ended {
+            return;
+        }
+        self.ended = true;
+        let metadata =
+            metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
+        self.emit_end_event(metadata);
     }
 
     /// Emit the LLM END event with aggregated response data.
     ///
     /// Calls the finalizer to produce the aggregated response, runs sanitize
     /// response guardrails, and emits the END event.
-    fn emit_end_event(&mut self) {
+    fn emit_end_event(&mut self, metadata: Option<Json>) {
         let aggregated = match self.finalizer.take() {
             Some(finalizer) => finalizer(),
             None => Json::Null,
@@ -163,12 +174,8 @@ impl LlmStreamWrapper {
                     } else {
                         Some(sanitized)
                     };
-                    let event = state.end_llm_handle(
-                        &self.handle,
-                        data,
-                        self.metadata.clone(),
-                        annotated_response,
-                    );
+                    let event =
+                        state.end_llm_handle(&self.handle, data, metadata, annotated_response);
                     Some((event, subscribers))
                 }
                 Err(_) => None,
@@ -232,17 +239,19 @@ impl Stream for LlmStreamWrapper {
                 match (this.collector)(raw_chunk.clone()) {
                     Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
                     Err(e) => {
-                        this.finish();
+                        let message = e.to_string();
+                        this.finish_with_status("ERROR", Some(message));
                         Poll::Ready(Some(Err(e)))
                     }
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                this.finish();
+                let message = e.to_string();
+                this.finish_with_status("ERROR", Some(message));
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
-                this.finish();
+                this.finish_with_status("OK", None);
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,

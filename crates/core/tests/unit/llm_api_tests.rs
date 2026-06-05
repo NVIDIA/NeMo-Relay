@@ -169,3 +169,113 @@ fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
     assert_eq!(success_metadata["otel.status_code"], json!("OK"));
     assert!(success_metadata.get("otel.status_message").is_none());
 }
+
+#[test]
+fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
+    reset_global();
+
+    let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
+    let subscriber_events = captured_events.clone();
+    register_subscriber(
+        "llm-stream-error-status-metadata",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                subscriber_events
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), event.metadata().cloned()));
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut upstream_error_stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("llm-stream-upstream-error")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
+                            "stream boom".to_string(),
+                        ))])) as LlmJsonStream)
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| json!({"partial": true})))
+                .metadata(
+                    json!({"caller": "llm-stream-upstream-error", "otel.status_code": "USER"}),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+        let upstream_error = upstream_error_stream.next().await.unwrap().unwrap_err();
+        assert!(upstream_error.to_string().contains("stream boom"));
+
+        let mut collector_error_stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("llm-stream-collector-error")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(
+                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
+                                as LlmJsonStream,
+                        )
+                    })
+                }))
+                .collector(Box::new(|_chunk| {
+                    Err(FlowError::Internal("collector boom".to_string()))
+                }))
+                .finalizer(Box::new(|| json!({"partial": true})))
+                .metadata(
+                    json!({"caller": "llm-stream-collector-error", "otel.status_code": "USER"}),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+        let collector_error = collector_error_stream.next().await.unwrap().unwrap_err();
+        assert!(collector_error.to_string().contains("collector boom"));
+    });
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("llm-stream-error-status-metadata").unwrap());
+
+    let events = captured_events.lock().unwrap();
+    let metadata_for = |name: &str| {
+        events
+            .iter()
+            .find(|event| event.0 == name)
+            .and_then(|event| event.1.as_ref())
+            .unwrap_or_else(|| panic!("missing stream end event metadata for {name}"))
+    };
+
+    let upstream_error_metadata = metadata_for("llm-stream-upstream-error");
+    assert_eq!(
+        upstream_error_metadata["caller"],
+        json!("llm-stream-upstream-error")
+    );
+    assert_eq!(upstream_error_metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        upstream_error_metadata["otel.status_message"]
+            .as_str()
+            .unwrap()
+            .contains("stream boom")
+    );
+
+    let collector_error_metadata = metadata_for("llm-stream-collector-error");
+    assert_eq!(
+        collector_error_metadata["caller"],
+        json!("llm-stream-collector-error")
+    );
+    assert_eq!(collector_error_metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        collector_error_metadata["otel.status_message"]
+            .as_str()
+            .unwrap()
+            .contains("collector boom")
+    );
+}
