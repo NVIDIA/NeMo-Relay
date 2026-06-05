@@ -67,11 +67,11 @@ fn with_scope(
 }
 
 fn pop_scope(handle: &ScopeHandle) -> Result<(), JsValue> {
-    nemo_relay_wasm::api::pop_scope(handle, JsValue::NULL, None)
+    nemo_relay_wasm::api::pop_scope(handle, JsValue::NULL, None, JsValue::NULL)
 }
 
 fn pop_scope_with_output(handle: &ScopeHandle, output: JsValue) -> Result<(), JsValue> {
-    nemo_relay_wasm::api::pop_scope(handle, output, None)
+    nemo_relay_wasm::api::pop_scope(handle, output, None, JsValue::NULL)
 }
 
 fn event(
@@ -555,6 +555,49 @@ fn test_subscriber_receives_scope_output_payload() {
 
     deregister_subscriber("wasm_scope_end_collector").unwrap();
     js_sys::eval("delete globalThis.__wasm_scope_end_events").unwrap();
+}
+
+#[wasm_bindgen_test]
+fn test_pop_scope_merges_end_metadata() {
+    js_sys::eval("globalThis.__wasm_scope_end_metadata_events = []; true").unwrap();
+    let cb = js_fn1(
+        "event",
+        "if (event.kind === 'scope' && event.scope_category === 'end') globalThis.__wasm_scope_end_metadata_events.push(event)",
+    );
+    register_subscriber("wasm_scope_end_metadata_collector", cb).unwrap();
+
+    let scope = push_scope(
+        "metadata_scope",
+        ScopeType::Function,
+        None,
+        None,
+        JsValue::NULL,
+        parse_json(r#"{"a":1,"b":2,"c":3}"#),
+    )
+    .unwrap();
+    nemo_relay_wasm::api::pop_scope(
+        &scope,
+        JsValue::NULL,
+        None,
+        parse_json(r#"{"c":3.5,"d":4}"#),
+    )
+    .unwrap();
+
+    let events = js_sys::eval("globalThis.__wasm_scope_end_metadata_events").unwrap();
+    let arr = js_sys::Array::from(&events);
+    assert_eq!(arr.length(), 1, "Expected one scope end event");
+
+    let event = arr.get(0);
+    let metadata = js_sys::Reflect::get(&event, &"metadata".into()).unwrap();
+    let metadata_json = serde_wasm_bindgen::from_value::<serde_json::Value>(metadata)
+        .expect("metadata should be JSON");
+    assert_eq!(
+        metadata_json,
+        serde_json::json!({"a": 1, "b": 2, "c": 3.5, "d": 4})
+    );
+
+    deregister_subscriber("wasm_scope_end_metadata_collector").unwrap();
+    js_sys::eval("delete globalThis.__wasm_scope_end_metadata_events").unwrap();
 }
 
 #[wasm_bindgen_test]

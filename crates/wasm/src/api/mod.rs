@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use js_sys::{Function, Reflect};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 use uuid::Uuid;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
@@ -69,6 +70,37 @@ use crate::stream::LlmStream;
 #[cfg(test)]
 pub use crate::types::{LLM_STATEFUL, LLM_STREAMING, SCOPE_PARALLEL, TOOL_REMOTE};
 use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
+
+fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "otel.status_code".to_string(),
+        Json::String(status_code.to_string()),
+    );
+    if let Some(status_message) = status_message {
+        metadata.insert(
+            "otel.status_message".to_string(),
+            Json::String(status_message),
+        );
+    }
+    Json::Object(metadata)
+}
+
+fn js_error_message(error: &JsValue) -> String {
+    if let Some(message) = error.as_string() {
+        return message;
+    }
+    if let Ok(message) = Reflect::get(error, &JsValue::from_str("message"))
+        && let Some(message) = message.as_string()
+    {
+        return message;
+    }
+    js_sys::JSON::stringify(error)
+        .ok()
+        .and_then(|value| value.as_string())
+        .filter(|value| value != "{}")
+        .unwrap_or_else(|| "JavaScript callback failed".to_string())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -394,6 +426,7 @@ pub fn push_scope(
 /// Optional `output` is a semantic JSON payload exported on the scope end event.
 /// Optional `timestamp` is a Unix microseconds timestamp recorded on the scope end event.
 /// It must be a safe integer number; omitted values use the runtime default end timestamp.
+/// Optional `metadata` is a JSON metadata payload recorded on the scope end event.
 ///
 /// Throws if the handle does not match the current top of the stack.
 #[wasm_bindgen(js_name = "popScope")]
@@ -401,6 +434,7 @@ pub fn pop_scope(
     handle: &ScopeHandle,
     #[wasm_bindgen(unchecked_param_type = "Json | null | undefined")] output: JsValue,
     #[wasm_bindgen(unchecked_param_type = "number | null | undefined")] timestamp: Option<f64>,
+    #[wasm_bindgen(unchecked_param_type = "Json | null | undefined")] metadata: JsValue,
 ) -> Result<(), JsValue> {
     let timestamp = opt_js_to_timestamp_micros(timestamp)?;
     relay_scope_api::pop_scope(
@@ -408,6 +442,7 @@ pub fn pop_scope(
             .handle_uuid(&handle.inner.uuid)
             .output_opt(opt_js_to_json(&output)?)
             .timestamp_opt(timestamp)
+            .metadata_opt(opt_js_to_json(&metadata)?)
             .build(),
     )
     .map_err(to_js_err)
@@ -493,6 +528,7 @@ pub fn with_scope(
                 let _ = relay_scope_api::pop_scope(
                     relay_scope_api::PopScopeParams::builder()
                         .handle_uuid(&then_uuid)
+                        .metadata_opt(Some(otel_status_metadata("OK", None)))
                         .build(),
                 );
                 resolved
@@ -503,6 +539,10 @@ pub fn with_scope(
                 let _ = relay_scope_api::pop_scope(
                     relay_scope_api::PopScopeParams::builder()
                         .handle_uuid(&catch_uuid)
+                        .metadata_opt(Some(otel_status_metadata(
+                            "ERROR",
+                            Some(js_error_message(&rejected)),
+                        )))
                         .build(),
                 );
                 // Re-throw by returning a rejected promise
@@ -522,6 +562,7 @@ pub fn with_scope(
             let _ = relay_scope_api::pop_scope(
                 relay_scope_api::PopScopeParams::builder()
                     .handle_uuid(&scope_uuid)
+                    .metadata_opt(Some(otel_status_metadata("OK", None)))
                     .build(),
             );
             Ok(js_sys::Promise::resolve(&val))
@@ -531,6 +572,10 @@ pub fn with_scope(
             let _ = relay_scope_api::pop_scope(
                 relay_scope_api::PopScopeParams::builder()
                     .handle_uuid(&scope_uuid)
+                    .metadata_opt(Some(otel_status_metadata(
+                        "ERROR",
+                        Some(js_error_message(&err)),
+                    )))
                     .build(),
             );
             Err(err)

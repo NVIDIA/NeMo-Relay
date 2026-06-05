@@ -318,6 +318,73 @@ test('WebAssembly llm execute flow works from the generated Node package', async
   }
 });
 
+test('WebAssembly llmCallExecute adds OTEL status metadata to end events', async () => {
+  const stack = resetScopeStack();
+  const events = [];
+  const subscriberName = unique('wasm_llm_status_sub');
+
+  wasm.registerSubscriber(subscriberName, (event) => events.push(event));
+
+  try {
+    await wasm.llmCallExecute(
+      'wasm_llm_status_ok',
+      makeLlmRequest(),
+      async () => ({
+        role: 'assistant',
+        content: 'ok',
+        tool_calls: [],
+      }),
+      null,
+      0,
+      null,
+      {
+        caller: 'wasm-llm',
+        'otel.status_code': 'USER',
+      },
+      'demo-model',
+    );
+
+    await assert.rejects(
+      () =>
+        wasm.llmCallExecute(
+          'wasm_llm_status_error',
+          makeLlmRequest(),
+          async () => {
+            throw new Error('wasm llm failure');
+          },
+          null,
+          0,
+          null,
+          {
+            caller: 'wasm-llm-error',
+          },
+          'demo-model',
+        ),
+      /wasm llm failure/,
+    );
+
+    const okEvent = await waitFor(() =>
+      events.find(
+        (event) => event.kind === 'scope' && event.scope_category === 'end' && event.name === 'wasm_llm_status_ok',
+      ),
+    );
+    const errorEvent = await waitFor(() =>
+      events.find(
+        (event) => event.kind === 'scope' && event.scope_category === 'end' && event.name === 'wasm_llm_status_error',
+      ),
+    );
+
+    assert.equal(okEvent.metadata.caller, 'wasm-llm');
+    assert.equal(okEvent.metadata['otel.status_code'], 'OK');
+    assert.equal(errorEvent.metadata.caller, 'wasm-llm-error');
+    assert.equal(errorEvent.metadata['otel.status_code'], 'ERROR');
+    assert.match(errorEvent.metadata['otel.status_message'], /wasm llm failure/);
+  } finally {
+    wasm.deregisterSubscriber(subscriberName);
+    stack.free();
+  }
+});
+
 test('WebAssembly llm stream flow works from the generated Node package', async () => {
   const request = {
     headers: {

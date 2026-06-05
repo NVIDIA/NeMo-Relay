@@ -161,3 +161,70 @@ test('WebAssembly tool execute runs through the generated Node package flow', as
     wasm.deregisterToolRequestIntercept(toolInterceptName);
   }
 });
+
+test('WebAssembly toolCallExecute adds OTEL status metadata to end events', async () => {
+  const stack = resetScopeStack();
+  const events = [];
+  const subscriberName = unique('wasm_tool_status_sub');
+
+  wasm.registerSubscriber(subscriberName, (event) => events.push(event));
+
+  try {
+    await wasm.toolCallExecute(
+      'wasm_tool_status_ok',
+      {
+        value: 1,
+      },
+      async () => ({
+        ok: true,
+      }),
+      null,
+      0,
+      null,
+      {
+        caller: 'wasm-tool',
+        'otel.status_code': 'USER',
+      },
+    );
+
+    await assert.rejects(
+      () =>
+        wasm.toolCallExecute(
+          'wasm_tool_status_error',
+          {
+            value: 2,
+          },
+          async () => {
+            throw new Error('wasm tool failure');
+          },
+          null,
+          0,
+          null,
+          {
+            caller: 'wasm-tool-error',
+          },
+        ),
+      /wasm tool failure/,
+    );
+
+    const okEvent = await waitFor(() =>
+      events.find(
+        (event) => event.kind === 'scope' && event.scope_category === 'end' && event.name === 'wasm_tool_status_ok',
+      ),
+    );
+    const errorEvent = await waitFor(() =>
+      events.find(
+        (event) => event.kind === 'scope' && event.scope_category === 'end' && event.name === 'wasm_tool_status_error',
+      ),
+    );
+
+    assert.equal(okEvent.metadata.caller, 'wasm-tool');
+    assert.equal(okEvent.metadata['otel.status_code'], 'OK');
+    assert.equal(errorEvent.metadata.caller, 'wasm-tool-error');
+    assert.equal(errorEvent.metadata['otel.status_code'], 'ERROR');
+    assert.match(errorEvent.metadata['otel.status_message'], /wasm tool failure/);
+  } finally {
+    wasm.deregisterSubscriber(subscriberName);
+    stack.free();
+  }
+});
