@@ -3,10 +3,46 @@
 
 use super::*;
 use std::ffi::OsString;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let body = Arc::new(Mutex::new(String::new()));
+    let thread_body = Arc::clone(&body);
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut data = Vec::new();
+        let mut buf = [0_u8; 1];
+        while !data.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut buf).unwrap();
+            data.push(buf[0]);
+        }
+        let headers = String::from_utf8_lossy(&data).to_string();
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then_some(value.trim())
+                })
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap();
+        let mut request_body = vec![0_u8; length];
+        stream.read_exact(&mut request_body).unwrap();
+        *thread_body.lock().unwrap() = String::from_utf8(request_body).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    (url, body, handle)
+}
 
 struct EnvScope {
     values: Vec<(&'static str, Option<OsString>)>,
@@ -655,6 +691,90 @@ async fn collect_observability_registers_adaptive_before_validation() {
             .contains("plugin component kind 'adaptive' is unsupported")),
         "doctor should register adaptive before plugin validation: {checks:?}"
     );
+}
+
+#[tokio::test]
+async fn collect_observability_probes_atof_streaming_endpoint() {
+    let (url, body, server_thread) = start_doctor_http_capture_server();
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "endpoints": [{
+                            "url": url,
+                            "transport": "http_post",
+                            "headers": {"X-Test": "doctor"}
+                        }]
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+    let body = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let captured = body.lock().unwrap().clone();
+            if captured.contains("\"kind\":\"mark\"")
+                && captured.contains("\"name\":\"nemo_relay.doctor.atof_probe\"")
+            {
+                break captured;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("doctor probe body should be captured");
+
+    let endpoint = checks
+        .iter()
+        .find(|check| check.name == "ATOF endpoint")
+        .expect("ATOF endpoint check");
+    assert_eq!(endpoint.status, Status::Pass);
+    assert!(body.contains("\"kind\":\"mark\""));
+    assert!(body.contains("\"name\":\"nemo_relay.doctor.atof_probe\""));
+    server_thread.join().unwrap();
+}
+
+#[tokio::test]
+async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "endpoints": [{
+                            "url": "http://localhost:9/events",
+                            "transport": "websocket"
+                        }]
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let endpoint = checks
+        .iter()
+        .find(|check| check.name == "ATOF endpoint")
+        .expect("ATOF endpoint check");
+    assert_eq!(endpoint.status, Status::Fail);
+    assert!(endpoint.details.contains("invalid scheme"));
+    assert!(endpoint.details.contains("must be ws or wss"));
 }
 
 #[test]

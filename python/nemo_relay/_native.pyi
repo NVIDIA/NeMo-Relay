@@ -730,12 +730,35 @@ class AtofExporterMode:
     Append: ClassVar[AtofExporterMode]
     Overwrite: ClassVar[AtofExporterMode]
 
+class AtofEndpointConfig:
+    """Streaming destination for raw ATOF events."""
+
+    url: str
+    transport: str
+    headers: dict[str, str]
+    timeout_millis: int
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        transport: str = "http_post",
+        headers: dict[str, str] | None = None,
+        timeout_millis: int = 3000,
+    ) -> None:
+        """Create an ATOF streaming endpoint config.
+
+        ``headers=None`` is converted to an empty dict; the instance field is
+        always non-optional.
+        """
+
 class AtofExporterConfig:
     """Mutable configuration for the filesystem-backed ATOF JSONL exporter."""
 
     output_directory: str
     mode: AtofExporterMode
     filename: str
+    endpoints: list[AtofEndpointConfig]
 
     def __init__(self) -> None:
         """Create an ATOF exporter config with native defaults."""

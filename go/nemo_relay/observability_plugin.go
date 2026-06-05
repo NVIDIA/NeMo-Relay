@@ -18,10 +18,19 @@ type ObservabilityConfig struct {
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
 type ObservabilityAtofConfig struct {
-	Enabled         bool   `json:"enabled,omitempty"`
-	OutputDirectory string `json:"output_directory,omitempty"`
-	Filename        string `json:"filename,omitempty"`
-	Mode            string `json:"mode,omitempty"`
+	Enabled         bool                        `json:"enabled,omitempty"`
+	OutputDirectory string                      `json:"output_directory,omitempty"`
+	Filename        string                      `json:"filename,omitempty"`
+	Mode            string                      `json:"mode,omitempty"`
+	Endpoints       []ObservabilityAtofEndpoint `json:"endpoints,omitempty"`
+}
+
+// ObservabilityAtofEndpoint configures one streaming destination for raw ATOF events.
+type ObservabilityAtofEndpoint struct {
+	URL           string            `json:"url"`
+	Transport     string            `json:"transport,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
 }
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.

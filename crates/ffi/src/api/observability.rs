@@ -342,6 +342,50 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_create(
     }
 }
 
+/// Creates a new ATOF exporter from a JSON config object.
+///
+/// # Parameters
+/// - `config_json`: JSON object matching `AtofExporterConfig`.
+/// - `out`: On success, receives a heap-allocated `FfiAtofExporter`.
+///
+/// # Safety
+/// `config_json` must be a valid C string. `out` must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_atof_exporter_create_from_json(
+    config_json: *const c_char,
+    out: *mut *mut FfiAtofExporter,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if let Err(status) = required_out_ptr(out) {
+        return status;
+    }
+    let config_json = match c_str_to_string(config_json) {
+        Ok(config_json) => config_json,
+        Err(status) => return status,
+    };
+    let config_value = match serde_json::from_str(&config_json) {
+        Ok(config_value) => config_value,
+        Err(error) => {
+            set_last_error(&format!("invalid JSON: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    let config = match serde_json::from_value::<AtofExporterConfig>(config_value) {
+        Ok(config) => config,
+        Err(error) => {
+            set_last_error(&error.to_string());
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    match AtofExporter::new(config) {
+        Ok(exporter) => {
+            unsafe { *out = Box::into_raw(Box::new(FfiAtofExporter(exporter))) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => status_from_atof_error(&error),
+    }
+}
+
 /// Registers the ATOF exporter as an event subscriber.
 ///
 /// # Safety

@@ -53,6 +53,27 @@ class ConfigPolicy:
 
 
 @dataclass(slots=True)
+class AtofEndpointConfig:
+    """Streaming destination for raw ATOF events."""
+
+    url: str
+    transport: Literal["http_post", "websocket", "ndjson"] = "http_post"
+    headers: dict[str, str] = field(default_factory=dict)
+    timeout_millis: int = 3000
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this ATOF endpoint config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "url": self.url,
+                "transport": self.transport,
+                "headers": self.headers,
+                "timeout_millis": self.timeout_millis,
+            }
+        )
+
+
+@dataclass(slots=True)
 class AtofConfig:
     """Filesystem-backed raw ATOF JSONL export settings."""
 
@@ -60,6 +81,7 @@ class AtofConfig:
     output_directory: str | None = None
     filename: str | None = None
     mode: Literal["append", "overwrite"] = "append"
+    endpoints: list[AtofEndpointConfig] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF config to the canonical JSON object shape."""
@@ -69,6 +91,7 @@ class AtofConfig:
                 "output_directory": self.output_directory,
                 "filename": self.filename,
                 "mode": self.mode,
+                "endpoints": self.endpoints,
             }
         )
 
@@ -221,6 +244,7 @@ class ComponentSpec:
 
 __all__ = [
     "ConfigPolicy",
+    "AtofEndpointConfig",
     "AtofConfig",
     "AtifConfig",
     "S3StorageConfig",

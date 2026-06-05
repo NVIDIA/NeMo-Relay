@@ -26,6 +26,18 @@ func TestNewAtofExporterConfigDefaults(t *testing.T) {
 	if config.Filename != "" {
 		t.Fatalf("expected empty filename default override, got %q", config.Filename)
 	}
+	if len(config.Endpoints) != 0 {
+		t.Fatalf("expected no streaming endpoints by default, got %#v", config.Endpoints)
+	}
+	config.Endpoints = []AtofEndpointConfig{{
+		URL:           "http://localhost:8080/events",
+		Transport:     AtofEndpointTransportHTTPPost,
+		Headers:       map[string]string{"X-Test": "yes"},
+		TimeoutMillis: 1000,
+	}}
+	if config.Endpoints[0].Transport != AtofEndpointTransportHTTPPost {
+		t.Fatalf("unexpected endpoint config: %#v", config.Endpoints[0])
+	}
 }
 
 func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
