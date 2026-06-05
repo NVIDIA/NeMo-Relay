@@ -14,7 +14,23 @@ readme = "README.md"
 workspace = true
 
 [features]
-default = ["otel", "openinference", "guardrails-remote", "object-store", "python"]
+default = [
+    "otel",
+    "openinference",
+    "guardrails-remote",
+    "object-store",
+    "python",
+]
+atof-streaming = [
+    "dep:futures-util",
+    "dep:reqwest",
+    "dep:rustls",
+    "dep:tokio-tungstenite",
+    "tokio/io-util",
+    "tokio/net",
+    "tokio/rt-multi-thread",
+    "tokio/time",
+]
 schema = ["dep:schemars"]
 guardrails-remote = [
     "dep:reqwest",
@@ -27,6 +43,8 @@ python = [
 ]
 object-store = [
     "dep:object_store",
+    "dep:reqwest",
+    "dep:rustls",
     "tokio/net",
     "tokio/time",
 ]
@@ -71,8 +89,9 @@ chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync"] }
-tokio-stream = { version = "0.1", default-features = false }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"
+futures-util = { version = "0.3", optional = true }
 opentelemetry = { version = "0.31", default-features = false, features = ["trace"], optional = true }
 opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace"], optional = true }
 openinference-semantic-conventions = { version = "0.1.1", optional = true }
@@ -136,7 +155,8 @@ opentelemetry-otlp = { version = "0.31.1", default-features = false, features = 
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "stream"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tonic = { version = "0.14.1", default-features = false, optional = true }
 object_store = { version = "0.13", default-features = false, features = ["aws"], optional = true }
+tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }

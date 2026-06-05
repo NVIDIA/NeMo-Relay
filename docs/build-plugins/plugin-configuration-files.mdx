@@ -241,9 +241,9 @@ Common validation failures include:
   Format (ATIF) filename template that does not contain `{session_id}`.
 
 Use `nemo-relay doctor` to inspect the resolved gateway configuration and plugin
-diagnostics. For Observability, doctor also reports enabled exporter sections and
-checks writable file exporter directories or reachable OTLP endpoints when those
-settings are present.
+diagnostics. For Observability, doctor also reports enabled exporter sections,
+checks writable file exporter directories, probes configured ATOF streaming
+endpoints, and checks reachable OTLP endpoints when those settings are present.
 
 ## Relationship To `config.toml`
 

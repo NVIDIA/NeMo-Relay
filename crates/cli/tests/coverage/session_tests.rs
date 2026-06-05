@@ -2002,6 +2002,134 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
 }
 
 #[tokio::test]
+async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-tool-result"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-tool-result",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "search for needle" }
+                        ],
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": { "name": "search_files" }
+                            }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-tool-result",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:1",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-search-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_files",
+                                    "arguments": "{\"query\":\"needle\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-tool-result",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-tool-result",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "tool_response": { "total_count": 6 },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-tool-result"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-tool-result");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["message"], json!("search for needle"));
+
+    let agent = &steps[1];
+    assert_eq!(agent["source"], json!("agent"));
+    assert_eq!(
+        agent["tool_calls"][0]["tool_call_id"],
+        json!("call-search-1")
+    );
+    assert_eq!(
+        agent["tool_calls"][0]["function_name"],
+        json!("search_files")
+    );
+    assert_eq!(
+        agent["observation"]["results"][0]["source_call_id"],
+        json!("call-search-1")
+    );
+    assert!(agent["observation"]["results"][0].get("content").is_none());
+    assert_eq!(
+        agent["observation"]["results"][0]["extra"]["tool_result"]["total_count"],
+        json!(6)
+    );
+}
+
+#[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();

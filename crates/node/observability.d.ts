@@ -11,6 +11,14 @@ export interface AtofConfig {
   output_directory?: string;
   filename?: string;
   mode?: 'append' | 'overwrite' | string;
+  endpoints?: AtofEndpointConfig[];
+}
+
+export interface AtofEndpointConfig {
+  url: string;
+  transport?: 'http_post' | 'websocket' | 'ndjson' | string;
+  headers?: Record<string, string>;
+  timeout_millis?: number;
 }
 
 export interface S3StorageConfig {
@@ -25,6 +33,14 @@ export interface S3StorageConfig {
   allow_http?: boolean;
 }
 
+export interface HttpStorageConfig {
+  type: 'http';
+  endpoint: string;
+  headers?: Record<string, string>;
+  header_env?: Record<string, string>;
+  timeout_millis?: number;
+}
+
 export interface AtifConfig {
   enabled?: boolean;
   agent_name?: string;
@@ -34,7 +50,7 @@ export interface AtifConfig {
   extra?: Record<string, Json>;
   output_directory?: string;
   filename_template?: string;
-  storage?: S3StorageConfig | S3StorageConfig[];
+  storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
 }
 
 export interface OtlpConfig {
