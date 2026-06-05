@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use nemo_relay::plugin::layer_config;
+use nemo_relay::plugin::{PluginError, load_plugin_config_files};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -745,39 +744,13 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let mut merged = Value::Object(serde_json::Map::new());
-    let mut sources = Vec::new();
-    for path in paths {
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path)?;
-            let parsed = raw
-                .parse::<toml::Table>()
-                .map(toml::Value::Table)
-                .map_err(|error| {
-                    CliError::Config(format!(
-                        "invalid plugin TOML in {}: {error}",
-                        path.display()
-                    ))
-                })?;
-            validate_plugin_toml_component_kinds(&path, &parsed)?;
-            // Merge file layers with the shared core primitive (each file converted to JSON first).
-            let document = serde_json::to_value(parsed).map_err(|error| {
-                CliError::Config(format!(
-                    "invalid plugin TOML shape in {}: {error}",
-                    path.display()
-                ))
-            })?;
-            layer_config(&mut merged, document);
-            sources.push(path);
-        }
-    }
-    if sources.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(PluginTomlConfig {
-        value: merged,
-        sources,
-    }))
+    // Delegate read/parse/merge to the shared core primitive so file precedence and the
+    // per-file duplicate-kind check stay identical to the code-driven layering path.
+    let resolved = load_plugin_config_files(paths).map_err(|err| match err {
+        PluginError::InvalidConfig(message) => CliError::Config(message),
+        other => CliError::Config(other.to_string()),
+    })?;
+    Ok(resolved.map(|(value, sources)| PluginTomlConfig { value, sources }))
 }
 
 fn apply_plugin_toml_config(
@@ -865,40 +838,6 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
             }
         }
         (left, right) => *left = right,
-    }
-}
-
-fn component_kind(component: &toml::Value) -> Option<&str> {
-    component
-        .as_table()
-        .and_then(|table| table.get("kind"))
-        .and_then(toml::Value::as_str)
-}
-
-fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Result<(), CliError> {
-    let Some(components) = value.get("components").and_then(toml::Value::as_array) else {
-        return Ok(());
-    };
-    let mut seen = HashSet::new();
-    let mut duplicates = Vec::new();
-    for component in components {
-        let Some(kind) = component_kind(component) else {
-            continue;
-        };
-        if !seen.insert(kind.to_string()) {
-            duplicates.push(kind.to_string());
-        }
-    }
-    duplicates.sort();
-    duplicates.dedup();
-    if duplicates.is_empty() {
-        Ok(())
-    } else {
-        Err(CliError::Config(format!(
-            "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
-            path.display(),
-            duplicates.join(", ")
-        )))
     }
 }
 

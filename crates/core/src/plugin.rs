@@ -984,15 +984,18 @@ pub fn plugin_config_schema() -> Json {
         .expect("plugin config schema should serialize")
 }
 
-/// Configures the active global plugin components.
+/// Validates and activates `config` exactly, without resolving or layering any
+/// file-based plugin configuration.
 ///
-/// Initialization validates the supplied config, replaces the active
-/// configuration, and rolls back partial registration on failure. If a
-/// previous configuration was active, the host attempts to restore it when the
-/// new activation fails.
+/// Replaces the active configuration and rolls back partial registration on
+/// failure, restoring the previous configuration when a replace fails. Callers
+/// that have already materialized their effective configuration — such as the
+/// `nemo-relay` gateway, which applies its own file/CLI source rules — use this
+/// directly. Most embedders use [`initialize_plugins`], which layers the
+/// discovered file configuration underneath first.
 ///
 /// # Parameters
-/// - `config`: Plugin configuration to validate and activate.
+/// - `config`: Plugin configuration to validate and activate as-is.
 ///
 /// # Returns
 /// A plugin [`Result`] containing the successful [`ConfigReport`].
@@ -1002,9 +1005,9 @@ pub fn plugin_config_schema() -> Json {
 /// when the previous configuration cannot be restored after a failed replace.
 ///
 /// # Notes
-/// Initialization is replace-with-rollback: the previous active configuration
-/// is removed before the new configuration is activated.
-pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
+/// Activation is replace-with-rollback: the previous active configuration is
+/// removed before the new configuration is activated.
+pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
     let report = validate_plugin_config(&config);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
@@ -1044,6 +1047,145 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
         store_active_plugin_configuration(config, report.clone(), registrations)?;
         Ok(report)
     }
+}
+
+/// Validates and activates `config`, layered on top of the materialized file
+/// configuration.
+///
+/// Resolves the discovered `plugins.toml` layering as the base, layers `config`
+/// (higher precedence) on top, then validates and activates via
+/// [`initialize_plugins_exact`]. Every language binding funnels through this, so a
+/// direct integration sees the same file layering as the `nemo-relay` gateway
+/// instead of starting from an empty base.
+///
+/// `config` is layered as a typed document, so its `version`, `policy`, and each
+/// component's `enabled` carry serde defaults and override the file base; a
+/// component's free-form `config` body still merges field-by-field. When file
+/// discovery is not compiled in (the `config-files` feature is disabled, as on
+/// wasm targets), the base is empty and this matches [`initialize_plugins_exact`].
+pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
+    let mut base = resolve_default_file_plugin_config()?;
+    layer_config(&mut base, serde_json::to_value(config)?);
+    let config: PluginConfig = serde_json::from_value(base)?;
+    initialize_plugins_exact(config).await
+}
+
+/// Resolves the default `plugins.toml` layering into one JSON document, or an
+/// empty object when no file exists or file discovery is not compiled in.
+fn resolve_default_file_plugin_config() -> Result<Json> {
+    #[cfg(feature = "config-files")]
+    {
+        Ok(load_plugin_config_files(default_plugin_config_paths())?
+            .map(|(value, _sources)| value)
+            .unwrap_or_else(|| Json::Object(Map::new())))
+    }
+    #[cfg(not(feature = "config-files"))]
+    {
+        Ok(Json::Object(Map::new()))
+    }
+}
+
+#[cfg(feature = "config-files")]
+use std::path::{Path, PathBuf};
+
+/// Reads and merges plugin config documents from `paths`, lowest precedence
+/// first.
+///
+/// Each existing file is parsed as TOML, converted to the canonical JSON
+/// document shape, and layered with [`layer_config`]. Returns the merged
+/// document and the contributing source paths, or `None` when no file existed.
+///
+/// Internal shared primitive for the gateway's file discovery; `pub` only for
+/// cross-crate reuse, not part of the stable API.
+#[cfg(feature = "config-files")]
+#[doc(hidden)]
+pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut merged = Json::Object(Map::new());
+    let mut sources = Vec::new();
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&path).map_err(|err| {
+            PluginError::InvalidConfig(format!("failed to read {}: {err}", path.display()))
+        })?;
+        let parsed = raw.parse::<toml::Table>().map_err(|err| {
+            PluginError::InvalidConfig(format!("invalid plugin TOML in {}: {err}", path.display()))
+        })?;
+        let document = serde_json::to_value(parsed)?;
+        validate_unique_component_kinds(&path, &document)?;
+        layer_config(&mut merged, document);
+        sources.push(path);
+    }
+    Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Rejects a single file that declares the same component `kind` more than once.
+#[cfg(feature = "config-files")]
+fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
+    let Some(components) = document.get("components").and_then(Json::as_array) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for component in components {
+        if let Some(kind) = component_kind(component)
+            && !seen.insert(kind)
+        {
+            duplicates.push(kind.to_string());
+        }
+    }
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+    duplicates.sort();
+    duplicates.dedup();
+    Err(PluginError::InvalidConfig(format!(
+        "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
+        path.display(),
+        duplicates.join(", ")
+    )))
+}
+
+/// Default `plugins.toml` search path, lowest precedence first: system, then the
+/// nearest project file, then the user file. Mirrors the gateway's implicit
+/// discovery so a direct integration sees the same layering as `nemo-relay`.
+#[cfg(feature = "config-files")]
+fn default_plugin_config_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/etc/nemo-relay/plugins.toml")];
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(project) = nearest_project_plugin_config(&cwd)
+    {
+        paths.push(project);
+    }
+    if let Some(dir) = user_config_dir() {
+        paths.push(dir.join("plugins.toml"));
+    }
+    paths
+}
+
+/// Walks upward from `start` for the nearest `.nemo-relay/plugins.toml`.
+#[cfg(feature = "config-files")]
+fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .map(|ancestor| ancestor.join(".nemo-relay").join("plugins.toml"))
+        .find(|path| path.exists())
+}
+
+/// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then
+/// `HOME`/`USERPROFILE`.
+#[cfg(feature = "config-files")]
+fn user_config_dir() -> Option<PathBuf> {
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(base).join("nemo-relay"));
+    }
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".config/nemo-relay"))
 }
 
 /// Deregisters and clears all configured plugin components.
