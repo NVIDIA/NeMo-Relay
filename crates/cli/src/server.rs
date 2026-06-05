@@ -157,8 +157,7 @@ impl PluginActivation {
         register_adaptive_component().map_err(|error| {
             CliError::Config(format!("adaptive plugin registration failed: {error}"))
         })?;
-        // The gateway has already materialized its effective config via its own file/CLI
-        // source rules, so activate it exactly — core must not re-discover and re-layer.
+        // Gateway already resolved its config; activate exactly (no re-discovery).
         let plugin_config: PluginConfig = serde_json::from_value(config)
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
         initialize_plugins_exact(plugin_config)

@@ -984,29 +984,12 @@ pub fn plugin_config_schema() -> Json {
         .expect("plugin config schema should serialize")
 }
 
-/// Validates and activates `config` exactly, without resolving or layering any
-/// file-based plugin configuration.
+/// Validates and activates `config` exactly, with no file-based layering.
 ///
-/// Replaces the active configuration and rolls back partial registration on
-/// failure, restoring the previous configuration when a replace fails. Callers
-/// that have already materialized their effective configuration — such as the
-/// `nemo-relay` gateway, which applies its own file/CLI source rules — use this
-/// directly. Most embedders use [`initialize_plugins`], which layers the
-/// discovered file configuration underneath first.
-///
-/// # Parameters
-/// - `config`: Plugin configuration to validate and activate as-is.
-///
-/// # Returns
-/// A plugin [`Result`] containing the successful [`ConfigReport`].
-///
-/// # Errors
-/// Returns an error when validation fails, when plugin registration fails, or
-/// when the previous configuration cannot be restored after a failed replace.
-///
-/// # Notes
-/// Activation is replace-with-rollback: the previous active configuration is
-/// removed before the new configuration is activated.
+/// Replace-with-rollback: the previous configuration is removed first and
+/// restored if activation fails. The gateway uses this (it resolves its own
+/// config); most callers use [`initialize_plugins`], which layers the discovered
+/// file config underneath.
 pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
     let report = validate_plugin_config(&config);
     if report.has_errors() {
@@ -1049,20 +1032,11 @@ pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigRepo
     }
 }
 
-/// Validates and activates `config`, layered on top of the materialized file
-/// configuration.
-///
-/// Resolves the discovered `plugins.toml` layering as the base, layers `config`
-/// (higher precedence) on top, then validates and activates via
-/// [`initialize_plugins_exact`]. Every language binding funnels through this, so a
-/// direct integration sees the same file layering as the `nemo-relay` gateway
-/// instead of starting from an empty base.
-///
-/// `config` is layered as a typed document, so its `version`, `policy`, and each
-/// component's `enabled` carry serde defaults and override the file base; a
-/// component's free-form `config` body still merges field-by-field. When file
-/// discovery is not compiled in (the `config-files` feature is disabled, as on
-/// wasm targets), the base is empty and this matches [`initialize_plugins_exact`].
+/// Validates and activates `config` layered on top of the discovered
+/// `plugins.toml` configuration, so a direct integration sees the same file
+/// layering as the gateway. `config` wins on conflicts; as a typed document its
+/// default `version`/`policy`/`enabled` override the file, while `config` bodies
+/// merge field-by-field. Delegates to [`initialize_plugins_exact`].
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
     let mut base = resolve_default_file_plugin_config()?;
     layer_config(&mut base, serde_json::to_value(config)?);
@@ -1071,33 +1045,18 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
 }
 
 /// Resolves the default `plugins.toml` layering into one JSON document, or an
-/// empty object when no file exists or file discovery is not compiled in.
+/// empty object when no plugin file exists.
 fn resolve_default_file_plugin_config() -> Result<Json> {
-    #[cfg(feature = "config-files")]
-    {
-        Ok(load_plugin_config_files(default_plugin_config_paths())?
-            .map(|(value, _sources)| value)
-            .unwrap_or_else(|| Json::Object(Map::new())))
-    }
-    #[cfg(not(feature = "config-files"))]
-    {
-        Ok(Json::Object(Map::new()))
-    }
+    Ok(load_plugin_config_files(default_plugin_config_paths())?
+        .map(|(value, _sources)| value)
+        .unwrap_or_else(|| Json::Object(Map::new())))
 }
 
-#[cfg(feature = "config-files")]
 use std::path::{Path, PathBuf};
 
-/// Reads and merges plugin config documents from `paths`, lowest precedence
-/// first.
-///
-/// Each existing file is parsed as TOML, converted to the canonical JSON
-/// document shape, and layered with [`layer_config`]. Returns the merged
-/// document and the contributing source paths, or `None` when no file existed.
-///
-/// Internal shared primitive for the gateway's file discovery; `pub` only for
-/// cross-crate reuse, not part of the stable API.
-#[cfg(feature = "config-files")]
+/// Reads, parses, and merges the `plugins.toml` files at `paths` (lowest
+/// precedence first) into one JSON document with its source paths, or `None`
+/// when none exist. Internal: `pub` only for cross-crate reuse by the gateway.
 #[doc(hidden)]
 pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf>)>>
 where
@@ -1124,7 +1083,6 @@ where
 }
 
 /// Rejects a single file that declares the same component `kind` more than once.
-#[cfg(feature = "config-files")]
 fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
     let Some(components) = document.get("components").and_then(Json::as_array) else {
         return Ok(());
@@ -1150,10 +1108,8 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
     )))
 }
 
-/// Default `plugins.toml` search path, lowest precedence first: system, then the
-/// nearest project file, then the user file. Mirrors the gateway's implicit
-/// discovery so a direct integration sees the same layering as `nemo-relay`.
-#[cfg(feature = "config-files")]
+/// Default `plugins.toml` search path (lowest precedence first): system, nearest
+/// project file, then user file — mirroring the gateway's discovery.
 fn default_plugin_config_paths() -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("/etc/nemo-relay/plugins.toml")];
     if let Ok(cwd) = std::env::current_dir()
@@ -1168,7 +1124,6 @@ fn default_plugin_config_paths() -> Vec<PathBuf> {
 }
 
 /// Walks upward from `start` for the nearest `.nemo-relay/plugins.toml`.
-#[cfg(feature = "config-files")]
 fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
@@ -1178,7 +1133,6 @@ fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
 
 /// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then
 /// `HOME`/`USERPROFILE`.
-#[cfg(feature = "config-files")]
 fn user_config_dir() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(base).join("nemo-relay"));

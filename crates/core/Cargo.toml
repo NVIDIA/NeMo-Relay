@@ -16,9 +16,6 @@ workspace = true
 [features]
 default = ["otel", "openinference", "guardrails-remote", "object-store"]
 schema = ["dep:schemars"]
-# Opt-in plugins.toml discovery + TOML parsing for the code-driven layering path.
-# Kept out of `default` so the lean and wasm builds never pull `toml`/filesystem.
-config-files = ["dep:toml"]
 guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
@@ -64,7 +61,7 @@ openinference = [
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-toml = { version = "0.9", optional = true }
+toml = { version = "0.9" }
 schemars = { version = "0.8", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }

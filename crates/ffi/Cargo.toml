@@ -17,7 +17,7 @@ workspace = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["config-files", "otel", "openinference"] }
+nemo-relay = { workspace = true, features = ["otel", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 chrono = "0.4"
 libc = "0.2"

@@ -744,8 +744,7 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    // Delegate read/parse/merge to the shared core primitive so file precedence and the
-    // per-file duplicate-kind check stay identical to the code-driven layering path.
+    // Delegate read/parse/merge to the shared core primitive (file precedence unchanged).
     let resolved = load_plugin_config_files(paths).map_err(|err| match err {
         PluginError::InvalidConfig(message) => CliError::Config(message),
         other => CliError::Config(other.to_string()),
