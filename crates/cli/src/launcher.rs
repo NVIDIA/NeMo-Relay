@@ -76,6 +76,7 @@ pub(crate) async fn easy_path(
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config: None,
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: command.command,

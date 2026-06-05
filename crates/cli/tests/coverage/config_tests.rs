@@ -125,6 +125,7 @@ command = "hermes --yolo chat"
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config: None,
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -180,6 +181,7 @@ fn legacy_observability_config_sections_fail_clearly() {
             anthropic_base_url: None,
             session_metadata: None,
             plugin_config: None,
+            plugin_config_file: None,
             dry_run: false,
             print: false,
             command: vec![],
@@ -233,6 +235,7 @@ mode = "overwrite"
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config: None,
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -534,6 +537,7 @@ fn cli_plugin_config_conflicts_with_file_plugin_config() {
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -564,6 +568,7 @@ openai_base_url = "http://file-openai"
         anthropic_base_url: None,
         session_metadata: Some(r#"{"team":"cli"}"#.into()),
         plugin_config: None,
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -599,6 +604,7 @@ openai_base_url = "http://file-openai"
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config: None,
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -624,6 +630,7 @@ fn run_plugin_config_overrides_inherited_top_level_plugin_config() {
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config: Some(r#"{"components":["run"]}"#.into()),
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -646,6 +653,7 @@ fn server_resolution_applies_all_server_overrides() {
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
         plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
+        plugin_config_file: None,
     };
 
     let resolved = resolve_server_config(&args).unwrap();
@@ -661,6 +669,173 @@ fn server_resolution_applies_all_server_overrides() {
 }
 
 #[test]
+fn plugin_config_file_overrides_discovered_plugins_toml() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    let explicit_plugin_path = temp.path().join("explicit-plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        temp.path().join("plugins.toml"),
+        r#"version = 1
+components = ["discovered"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &explicit_plugin_path,
+        r#"version = 1
+components = ["explicit"]
+"#,
+    )
+    .unwrap();
+    let args = ServerArgs {
+        config: Some(config_path),
+        plugin_config_file: Some(explicit_plugin_path),
+        ..ServerArgs::default()
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({ "version": 1, "components": ["explicit"] }))
+    );
+    assert!(args.requested_daemon_mode());
+}
+
+#[test]
+fn plugin_config_file_conflicts_with_inline_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_path = temp.path().join("plugins.toml");
+    std::fs::write(&plugin_path, "version = 1\n").unwrap();
+    let args = ServerArgs {
+        plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
+        plugin_config_file: Some(plugin_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("choose only one of --plugin-config or --plugin-config-file"));
+}
+
+#[test]
+fn plugin_config_file_conflicts_with_config_toml_plugins_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    let plugin_path = temp.path().join("override-plugins.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[plugins]
+config = { version = 1, components = [] }
+"#,
+    )
+    .unwrap();
+    std::fs::write(&plugin_path, "version = 1\n").unwrap();
+    let args = ServerArgs {
+        config: Some(config_path),
+        plugin_config_file: Some(plugin_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("plugin config is defined in both"));
+    assert!(error.contains("config.toml"));
+    assert!(error.contains("override-plugins.toml"));
+}
+
+#[test]
+fn plugin_config_file_reports_missing_and_invalid_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-plugins.toml");
+    let args = ServerArgs {
+        plugin_config_file: Some(missing.clone()),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("could not read plugin config file"));
+    assert!(error.contains("missing-plugins.toml"));
+
+    let invalid = temp.path().join("invalid-plugins.toml");
+    std::fs::write(&invalid, "version = [").unwrap();
+    let args = ServerArgs {
+        plugin_config_file: Some(invalid),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("invalid plugin TOML"));
+}
+
+#[test]
+fn run_plugin_config_file_overrides_inherited_top_level_plugin_config_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let top_level_plugin_path = temp.path().join("top-level-plugins.toml");
+    let run_plugin_path = temp.path().join("run-plugins.toml");
+    std::fs::write(&top_level_plugin_path, "components = [\"top-level\"]\n").unwrap();
+    std::fs::write(&run_plugin_path, "components = [\"run\"]\n").unwrap();
+    let server = ServerArgs {
+        config: Some(isolated_config_path(&temp)),
+        plugin_config_file: Some(top_level_plugin_path),
+        ..ServerArgs::default()
+    };
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config: None,
+        plugin_config_file: Some(run_plugin_path),
+        dry_run: false,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let resolved = resolve_run_config(&command, Some(&server)).unwrap();
+
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({ "components": ["run"] }))
+    );
+}
+
+#[test]
+fn run_plugin_config_file_conflicts_with_inherited_inline_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let run_plugin_path = temp.path().join("run-plugins.toml");
+    std::fs::write(&run_plugin_path, "components = [\"run\"]\n").unwrap();
+    let server = ServerArgs {
+        config: Some(isolated_config_path(&temp)),
+        plugin_config: Some(r#"{"components":["top-level"]}"#.into()),
+        ..ServerArgs::default()
+    };
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config: None,
+        plugin_config_file: Some(run_plugin_path),
+        dry_run: false,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let error = resolve_run_config(&command, Some(&server))
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("choose only one of --plugin-config or --plugin-config-file"));
+}
+
+#[test]
 fn run_resolution_applies_all_run_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let command = RunCommand {
@@ -670,6 +845,7 @@ fn run_resolution_applies_all_run_overrides() {
         anthropic_base_url: Some("http://run-anthropic".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),
         plugin_config: Some(r#"{"components":["x"]}"#.into()),
+        plugin_config_file: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],

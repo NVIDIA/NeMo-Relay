@@ -198,6 +198,9 @@ pub(crate) struct ServerArgs {
     /// Generic plugin configuration JSON for process-level gateway plugin activation.
     #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG")]
     pub(crate) plugin_config: Option<String>,
+    /// Path to plugin configuration TOML for process-level gateway plugin activation.
+    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_FILE")]
+    pub(crate) plugin_config_file: Option<PathBuf>,
 }
 
 impl ServerArgs {
@@ -211,6 +214,7 @@ impl ServerArgs {
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
             || self.plugin_config.is_some()
+            || self.plugin_config_file.is_some()
             || self.config.is_some()
     }
 }
@@ -268,6 +272,8 @@ pub(crate) struct RunCommand {
     pub(crate) session_metadata: Option<String>,
     #[arg(long)]
     pub(crate) plugin_config: Option<String>,
+    #[arg(long)]
+    pub(crate) plugin_config_file: Option<PathBuf>,
     #[arg(long)]
     pub(crate) dry_run: bool,
     #[arg(long)]
@@ -432,7 +438,12 @@ impl Default for GatewayConfig {
 /// File discovery and merge behavior live in `load_shared_config`; this function only applies the
 /// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
 pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, CliError> {
-    let mut resolved = load_shared_config(args.config.as_ref())?;
+    validate_cli_plugin_config_sources(
+        args.plugin_config.as_ref(),
+        args.plugin_config_file.as_ref(),
+    )?;
+    let plugin_toml_override = load_plugin_config_file_override(args.plugin_config_file.as_ref())?;
+    let mut resolved = load_shared_config(args.config.as_ref(), plugin_toml_override)?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     Ok(resolved)
 }
@@ -450,14 +461,23 @@ pub(crate) fn resolve_run_config(
         .config
         .as_ref()
         .or_else(|| inherited.and_then(|args| args.config.as_ref()));
-    let mut resolved = load_shared_config(config)?;
+    validate_run_plugin_config_sources(command, inherited)?;
+    let plugin_config_file = command
+        .plugin_config_file
+        .as_ref()
+        .or_else(|| inherited.and_then(|args| args.plugin_config_file.as_ref()));
+    let plugin_toml_override = load_plugin_config_file_override(plugin_config_file)?;
+    let mut resolved = load_shared_config(config, plugin_toml_override)?;
     if let Some(args) = inherited {
         // Run-subcommand plugin config has higher precedence than inherited top-level plugin
         // config. Skip only that inherited field so file/plugins.toml conflicts are still caught
         // when the run-level override is applied below.
-        if command.plugin_config.is_some() && args.plugin_config.is_some() {
+        if command.plugin_config.is_some() && args.plugin_config.is_some()
+            || command.plugin_config_file.is_some() && args.plugin_config_file.is_some()
+        {
             let mut inherited = args.clone();
             inherited.plugin_config = None;
+            inherited.plugin_config_file = None;
             apply_server_overrides(&mut resolved.gateway, &inherited)?;
         } else {
             apply_server_overrides(&mut resolved.gateway, args)?;
@@ -528,7 +548,10 @@ const PLUGINS_TOML: &str = "plugins.toml";
 // shape onto runtime structs, applies a sibling/discovered plugins.toml when present, then lets
 // environment variables override file values. Invalid TOML or typed shapes fail closed because
 // they indicate an operator configuration error.
-fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliError> {
+fn load_shared_config(
+    explicit: Option<&PathBuf>,
+    plugin_toml_override: Option<PluginTomlConfig>,
+) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     let mut config_toml_plugin_sources = Vec::new();
     for path in config_paths(explicit) {
@@ -562,7 +585,10 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
             format_paths(&config_toml_plugin_sources)
         )));
     }
-    let plugin_toml = load_plugin_toml_config(explicit)?;
+    let plugin_toml = match plugin_toml_override {
+        Some(plugin_toml) => Some(plugin_toml),
+        None => load_plugin_toml_config(explicit)?,
+    };
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
@@ -740,6 +766,38 @@ fn load_plugin_toml_config(
     load_plugin_toml_config_from_paths(plugin_config_paths(explicit))
 }
 
+fn load_plugin_config_file_override(
+    path: Option<&PathBuf>,
+) -> Result<Option<PluginTomlConfig>, CliError> {
+    path.map(|path| load_plugin_toml_config_from_path(path))
+        .transpose()
+}
+
+fn load_plugin_toml_config_from_path(path: &Path) -> Result<PluginTomlConfig, CliError> {
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        CliError::Config(format!(
+            "could not read plugin config file {}: {error}",
+            path.display()
+        ))
+    })?;
+    let parsed = raw
+        .parse::<toml::Table>()
+        .map(toml::Value::Table)
+        .map_err(|error| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: {error}",
+                path.display()
+            ))
+        })?;
+    validate_plugin_toml_component_kinds(path, &parsed)?;
+    let value = serde_json::to_value(parsed)
+        .map_err(|error| CliError::Config(format!("invalid plugin TOML shape: {error}")))?;
+    Ok(PluginTomlConfig {
+        value,
+        sources: vec![path.to_path_buf()],
+    })
+}
+
 fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlConfig>, CliError>
 where
     I: IntoIterator<Item = PathBuf>,
@@ -797,6 +855,44 @@ fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<()
         ));
     }
     config.plugin_config = Some(parse_json_option("plugin config", value)?);
+    Ok(())
+}
+
+fn validate_cli_plugin_config_sources(
+    plugin_config: Option<&String>,
+    plugin_config_file: Option<&PathBuf>,
+) -> Result<(), CliError> {
+    if plugin_config.is_some() && plugin_config_file.is_some() {
+        return Err(CliError::Config(
+            "choose only one of --plugin-config or --plugin-config-file".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_run_plugin_config_sources(
+    command: &RunCommand,
+    inherited: Option<&ServerArgs>,
+) -> Result<(), CliError> {
+    validate_cli_plugin_config_sources(
+        command.plugin_config.as_ref(),
+        command.plugin_config_file.as_ref(),
+    )?;
+    if let Some(inherited) = inherited {
+        validate_cli_plugin_config_sources(
+            inherited.plugin_config.as_ref(),
+            inherited.plugin_config_file.as_ref(),
+        )?;
+    }
+    let inline_present = command.plugin_config.is_some()
+        || inherited.is_some_and(|args| args.plugin_config.is_some());
+    let file_present = command.plugin_config_file.is_some()
+        || inherited.is_some_and(|args| args.plugin_config_file.is_some());
+    if inline_present && file_present {
+        return Err(CliError::Config(
+            "choose only one of --plugin-config or --plugin-config-file".into(),
+        ));
+    }
     Ok(())
 }
 
