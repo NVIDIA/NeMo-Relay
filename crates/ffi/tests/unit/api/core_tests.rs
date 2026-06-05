@@ -579,6 +579,7 @@ fn test_ffi_pop_scope_merges_scope_metadata() {
         let scope_name = cstring("ffi_scope_end_metadata");
         let scope_metadata = cstring(r#"{"a":1,"b":2,"c":3}"#);
         let end_metadata = cstring(r#"{"c":3.5,"d":4}"#);
+        let invalid_end_metadata = cstring("{");
         let mut scope = ptr::null_mut();
         assert_eq!(
             nemo_relay_push_scope(
@@ -596,6 +597,10 @@ fn test_ffi_pop_scope_merges_scope_metadata() {
         assert_eq!(
             api::nemo_relay_pop_scope(scope, ptr::null(), end_metadata.as_ptr(), ptr::null(),),
             NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            api::nemo_relay_pop_scope(scope, ptr::null(), invalid_end_metadata.as_ptr(), ptr::null()),
+            NemoRelayStatus::InvalidJson
         );
         assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
 
