@@ -44,8 +44,7 @@ typedef void (*NemoRelayFreeFn)(void* user_data);
 // Core API
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
-extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const int64_t* timestamp_unix_micros);
-extern int32_t nemo_relay_pop_scope_with_metadata(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 
 // Tool lifecycle
@@ -555,7 +554,7 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	return checkStatus(C.nemo_relay_pop_scope_with_metadata(handle.ptr, o.output, o.metadata, o.timestamp))
+	return checkStatus(C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp))
 }
 
 // ---------------------------------------------------------------------------

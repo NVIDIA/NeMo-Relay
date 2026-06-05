@@ -558,7 +558,7 @@ fn test_ffi_error_paths_and_scope_stack() {
 }
 
 #[test]
-fn test_ffi_pop_scope_with_metadata_merges_scope_metadata() {
+fn test_ffi_pop_scope_merges_scope_metadata() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
 
@@ -594,12 +594,7 @@ fn test_ffi_pop_scope_with_metadata_merges_scope_metadata() {
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            api::nemo_relay_pop_scope_with_metadata(
-                scope,
-                ptr::null(),
-                end_metadata.as_ptr(),
-                ptr::null(),
-            ),
+            api::nemo_relay_pop_scope(scope, ptr::null(), end_metadata.as_ptr(), ptr::null(),),
             NemoRelayStatus::Ok
         );
         assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
@@ -938,7 +933,7 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
         );
 
         assert_eq!(
-            api::nemo_relay_pop_scope(scope, ptr::null(), &timestamps[6]),
+            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null(), &timestamps[6]),
             NemoRelayStatus::Ok
         );
 
@@ -1147,10 +1142,11 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
         assert_invalid_timestamp(api::nemo_relay_pop_scope(
             scope,
             ptr::null(),
+            ptr::null(),
             &invalid_timestamp,
         ));
         assert_eq!(
-            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null()),
+            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok
         );
 
