@@ -4,13 +4,11 @@
 //! Coverage tests for coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::PyModule;
 use serde_json::{Value as Json, json};
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
@@ -26,225 +24,13 @@ use crate::py_callable::{
 };
 use nemo_relay::api::event::{BaseEvent, Event, EventCategory, ScopeCategory, ScopeEvent};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{
-    LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState, ToolExecutionNextFn,
-    global_context,
-};
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
-};
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 
 fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
     let file_name = CString::new("coverage_tests.py").unwrap();
     let module_name = CString::new("coverage_tests").unwrap();
     PyModule::from_code(py, &code, &file_name, &module_name).unwrap()
-}
-
-fn python_package_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python")
-}
-
-fn embedded_guardrails_local_source_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../core/src/plugins/nemo_guardrails/embedded_python/_guardrails_local.py")
-}
-
-fn fake_guardrails_module_prelude(module_name: &str, python_dir: &str) -> String {
-    format!(
-        r#"
-import sys
-import types
-
-sys.path.insert(0, {python_dir:?})
-
-MODULE_NAME = {module_name:?}
-
-fake_root = types.ModuleType(MODULE_NAME)
-fake_root.__version__ = "0.22.0"
-fake_options = types.ModuleType(MODULE_NAME + ".rails.llm.options")
-
-class Result:
-    def __init__(self, status, content=None, rail=None):
-        self.status = status
-        self.content = content
-        self.rail = rail
-
-class RailType:
-    INPUT = "input"
-    OUTPUT = "output"
-
-class RailStatus:
-    BLOCKED = "blocked"
-    MODIFIED = "modified"
-    PASSED = "passed"
-
-class RailsConfig:
-    @staticmethod
-    def from_content(*, colang_content=None, yaml_content=None):
-        return {{"yaml": yaml_content, "colang": colang_content}}
-
-    @staticmethod
-    def from_path(path):
-        return {{"path": path}}
-"#,
-        python_dir = python_dir,
-        module_name = module_name,
-    )
-}
-
-fn register_fake_guardrails_module_epilogue() -> &'static str {
-    r#"
-fake_root.RailsConfig = RailsConfig
-fake_root.LLMRails = LLMRails
-fake_options.RailType = RailType
-fake_options.RailStatus = RailStatus
-
-sys.modules[MODULE_NAME] = fake_root
-sys.modules[MODULE_NAME + ".rails"] = types.ModuleType(MODULE_NAME + ".rails")
-sys.modules[MODULE_NAME + ".rails.llm"] = types.ModuleType(MODULE_NAME + ".rails.llm")
-sys.modules[MODULE_NAME + ".rails.llm.options"] = fake_options
-"#
-}
-
-fn local_plugin_context_python() -> &'static str {
-    r#"
-class Context:
-    def register_llm_execution_intercept(self, name, priority, callback):
-        self.llm = callback
-
-    def register_llm_stream_execution_intercept(self, name, priority, callback):
-        self.stream = callback
-
-    def register_tool_execution_intercept(self, name, priority, callback):
-        self.tool = callback
-"#
-}
-
-fn embedded_guardrails_local_loader_python(source_path: &str) -> String {
-    format!(
-        r#"
-import pathlib
-import sys
-import types
-
-from nemo_relay._native import LLMRequest
-
-class _AnnotatedRequest:
-    def __init__(self, messages):
-        self.messages = [dict(message) for message in messages]
-
-class _AnnotatedResponse:
-    def __init__(self, response):
-        self._response = response
-
-    def response_text(self):
-        try:
-            return self._response["choices"][0]["message"]["content"]
-        except Exception:
-            return None
-
-class _BaseCodec:
-    def decode(self, request):
-        return _AnnotatedRequest(request.content.get("messages", []))
-
-    def encode(self, annotated, original):
-        content = dict(original.content)
-        content["messages"] = annotated.messages
-        return LLMRequest(original.headers, content)
-
-    def decode_response(self, response):
-        return _AnnotatedResponse(response)
-
-class OpenAIChatCodec(_BaseCodec):
-    pass
-
-class OpenAIResponsesCodec(_BaseCodec):
-    pass
-
-class AnthropicMessagesCodec(_BaseCodec):
-    pass
-
-class PluginContext:
-    pass
-
-runtime_module = types.ModuleType("_nemo_guardrails_local_runtime")
-runtime_module.LLMRequest = LLMRequest
-runtime_module.OpenAIChatCodec = OpenAIChatCodec
-runtime_module.OpenAIResponsesCodec = OpenAIResponsesCodec
-runtime_module.AnthropicMessagesCodec = AnthropicMessagesCodec
-runtime_module.PluginContext = PluginContext
-sys.modules["_nemo_guardrails_local_runtime"] = runtime_module
-
-GUARDRAILS_LOCAL_SOURCE_PATH = pathlib.Path({source_path:?})
-guardrails_local_module = types.ModuleType("_nemo_guardrails_local")
-guardrails_local_module.__file__ = str(GUARDRAILS_LOCAL_SOURCE_PATH)
-guardrails_local_module.__package__ = ""
-sys.modules["_nemo_guardrails_local"] = guardrails_local_module
-exec(
-    compile(
-        GUARDRAILS_LOCAL_SOURCE_PATH.read_text(),
-        str(GUARDRAILS_LOCAL_SOURCE_PATH),
-        "exec",
-    ),
-    guardrails_local_module.__dict__,
-)
-"#,
-        source_path = source_path,
-    )
-}
-
-fn with_isolated_nemo_relay_modules<T>(
-    py: Python<'_>,
-    native_module: &Bound<'_, PyModule>,
-    f: impl FnOnce() -> T,
-) -> T {
-    let sys = py.import("sys").unwrap();
-    let modules = sys
-        .getattr("modules")
-        .unwrap()
-        .cast_into::<PyDict>()
-        .unwrap();
-    let saved_modules = modules
-        .iter()
-        .filter_map(|(name, module)| {
-            let name = name.extract::<String>().ok()?;
-            if name == "nemo_relay" || name.starts_with("nemo_relay.") {
-                Some((name, module.unbind()))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
-    clear_nemo_relay_modules(&modules);
-    modules
-        .set_item("nemo_relay._native", native_module.clone())
-        .unwrap();
-
-    let result = catch_unwind(AssertUnwindSafe(f));
-
-    clear_nemo_relay_modules(&modules);
-    for (name, module) in saved_modules {
-        modules.set_item(name, module).unwrap();
-    }
-
-    match result {
-        Ok(value) => value,
-        Err(payload) => std::panic::resume_unwind(payload),
-    }
-}
-
-fn clear_nemo_relay_modules(modules: &Bound<'_, PyDict>) {
-    let module_names = modules
-        .iter()
-        .filter_map(|(name, _)| name.extract::<String>().ok())
-        .filter(|name| name == "nemo_relay" || name.starts_with("nemo_relay."))
-        .collect::<Vec<_>>();
-
-    for name in module_names {
-        modules.del_item(name).unwrap();
-    }
 }
 
 fn make_request() -> LlmRequest {
@@ -277,12 +63,6 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
         .unwrap();
     event_loop.call_method0("close").unwrap();
     result
-}
-
-fn reset_runtime_state() {
-    let _ = clear_plugin_configuration();
-    let context = global_context();
-    *context.write().unwrap() = NemoRelayContextState::new();
 }
 
 #[test]

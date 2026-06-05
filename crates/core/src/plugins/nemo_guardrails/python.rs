@@ -1,141 +1,615 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::CString;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::types::{PyDict, PyList};
+use serde_json::json;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::api::llm::LlmRequest;
-use crate::api::registry::{
-    deregister_llm_execution_intercept, deregister_llm_stream_execution_intercept,
-    deregister_tool_execution_intercept, register_llm_execution_intercept,
-    register_llm_stream_execution_intercept, register_tool_execution_intercept,
-};
-use crate::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use crate::api::runtime::{LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, ToolExecutionFn};
 use crate::codec::anthropic::AnthropicMessagesCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::request::{AnnotatedLlmRequest, Message};
-use crate::codec::response::AnnotatedLlmResponse;
+use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::json::Json;
-use crate::plugin::{
-    PluginError, PluginRegistration, PluginRegistrationContext, Result as PluginResult,
-    rollback_registrations,
-};
+use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
 
 use super::NeMoGuardrailsConfig;
 
-const SUPPORT_MODULE_NAME: &str = "_nemo_guardrails_local_runtime";
-const HELPER_MODULE_NAME: &str = "_nemo_guardrails_local";
-const HELPER_FILENAME: &str = "_nemo_guardrails_local.py";
-const HELPER_SOURCE: &str = include_str!("embedded_python/_guardrails_local.py");
+const DEFAULT_MODULE_NAME: &str = "nemoguardrails";
+const SUPPORTED_NEMOGUARDRAILS_VERSION: &str = "0.22.0";
 
 pub(super) fn register_local_backend(
     config: NeMoGuardrailsConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    Python::initialize();
+    let runtime = Arc::new(LocalGuardrailsRuntime::new(&config)?);
 
-    let plugin_config = match serde_json::to_value(config) {
-        Ok(Json::Object(config)) => config,
-        Ok(_) => {
-            return Err(PluginError::Internal(
-                "NeMo Guardrails local config did not serialize to a JSON object".to_string(),
-            ));
-        }
-        Err(err) => {
-            return Err(PluginError::Internal(format!(
-                "failed to serialize NeMo Guardrails local config: {err}"
-            )));
-        }
-    };
+    if config.input || config.output {
+        let llm_runtime = Arc::clone(&runtime);
+        let enable_input = config.input;
+        let enable_output = config.output;
+        let llm_execution: LlmExecutionFn = Arc::new(move |_name, request, next| {
+            let runtime = Arc::clone(&llm_runtime);
+            Box::pin(async move {
+                runtime
+                    .execute_llm(request, next, enable_input, enable_output)
+                    .await
+            })
+        });
+        ctx.register_llm_execution_intercept(
+            "nemo_guardrails_local",
+            config.priority,
+            llm_execution,
+        )?;
 
-    let registrations = Python::attach(|py| {
-        let register_fn = load_guardrails_local_register_fn(py)?;
-        invoke_embedded_plugin_register(py, &register_fn, &plugin_config, ctx.qualify_name(""))
-    })
-    .map_err(|err| PluginError::RegistrationFailed(err.to_string()))?;
+        let stream_runtime = Arc::clone(&runtime);
+        let enable_input = config.input;
+        let enable_output = config.output;
+        let llm_stream_execution: LlmStreamExecutionFn = Arc::new(move |_name, request, next| {
+            let runtime = Arc::clone(&stream_runtime);
+            Box::pin(async move {
+                runtime
+                    .execute_llm_stream(request, next, enable_input, enable_output)
+                    .await
+            })
+        });
+        ctx.register_llm_stream_execution_intercept(
+            "nemo_guardrails_local_stream",
+            config.priority,
+            llm_stream_execution,
+        )?;
+    }
 
-    ctx.extend_registrations(registrations);
+    if config.tool_input || config.tool_output {
+        let tool_runtime = Arc::clone(&runtime);
+        let enable_tool_input = config.tool_input;
+        let enable_tool_output = config.tool_output;
+        let tool_execution: ToolExecutionFn = Arc::new(move |tool_name, args, next| {
+            let runtime = Arc::clone(&tool_runtime);
+            let tool_name = tool_name.to_string();
+            Box::pin(async move {
+                let current_args = if enable_tool_input {
+                    runtime.check_tool_input(&tool_name, &args).await?
+                } else {
+                    args
+                };
+
+                let tool_result = next(current_args.clone()).await?;
+                if !enable_tool_output {
+                    return Ok(tool_result);
+                }
+
+                runtime
+                    .check_tool_output(&tool_name, &current_args, &tool_result)
+                    .await
+            })
+        });
+        ctx.register_tool_execution_intercept(
+            "nemo_guardrails_local",
+            config.priority,
+            tool_execution,
+        )?;
+    }
+
     Ok(())
 }
 
-fn invoke_embedded_plugin_register(
-    py: Python<'_>,
-    register_fn: &Bound<'_, PyAny>,
-    plugin_config: &serde_json::Map<String, Json>,
-    namespace_prefix: String,
-) -> PyResult<Vec<PluginRegistration>> {
-    let context = Py::new(
-        py,
-        PyLocalPluginContext {
-            registrations: Arc::new(Mutex::new(vec![])),
-            namespace_prefix,
-        },
-    )?;
-    let plugin_config_py = json_to_py(py, &Json::Object(plugin_config.clone()))?;
+struct LocalGuardrailsRuntime {
+    bridge: LocalGuardrailsBridge,
+    codec: Option<LocalGuardrailsCodec>,
+}
 
-    match register_fn.call1((plugin_config_py, context.clone_ref(py))) {
-        Ok(_) => context.bind(py).borrow().drain_registrations(),
-        Err(err) => {
-            if let Ok(mut registrations) = context.bind(py).borrow().drain_registrations() {
-                rollback_registrations(&mut registrations);
+impl LocalGuardrailsRuntime {
+    fn new(config: &NeMoGuardrailsConfig) -> PluginResult<Self> {
+        Python::initialize();
+        Ok(Self {
+            bridge: LocalGuardrailsBridge::new(config)?,
+            codec: resolve_codec(config)?,
+        })
+    }
+
+    async fn execute_llm(
+        &self,
+        request: LlmRequest,
+        next: crate::api::runtime::LlmExecutionNextFn,
+        enable_input: bool,
+        enable_output: bool,
+    ) -> FlowResult<Json> {
+        let (request, messages) = self.prepare_llm_request(request, enable_input).await?;
+        let response = next(request).await?;
+
+        if enable_output {
+            let annotated_response = self.codec()?.decode_response(&response)?;
+            if let Some(response_text) = annotated_response.response_text() {
+                self.check_output_rails(&messages, response_text).await?;
             }
-            Err(err)
+        }
+
+        Ok(response)
+    }
+
+    async fn execute_llm_stream(
+        &self,
+        request: LlmRequest,
+        next: crate::api::runtime::LlmStreamExecutionNextFn,
+        enable_input: bool,
+        enable_output: bool,
+    ) -> FlowResult<LlmJsonStream> {
+        let (request, messages) = self.prepare_llm_request(request, enable_input).await?;
+        let provider_stream = next(request).await?;
+
+        if !enable_output || !self.bridge.has_streaming_output_rails()? {
+            return Ok(provider_stream);
+        }
+
+        self.bridge.ensure_streaming_output_supported()?;
+        self.guard_provider_stream(messages, provider_stream)
+    }
+
+    async fn prepare_llm_request(
+        &self,
+        request: LlmRequest,
+        enable_input: bool,
+    ) -> FlowResult<(LlmRequest, Vec<Json>)> {
+        let codec = self.codec()?;
+        let mut current_request = request;
+        let mut annotated = codec.decode(&current_request)?;
+        let mut messages = messages_from_annotated(&annotated)?;
+
+        if enable_input {
+            match self
+                .bridge
+                .check(messages.clone(), LocalRailKind::Input)
+                .await?
+            {
+                LocalCheckOutcome::Passed => {}
+                LocalCheckOutcome::Blocked { rail, .. } => {
+                    return Err(blocked_error("input", rail.as_deref()));
+                }
+                LocalCheckOutcome::Modified { content, .. } => {
+                    replace_last_role_content(&mut annotated, "user", content)?;
+                    current_request = codec.encode(&annotated, &current_request)?;
+                    messages = messages_from_annotated(&annotated)?;
+                }
+            }
+        }
+
+        Ok((current_request, messages))
+    }
+
+    async fn check_output_rails(&self, messages: &[Json], response_text: &str) -> FlowResult<()> {
+        let mut output_messages = messages.to_vec();
+        output_messages.push(json!({
+            "role": "assistant",
+            "content": response_text,
+        }));
+
+        match self
+            .bridge
+            .check(output_messages, LocalRailKind::Output)
+            .await?
+        {
+            LocalCheckOutcome::Passed => Ok(()),
+            LocalCheckOutcome::Blocked { rail, .. } => {
+                Err(blocked_error("output", rail.as_deref()))
+            }
+            LocalCheckOutcome::Modified { .. } => Err(local_violation(
+                "NeMo Guardrails output rail returned modified content, but the local backend \
+                 does not rewrite provider responses yet.",
+            )),
         }
     }
-}
 
-fn load_guardrails_local_register_fn(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
-    install_support_module(py)?;
-    let module = load_guardrails_local_module(py)?;
-    module.getattr("register_local_backend")
-}
+    async fn check_tool_input(&self, tool_name: &str, args: &Json) -> FlowResult<Json> {
+        let messages = vec![json!({
+            "role": "user",
+            "content": tool_input_content(tool_name, args)?,
+        })];
 
-fn install_support_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    let sys = py.import("sys")?;
-    let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
-    if let Some(existing) = modules.get_item(SUPPORT_MODULE_NAME)? {
-        return Ok(existing.cast_into::<PyModule>()?);
+        match self.bridge.check(messages, LocalRailKind::Input).await? {
+            LocalCheckOutcome::Passed => Ok(args.clone()),
+            LocalCheckOutcome::Blocked { rail, .. } => {
+                Err(blocked_error("tool_input", rail.as_deref()))
+            }
+            LocalCheckOutcome::Modified { content, .. } => {
+                modified_tool_payload(&content, "arguments")
+            }
+        }
     }
 
-    let module = PyModule::new(py, SUPPORT_MODULE_NAME)?;
-    module.add_class::<PyLLMRequest>()?;
-    module.add_class::<PyAnnotatedLLMRequest>()?;
-    module.add_class::<PyAnnotatedLLMResponse>()?;
-    module.add_class::<PyOpenAIChatCodec>()?;
-    module.add_class::<PyOpenAIResponsesCodec>()?;
-    module.add_class::<PyAnthropicMessagesCodec>()?;
-    module.add_class::<PyLocalPluginContext>()?;
-    modules.set_item(SUPPORT_MODULE_NAME, &module)?;
-    Ok(module)
-}
+    async fn check_tool_output(
+        &self,
+        tool_name: &str,
+        args: &Json,
+        result: &Json,
+    ) -> FlowResult<Json> {
+        let messages = vec![
+            json!({
+                "role": "user",
+                "content": tool_input_content(tool_name, args)?,
+            }),
+            json!({
+                "role": "assistant",
+                "content": tool_output_content(tool_name, args, result)?,
+            }),
+        ];
 
-fn load_guardrails_local_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    let sys = py.import("sys")?;
-    let modules = sys.getattr("modules")?.cast_into::<PyDict>()?;
-    if let Some(existing) = modules.get_item(HELPER_MODULE_NAME)? {
-        return Ok(existing.cast_into::<PyModule>()?);
+        match self.bridge.check(messages, LocalRailKind::Output).await? {
+            LocalCheckOutcome::Passed => Ok(result.clone()),
+            LocalCheckOutcome::Blocked { rail, .. } => {
+                Err(blocked_error("tool_output", rail.as_deref()))
+            }
+            LocalCheckOutcome::Modified { content, .. } => {
+                modified_tool_payload(&content, "result")
+            }
+        }
     }
 
-    let source = CString::new(HELPER_SOURCE).unwrap();
-    let filename = CString::new(HELPER_FILENAME).unwrap();
-    let module_name = CString::new(HELPER_MODULE_NAME).unwrap();
-    let module = PyModule::from_code(py, &source, &filename, &module_name)?;
-    modules.set_item(HELPER_MODULE_NAME, &module)?;
-    Ok(module)
+    fn guard_provider_stream(
+        &self,
+        messages: Vec<Json>,
+        provider_stream: LlmJsonStream,
+    ) -> FlowResult<LlmJsonStream> {
+        let (text_tx, text_rx) = mpsc::channel::<Option<String>>(32);
+        let (chunk_tx, chunk_rx) = mpsc::channel::<FlowResult<Json>>(32);
+        let blocked = Arc::new(Mutex::new(None));
+        let monitor = self
+            .bridge
+            .spawn_stream_monitor(messages, text_rx, Arc::clone(&blocked))?;
+        let codec = *self.codec()?;
+
+        tokio::spawn(async move {
+            forward_guarded_provider_stream(
+                provider_stream,
+                codec,
+                text_tx,
+                chunk_tx,
+                monitor,
+                blocked,
+            )
+            .await;
+        });
+
+        Ok(Box::pin(ReceiverStream::new(chunk_rx)) as LlmJsonStream)
+    }
+
+    fn codec(&self) -> FlowResult<&LocalGuardrailsCodec> {
+        self.codec.as_ref().ok_or_else(|| {
+            FlowError::Internal(
+                "local NeMo Guardrails backend requires a supported codec".to_string(),
+            )
+        })
+    }
 }
 
-fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Json> {
-    pythonize::depythonize(obj).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to convert to JSON: {e}"))
+struct LocalGuardrailsBridge {
+    rails: Py<PyAny>,
+    input_rail: Py<PyAny>,
+    output_rail: Py<PyAny>,
+    blocked_status: String,
+    modified_status: String,
+}
+
+impl LocalGuardrailsBridge {
+    fn new(config: &NeMoGuardrailsConfig) -> PluginResult<Self> {
+        Python::attach(|py| {
+            let imports = load_nemoguardrails(
+                py,
+                config.local.as_ref().and_then(|l| {
+                    l.python_module
+                        .as_deref()
+                        .filter(|module| !module.trim().is_empty())
+                }),
+            )?;
+            let guardrails_config = build_guardrails_config(py, config, &imports.rails_config_cls)?;
+            let rails = imports.llm_rails_cls.call1(py, (guardrails_config,))?;
+            let input_rail = imports.rail_type.getattr(py, "INPUT")?;
+            let output_rail = imports.rail_type.getattr(py, "OUTPUT")?;
+            let blocked = imports.rail_status.getattr(py, "BLOCKED")?;
+            let modified = imports.rail_status.getattr(py, "MODIFIED")?;
+            let blocked_status = py_status_value(blocked.bind(py))?;
+            let modified_status = py_status_value(modified.bind(py))?;
+
+            Ok::<Self, PyErr>(Self {
+                rails,
+                input_rail,
+                output_rail,
+                blocked_status,
+                modified_status,
+            })
+        })
+        .map_err(|err| PluginError::RegistrationFailed(err.to_string()))
+    }
+
+    async fn check(
+        &self,
+        messages: Vec<Json>,
+        kind: LocalRailKind,
+    ) -> FlowResult<LocalCheckOutcome> {
+        let future = Python::attach(|py| {
+            let messages = json_to_py(py, &Json::Array(messages))
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            let rail_type = match kind {
+                LocalRailKind::Input => self.input_rail.clone_ref(py),
+                LocalRailKind::Output => self.output_rail.clone_ref(py),
+            };
+            let rail_types =
+                PyList::new(py, [rail_type]).map_err(|err| FlowError::Internal(err.to_string()))?;
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("rail_types", rail_types)
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            let result = self
+                .rails
+                .bind(py)
+                .call_method("check_async", (messages,), Some(&kwargs))
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            pyo3_async_runtimes::tokio::into_future(result.unbind().into_bound(py))
+                .map_err(|err| FlowError::Internal(err.to_string()))
+        })?;
+
+        let result = future
+            .await
+            .map_err(|err| FlowError::Internal(err.to_string()))?;
+
+        Python::attach(|py| {
+            self.parse_check_result(result.bind(py))
+                .map_err(|err| FlowError::Internal(err.to_string()))
+        })
+    }
+
+    fn has_streaming_output_rails(&self) -> FlowResult<bool> {
+        Python::attach(|py| {
+            let Some(output) = self.output_rails_config(py)? else {
+                return Ok(false);
+            };
+            match output.getattr("flows") {
+                Ok(flows) => flows
+                    .is_truthy()
+                    .map_err(|err| FlowError::Internal(err.to_string())),
+                Err(_) => Ok(false),
+            }
+        })
+    }
+
+    fn ensure_streaming_output_supported(&self) -> FlowResult<()> {
+        Python::attach(|py| {
+            let Some(output) = self.output_rails_config(py)? else {
+                return Ok(());
+            };
+            let streaming = output.getattr("streaming").map_err(|_| {
+                FlowError::Internal(
+                    "local NeMo Guardrails streaming output rails require \
+                     rails.output.streaming.enabled = true in the Guardrails config."
+                        .to_string(),
+                )
+            })?;
+            let enabled = streaming
+                .getattr("enabled")
+                .and_then(|value| value.is_truthy())
+                .unwrap_or(false);
+            if !enabled {
+                return Err(FlowError::Internal(
+                    "local NeMo Guardrails streaming output rails require \
+                     rails.output.streaming.enabled = true in the Guardrails config."
+                        .to_string(),
+                ));
+            }
+
+            let stream_first = streaming
+                .getattr("stream_first")
+                .and_then(|value| value.is_truthy())
+                .unwrap_or(true);
+            if !stream_first {
+                return Err(FlowError::Internal(
+                    "local NeMo Guardrails streaming output rails currently require \
+                     rails.output.streaming.stream_first = true."
+                        .to_string(),
+                ));
+            }
+
+            Ok(())
+        })
+    }
+
+    fn spawn_stream_monitor(
+        &self,
+        messages: Vec<Json>,
+        text_rx: mpsc::Receiver<Option<String>>,
+        blocked: Arc<Mutex<Option<String>>>,
+    ) -> FlowResult<JoinHandle<FlowResult<()>>> {
+        let (async_iter, task_locals) = Python::attach(|py| {
+            let generator = Py::new(
+                py,
+                PyStringStream {
+                    receiver: Arc::new(tokio::sync::Mutex::new(text_rx)),
+                },
+            )
+            .map_err(|err| FlowError::Internal(err.to_string()))?;
+            let messages = json_to_py(py, &Json::Array(messages))
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("messages", messages)
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            kwargs
+                .set_item("generator", generator)
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            kwargs
+                .set_item("include_metadata", false)
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            let async_iter = self
+                .rails
+                .bind(py)
+                .call_method("stream_async", (), Some(&kwargs))
+                .map_err(|err| FlowError::Internal(err.to_string()))?
+                .unbind();
+            let task_locals = pyo3_async_runtimes::tokio::get_current_locals(py)
+                .map_err(|err| FlowError::Internal(err.to_string()))?;
+            Ok((async_iter, task_locals))
+        })?;
+
+        let async_iter = Arc::new(async_iter);
+        Ok(tokio::spawn(pyo3_async_runtimes::tokio::scope(
+            task_locals,
+            async move { monitor_guardrails_stream(async_iter, blocked).await },
+        )))
+    }
+
+    fn output_rails_config<'py>(&self, py: Python<'py>) -> FlowResult<Option<Bound<'py, PyAny>>> {
+        let rails = self.rails.bind(py);
+        let config = match rails.getattr("config") {
+            Ok(config) => config,
+            Err(_) => return Ok(None),
+        };
+        let rails_config = match config.getattr("rails") {
+            Ok(rails_config) => rails_config,
+            Err(_) => return Ok(None),
+        };
+        match rails_config.getattr("output") {
+            Ok(output) => Ok(Some(output)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn parse_check_result(&self, result: &Bound<'_, PyAny>) -> PyResult<LocalCheckOutcome> {
+        let status = py_status_value(&result.getattr("status")?)?;
+        let rail = optional_string_attr(result, "rail")?;
+        let content = string_attr_or_empty(result, "content")?;
+
+        if status == self.blocked_status {
+            return Ok(LocalCheckOutcome::Blocked { rail });
+        }
+        if status == self.modified_status {
+            return Ok(LocalCheckOutcome::Modified { content });
+        }
+        Ok(LocalCheckOutcome::Passed)
+    }
+}
+
+struct GuardrailsRuntimeImports {
+    rails_config_cls: Py<PyAny>,
+    llm_rails_cls: Py<PyAny>,
+    rail_type: Py<PyAny>,
+    rail_status: Py<PyAny>,
+}
+
+fn load_nemoguardrails(
+    py: Python<'_>,
+    module_name: Option<&str>,
+) -> PyResult<GuardrailsRuntimeImports> {
+    let root_module = module_name.unwrap_or(DEFAULT_MODULE_NAME);
+    let importlib = py.import("importlib")?;
+    let import_module = importlib.getattr("import_module")?;
+    let guardrails = import_module
+        .call1((root_module,))
+        .map_err(|err| import_dependency_error(py, err, root_module))?;
+    let options_module_name = format!("{root_module}.rails.llm.options");
+    let options = import_module
+        .call1((options_module_name.as_str(),))
+        .map_err(|err| import_dependency_error(py, err, root_module))?;
+
+    let version = guardrails
+        .getattr("__version__")
+        .ok()
+        .and_then(|value| value.extract::<String>().ok());
+    if version.as_deref() != Some(SUPPORTED_NEMOGUARDRAILS_VERSION) {
+        let found = version
+            .map(|version| format!("{version:?}"))
+            .unwrap_or_else(|| "None".to_string());
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "NeMo Guardrails local backend requires nemoguardrails==\
+             {SUPPORTED_NEMOGUARDRAILS_VERSION}, but found {found}. \
+             Install it with: pip install nemoguardrails=={SUPPORTED_NEMOGUARDRAILS_VERSION}"
+        )));
+    }
+
+    Ok(GuardrailsRuntimeImports {
+        rails_config_cls: guardrails.getattr("RailsConfig")?.unbind(),
+        llm_rails_cls: guardrails.getattr("LLMRails")?.unbind(),
+        rail_type: options.getattr("RailType")?.unbind(),
+        rail_status: options.getattr("RailStatus")?.unbind(),
     })
+}
+
+fn import_dependency_error(py: Python<'_>, err: PyErr, root_module: &str) -> PyErr {
+    if !err.is_instance_of::<pyo3::exceptions::PyImportError>(py) {
+        return err;
+    }
+
+    let name = err.value(py).getattr("name").ok().and_then(|name| {
+        if name.is_none() {
+            None
+        } else {
+            name.extract::<String>().ok()
+        }
+    });
+
+    if name.as_deref() == Some(root_module) {
+        return pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "NeMo Guardrails is required for the built-in NeMo Guardrails local backend. \
+             Install it with: pip install nemoguardrails=={SUPPORTED_NEMOGUARDRAILS_VERSION}"
+        ));
+    }
+
+    pyo3::exceptions::PyRuntimeError::new_err(format!(
+        "NeMo Guardrails local backend could not import a required dependency: {}. \
+         Install the full NeMo Guardrails runtime dependencies.",
+        name.unwrap_or_else(|| err.to_string())
+    ))
+}
+
+fn build_guardrails_config(
+    py: Python<'_>,
+    config: &NeMoGuardrailsConfig,
+    rails_config_cls: &Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let rails_config_cls = rails_config_cls.bind(py);
+    if let Some(config_path) = config.config_path.as_deref() {
+        return rails_config_cls
+            .call_method1("from_path", (config_path,))
+            .map(Bound::unbind);
+    }
+
+    let config_yaml = config.config_yaml.as_deref().ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(
+            "config_yaml is required when config_path is not provided",
+        )
+    })?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("colang_content", config.colang_content.as_deref())?;
+    kwargs.set_item("yaml_content", config_yaml)?;
+    rails_config_cls
+        .call_method("from_content", (), Some(&kwargs))
+        .map(Bound::unbind)
+}
+
+fn py_status_value(status: &Bound<'_, PyAny>) -> PyResult<String> {
+    let value = status.getattr("value").unwrap_or_else(|_| status.clone());
+    Ok(value.str()?.extract::<String>()?.to_lowercase())
+}
+
+fn optional_string_attr(obj: &Bound<'_, PyAny>, attr: &str) -> PyResult<Option<String>> {
+    match obj.getattr(attr) {
+        Ok(value) if !value.is_none() => Ok(Some(value.str()?.extract::<String>()?)),
+        Ok(_) | Err(_) => Ok(None),
+    }
+}
+
+fn string_attr_or_empty(obj: &Bound<'_, PyAny>, attr: &str) -> PyResult<String> {
+    match optional_string_attr(obj, attr)? {
+        Some(value) => Ok(value),
+        None => Ok(String::new()),
+    }
 }
 
 fn json_to_py(py: Python<'_>, value: &Json) -> PyResult<Py<PyAny>> {
@@ -145,377 +619,330 @@ fn json_to_py(py: Python<'_>, value: &Json) -> PyResult<Py<PyAny>> {
     Ok(obj.unbind())
 }
 
-fn messages_to_json(messages: &[Message]) -> PyResult<Json> {
-    serde_json::to_value(messages).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Failed to serialize messages: {e}"
+#[derive(Clone, Copy)]
+enum LocalGuardrailsCodec {
+    OpenAIChat,
+    OpenAIResponses,
+    AnthropicMessages,
+}
+
+impl LocalGuardrailsCodec {
+    fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+        match self {
+            Self::OpenAIChat => OpenAIChatCodec.decode(request),
+            Self::OpenAIResponses => OpenAIResponsesCodec.decode(request),
+            Self::AnthropicMessages => AnthropicMessagesCodec.decode(request),
+        }
+    }
+
+    fn encode(
+        &self,
+        annotated: &AnnotatedLlmRequest,
+        original: &LlmRequest,
+    ) -> FlowResult<LlmRequest> {
+        match self {
+            Self::OpenAIChat => OpenAIChatCodec.encode(annotated, original),
+            Self::OpenAIResponses => OpenAIResponsesCodec.encode(annotated, original),
+            Self::AnthropicMessages => AnthropicMessagesCodec.encode(annotated, original),
+        }
+    }
+
+    fn decode_response(
+        &self,
+        response: &Json,
+    ) -> FlowResult<crate::codec::response::AnnotatedLlmResponse> {
+        match self {
+            Self::OpenAIChat => OpenAIChatCodec.decode_response(response),
+            Self::OpenAIResponses => OpenAIResponsesCodec.decode_response(response),
+            Self::AnthropicMessages => AnthropicMessagesCodec.decode_response(response),
+        }
+    }
+}
+
+fn resolve_codec(config: &NeMoGuardrailsConfig) -> PluginResult<Option<LocalGuardrailsCodec>> {
+    if !(config.input || config.output) {
+        return Ok(None);
+    }
+
+    match config.codec.as_deref() {
+        Some("openai_chat") => Ok(Some(LocalGuardrailsCodec::OpenAIChat)),
+        Some("openai_responses") => Ok(Some(LocalGuardrailsCodec::OpenAIResponses)),
+        Some("anthropic_messages") => Ok(Some(LocalGuardrailsCodec::AnthropicMessages)),
+        Some(other) => Err(PluginError::InvalidConfig(format!(
+            "unsupported local NeMo Guardrails codec '{other}'"
+        ))),
+        None => Err(PluginError::InvalidConfig(
+            "local NeMo Guardrails backend requires a supported codec".to_string(),
+        )),
+    }
+}
+
+enum LocalCheckOutcome {
+    Passed,
+    Blocked { rail: Option<String> },
+    Modified { content: String },
+}
+
+#[derive(Clone, Copy)]
+enum LocalRailKind {
+    Input,
+    Output,
+}
+
+fn messages_from_annotated(annotated: &AnnotatedLlmRequest) -> FlowResult<Vec<Json>> {
+    match serde_json::to_value(&annotated.messages)
+        .map_err(|err| FlowError::Internal(format!("failed to serialize messages: {err}")))?
+    {
+        Json::Array(messages) => Ok(messages),
+        _ => Err(FlowError::Internal(
+            "serialized messages were not a JSON array".to_string(),
+        )),
+    }
+}
+
+fn replace_last_role_content(
+    annotated: &mut AnnotatedLlmRequest,
+    role: &str,
+    content: String,
+) -> FlowResult<()> {
+    for message in annotated.messages.iter_mut().rev() {
+        match (role, message) {
+            (
+                "user",
+                Message::User {
+                    content: target, ..
+                },
+            ) => {
+                *target = MessageContent::Text(content);
+                return Ok(());
+            }
+            (
+                "assistant",
+                Message::Assistant {
+                    content: target, ..
+                },
+            ) => {
+                *target = Some(MessageContent::Text(content));
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    Err(local_violation(format!(
+        "NeMo Guardrails returned modified {role} content but no {role} message was present."
+    )))
+}
+
+fn tool_input_content(name: &str, args: &Json) -> FlowResult<String> {
+    serde_json::to_string(&json!({
+        "tool_name": name,
+        "arguments": args,
+    }))
+    .map_err(|err| FlowError::Internal(format!("failed to serialize tool input: {err}")))
+}
+
+fn tool_output_content(name: &str, args: &Json, result: &Json) -> FlowResult<String> {
+    serde_json::to_string(&json!({
+        "tool_name": name,
+        "arguments": args,
+        "result": result,
+    }))
+    .map_err(|err| FlowError::Internal(format!("failed to serialize tool output: {err}")))
+}
+
+fn modified_tool_payload(content: &str, field: &str) -> FlowResult<Json> {
+    let value: Json = serde_json::from_str(content).map_err(|_| {
+        local_violation(format!(
+            "NeMo Guardrails returned modified tool {field} content that is not valid JSON."
+        ))
+    })?;
+
+    let Json::Object(object) = value else {
+        return Err(local_violation(format!(
+            "NeMo Guardrails returned modified tool {field} content without a '{field}' field."
+        )));
+    };
+    object.get(field).cloned().ok_or_else(|| {
+        local_violation(format!(
+            "NeMo Guardrails returned modified tool {field} content without a '{field}' field."
         ))
     })
 }
 
-#[pyclass(name = "LLMRequest", from_py_object)]
-#[derive(Clone)]
-struct PyLLMRequest {
-    inner: LlmRequest,
-}
-
-#[pymethods]
-impl PyLLMRequest {
-    #[new]
-    #[pyo3(signature = (headers, content), text_signature = "(headers: dict[str, str], content: object)")]
-    fn new(headers: &Bound<'_, PyAny>, content: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let headers_json = py_to_json(headers)?;
-        let Json::Object(headers_map) = headers_json else {
-            return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
-                "headers must be a dict",
-            ));
-        };
-        let content_json = py_to_json(content)?;
-        Ok(Self {
-            inner: LlmRequest {
-                headers: headers_map,
-                content: content_json,
-            },
-        })
-    }
-
-    #[getter]
-    fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(py, &Json::Object(self.inner.headers.clone()))
-    }
-
-    #[getter]
-    fn content(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(py, &self.inner.content)
-    }
-
-    fn __repr__(&self) -> String {
-        "LLMRequest(...)".to_string()
-    }
-}
-
-#[pyclass(name = "AnnotatedLLMRequest", from_py_object)]
-#[derive(Clone)]
-struct PyAnnotatedLLMRequest {
-    inner: AnnotatedLlmRequest,
-}
-
-#[pymethods]
-impl PyAnnotatedLLMRequest {
-    #[getter]
-    fn messages(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        json_to_py(py, &messages_to_json(&self.inner.messages)?)
-    }
-
-    #[setter]
-    fn set_messages(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.inner.messages = pythonize::depythonize(value).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("invalid messages: {e}"))
-        })?;
-        Ok(())
-    }
-}
-
-#[pyclass(name = "AnnotatedLLMResponse", skip_from_py_object)]
-#[derive(Clone)]
-struct PyAnnotatedLLMResponse {
-    inner: AnnotatedLlmResponse,
-}
-
-#[pymethods]
-impl PyAnnotatedLLMResponse {
-    fn response_text(&self) -> Option<String> {
-        self.inner.response_text().map(str::to_string)
-    }
-}
-
-#[pyclass(name = "OpenAIChatCodec")]
-struct PyOpenAIChatCodec;
-
-#[pymethods]
-impl PyOpenAIChatCodec {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-
-    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
-        OpenAIChatCodec
-            .decode(&request.inner)
-            .map(|inner| PyAnnotatedLLMRequest { inner })
-            .map_err(flow_to_py_err)
-    }
-
-    fn encode(
-        &self,
-        annotated: &PyAnnotatedLLMRequest,
-        original: &PyLLMRequest,
-    ) -> PyResult<PyLLMRequest> {
-        OpenAIChatCodec
-            .encode(&annotated.inner, &original.inner)
-            .map(|inner| PyLLMRequest { inner })
-            .map_err(flow_to_py_err)
-    }
-
-    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
-        let response = py_to_json(response)?;
-        OpenAIChatCodec
-            .decode_response(&response)
-            .map(|inner| PyAnnotatedLLMResponse { inner })
-            .map_err(flow_to_py_err)
-    }
-}
-
-#[pyclass(name = "OpenAIResponsesCodec")]
-struct PyOpenAIResponsesCodec;
-
-#[pymethods]
-impl PyOpenAIResponsesCodec {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-
-    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
-        OpenAIResponsesCodec
-            .decode(&request.inner)
-            .map(|inner| PyAnnotatedLLMRequest { inner })
-            .map_err(flow_to_py_err)
-    }
-
-    fn encode(
-        &self,
-        annotated: &PyAnnotatedLLMRequest,
-        original: &PyLLMRequest,
-    ) -> PyResult<PyLLMRequest> {
-        OpenAIResponsesCodec
-            .encode(&annotated.inner, &original.inner)
-            .map(|inner| PyLLMRequest { inner })
-            .map_err(flow_to_py_err)
-    }
-
-    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
-        let response = py_to_json(response)?;
-        OpenAIResponsesCodec
-            .decode_response(&response)
-            .map(|inner| PyAnnotatedLLMResponse { inner })
-            .map_err(flow_to_py_err)
-    }
-}
-
-#[pyclass(name = "AnthropicMessagesCodec")]
-struct PyAnthropicMessagesCodec;
-
-#[pymethods]
-impl PyAnthropicMessagesCodec {
-    #[new]
-    fn new() -> Self {
-        Self
-    }
-
-    fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
-        AnthropicMessagesCodec
-            .decode(&request.inner)
-            .map(|inner| PyAnnotatedLLMRequest { inner })
-            .map_err(flow_to_py_err)
-    }
-
-    fn encode(
-        &self,
-        annotated: &PyAnnotatedLLMRequest,
-        original: &PyLLMRequest,
-    ) -> PyResult<PyLLMRequest> {
-        AnthropicMessagesCodec
-            .encode(&annotated.inner, &original.inner)
-            .map(|inner| PyLLMRequest { inner })
-            .map_err(flow_to_py_err)
-    }
-
-    fn decode_response(&self, response: &Bound<'_, PyAny>) -> PyResult<PyAnnotatedLLMResponse> {
-        let response = py_to_json(response)?;
-        AnthropicMessagesCodec
-            .decode_response(&response)
-            .map(|inner| PyAnnotatedLLMResponse { inner })
-            .map_err(flow_to_py_err)
-    }
-}
-
-#[pyclass(name = "PluginContext")]
-struct PyLocalPluginContext {
-    registrations: Arc<Mutex<Vec<PluginRegistration>>>,
-    namespace_prefix: String,
-}
-
-impl PyLocalPluginContext {
-    fn qualify_name(&self, name: &str) -> String {
-        format!("{}{}", self.namespace_prefix, name)
-    }
-
-    fn drain_registrations(&self) -> PyResult<Vec<PluginRegistration>> {
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        Ok(std::mem::take(&mut *guard))
-    }
-}
-
-#[pymethods]
-impl PyLocalPluginContext {
-    #[pyo3(signature = (name, priority, callback), text_signature = "(name: str, priority: int, callback: object) -> None")]
-    fn register_llm_execution_intercept(
-        &self,
-        name: &str,
-        priority: i32,
-        callback: Py<PyAny>,
-    ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_execution_intercept(
-            &qualified_name,
-            priority,
-            wrap_py_llm_exec_intercept_fn(callback),
-        )
-        .map_err(plugin_to_py_err)?;
-        self.push_registration(qualified_name, RegistrationKind::Llm)
-    }
-
-    #[pyo3(signature = (name, priority, callback), text_signature = "(name: str, priority: int, callback: object) -> None")]
-    fn register_llm_stream_execution_intercept(
-        &self,
-        name: &str,
-        priority: i32,
-        callback: Py<PyAny>,
-    ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_stream_execution_intercept(
-            &qualified_name,
-            priority,
-            wrap_py_llm_stream_exec_intercept_fn(callback),
-        )
-        .map_err(plugin_to_py_err)?;
-        self.push_registration(qualified_name, RegistrationKind::LlmStream)
-    }
-
-    #[pyo3(signature = (name, priority, callback), text_signature = "(name: str, priority: int, callback: object) -> None")]
-    fn register_tool_execution_intercept(
-        &self,
-        name: &str,
-        priority: i32,
-        callback: Py<PyAny>,
-    ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_execution_intercept(
-            &qualified_name,
-            priority,
-            wrap_py_tool_exec_intercept_fn(callback),
-        )
-        .map_err(plugin_to_py_err)?;
-        self.push_registration(qualified_name, RegistrationKind::Tool)
-    }
-
-    fn __repr__(&self) -> String {
-        "<PluginContext>".to_string()
-    }
-}
-
-impl PyLocalPluginContext {
-    fn push_registration(&self, name: String, kind: RegistrationKind) -> PyResult<()> {
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name.clone(),
-            Box::new(move || match kind {
-                RegistrationKind::Llm => deregister_llm_execution_intercept(&name)
-                    .map(|_| ())
-                    .map_err(registration_failure),
-                RegistrationKind::LlmStream => deregister_llm_stream_execution_intercept(&name)
-                    .map(|_| ())
-                    .map_err(registration_failure),
-                RegistrationKind::Tool => deregister_tool_execution_intercept(&name)
-                    .map(|_| ())
-                    .map_err(registration_failure),
-            }),
-        ));
-        Ok(())
-    }
-}
-
-enum RegistrationKind {
-    Llm,
-    LlmStream,
-    Tool,
-}
-
-fn registration_failure(err: FlowError) -> PluginError {
-    PluginError::RegistrationFailed(err.to_string())
-}
-
-fn plugin_to_py_err(err: FlowError) -> PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(err.to_string())
-}
-
-fn flow_to_py_err(err: FlowError) -> PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(err.to_string())
-}
-
-type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
-type ToolExecIntercept = Arc<
-    dyn Fn(
-            &str,
-            Json,
-            ToolExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
-        + Send
-        + Sync,
->;
-type LlmExecIntercept = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
-        + Send
-        + Sync,
->;
-type LlmStreamIntercept = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            LlmStreamExecutionNextFn,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = FlowResult<
-                            Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>>,
-                        >,
-                    > + Send,
-            >,
-        > + Send
-        + Sync,
->;
-
-fn split_py_object_or_future(
-    py: Python<'_>,
-    result: Py<PyAny>,
-) -> FlowResult<Result<Py<PyAny>, PyValueFuture>> {
-    let bound = result.bind(py);
-    if bound.getattr("__await__").is_ok() {
-        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-            .map_err(|e| FlowError::Internal(e.to_string()))?;
-        Ok(Err(Box::pin(future) as PyValueFuture))
+fn blocked_error(rail_type: &str, rail: Option<&str>) -> FlowError {
+    let detail = rail
+        .filter(|rail| !rail.is_empty())
+        .map(|rail| format!(" by rail '{rail}'"))
+        .unwrap_or_default();
+    let subject = if matches!(rail_type, "input" | "output") {
+        "LLM call"
     } else {
-        Ok(Ok(result))
+        "tool call"
+    };
+    local_violation(format!(
+        "NeMo Guardrails {rail_type} rail blocked the {subject}{detail}."
+    ))
+}
+
+fn local_violation(message: impl Into<String>) -> FlowError {
+    FlowError::Internal(message.into())
+}
+
+async fn forward_guarded_provider_stream(
+    mut provider_stream: LlmJsonStream,
+    codec: LocalGuardrailsCodec,
+    text_tx: mpsc::Sender<Option<String>>,
+    chunk_tx: mpsc::Sender<FlowResult<Json>>,
+    monitor: JoinHandle<FlowResult<()>>,
+    blocked: Arc<Mutex<Option<String>>>,
+) {
+    while let Some(item) = provider_stream.next().await {
+        let chunk = match item {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                let _ = chunk_tx.send(Err(err)).await;
+                let _ = text_tx.send(None).await;
+                let _ = monitor.await;
+                return;
+            }
+        };
+
+        if let Some(message) = blocked_message(&blocked) {
+            let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+            let _ = text_tx.send(None).await;
+            let _ = monitor.await;
+            return;
+        }
+
+        let text = extract_stream_text(codec, &chunk);
+
+        if chunk_tx.send(Ok(chunk)).await.is_err() {
+            let _ = text_tx.send(None).await;
+            let _ = monitor.await;
+            return;
+        }
+        tokio::task::yield_now().await;
+
+        if let Some(text) = text {
+            let _ = text_tx.send(Some(text)).await;
+        }
+
+        if let Some(message) = blocked_message(&blocked) {
+            let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+            let _ = text_tx.send(None).await;
+            let _ = monitor.await;
+            return;
+        }
+    }
+
+    let _ = text_tx.send(None).await;
+    match monitor.await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            let _ = chunk_tx.send(Err(err)).await;
+            return;
+        }
+        Err(err) => {
+            let _ = chunk_tx
+                .send(Err(FlowError::Internal(format!(
+                    "nemo_guardrails stream monitor task failed: {err}"
+                ))))
+                .await;
+            return;
+        }
+    }
+
+    if let Some(message) = blocked_message(&blocked) {
+        let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
     }
 }
 
-async fn resolve_py_object_or_future(
-    outcome: FlowResult<Result<Py<PyAny>, PyValueFuture>>,
-) -> FlowResult<Py<PyAny>> {
-    match outcome? {
-        Ok(value) => Ok(value),
-        Err(future) => future.await.map_err(|e| FlowError::Internal(e.to_string())),
+fn blocked_message(blocked: &Arc<Mutex<Option<String>>>) -> Option<String> {
+    blocked.lock().ok().and_then(|guard| guard.clone())
+}
+
+fn streaming_output_blocked(message: String) -> FlowError {
+    local_violation(format!(
+        "NeMo Guardrails output rail blocked the LLM call: {message}"
+    ))
+}
+
+fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<String> {
+    let chunk = chunk.as_object()?;
+    match codec {
+        LocalGuardrailsCodec::OpenAIChat => {
+            let choices = chunk.get("choices")?.as_array()?;
+            let mut parts = vec![];
+            for choice in choices {
+                let content = choice
+                    .get("delta")
+                    .and_then(Json::as_object)
+                    .and_then(|delta| delta.get("content"))
+                    .and_then(Json::as_str);
+                if let Some(content) = content
+                    && !content.is_empty()
+                {
+                    parts.push(content);
+                }
+            }
+            (!parts.is_empty()).then(|| parts.join(""))
+        }
+        LocalGuardrailsCodec::OpenAIResponses => {
+            if chunk.get("type").and_then(Json::as_str) == Some("response.output_text.delta") {
+                chunk
+                    .get("delta")
+                    .and_then(Json::as_str)
+                    .filter(|delta| !delta.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        }
+        LocalGuardrailsCodec::AnthropicMessages => {
+            if chunk.get("type").and_then(Json::as_str) != Some("content_block_delta") {
+                return None;
+            }
+            let delta = chunk.get("delta")?.as_object()?;
+            if delta.get("type").and_then(Json::as_str) != Some("text_delta") {
+                return None;
+            }
+            delta
+                .get("text")
+                .and_then(Json::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        }
     }
+}
+
+async fn monitor_guardrails_stream(
+    async_iter: Arc<Py<PyAny>>,
+    blocked: Arc<Mutex<Option<String>>>,
+) -> FlowResult<()> {
+    loop {
+        let Some(coro) = next_async_iter_coro(&async_iter)? else {
+            break;
+        };
+        let Some(value) = await_async_iter_value(coro).await? else {
+            break;
+        };
+        Python::attach(|py| {
+            if let Ok(chunk) = value.bind(py).extract::<String>()
+                && let Some(message) = guardrails_stream_error_message(&chunk)
+            {
+                let mut guard = blocked.lock().map_err(|err| {
+                    FlowError::Internal(format!("stream block state lock poisoned: {err}"))
+                })?;
+                *guard = Some(message);
+            }
+            Ok::<(), FlowError>(())
+        })?;
+        if blocked_message(&blocked).is_some() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyAny>>> {
@@ -534,18 +961,14 @@ fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyA
     })
 }
 
-async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Json>> {
+async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Py<PyAny>>> {
     let future = Python::attach(|py| {
         pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
-            .map_err(|e| FlowError::Internal(e.to_string()))
+            .map_err(|err| FlowError::Internal(err.to_string()))
     })?;
 
     match future.await {
-        Ok(result) => Python::attach(|py| {
-            py_to_json(result.bind(py))
-                .map(Some)
-                .map_err(|e| FlowError::Internal(e.to_string()))
-        }),
+        Ok(result) => Ok(Some(result)),
         Err(error) => Python::attach(|py| {
             if error.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
                 Ok(None)
@@ -556,287 +979,45 @@ async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Json>> {
     }
 }
 
-async fn forward_async_iter(
-    async_iter: Arc<Py<PyAny>>,
-    tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
-) {
-    loop {
-        let next_value = match next_async_iter_coro(&async_iter) {
-            Ok(None) => break,
-            Ok(Some(coro)) => await_async_iter_value(coro).await,
-            Err(error) => Err(error),
-        };
-
-        match next_value {
-            Ok(Some(value)) => {
-                if tx.send(Ok(value)).await.is_err() {
-                    break;
-                }
-            }
-            Ok(None) => break,
-            Err(error) => {
-                let _ = tx.send(Err(error)).await;
-                break;
-            }
-        }
+fn guardrails_stream_error_message(chunk: &str) -> Option<String> {
+    let payload: Json = serde_json::from_str(chunk).ok()?;
+    let error = payload.get("error")?.as_object()?;
+    if error.get("type").and_then(Json::as_str) != Some("guardrails_violation") {
+        return None;
     }
+    error
+        .get("message")
+        .and_then(Json::as_str)
+        .filter(|message| !message.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some("Blocked by output rails.".to_string()))
 }
 
-fn stream_from_async_iter(
-    async_iter: Py<PyAny>,
-) -> FlowResult<Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>>> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
-    let task_locals = Python::attach(|py| {
-        pyo3_async_runtimes::tokio::get_current_locals(py)
-            .map_err(|e: pyo3::PyErr| FlowError::Internal(e.to_string()))
-    })?;
-
-    let async_iter = Arc::new(async_iter);
-    tokio::spawn(pyo3_async_runtimes::tokio::scope(task_locals, async move {
-        forward_async_iter(async_iter, tx).await;
-    }));
-
-    Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
-}
-
-#[pyclass]
-struct PyToolNextFn {
-    inner: ToolExecutionNextFn,
+#[pyclass(name = "StringStream")]
+struct PyStringStream {
+    receiver: Arc<tokio::sync::Mutex<mpsc::Receiver<Option<String>>>>,
 }
 
 #[pymethods]
-impl PyToolNextFn {
-    fn __call__<'py>(
-        &self,
-        py: Python<'py>,
-        args: Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let args = py_to_json(&args)?;
-        let next = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = next(args)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Python::attach(|py| json_to_py(py, &result))
-        })
-    }
-}
-
-#[pyclass]
-struct PyLlmNextFn {
-    inner: LlmExecutionNextFn,
-}
-
-#[pymethods]
-impl PyLlmNextFn {
-    fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
-        let next = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = next(request.inner)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Python::attach(|py| json_to_py(py, &result))
-        })
-    }
-}
-
-#[pyclass(name = "LlmStream")]
-struct PyLlmStream {
-    receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>,
-}
-
-#[pymethods]
-impl PyLlmStream {
+impl PyStringStream {
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
     fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let receiver_ptr = &self.receiver
-            as *const tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>;
-        let receiver_ref = unsafe { &*receiver_ptr };
-
+        let receiver = Arc::clone(&self.receiver);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut guard = receiver_ref.lock().await;
+            let mut guard = receiver.lock().await;
             match guard.recv().await {
-                None => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
+                Some(Some(value)) => Ok(value),
+                Some(None) | None => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
                     "stream exhausted",
                 )),
-                Some(Ok(value)) => Python::attach(|py| json_to_py(py, &value)),
-                Some(Err(err)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    err.to_string(),
-                )),
             }
         })
     }
 }
 
-#[pyclass]
-struct PyLlmStreamNextFn {
-    inner: LlmStreamExecutionNextFn,
-}
-
-#[pymethods]
-impl PyLlmStreamNextFn {
-    fn __call__<'py>(&self, py: Python<'py>, request: PyLLMRequest) -> PyResult<Bound<'py, PyAny>> {
-        let next = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let rust_stream = next(request.inner)
-                .await
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
-            tokio::spawn(async move {
-                use tokio_stream::StreamExt;
-                let mut stream = rust_stream;
-                while let Some(item) = stream.next().await {
-                    if tx.send(item).await.is_err() {
-                        break;
-                    }
-                }
-            });
-            Ok(PyLlmStream {
-                receiver: tokio::sync::Mutex::new(rx),
-            })
-        })
-    }
-}
-
-fn wrap_py_tool_exec_intercept_fn(py_fn: Py<PyAny>) -> ToolExecIntercept {
-    let py_fn = Arc::new(py_fn);
-    Arc::new(move |name: &str, args: Json, next: ToolExecutionNextFn| {
-        let py_fn = py_fn.clone();
-        let name = name.to_string();
-        Box::pin(async move {
-            let outcome: FlowResult<Result<Json, PyValueFuture>> = Python::attach(|py| {
-                let py_args =
-                    json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                let py_next = PyToolNextFn { inner: next };
-                let result = py_fn
-                    .call1(
-                        py,
-                        (
-                            &name,
-                            py_args,
-                            py_next
-                                .into_pyobject(py)
-                                .map_err(|e| FlowError::Internal(e.to_string()))?
-                                .into_any(),
-                        ),
-                    )
-                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                let bound = result.bind(py);
-                if bound.getattr("__await__").is_ok() {
-                    let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                        .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    Ok(Err(Box::pin(future) as PyValueFuture))
-                } else {
-                    let json =
-                        py_to_json(bound).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                    Ok(Ok(json))
-                }
-            });
-
-            match outcome? {
-                Ok(json) => Ok(json),
-                Err(future) => {
-                    let py_result = future
-                        .await
-                        .map_err(|e| FlowError::Internal(e.to_string()))?;
-                    Python::attach(|py| {
-                        py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
-                    })
-                }
-            }
-        })
-    })
-}
-
-fn wrap_py_llm_exec_intercept_fn(py_fn: Py<PyAny>) -> LlmExecIntercept {
-    let py_fn = Arc::new(py_fn);
-    Arc::new(
-        move |name: &str, request: LlmRequest, next: LlmExecutionNextFn| {
-            let py_fn = py_fn.clone();
-            let name = name.to_string();
-            Box::pin(async move {
-                let outcome: FlowResult<Result<Json, PyValueFuture>> = Python::attach(|py| {
-                    let py_req = PyLLMRequest { inner: request };
-                    let py_next = PyLlmNextFn { inner: next };
-                    let result = py_fn
-                        .call1(
-                            py,
-                            (
-                                &name,
-                                py_req
-                                    .into_pyobject(py)
-                                    .map_err(|e| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                                py_next
-                                    .into_pyobject(py)
-                                    .map_err(|e| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                            ),
-                        )
-                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                    let bound = result.bind(py);
-                    if bound.getattr("__await__").is_ok() {
-                        let future = pyo3_async_runtimes::tokio::into_future(result.into_bound(py))
-                            .map_err(|e| FlowError::Internal(e.to_string()))?;
-                        Ok(Err(Box::pin(future) as PyValueFuture))
-                    } else {
-                        let json = py_to_json(bound)
-                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                        Ok(Ok(json))
-                    }
-                });
-
-                match outcome? {
-                    Ok(json) => Ok(json),
-                    Err(future) => {
-                        let py_result = future
-                            .await
-                            .map_err(|e| FlowError::Internal(e.to_string()))?;
-                        Python::attach(|py| {
-                            py_to_json(py_result.bind(py))
-                                .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
-                        })
-                    }
-                }
-            })
-        },
-    )
-}
-
-fn wrap_py_llm_stream_exec_intercept_fn(py_fn: Py<PyAny>) -> LlmStreamIntercept {
-    let py_fn = Arc::new(py_fn);
-    Arc::new(
-        move |_name: &str, request: LlmRequest, next: LlmStreamExecutionNextFn| {
-            let py_fn = py_fn.clone();
-            Box::pin(async move {
-                let async_iter = resolve_py_object_or_future(Python::attach(|py| {
-                    let py_req = PyLLMRequest { inner: request };
-                    let py_next = PyLlmStreamNextFn { inner: next };
-                    let result = py_fn
-                        .call1(
-                            py,
-                            (
-                                py_req
-                                    .into_pyobject(py)
-                                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                                py_next
-                                    .into_pyobject(py)
-                                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?
-                                    .into_any(),
-                            ),
-                        )
-                        .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                    split_py_object_or_future(py, result)
-                }))
-                .await?;
-
-                stream_from_async_iter(async_iter)
-            })
-        },
-    )
-}
+#[cfg(test)]
+#[path = "../../../tests/unit/plugins/nemo_guardrails/local_python_tests.rs"]
+mod tests;

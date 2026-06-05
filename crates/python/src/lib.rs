@@ -75,3 +75,7 @@ fn install_native_module_alias(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 #[path = "../tests/coverage/coverage_tests.rs"]
 mod coverage_tests;
+
+#[cfg(test)]
+#[path = "../tests/coverage/nemo_guardrails_coverage_tests.rs"]
+mod nemo_guardrails_coverage_tests;

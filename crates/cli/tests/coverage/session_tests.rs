@@ -1563,6 +1563,128 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
 }
 
 #[tokio::test]
+async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = session_test_config();
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-error"
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "provider": "custom",
+                "model": "qwen",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-error"
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, &headers);
+        manager
+            .apply_events(&headers, outcome.events)
+            .await
+            .unwrap();
+    }
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-error");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["message"], json!("hello"));
+    assert_eq!(steps[1]["source"], json!("agent"));
+    assert_eq!(steps[1]["extra"]["llm_response"]["status_code"], json!(502));
+    assert_eq!(steps[1]["extra"]["llm_response"]["retry_count"], json!(1));
+    assert_eq!(steps[1]["extra"]["llm_response"]["retryable"], json!(true));
+    assert_eq!(
+        steps[1]["extra"]["llm_response"]["reason"],
+        json!("upstream")
+    );
+    assert_eq!(
+        steps[1]["extra"]["llm_response"]["error"]["message"],
+        json!("gateway upstream error")
+    );
+    let observed_events = atif["extra"]["observed_events"].as_array().unwrap();
+    assert!(
+        observed_events.len() >= 4,
+        "expected Hermes error trajectory to keep observed events, got {}",
+        serde_json::to_string_pretty(&atif["extra"]["observed_events"]).unwrap()
+    );
+    let error_event = observed_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == json!("end")
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    let request_event = observed_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == json!("start")
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    assert_eq!(
+        request_event["metadata"]["provider_payload_exact"],
+        json!(true)
+    );
+    assert_eq!(
+        request_event["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        error_event["metadata"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        error_event["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks")
+    );
+}
+
+#[tokio::test]
 async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -2056,6 +2178,224 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
             .unwrap()
             .contains("subagent_end_without_start")
     );
+}
+
+#[tokio::test]
+async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: "hermes-routed".into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_start".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let anthropic = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("hermes-routed".into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-sonnet-4".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("msg-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "claude-sonnet-4",
+                        "messages": [{"role": "user", "content": "Find the file."}],
+                        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: json!({ "gateway_path": "/v1/messages" }),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            anthropic,
+            json!({
+                "id": "msg_01",
+                "type": "message",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let responses = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("hermes-routed".into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("resp-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "input": "Find the weather.",
+                        "tools": [{"type": "function", "name": "get_weather"}]
+                    }),
+                },
+                streaming: false,
+                metadata: json!({ "gateway_path": "/v1/responses" }),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            responses,
+            json!({
+                "id": "resp_1",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "I will check the weather."}]},
+                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
+                ],
+                "usage": {
+                    "input_tokens": 75,
+                    "output_tokens": 20,
+                    "total_tokens": 95,
+                    "input_tokens_details": {"cached_tokens": 10},
+                    "cost_usd": 0.005
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let chat = manager
+        .start_llm(
+            &headers,
+            LlmGatewayStart {
+                session_id: Some("hermes-routed".into()),
+                provider: "openai.chat_completions".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("chat-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": "Inspect the files."}],
+                        "tools": [{"type": "function", "function": {"name": "read"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: json!({ "gateway_path": "/v1/chat/completions" }),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            chat,
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect.",
+                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "cost_usd": 0.001
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: "hermes-routed".into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_finalize".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-routed");
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 6);
+
+    assert_eq!(steps[0]["message"], json!("Find the file."));
+    assert_eq!(steps[1]["message"], json!("I will search."));
+    assert_eq!(steps[1]["tool_calls"][0]["tool_call_id"], json!("toolu_01"));
+    assert_eq!(steps[1]["metrics"]["prompt_tokens"], json!(11));
+    assert_eq!(steps[1]["metrics"]["cached_tokens"], json!(3));
+    assert_eq!(steps[1]["metrics"]["cost_usd"], json!(0.0042));
+
+    assert_eq!(steps[2]["message"], json!("Find the weather."));
+    assert_eq!(steps[3]["message"], json!("I will check the weather."));
+    assert_eq!(
+        steps[3]["tool_calls"][0]["tool_call_id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(steps[3]["metrics"]["prompt_tokens"], json!(75));
+    assert_eq!(steps[3]["metrics"]["cached_tokens"], json!(10));
+    assert_eq!(steps[3]["metrics"]["cost_usd"], json!(0.005));
+
+    assert_eq!(steps[4]["message"], json!("Inspect the files."));
+    assert_eq!(steps[5]["message"], json!("I will inspect."));
+    assert_eq!(
+        steps[5]["tool_calls"][0]["tool_call_id"],
+        json!("call_read_1")
+    );
+    assert_eq!(steps[5]["metrics"]["prompt_tokens"], json!(3));
+    assert_eq!(steps[5]["metrics"]["cached_tokens"], json!(2));
+    assert_eq!(steps[5]["metrics"]["cost_usd"], json!(0.001));
+
+    assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(89));
+    assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(31));
+    assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(15));
+    assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0102));
 }
 
 #[tokio::test]
