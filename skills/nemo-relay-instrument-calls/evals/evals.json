@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-instrument-calls",
+  "cases": [
+    {
+      "id": "wrap-existing-tool-and-llm",
+      "question": "I already have app tool functions and a provider call. Wrap them with NeMo Relay without changing their business logic.",
+      "expected_skill": "nemo-relay-instrument-calls",
+      "expected_script": null,
+      "ground_truth": "Use the instrumentation skill to choose a scope boundary, wrap existing tool and LLM calls with managed execution APIs, preserve caller-visible results, and attach metadata where useful.",
+      "expected_behavior": [
+        "Choose a natural agent, request, workflow, or graph scope boundary",
+        "Use managed execution APIs before manual lifecycle APIs",
+        "Preserve the original callable arguments and results",
+        "Handle metadata and context propagation when needed"
+      ]
+    },
+    {
+      "id": "neg-export-traces",
+      "question": "My calls are already wrapped; now export traces to OpenTelemetry.",
+      "expected_skill": "nemo-relay-export-otel",
+      "expected_script": null,
+      "ground_truth": "Export setup after instrumentation belongs to nemo-relay-export-otel.",
+      "expected_behavior": [
+        "nemo-relay-instrument-calls stays silent or redirects",
+        "nemo-relay-export-otel handles trace export"
+      ]
+    }
+  ]
+}

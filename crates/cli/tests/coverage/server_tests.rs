@@ -12,9 +12,11 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use futures_util::stream;
 use http_body_util::BodyExt;
+use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
     register_plugin,
@@ -317,6 +319,644 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
     assert!(agent_starts.contains(&"codex-turn".to_string()));
     assert!(agent_starts.contains(&"claude-code-turn".to_string()));
     assert!(!agent_starts.contains(&"claude-code".to_string()));
+}
+
+#[tokio::test]
+async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelity() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-exact",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ],
+                        "tools": [
+                            { "type": "function", "function": { "name": "search_files" } }
+                        ]
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "post_api_request",
+            "session_id": "hermes-atof-exact",
+            "extra": {
+                "task_id": "task-1",
+                "api_request_id": "turn-1:api:2",
+                "api_call_count": 2,
+                "model": "qwen",
+                "response": {
+                    "model": "qwen",
+                    "finish_reason": "tool_calls",
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "search_files",
+                                    "arguments": "{\"query\":\"needle\"}"
+                                }
+                            }
+                        ]
+                    },
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "cost": { "total": 0.0042 }
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-lossy",
+            "extra": {
+                "task_id": "task-2",
+                "api_call_count": 4,
+                "model": "qwen",
+                "provider": "custom",
+                "request": null,
+                "message_count": 2
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        4,
+        "expected Hermes LLM exports, got {llm_events:?}"
+    );
+
+    let start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:2")
+        })
+        .unwrap();
+    assert_eq!(start["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(
+        start["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        start["data"]["content"]["messages"][0]["content"],
+        json!("hello")
+    );
+    assert_eq!(
+        start["data"]["content"]["tools"][0]["function"]["name"],
+        json!("search_files")
+    );
+
+    let end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:2")
+        })
+        .unwrap();
+    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(end["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(end["data"]["tool_calls"][0]["id"], json!("call-1"));
+    assert_eq!(
+        end["data"]["tool_calls"][0]["function"]["name"],
+        json!("search_files")
+    );
+    assert_eq!(end["data"]["usage"]["prompt_tokens"], json!(10));
+    assert_eq!(end["data"]["usage"]["completion_tokens"], json!(5));
+
+    let lossy_start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("hermes-atof-lossy:task-2:4")
+        })
+        .unwrap();
+    assert_eq!(lossy_start["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(
+        lossy_start["metadata"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(
+        lossy_start["data"]["content"]["fidelity"]["provider_payload_exact"],
+        json!(false)
+    );
+    assert_eq!(lossy_start["data"]["content"]["message_count"], json!(2));
+}
+
+#[tokio::test]
+async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-atof-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        2,
+        "expected Hermes error-path LLM exports, got {llm_events:?}"
+    );
+
+    let end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    let start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(
+        start["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        start["data"]["content"]["messages"][0]["content"],
+        json!("hello")
+    );
+    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(end["metadata"]["provider_payload_exact"], json!(false));
+    assert_eq!(
+        end["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks")
+    );
+    assert_eq!(end["data"]["status_code"], json!(502));
+    assert_eq!(end["data"]["retry_count"], json!(1));
+    assert_eq!(end["data"]["retryable"], json!(true));
+    assert_eq!(end["data"]["reason"], json!("upstream"));
+    assert_eq!(
+        end["data"]["error"]["message"],
+        json!("gateway upstream error")
+    );
+}
+
+#[tokio::test]
+async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    async fn anthropic_messages() -> TestServer {
+        async fn messages(_headers: HeaderMap, _request: Request<Body>) -> impl IntoResponse {
+            Json(json!({
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "stop_reason": "tool_use",
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }))
+        }
+
+        let app = Router::new().route("/v1/messages", post(messages));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        }
+    }
+
+    async fn openai_routed() -> TestServer {
+        async fn chat(_headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+            let path = request.uri().path().to_string();
+            if path == "/v1/responses" {
+                Json(json!({
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "I will check the weather."}]
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_weather_1",
+                            "name": "get_weather",
+                            "arguments": "{\"city\":\"SF\"}",
+                            "status": "completed"
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 75,
+                        "output_tokens": 20,
+                        "total_tokens": 95,
+                        "input_tokens_details": {"cached_tokens": 10},
+                        "cost_usd": 0.005
+                    }
+                }))
+            } else {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "I will inspect.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_read_1",
+                                    "type": "function",
+                                    "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 4,
+                        "total_tokens": 7,
+                        "prompt_tokens_details": {"cached_tokens": 2},
+                        "cost_usd": 0.001
+                    }
+                }))
+            }
+        }
+
+        let app = Router::new()
+            .route("/v1/chat/completions", post(chat))
+            .route("/v1/responses", post(chat));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+
+    let anthropic_upstream = anthropic_messages().await;
+    let openai_upstream = openai_routed().await;
+
+    let mut config = test_config();
+    config.anthropic_base_url = anthropic_upstream.url();
+    config.openai_base_url = openai_upstream.url();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/v1/messages"))
+        .header("content-type", "application/json")
+        .header("x-api-key", "sk-ant-test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "Find the file."}],
+            "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/v1/responses"))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "gpt-4o",
+            "input": "Find the weather.",
+            "tools": [{"type": "function", "name": "get_weather"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/v1/chat/completions"))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Inspect the files."}],
+            "tools": [{"type": "function", "function": {"name": "read"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        6,
+        "expected three routed LLM start/end pairs, got {llm_events:?}"
+    );
+
+    let anthropic_start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["name"] == "anthropic.messages"
+                && event["metadata"]["gateway_path"] == "/v1/messages"
+        })
+        .unwrap();
+    assert_eq!(
+        anthropic_start["category_profile"]["model_name"],
+        json!("claude-sonnet-4")
+    );
+    assert_eq!(
+        anthropic_start["data"]["content"]["messages"][0]["content"],
+        json!("Find the file.")
+    );
+
+    let anthropic_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "anthropic.messages"
+                && event["metadata"]["gateway_path"] == "/v1/messages"
+        })
+        .unwrap();
+    assert_eq!(
+        anthropic_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("toolu_01")
+    );
+    assert_eq!(anthropic_end["data"]["content"][1]["id"], json!("toolu_01"));
+    assert_eq!(anthropic_end["data"]["usage"]["input_tokens"], json!(11));
+    assert_eq!(
+        anthropic_end["data"]["usage"]["cost"]["total"],
+        json!(0.0042)
+    );
+
+    let responses_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "openai.responses"
+                && event["metadata"]["gateway_path"] == "/v1/responses"
+        })
+        .unwrap();
+    assert_eq!(
+        responses_end["category_profile"]["model_name"],
+        json!("gpt-4o")
+    );
+    assert_eq!(
+        responses_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(
+        responses_end["data"]["output"][1]["call_id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(
+        responses_end["data"]["usage"]["input_tokens_details"]["cached_tokens"],
+        json!(10)
+    );
+    assert_eq!(responses_end["data"]["usage"]["cost_usd"], json!(0.005));
+
+    let chat_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "openai.chat_completions"
+                && event["metadata"]["gateway_path"] == "/v1/chat/completions"
+        })
+        .unwrap();
+    assert_eq!(chat_end["category_profile"]["model_name"], json!("gpt-4o"));
+    assert_eq!(
+        chat_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("call_read_1")
+    );
+    assert_eq!(
+        chat_end["data"]["choices"][0]["message"]["tool_calls"][0]["id"],
+        json!("call_read_1")
+    );
+    assert_eq!(
+        chat_end["data"]["usage"]["prompt_tokens_details"]["cached_tokens"],
+        json!(2)
+    );
+    assert_eq!(chat_end["data"]["usage"]["cost_usd"], json!(0.001));
 }
 
 #[tokio::test]
@@ -835,6 +1475,95 @@ async fn gateway_forwards_anthropic_count_tokens_without_llm_codec() {
     assert_eq!(body["input_tokens"], json!(12));
 }
 
+#[tokio::test]
+async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
+    let subscriber_name = "server-claude-startup-probe-no-llm-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_llm_starts = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = captured_llm_starts.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "anthropic.messages"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("gateway_path"))
+                    .and_then(Value::as_str)
+                    == Some("/v1/messages")
+                && event
+                    .input()
+                    .and_then(|input| input.get("model"))
+                    .and_then(Value::as_str)
+                    == Some("claude-opus-4-8[1m]")
+                && event
+                    .input()
+                    .and_then(|input| input.get("max_tokens"))
+                    .and_then(Value::as_u64)
+                    == Some(1)
+                && event
+                    .input()
+                    .and_then(|input| input.get("messages"))
+                    .and_then(Value::as_array)
+                    .and_then(|messages| messages.first())
+                    .and_then(|message| message.get("content"))
+                    .and_then(Value::as_str)
+                    == Some("test")
+            {
+                captured.lock().unwrap().push(json!({
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let upstream = spawn_anthropic_upstream().await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "sk-ant-test")
+                .header("x-claude-code-session-id", "claude-probe")
+                .body(Body::from(
+                    json!({
+                        "model": "claude-opus-4-8[1m]",
+                        "max_tokens": 1,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "test"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["path"], json!("/v1/messages"));
+    assert_eq!(body["model"], json!("claude-opus-4-8[1m]"));
+    assert_eq!(body["prompt"], json!("test"));
+
+    flush_subscribers().unwrap();
+    assert!(
+        captured_llm_starts.lock().unwrap().is_empty(),
+        "Claude startup probe must not emit a managed LLM span"
+    );
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
 async fn wait_for_gateway(url: &str) {
     let client = test_http_client();
     for _ in 0..50 {
@@ -953,6 +1682,19 @@ async fn spawn_models_upstream() -> TestServer {
 }
 
 async fn spawn_anthropic_upstream() -> TestServer {
+    async fn messages(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+        let body = request.into_body().collect().await.unwrap().to_bytes();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        Json(json!({
+            "path": "/v1/messages",
+            "x_api_key": headers
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            "model": payload["model"],
+            "prompt": payload["messages"][0]["content"]
+        }))
+    }
+
     async fn count_tokens(headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
         Json(json!({
             "path": request.uri().path(),
@@ -963,7 +1705,9 @@ async fn spawn_anthropic_upstream() -> TestServer {
         }))
     }
 
-    let app = Router::new().route("/v1/messages/count_tokens", post(count_tokens));
+    let app = Router::new()
+        .route("/v1/messages", post(messages))
+        .route("/v1/messages/count_tokens", post(count_tokens));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {

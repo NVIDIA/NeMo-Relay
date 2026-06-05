@@ -107,6 +107,15 @@ Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
 `agent_id` as the subagent identifier and preserve `agent_type` in metadata.
 
+Claude Code traces are turn-oriented. A multi-turn conversation can produce one
+root `claude-code-turn` agent span or trajectory per user turn. That is expected
+when each span has a real `UserPromptSubmit` payload and assistant output. NeMo
+Relay excludes the known Claude Code startup/preflight probe and late
+uncorrelatable lifecycle hooks from exported user traces so they do not appear
+as synthetic `null`, `user: test`, `idle_timeout`, or lifecycle-only turns.
+Suppressed startup probes are still logged by the gateway as internal pre-turn
+probe bypasses for debugging.
+
 ## Smoke Test
 
 Run a small Claude Code prompt that starts a session and uses one simple tool.
@@ -119,7 +128,9 @@ printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
 ```
 
 The response should be valid Claude Code hook JSON. For most lifecycle events it
-is an allow/continue response.
+is an allow/continue response. A full observability smoke fixture should produce
+expected OpenInference spans, raw ATOF events, and ATIF trajectories for at
+least one user turn, one LLM call, and one simple tool call.
 
 ## Verify Export
 
@@ -147,3 +158,32 @@ If LLM spans exist but attach to the session instead of a subagent, pass
 `x-nemo-relay-subagent-id` on gateway requests or include shared
 `conversation_id`, `generation_id`, or `request_id` values in both hook payloads
 and provider requests.
+
+When Relay cannot prove a stronger LLM owner, it keeps the span under the active
+turn and adds correlation metadata instead of guessing. Inspect
+`llm_correlation_status`, `llm_correlation_source`, and
+`llm_correlation_subagent_id` on LLM spans. Common statuses include `explicit`,
+`single_hint`, `request_affinity`, `agent_fallback`, and
+`ambiguous_fallback`. Tool spans expose the same diagnostic pattern with
+`tool_correlation_status`, `tool_correlation_source`, and
+`tool_correlation_subagent_id`.
+
+Late `SubagentStop` hooks can arrive after Claude Code has already closed the
+turn, especially when Claude reports background stop-hook state. If the
+subagent id has no matching `SubagentStart` and there is no active turn, Relay
+logs the missing subagent and suppresses the hook from exported observability so
+it does not create a synthetic null turn. If an unknown subagent end arrives
+while a turn is active, Relay may emit a `subagent_end_without_start` diagnostic
+mark under that turn.
+
+## Hook Limitations
+
+Claude Code hooks are available only when Claude Code loads the NeMo Relay
+plugin, such as through `nemo-relay claude` or `nemo-relay run --agent claude`.
+The standalone gateway can still observe Anthropic LLM traffic, but it cannot
+invent missing tool, prompt, compaction, notification, or subagent hooks.
+
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
+used as private correlation and turn-boundary hints. They are not exported as
+standalone user-visible mark events unless they also produce a scoped turn,
+tool, LLM, or lifecycle observation.

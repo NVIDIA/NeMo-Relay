@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-debug-runtime-integration",
+  "cases": [
+    {
+      "id": "debug-missing-events",
+      "question": "NeMo Relay is installed, but my wrapped tool calls are not emitting events. Help me debug the integration.",
+      "expected_skill": "nemo-relay-debug-runtime-integration",
+      "expected_script": null,
+      "ground_truth": "Use the debug skill to check binding load, active scope, scope stack propagation, subscriber registration, middleware wiring, and event flush behavior.",
+      "expected_behavior": [
+        "Check whether the binding or native artifact loads",
+        "Verify an active scope exists when the tool call runs",
+        "Inspect subscriber and middleware registration",
+        "Recommend a minimal scoped reproduction before broad code changes"
+      ]
+    },
+    {
+      "id": "neg-first-example",
+      "question": "Show me my first NeMo Relay Python example with a scope and one managed tool call.",
+      "expected_skill": "nemo-relay-start",
+      "expected_script": null,
+      "ground_truth": "First examples belong to nemo-relay-start unless the user reports a failure.",
+      "expected_behavior": [
+        "nemo-relay-debug-runtime-integration stays silent",
+        "nemo-relay-start handles first-time setup"
+      ]
+    }
+  ]
+}

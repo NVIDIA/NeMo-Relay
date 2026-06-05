@@ -142,6 +142,33 @@ fn cli_easy_path_invokes_setup_when_no_config_found() {
 }
 
 #[test]
+fn cli_hermes_easy_path_invokes_setup_when_no_config_found() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .arg("hermes")
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "Hermes easy path should exit non-zero when no config + no TTY for setup"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("setup requires a TTY"),
+        "expected non-TTY setup error in stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
 fn cli_bare_invocation_invokes_setup_when_no_config_found() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
@@ -381,6 +408,39 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     assert!(request.contains("x-nemo-relay-config-profile: coverage"));
     assert!(request.contains("x-nemo-relay-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));
+}
+
+#[test]
+fn cli_hook_forward_hermes_shell_hook_returns_empty_object() {
+    let (server_url, received) = spawn_single_request_server(200, r#"{}"#);
+    let mut child = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            &server_url,
+            "--fail-closed",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}"#)
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let request = received.recv().unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"{}"#);
+    assert!(request.contains("POST /hooks/hermes HTTP/1.1"));
+    assert!(
+        request.contains(r#"{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}"#)
+    );
 }
 
 #[test]

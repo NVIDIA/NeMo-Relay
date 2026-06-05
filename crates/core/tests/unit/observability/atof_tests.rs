@@ -138,6 +138,83 @@ fn wire_format_llm_event(
     ))
 }
 
+fn openclaw_agent_scope_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    scope_category: ScopeCategory,
+    name: &str,
+    session_id: &str,
+    scope_role: Option<&str>,
+) -> Event {
+    let mut metadata = Map::new();
+    metadata.insert("source".to_string(), json!("openclaw.session_start"));
+    metadata.insert("hook_event_name".to_string(), json!("session_start"));
+    metadata.insert("session_id".to_string(), json!(session_id));
+    if let Some(scope_role) = scope_role {
+        metadata.insert("nemo_relay_scope_role".to_string(), json!(scope_role));
+    }
+
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name(name)
+            .data(json!({"session_id": session_id}))
+            .metadata(serde_json::Value::Object(metadata))
+            .build(),
+        scope_category,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ))
+}
+
+fn openclaw_replay_llm_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    scope_category: ScopeCategory,
+    data: serde_json::Value,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name("openclaw-model-call")
+            .data(data)
+            .metadata(json!({
+                "source": "openclaw.llm_output",
+                "hook_event_name": "llm_output"
+            }))
+            .build(),
+        scope_category,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(
+            CategoryProfile::builder()
+                .model_name("claude-sonnet-4")
+                .build(),
+        ),
+    ))
+}
+
+fn openclaw_timing_mark_event(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    data: serde_json::Value,
+) -> Event {
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name(name)
+            .data(data)
+            .build(),
+        None,
+        None,
+    ))
+}
+
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
         .unwrap()
@@ -435,6 +512,336 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
         2
     );
     assert_eq!(lines[5]["data"]["usage"]["cost_usd"], 0.001);
+}
+
+#[test]
+fn openclaw_subagent_events_preserve_nested_and_fallback_parent_uuid() {
+    let dir = temp_dir("atof-openclaw-subagent-parentage");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+    let parent_uuid = Uuid::now_v7();
+    let nested_child_uuid = Uuid::now_v7();
+    let fallback_child_uuid = Uuid::now_v7();
+
+    let events = [
+        openclaw_agent_scope_event(
+            parent_uuid,
+            None,
+            ScopeCategory::Start,
+            "requester-agent",
+            "parent-session",
+            None,
+        ),
+        openclaw_agent_scope_event(
+            nested_child_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            "nested-worker",
+            "nested-child-session",
+            Some("subagent"),
+        ),
+        openclaw_agent_scope_event(
+            nested_child_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            "nested-worker",
+            "nested-child-session",
+            Some("subagent"),
+        ),
+        openclaw_agent_scope_event(
+            parent_uuid,
+            None,
+            ScopeCategory::End,
+            "requester-agent",
+            "parent-session",
+            None,
+        ),
+        openclaw_agent_scope_event(
+            fallback_child_uuid,
+            None,
+            ScopeCategory::Start,
+            "fallback-worker",
+            "fallback-child-session",
+            Some("subagent"),
+        ),
+        openclaw_agent_scope_event(
+            fallback_child_uuid,
+            None,
+            ScopeCategory::End,
+            "fallback-worker",
+            "fallback-child-session",
+            Some("subagent"),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    let nested_start = lines
+        .iter()
+        .find(|line| {
+            line["uuid"] == nested_child_uuid.to_string() && line["scope_category"] == "start"
+        })
+        .unwrap();
+    assert_eq!(nested_start["parent_uuid"], parent_uuid.to_string());
+    assert_eq!(
+        nested_start["metadata"]["nemo_relay_scope_role"],
+        json!("subagent")
+    );
+
+    let fallback_start = lines
+        .iter()
+        .find(|line| {
+            line["uuid"] == fallback_child_uuid.to_string() && line["scope_category"] == "start"
+        })
+        .unwrap();
+    assert!(
+        !fallback_start
+            .as_object()
+            .unwrap()
+            .contains_key("parent_uuid")
+            || fallback_start["parent_uuid"].is_null()
+    );
+    assert_eq!(
+        fallback_start["metadata"]["nemo_relay_scope_role"],
+        json!("subagent")
+    );
+}
+
+#[test]
+fn subscriber_preserves_openclaw_placeholder_replay_payloads_as_raw_jsonl() {
+    let dir = temp_dir("atof-openclaw-placeholder");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let events = [
+        openclaw_replay_llm_event(
+            uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            json!({
+                "headers": {},
+                "content": {
+                    "provider": "nvidia-inference",
+                    "model": "claude-sonnet-4",
+                    "prompt": "",
+                    "messages": [],
+                    "imagesCount": 0,
+                    "placeholderRequest": true,
+                    "source": "openclaw.llm_output"
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            json!({
+                "role": "assistant",
+                "content": "I will search.",
+                "assistant_texts_count": 1,
+                "openclaw": {
+                    "assistant_tool_call_names": []
+                }
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "scope");
+        assert_eq!(line["atof_version"], "0.1");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+        assert_eq!(line["category"], "llm");
+        assert_eq!(line["metadata"]["source"], "openclaw.llm_output");
+        assert_eq!(line["metadata"]["hook_event_name"], "llm_output");
+    }
+
+    assert_eq!(lines[0]["scope_category"], "start");
+    assert_eq!(lines[0]["data"]["content"]["placeholderRequest"], true);
+    assert_eq!(lines[0]["data"]["content"]["messages"], json!([]));
+    assert_eq!(lines[1]["scope_category"], "end");
+    assert_eq!(lines[1]["data"]["content"], "I will search.");
+}
+
+#[test]
+fn subscriber_preserves_openclaw_model_timing_marks_as_raw_jsonl() {
+    let dir = temp_dir("atof-openclaw-model-timing");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let parent_uuid = Uuid::now_v7();
+    let events = [
+        openclaw_timing_mark_event(
+            Uuid::now_v7(),
+            Some(parent_uuid),
+            "openclaw.model_call_timing_ambiguous",
+            json!({
+                "runId": "run-1",
+                "sessionId": "session-1",
+                "provider": "openai",
+                "model": "gpt-4",
+                "candidateCount": 2
+            }),
+        ),
+        openclaw_timing_mark_event(
+            Uuid::now_v7(),
+            Some(parent_uuid),
+            "openclaw.model_call_timing_unpaired",
+            json!({
+                "runId": "run-1",
+                "callId": "call-1",
+                "provider": "openai",
+                "model": "gpt-4",
+                "durationMs": 42,
+                "outcome": "completed"
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "mark");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+    }
+
+    assert_eq!(lines[0]["name"], "openclaw.model_call_timing_ambiguous");
+    assert_eq!(lines[0]["data"]["candidateCount"], 2);
+    assert_eq!(lines[1]["name"], "openclaw.model_call_timing_unpaired");
+    assert_eq!(lines[1]["data"]["durationMs"], 42);
+}
+
+#[test]
+fn subscriber_preserves_openclaw_hook_only_fallback_payloads_as_raw_jsonl() {
+    let dir = temp_dir("atof-openclaw-hook-fallbacks");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+    let parent_uuid = Uuid::now_v7();
+    let events = [
+        openclaw_replay_llm_event(
+            stripped_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            json!({
+                "headers": {},
+                "content": {
+                    "provider": "openai",
+                    "model": "gpt-4",
+                    "messages": [],
+                    "imagesCount": 1,
+                    "source": "openclaw.llm_output"
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            stripped_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            json!({
+                "role": "assistant",
+                "assistant_texts_count": 1,
+                "usage": {
+                    "cost_usd": 0.001
+                },
+                "openclaw": {
+                    "assistant_tool_call_names": []
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            partial_uuid,
+            Some(parent_uuid),
+            ScopeCategory::Start,
+            json!({
+                "headers": {},
+                "content": {
+                    "provider": "openai",
+                    "model": "gpt-4",
+                    "prompt": "visible prompt",
+                    "messages": [{"role": "user", "content": "visible prompt"}],
+                    "imagesCount": 0,
+                    "source": "openclaw.llm_output"
+                }
+            }),
+        ),
+        openclaw_replay_llm_event(
+            partial_uuid,
+            Some(parent_uuid),
+            ScopeCategory::End,
+            json!({
+                "role": "assistant",
+                "content": "visible answer",
+                "usage": {
+                    "prompt_tokens": 42
+                },
+                "openclaw": {
+                    "assistant_tool_call_names": []
+                }
+            }),
+        ),
+    ];
+
+    for event in &events {
+        subscriber(event);
+    }
+    exporter.force_flush().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), events.len());
+    for (line, event) in lines.iter().zip(events.iter()) {
+        assert_eq!(line, &event.try_to_json_value().unwrap());
+        assert_eq!(line["kind"], "scope");
+        assert_eq!(line["parent_uuid"], parent_uuid.to_string());
+    }
+
+    assert!(lines[0]["data"]["content"].get("prompt").is_none());
+    assert_eq!(lines[0]["data"]["content"]["messages"], json!([]));
+    assert!(lines[1]["data"].get("content").is_none());
+    assert_eq!(lines[1]["data"]["usage"]["cost_usd"], 0.001);
+    assert_eq!(lines[3]["data"]["usage"]["prompt_tokens"], 42);
+    assert!(lines[3]["data"]["usage"].get("completion_tokens").is_none());
 }
 
 #[test]

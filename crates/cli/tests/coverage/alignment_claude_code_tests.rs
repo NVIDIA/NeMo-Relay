@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderValue;
-use serde_json::{Value, json};
+use nemo_relay::api::llm::LlmRequest;
+use serde_json::{Map, Value, json};
 
 use super::*;
 
@@ -42,6 +43,70 @@ fn session_id_from_headers_reads_claude_native_header() {
         session_id_from_headers(&headers).as_deref(),
         Some("claude-session")
     );
+}
+
+#[test]
+fn startup_probe_matches_only_claude_code_preflight_shape() {
+    let request = LlmRequest {
+        headers: Map::from_iter([(
+            "x-claude-code-session-id".to_string(),
+            json!("claude-session"),
+        )]),
+        content: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "test"
+                }
+            ]
+        }),
+    };
+
+    assert!(is_startup_probe(
+        "anthropic.messages",
+        Some("claude-sonnet-4-5"),
+        &request
+    ));
+    assert!(!is_startup_probe(
+        "anthropic.count_tokens",
+        Some("claude-sonnet-4-5"),
+        &request
+    ));
+    assert!(!is_startup_probe(
+        "anthropic.messages",
+        Some("gpt-test"),
+        &request
+    ));
+    let missing_claude_header = LlmRequest {
+        headers: Default::default(),
+        content: request.content.clone(),
+    };
+    assert!(!is_startup_probe(
+        "anthropic.messages",
+        Some("claude-sonnet-4-5"),
+        &missing_claude_header
+    ));
+
+    let real_prompt = LlmRequest {
+        headers: request.headers.clone(),
+        content: json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 1,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "real user work"
+                }
+            ]
+        }),
+    };
+    assert!(!is_startup_probe(
+        "anthropic.messages",
+        Some("claude-sonnet-4-5"),
+        &real_prompt
+    ));
 }
 
 #[test]
