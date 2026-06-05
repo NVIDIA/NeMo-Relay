@@ -1004,6 +1004,7 @@ pub fn plugin_config_schema() -> Json {
 /// # Notes
 /// Initialization is replace-with-rollback: the previous active configuration
 /// is removed before the new configuration is activated.
+#[doc(hidden)]
 pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
     let report = validate_plugin_config(&config);
     if report.has_errors() {
