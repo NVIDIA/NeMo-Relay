@@ -222,13 +222,20 @@ naming the sources, in these conflict cases:
 
 ## Configuration Layering
 
-The file-layer merge described above is implemented by `layer_config` in
-`nemo_relay::plugin` — a Rust-only primitive, shared with the core crate, that the
-gateway uses internally to combine discovered layers. It is not a step operators
-or language bindings invoke: configuration is written in files and applied through
-plugin initialization, which performs the layering. (When the same component
-`kind` appears more than once, entries pair by order of appearance, so
-multi-instance plugins keep each instance rather than collapsing into the first.)
+`layer_config` in `nemo_relay::plugin` is the document merge shared by the gateway
+and the plugin runtime; it runs during initialization, not as an operator step.
+
+A direct integration that calls `plugin.initialize(...)` (any binding) resolves the
+discovered `plugins.toml` layering as a base, then layers the code-driven config on
+top (the code-driven config wins). Precedence differs slightly from the file-vs-file
+rule above: a code-driven config is a typed document, so `version`, `policy`, and a
+declared component's `enabled` take the code value (their defaults included), while
+omitted component kinds and `config` keys are inherited from the files. On targets
+without a filesystem (such as wasm), no files are found and the base is empty.
+
+(When the same component `kind` appears more than once, entries pair by order of
+appearance, so multi-instance plugins keep each instance rather than collapsing into
+the first.)
 
 ## Explicit Defaults And Overrides
 

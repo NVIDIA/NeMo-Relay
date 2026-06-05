@@ -1419,3 +1419,91 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
     assert!(active_plugin_report().is_none());
     reset_global();
 }
+
+#[test]
+fn test_load_plugin_config_files_merges_files_by_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &lower,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n\
+         [components.config]\n\
+         output_directory = \"/var/log\"\n\
+         mode = \"append\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &higher,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         [components.config]\n\
+         mode = \"overwrite\"\n\
+         [[components]]\n\
+         kind = \"adaptive\"\n",
+    )
+    .unwrap();
+
+    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
+        .unwrap()
+        .expect("a file exists");
+    assert_eq!(sources, vec![lower, higher]);
+
+    let components = merged["components"].as_array().unwrap();
+    let observability = &components[0];
+    assert_eq!(observability["kind"], json!("observability"));
+    assert_eq!(
+        observability["enabled"],
+        json!(false),
+        "lower-file enabled is inherited (higher omits it)"
+    );
+    assert_eq!(
+        observability["config"]["output_directory"],
+        json!("/var/log"),
+        "lower-only config key is inherited"
+    );
+    assert_eq!(
+        observability["config"]["mode"],
+        json!("overwrite"),
+        "higher file overrides the shared config key"
+    );
+    assert_eq!(
+        components[1]["kind"],
+        json!("adaptive"),
+        "higher-only component kind is appended"
+    );
+}
+
+#[test]
+fn test_load_plugin_config_files_rejects_duplicate_kinds_in_one_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dup.toml");
+    std::fs::write(
+        &path,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         [[components]]\n\
+         kind = \"observability\"\n",
+    )
+    .unwrap();
+
+    match load_plugin_config_files([path]).unwrap_err() {
+        PluginError::InvalidConfig(message) => {
+            assert!(
+                message.contains("duplicate plugin component kind"),
+                "{message}"
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+fn test_load_plugin_config_files_returns_none_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.toml");
+    assert!(load_plugin_config_files([missing]).unwrap().is_none());
+}

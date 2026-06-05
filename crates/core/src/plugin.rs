@@ -984,12 +984,26 @@ pub fn plugin_config_schema() -> Json {
         .expect("plugin config schema should serialize")
 }
 
-/// Validates and activates `config` exactly, with no file-based layering.
+/// Configures the active global plugin components.
 ///
-/// Replace-with-rollback: the previous configuration is removed first and
-/// restored if activation fails. The gateway uses this (it resolves its own
-/// config); most callers use [`initialize_plugins`], which layers the discovered
-/// file config underneath.
+/// Initialization validates the supplied config, replaces the active
+/// configuration, and rolls back partial registration on failure. If a
+/// previous configuration was active, the host attempts to restore it when the
+/// new activation fails.
+///
+/// # Parameters
+/// - `config`: Plugin configuration to validate and activate.
+///
+/// # Returns
+/// A plugin [`Result`] containing the successful [`ConfigReport`].
+///
+/// # Errors
+/// Returns an error when validation fails, when plugin registration fails, or
+/// when the previous configuration cannot be restored after a failed replace.
+///
+/// # Notes
+/// Initialization is replace-with-rollback: the previous active configuration
+/// is removed before the new configuration is activated.
 pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
     let report = validate_plugin_config(&config);
     if report.has_errors() {
