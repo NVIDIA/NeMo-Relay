@@ -522,6 +522,152 @@ async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelit
 }
 
 #[tokio::test]
+async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-atof-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        2,
+        "expected Hermes error-path LLM exports, got {llm_events:?}"
+    );
+
+    let end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    let start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(
+        start["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        start["data"]["content"]["messages"][0]["content"],
+        json!("hello")
+    );
+    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(end["metadata"]["provider_payload_exact"], json!(false));
+    assert_eq!(
+        end["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks")
+    );
+    assert_eq!(end["data"]["status_code"], json!(502));
+    assert_eq!(end["data"]["retry_count"], json!(1));
+    assert_eq!(end["data"]["retryable"], json!(true));
+    assert_eq!(end["data"]["reason"], json!("upstream"));
+    assert_eq!(
+        end["data"]["error"]["message"],
+        json!("gateway upstream error")
+    );
+}
+
+#[tokio::test]
 async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
