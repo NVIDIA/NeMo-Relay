@@ -6,8 +6,12 @@ use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use serde_json::json;
+use std::io::{Read, Write};
+use std::net::TcpListener as StdTcpListener;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
@@ -36,6 +40,96 @@ async fn install_test_atif_plugin(output_directory: &Path) {
     }))
     .unwrap();
     initialize_plugins(config).await.unwrap();
+}
+
+async fn install_test_openinference_plugin(endpoint: &str) {
+    let _ = clear_plugin_configuration();
+    let config: PluginConfig = serde_json::from_value(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "openinference": {
+                        "enabled": true,
+                        "transport": "http_binary",
+                        "endpoint": endpoint,
+                        "service_name": "codex-openinference-test",
+                        "timeout_millis": 1000
+                    }
+                }
+            }
+        ]
+    }))
+    .unwrap();
+    initialize_plugins(config).await.unwrap();
+}
+
+fn start_otlp_collector() -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
+    let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/traces", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    panic!("collector should receive an OTLP request")
+                }
+                Err(error) => panic!("collector failed to accept OTLP request: {error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut buffer = Vec::new();
+        let mut content_length = None;
+        let mut header_end = None;
+        loop {
+            let mut chunk = [0_u8; 4096];
+            let read = stream.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if header_end.is_none()
+                && let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
+            {
+                header_end = Some(position + 4);
+                let headers = String::from_utf8_lossy(&buffer[..position]);
+                content_length = headers.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                });
+            }
+            if let (Some(header_end), Some(content_length)) = (header_end, content_length)
+                && buffer.len() >= header_end + content_length
+            {
+                break;
+            }
+        }
+
+        let header_end = header_end.expect("collector should receive HTTP headers");
+        let content_length = content_length.expect("collector should receive content length");
+        let request = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+        let body = buffer[header_end..header_end + content_length].to_vec();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        (request, body)
+    });
+    (endpoint, handle)
 }
 
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
@@ -1469,6 +1563,48 @@ async fn codex_stop_snapshots_atif_without_session_end() {
         steps[1]["extra"]["tool_invocations"][0]["invocation_id"],
         json!("tool-call-1")
     );
+}
+
+#[tokio::test]
+async fn codex_openinference_spans_match_shared_contract() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let (endpoint, collector) = start_otlp_collector();
+    install_test_openinference_plugin(&endpoint).await;
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    start_codex_prompt_turn(&manager, &headers, "codex-openinference").await;
+    run_codex_responses_tool_activity(&manager, &headers, "codex-openinference").await;
+    stop_codex_turn(&manager, &headers, "codex-openinference").await;
+
+    clear_plugin_configuration().unwrap();
+    let (request, body) = collector.join().unwrap();
+    assert!(request.starts_with("POST /v1/traces HTTP/1.1"));
+    assert!(request.contains("content-type: application/x-protobuf"));
+
+    let body = String::from_utf8_lossy(&body);
+    for expected in [
+        "openinference.span.kind",
+        "AGENT",
+        "LLM",
+        "TOOL",
+        "nemo_relay.uuid",
+        "nemo_relay.parent_uuid",
+        "codex-turn",
+        "openai.responses",
+        "Read",
+        "gpt-test",
+        "codex-openinference",
+        "tool-call-1",
+        "tool_call.function.arguments",
+        "Requested tools: Read",
+    ] {
+        assert!(
+            body.contains(expected),
+            "expected OpenInference export body to contain {expected:?}; body: {body}"
+        );
+    }
+    assert!(!body.contains("sessionEnd"));
 }
 
 #[tokio::test]
