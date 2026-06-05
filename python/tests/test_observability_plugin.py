@@ -17,6 +17,7 @@ from nemo_relay.observability import (
     AtofConfig,
     AtofEndpointConfig,
     ComponentSpec,
+    HttpStorageConfig,
     ObservabilityConfig,
     OtlpConfig,
     S3StorageConfig,
@@ -110,6 +111,24 @@ class TestObservabilityConfigHelpers:
             "timeout_millis": 1000,
         }
         assert AtofConfig(endpoints=[endpoint]).to_dict()["endpoints"] == [endpoint.to_dict()]
+
+    def test_http_storage_config_serializes_headers(self):
+        s3 = S3StorageConfig(bucket="archive")
+        http = HttpStorageConfig(
+            endpoint="https://example.com/atif",
+            headers={"x-static": "value"},
+            header_env={"authorization": "NEMO_RELAY_ATIF_HTTP_AUTH"},
+            timeout_millis=1500,
+        )
+        assert http.to_dict() == {
+            "type": "http",
+            "endpoint": "https://example.com/atif",
+            "headers": {"x-static": "value"},
+            "header_env": {"authorization": "NEMO_RELAY_ATIF_HTTP_AUTH"},
+            "timeout_millis": 1500,
+        }
+        atif = AtifConfig(enabled=True, storage=[s3, http])
+        assert atif.to_dict()["storage"] == [s3.to_dict(), http.to_dict()]
 
     @pytest.mark.parametrize("use_context_manager", [True, False])
     async def test_atof_and_atif_file_outputs(self, tmp_path: Path, use_context_manager: bool):

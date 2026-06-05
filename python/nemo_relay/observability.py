@@ -134,6 +134,28 @@ class S3StorageConfig:
 
 
 @dataclass(slots=True)
+class HttpStorageConfig:
+    """HTTP endpoint settings for ATIF trajectory upload."""
+
+    endpoint: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    header_env: dict[str, str] = field(default_factory=dict)
+    timeout_millis: int = 3000
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this HTTP storage config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "type": "http",
+                "endpoint": self.endpoint,
+                "headers": self.headers,
+                "header_env": self.header_env,
+                "timeout_millis": self.timeout_millis,
+            }
+        )
+
+
+@dataclass(slots=True)
 class AtifConfig:
     """Per-top-level-agent ATIF file export settings."""
 
@@ -145,7 +167,7 @@ class AtifConfig:
     extra: JsonObject | None = None
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
-    storage: list[S3StorageConfig] | None = None
+    storage: list[S3StorageConfig | HttpStorageConfig] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""
@@ -247,6 +269,7 @@ __all__ = [
     "AtofEndpointConfig",
     "AtofConfig",
     "AtifConfig",
+    "HttpStorageConfig",
     "S3StorageConfig",
     "OtlpConfig",
     "ObservabilityConfig",
