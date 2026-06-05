@@ -735,13 +735,14 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 
     match execution(intercepted_request).await {
         Ok(raw_stream) => {
+            let end_metadata = metadata_with_otel_status(metadata, "OK", None);
             let wrapper = LlmStreamWrapper::new(
                 raw_stream,
                 handle,
                 collector,
                 finalizer,
                 data,
-                metadata,
+                end_metadata,
                 response_codec,
             );
             Ok(Box::pin(wrapper) as LlmJsonStream)

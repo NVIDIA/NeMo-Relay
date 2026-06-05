@@ -6,9 +6,14 @@
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
+use tokio_stream::StreamExt;
 
-use super::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
+use super::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
 use crate::api::event::ScopeCategory;
+use crate::api::runtime::LlmJsonStream;
 use crate::api::runtime::{NemoRelayContextState, global_context};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::error::FlowError;
@@ -103,4 +108,64 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
             .unwrap()
             .contains("llm boom")
     );
+}
+
+#[test]
+fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
+    reset_global();
+
+    let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
+    let subscriber_events = captured_events.clone();
+    register_subscriber(
+        "llm-stream-status-metadata",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                subscriber_events
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), event.metadata().cloned()));
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("llm-stream-ok")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(
+                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
+                                as LlmJsonStream,
+                        )
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| json!({"ok": true})))
+                .metadata(json!({"caller": "llm-stream-ok", "otel.status_code": "USER"}))
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        while let Some(chunk) = stream.next().await {
+            chunk.unwrap();
+        }
+    });
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("llm-stream-status-metadata").unwrap());
+
+    let events = captured_events.lock().unwrap();
+    let success_metadata = events
+        .iter()
+        .find(|event| event.0 == "llm-stream-ok")
+        .and_then(|event| event.1.as_ref())
+        .unwrap_or_else(|| panic!("missing stream end event metadata"));
+    assert_eq!(success_metadata["caller"], json!("llm-stream-ok"));
+    assert_eq!(success_metadata["otel.status_code"], json!("OK"));
+    assert!(success_metadata.get("otel.status_message").is_none());
 }
