@@ -1378,6 +1378,8 @@ dependencies = [
  "http-body-util",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "reqwest",
  "rustls",
  "serde",
