@@ -1063,7 +1063,9 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
 /// Resolves the default `plugins.toml` layering into one JSON document, or an
 /// empty object when no plugin file exists.
 fn resolve_default_file_plugin_config() -> Result<Json> {
-    Ok(load_plugin_config_files(default_plugin_config_paths())?
+    let paths =
+        default_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir());
+    Ok(load_plugin_config_files(paths)?
         .map(|(value, _sources)| value)
         .unwrap_or_else(|| Json::Object(Map::new())))
 }
@@ -1125,22 +1127,26 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
 }
 
 /// Default `plugins.toml` search path (lowest precedence first): system, nearest
-/// project file, then user file — mirroring the gateway's discovery.
-fn default_plugin_config_paths() -> Vec<PathBuf> {
+/// project file, then user file — mirroring the gateway's discovery. `pub` only
+/// for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn default_plugin_config_paths(cwd: Option<&Path>, user_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut paths = vec![PathBuf::from("/etc/nemo-relay/plugins.toml")];
-    if let Ok(cwd) = std::env::current_dir()
-        && let Some(project) = nearest_project_plugin_config(&cwd)
+    if let Some(cwd) = cwd
+        && let Some(project) = nearest_project_plugin_config(cwd)
     {
         paths.push(project);
     }
-    if let Some(dir) = user_config_dir() {
+    if let Some(dir) = user_dir {
         paths.push(dir.join("plugins.toml"));
     }
     paths
 }
 
-/// Walks upward from `start` for the nearest `.nemo-relay/plugins.toml`.
-fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
+/// Walks upward from `start` for the nearest `.nemo-relay/plugins.toml`. `pub`
+/// only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
         .map(|ancestor| ancestor.join(".nemo-relay").join("plugins.toml"))
@@ -1148,8 +1154,9 @@ fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
 }
 
 /// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then
-/// `HOME`/`USERPROFILE`.
-fn user_config_dir() -> Option<PathBuf> {
+/// `HOME`/`USERPROFILE`. `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn user_config_dir() -> Option<PathBuf> {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(base).join("nemo-relay"));
     }

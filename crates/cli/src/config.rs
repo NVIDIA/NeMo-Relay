@@ -619,18 +619,8 @@ fn implicit_plugin_config_paths(
     cwd: Option<&std::path::Path>,
     user_config_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
-    // Ordered from lowest to highest precedence. User-level plugin config intentionally loads last
-    // so an operator can override project-local plugin defaults without editing the checkout.
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)];
-    if let Some(cwd) = cwd
-        && let Some(project) = find_project_plugin_config(cwd)
-    {
-        paths.push(project);
-    }
-    if let Some(user) = user_config_dir {
-        paths.push(user.join(PLUGINS_TOML));
-    }
-    paths
+    // The search-path logic lives in core; the gateway shares it so discovery stays identical.
+    nemo_relay::plugin::default_plugin_config_paths(cwd, user_config_dir)
 }
 
 // Walks upward from the current directory and returns the nearest project-local gateway config.
@@ -645,15 +635,9 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-// Walks upward from the current directory and returns the nearest project-local plugin config.
+// The project-walk lives in core; the gateway shares it so discovery stays identical.
 fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
-    for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-relay").join(PLUGINS_TOML);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
+    nemo_relay::plugin::nearest_project_plugin_config(start)
 }
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
@@ -679,15 +663,10 @@ fn user_config_path() -> Option<PathBuf> {
     user_config_dir().map(|dir| dir.join("config.toml"))
 }
 
-/// Resolves the nemo-relay user config DIRECTORY (without trailing filename) using the same XDG
-/// rules as `user_config_path`. Exposed so wizard/doctor code paths that write to or display
-/// the global location stay in sync with the loader — without this, hard-coded
-/// `$HOME/.config/nemo-relay` references silently ignore `$XDG_CONFIG_HOME`.
+/// Resolves the nemo-relay user config DIRECTORY (without trailing filename). Delegates to core's
+/// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(base).join("nemo-relay"));
-    }
-    home_dir().map(|home| home.join(".config/nemo-relay"))
+    nemo_relay::plugin::user_config_dir()
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -878,14 +857,6 @@ fn format_paths(paths: &[PathBuf]) -> String {
 fn parse_json_option(name: &str, value: &str) -> Result<Value, CliError> {
     serde_json::from_str::<Value>(value)
         .map_err(|error| CliError::Config(format!("invalid {name}: {error}")))
-}
-
-// Resolves a cross-platform home directory from environment only. The gateway avoids extra OS
-// lookups here so tests can control install/config locations by setting env variables.
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
 }
 
 /// Reads a non-empty UTF-8 header value as an owned string.
