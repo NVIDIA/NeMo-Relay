@@ -76,6 +76,7 @@ describe('observability plugin helpers', () => {
         timeout_millis: 1000,
       },
     ]);
+  });
 
   it('passes through mixed ATIF remote storage config', () => {
     const s3 = {
