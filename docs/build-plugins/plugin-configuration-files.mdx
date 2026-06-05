@@ -198,32 +198,7 @@ components that reach plugin validation also fail validation.
 Arrays inside component config are replaced by the higher-precedence value.
 Tables inside component config merge recursively.
 
-## Source Precedence And Conflicts
-
-A gateway run uses exactly one file/CLI source class. The effective configuration
-is composed from lowest to highest precedence:
-
-1. Discovered `plugins.toml` files, merged in order: system
-   (`/etc/nemo-relay/plugins.toml`) is lowest, then project (nearest
-   `.nemo-relay/plugins.toml`), then user
-   (`$XDG_CONFIG_HOME/nemo-relay/plugins.toml`) is highest
-2. **or** a single inline `[plugins].config` block in `config.toml`
-3. **or** `--plugin-config '<json>'`
-
-These source classes are mutually exclusive, and the `plugins.toml` sub-layers
-(system, project, user) only merge with each other. The gateway fails fast,
-naming the sources, in these conflict cases:
-
-| Situation | Result |
-|---|---|
-| `--plugin-config` and any file config (`plugins.toml` or `[plugins].config`) | Error: choose one source |
-| `plugins.toml` and `[plugins].config` both present | Error: choose one source |
-| `[plugins].config` defined in more than one `config.toml` file | Error: consolidate into one block |
-
 ## Configuration Layering
-
-`layer_config` in `nemo_relay::plugin` is the document merge shared by the gateway
-and the plugin runtime; it runs during initialization, not as an operator step.
 
 A direct integration that calls `plugin.initialize(...)` (any binding) resolves the
 discovered `plugins.toml` layering as a base, then layers the code-driven config on
@@ -232,10 +207,6 @@ rule above: a code-driven config is a typed document, so `version`, `policy`, an
 declared component's `enabled` take the code value (their defaults included), while
 omitted component kinds and `config` keys are inherited from the files. On targets
 without a filesystem (such as wasm), no files are found and the base is empty.
-
-(When the same component `kind` appears more than once, entries pair by order of
-appearance, so multi-instance plugins keep each instance rather than collapsing into
-the first.)
 
 ## Explicit Defaults And Overrides
 
