@@ -903,8 +903,9 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
 ///
 /// Objects merge recursively and arrays/scalars are replaced by `right`, except the
 /// top-level `components` array, whose entries pair by `kind` in order of appearance so
-/// multi-instance kinds are not collapsed. Shared by the gateway's file-layer merge.
-pub fn layer_config(left: &mut Json, right: Json) {
+/// multi-instance kinds are not collapsed. Internal helper shared by plugin
+/// initialization and `plugins.toml` discovery.
+fn layer_config(left: &mut Json, right: Json) {
     match (left, right) {
         (Json::Object(left), Json::Object(right)) => {
             for (key, value) in right {
