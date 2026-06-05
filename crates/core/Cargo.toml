@@ -19,7 +19,6 @@ default = [
     "openinference",
     "guardrails-remote",
     "object-store",
-    "python",
 ]
 atof-streaming = [
     "dep:futures-util",
@@ -36,7 +35,6 @@ guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
 ]
-python = []
 object-store = [
     "dep:object_store",
     "dep:reqwest",
