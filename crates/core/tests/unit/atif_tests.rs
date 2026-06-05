@@ -2057,6 +2057,122 @@ fn test_exporter_synthesizes_tool_call_for_active_subagent_dispatch() {
 }
 
 #[test]
+fn test_exporter_keeps_structured_tool_observation_on_agent_scope_tree() {
+    let root_uuid = Uuid::now_v7();
+    let turn_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+    let tool_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info());
+    let base = base_timestamp();
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("hermes")
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({
+            "nemo_relay_scope_role": "session",
+            "session_id": "session-1",
+        }))
+        .build();
+    let mut turn_start = event_builder(turn_uuid, EventType::Start)
+        .name("hermes-turn")
+        .parent_uuid(root_uuid)
+        .scope_type(ScopeType::Agent)
+        .metadata(json!({
+            "nemo_relay_scope_role": "turn",
+            "turn_index": 1,
+            "turn_source": "implicit",
+        }))
+        .build();
+    let mut llm_start = event_builder(llm_uuid, EventType::Start)
+        .name("custom")
+        .parent_uuid(turn_uuid)
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "messages": [{"role": "user", "content": "search for needle"}],
+            "model": "qwen",
+        }))
+        .model_name("qwen")
+        .build();
+    let mut llm_end = event_builder(llm_uuid, EventType::End)
+        .name("custom")
+        .parent_uuid(turn_uuid)
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "",
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call-search-1",
+                "type": "function",
+                "function": {
+                    "name": "search_files",
+                    "arguments": "{\"query\":\"needle\"}",
+                }
+            }]
+        }))
+        .model_name("qwen")
+        .build();
+    let mut tool_start = event_builder(tool_uuid, EventType::Start)
+        .name("search_files")
+        .parent_uuid(turn_uuid)
+        .scope_type(ScopeType::Tool)
+        .input(json!({"query": "needle"}))
+        .tool_call_id("call-search-1")
+        .build();
+    let mut tool_end = event_builder(tool_uuid, EventType::End)
+        .name("search_files")
+        .parent_uuid(turn_uuid)
+        .scope_type(ScopeType::Tool)
+        .output(json!({"total_count": 6}))
+        .tool_call_id("call-search-1")
+        .build();
+    let mut turn_end = event_builder(turn_uuid, EventType::End)
+        .name("hermes-turn")
+        .parent_uuid(root_uuid)
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut root_end = event_builder(root_uuid, EventType::End)
+        .name("hermes")
+        .scope_type(ScopeType::Agent)
+        .build();
+
+    for (offset, event) in [
+        &mut root_start,
+        &mut turn_start,
+        &mut llm_start,
+        &mut llm_end,
+        &mut tool_start,
+        &mut tool_end,
+        &mut turn_end,
+        &mut root_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.extend([
+            root_start, turn_start, llm_start, llm_end, tool_start, tool_end, turn_end, root_end,
+        ]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let agent_step = &trajectory.steps[1];
+    let observation = agent_step.observation.as_ref().unwrap();
+    assert_eq!(observation.results.len(), 1);
+    assert_eq!(
+        observation.results[0].source_call_id.as_deref(),
+        Some("call-search-1")
+    );
+    assert_structured_observation_result_extra(&observation.results[0], json!({"total_count": 6}));
+}
+
+#[test]
 fn test_exporter_drops_empty_subagent_trajectory_and_parent_ref() {
     let root_uuid = Uuid::now_v7();
     let child_uuid = Uuid::now_v7();

@@ -668,6 +668,122 @@ async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event()
 }
 
 #[tokio::test]
+async fn serve_listener_hermes_post_tool_call_writes_atof_tool_events() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-tool-atof"
+        }),
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-tool-atof",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-tool-atof",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "tool_response": { "total_count": 6 },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-tool-atof"
+        }),
+    ] {
+        let response = client
+            .post(format!("{url}/hooks/hermes"))
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let tool_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_events.len(),
+        2,
+        "expected Hermes tool start/end exports, got {tool_events:?}"
+    );
+
+    let start = tool_events
+        .iter()
+        .find(|event| event["scope_category"] == "start")
+        .unwrap();
+    assert_eq!(start["name"], json!("search_files"));
+    assert_eq!(
+        start["category_profile"]["tool_call_id"],
+        json!("call-search-1")
+    );
+    assert_eq!(start["data"]["query"], json!("needle"));
+
+    let end = tool_events
+        .iter()
+        .find(|event| event["scope_category"] == "end")
+        .unwrap();
+    assert_eq!(end["name"], json!("search_files"));
+    assert_eq!(
+        end["category_profile"]["tool_call_id"],
+        json!("call-search-1")
+    );
+    assert_eq!(end["data"]["total_count"], json!(6));
+}
+
+#[tokio::test]
 async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();

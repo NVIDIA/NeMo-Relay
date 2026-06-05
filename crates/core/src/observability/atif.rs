@@ -2737,7 +2737,9 @@ fn prune_subagent_refs(steps: &mut Vec<AtifStep>, child_trajectory_ids: &HashSet
                     result.subagent_trajectory_ref = None;
                 }
             }
-            result.content.is_some() || result.subagent_trajectory_ref.is_some()
+            result.content.is_some()
+                || result.subagent_trajectory_ref.is_some()
+                || observation_result_has_tool_result_extra(result)
         });
         if observation.results.is_empty() {
             step.observation = None;
@@ -2761,6 +2763,14 @@ fn renumber_steps(steps: &mut [AtifStep]) {
     for (index, step) in steps.iter_mut().enumerate() {
         step.step_id = index + 1;
     }
+}
+
+fn observation_result_has_tool_result_extra(result: &AtifObservationResult) -> bool {
+    result
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.as_object())
+        .is_some_and(|extra| extra.contains_key("tool_result"))
 }
 
 fn refresh_tool_call_lookup(
