@@ -385,10 +385,23 @@ fn assert_atif_message_value(value: &serde_json::Value) {
 }
 
 fn assert_atif_observation_content_value(value: &serde_json::Value) {
-    assert!(
-        !value.is_null(),
-        "ATIF observation content must not be null"
-    );
+    if value.is_string() {
+        return;
+    }
+    if let Some(parts) = value.as_array()
+        && parts.iter().all(is_atif_content_part)
+    {
+        return;
+    }
+    panic!("ATIF observation content must be a string or content-part array: {value}");
+}
+
+fn assert_structured_observation_result_extra(
+    result: &AtifObservationResult,
+    expected: serde_json::Value,
+) {
+    assert_eq!(result.content, None);
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], expected);
 }
 
 fn is_atif_content_part(part: &serde_json::Value) -> bool {
@@ -475,10 +488,7 @@ fn test_exporter_tool_lifecycle() {
     let obs = step1.observation.as_ref().unwrap();
     assert_eq!(obs.results.len(), 1);
     assert_eq!(obs.results[0].source_call_id, None);
-    assert_eq!(
-        obs.results[0].content,
-        Some(json!({"results": ["result1"]}))
-    );
+    assert_structured_observation_result_extra(&obs.results[0], json!({"results": ["result1"]}));
     assert_eq!(
         obs.results[0].extra.as_ref().unwrap()["event_name"],
         json!("web_search")
@@ -513,6 +523,65 @@ fn test_exporter_omits_null_tool_observation_content() {
             .unwrap()
             .contains_key("content")
     );
+}
+
+#[test]
+fn test_exporter_moves_structured_tool_close_result_to_observation_extra() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let close_result = json!({"status": "closed_by_turn_end"});
+
+    let end = event_builder(tool_uuid, EventType::End)
+        .name("terminal")
+        .scope_type(ScopeType::Tool)
+        .output(close_result.clone())
+        .tool_call_id("call_123")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(result.content, None);
+    assert_eq!(result.extra.as_ref().unwrap()["tool_result"], close_result);
+
+    let exported = serde_json::to_value(&trajectory).unwrap();
+    let content = exported["steps"][0]["observation"]["results"][0].get("content");
+    assert!(content.is_none());
+}
+
+#[test]
+fn test_exporter_preserves_tool_content_part_array_observation_content() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let content_parts = json!([
+        {"type": "text", "text": "screenshot captured"},
+        {"type": "image", "source": {"media_type": "image/png", "path": "artifacts/screenshot.png"}},
+    ]);
+
+    let end = event_builder(tool_uuid, EventType::End)
+        .name("screenshot")
+        .scope_type(ScopeType::Tool)
+        .output(content_parts.clone())
+        .tool_call_id("call_123")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+    assert_eq!(result.content, Some(content_parts));
+    assert!(result.extra.as_ref().unwrap().get("tool_result").is_none());
 }
 
 #[test]
@@ -629,6 +698,27 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         json!(30)
     );
     assert_eq!(openai_metrics.cost_usd, Some(0.001));
+
+    let responses_metrics = extract_metrics(&json!({
+        "usage": {
+            "input_tokens": 75,
+            "output_tokens": 20,
+            "total_tokens": 95,
+            "input_tokens_details": {
+                "cached_tokens": 10
+            },
+            "cost_usd": 0.005
+        }
+    }))
+    .unwrap();
+    assert_eq!(responses_metrics.prompt_tokens, Some(75));
+    assert_eq!(responses_metrics.completion_tokens, Some(20));
+    assert_eq!(responses_metrics.cached_tokens, Some(10));
+    assert_eq!(
+        responses_metrics.extra.as_ref().unwrap()["total_tokens"],
+        json!(95)
+    );
+    assert_eq!(responses_metrics.cost_usd, Some(0.005));
 
     let anthropic_metrics = extract_metrics(&json!({
         "usage": {
@@ -894,9 +984,9 @@ fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
         observation.results[0].source_call_id.as_deref(),
         Some("toolu_01")
     );
-    assert_eq!(
-        observation.results[0].content,
-        Some(json!({"matches": ["README.md"]}))
+    assert_structured_observation_result_extra(
+        &observation.results[0],
+        json!({"matches": ["README.md"]}),
     );
 }
 
@@ -1043,6 +1133,165 @@ fn test_exporter_openclaw_timing_marks_become_system_steps_with_payloads() {
 }
 
 #[test]
+fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_metrics() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+    let base = base_timestamp();
+
+    let mut stripped_start = event_builder(stripped_uuid, EventType::Start)
+        .name("openclaw-model-call")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "headers": {},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "messages": [],
+                "imagesCount": 1,
+                "source": "openclaw.llm_output"
+            }
+        }))
+        .model_name("gpt-4")
+        .build();
+    let mut stripped_end = event_builder(stripped_uuid, EventType::End)
+        .name("openclaw-model-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "role": "assistant",
+            "assistant_texts_count": 1,
+            "usage": {
+                "cost_usd": 0.001
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        }))
+        .model_name("gpt-4")
+        .build();
+    let mut partial_start = event_builder(partial_uuid, EventType::Start)
+        .name("openclaw-model-call")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "headers": {},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "prompt": "visible prompt",
+                "messages": [{"role": "user", "content": "visible prompt"}],
+                "imagesCount": 0,
+                "source": "openclaw.llm_output"
+            }
+        }))
+        .model_name("gpt-4")
+        .build();
+    let mut partial_end = event_builder(partial_uuid, EventType::End)
+        .name("openclaw-model-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "role": "assistant",
+            "content": "visible answer",
+            "usage": {
+                "prompt_tokens": 42
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        }))
+        .model_name("gpt-4")
+        .build();
+
+    for (offset, event) in [
+        &mut stripped_start,
+        &mut stripped_end,
+        &mut partial_start,
+        &mut partial_end,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_event_timestamp(event, base + chrono::Duration::milliseconds(offset as i64));
+    }
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state
+            .events
+            .extend([stripped_start, stripped_end, partial_start, partial_end]);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 4);
+
+    let stripped_user = &trajectory.steps[0];
+    assert_eq!(stripped_user.source, "user");
+    let stripped_user_message: serde_json::Value =
+        serde_json::from_str(stripped_user.message.as_str().unwrap()).unwrap();
+    assert_eq!(stripped_user_message["provider"], json!("openai"));
+    assert_eq!(stripped_user_message["model"], json!("gpt-4"));
+    assert_eq!(stripped_user_message["messages"], json!([]));
+    assert_eq!(stripped_user_message["imagesCount"], json!(1));
+    assert_eq!(
+        stripped_user_message["source"],
+        json!("openclaw.llm_output")
+    );
+    assert!(stripped_user_message.get("prompt").is_none());
+    assert!(stripped_user_message.get("systemPrompt").is_none());
+    let stripped_user_extra: AtifStepExtra =
+        serde_json::from_value(stripped_user.extra.clone().unwrap()).unwrap();
+    let stripped_request = stripped_user_extra.llm_request.unwrap();
+    assert!(stripped_request.get("prompt").is_none());
+    assert!(stripped_request.get("systemPrompt").is_none());
+    assert_eq!(stripped_request["messages"], json!([]));
+    assert_eq!(stripped_request["imagesCount"], json!(1));
+
+    let stripped_agent = &trajectory.steps[1];
+    assert_eq!(stripped_agent.source, "agent");
+    let stripped_message: serde_json::Value =
+        serde_json::from_str(stripped_agent.message.as_str().unwrap()).unwrap();
+    assert_eq!(stripped_message["assistant_texts_count"], json!(1));
+    assert!(stripped_message.get("content").is_none());
+    let stripped_metrics = stripped_agent.metrics.as_ref().unwrap();
+    assert_eq!(stripped_metrics.prompt_tokens, None);
+    assert_eq!(stripped_metrics.completion_tokens, None);
+    assert_eq!(stripped_metrics.cached_tokens, None);
+    assert_eq!(stripped_metrics.cost_usd, Some(0.001));
+    let stripped_agent_extra: AtifStepExtra =
+        serde_json::from_value(stripped_agent.extra.clone().unwrap()).unwrap();
+    let stripped_response = stripped_agent_extra.llm_response.unwrap();
+    assert!(stripped_response.get("content").is_none());
+    assert_eq!(stripped_response["assistant_texts_count"], json!(1));
+
+    let partial_user = &trajectory.steps[2];
+    assert_eq!(partial_user.source, "user");
+    assert_eq!(partial_user.message, json!("visible prompt"));
+    let partial_user_extra: AtifStepExtra =
+        serde_json::from_value(partial_user.extra.clone().unwrap()).unwrap();
+    let partial_request = partial_user_extra.llm_request.unwrap();
+    assert_eq!(partial_request["prompt"], json!("visible prompt"));
+    assert_eq!(
+        partial_request["messages"][0]["content"],
+        json!("visible prompt")
+    );
+
+    let partial_agent = &trajectory.steps[3];
+    assert_eq!(partial_agent.source, "agent");
+    assert_eq!(partial_agent.message, json!("visible answer"));
+    let partial_metrics = partial_agent.metrics.as_ref().unwrap();
+    assert_eq!(partial_metrics.prompt_tokens, Some(42));
+    assert_eq!(partial_metrics.completion_tokens, None);
+    assert_eq!(partial_metrics.cached_tokens, None);
+    assert_eq!(partial_metrics.cost_usd, None);
+
+    let final_metrics = trajectory.final_metrics.as_ref().unwrap();
+    assert_eq!(final_metrics.total_prompt_tokens, Some(42));
+    assert_eq!(final_metrics.total_completion_tokens, None);
+    assert_eq!(final_metrics.total_cached_tokens, None);
+    assert_eq!(final_metrics.total_cost_usd, Some(0.001));
+}
+
+#[test]
 fn test_openai_responses_input_extracts_latest_user_content_block() {
     let message = extract_user_messages(&json!({
         "input": [
@@ -1140,7 +1389,7 @@ fn test_exporter_openai_responses_function_calls_promoted_and_correlated() {
 
     let result = &agent_step.observation.as_ref().unwrap().results[0];
     assert_eq!(result.source_call_id.as_deref(), Some("call_terminal_1"));
-    assert_eq!(result.content, Some(json!({"stdout": "/workspace"})));
+    assert_structured_observation_result_extra(result, json!({"stdout": "/workspace"}));
 }
 
 #[test]
@@ -1301,9 +1550,9 @@ fn test_exporter_hermes_wrapper_payload_is_atif_v17_compatible() {
         observation.results[0].source_call_id,
         Some("call_terminal_1".to_string())
     );
-    assert_eq!(
-        observation.results[0].content,
-        Some(json!({"stdout": "hi", "exit_code": 0}))
+    assert_structured_observation_result_extra(
+        &observation.results[0],
+        json!({"stdout": "hi", "exit_code": 0}),
     );
 }
 
@@ -1679,7 +1928,7 @@ fn test_exporter_attaches_subagent_ref_to_delegating_tool_observation() {
 
     let result = &agent_step.observation.as_ref().unwrap().results[0];
     assert_eq!(result.source_call_id.as_deref(), Some("call_delegate"));
-    assert_eq!(result.content, Some(json!({"status": "launched"})));
+    assert_structured_observation_result_extra(result, json!({"status": "launched"}));
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
@@ -1792,7 +2041,7 @@ fn test_exporter_synthesizes_tool_call_for_active_subagent_dispatch() {
         result.source_call_id.as_deref(),
         Some(tool_call_id.as_str())
     );
-    assert_eq!(result.content, Some(json!({"status": "completed"})));
+    assert_structured_observation_result_extra(result, json!({"status": "completed"}));
     let refs = result.subagent_trajectory_ref.as_ref().unwrap();
     assert_eq!(refs[0].trajectory_id, Some(child_uuid.to_string()));
     assert_eq!(refs[0].session_id, Some("child-session".to_string()));
@@ -2982,7 +3231,7 @@ fn test_exporter_correlates_hermes_style_tool_outputs_before_llm_calls() {
             observation.results[0].source_call_id,
             Some(source_call_id.to_string())
         );
-        assert_eq!(observation.results[0].content, Some(content));
+        assert_structured_observation_result_extra(&observation.results[0], content);
     }
 
     assert!(!trajectory.steps.iter().any(|step| {

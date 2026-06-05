@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-export-atif-trajectories",
+  "cases": [
+    {
+      "id": "export-atif-for-replay",
+      "question": "Export my NeMo Relay run as ATIF so another tool can replay and analyze the trajectory.",
+      "expected_skill": "nemo-relay-export-atif-trajectories",
+      "expected_script": null,
+      "ground_truth": "Use the ATIF export skill to create an AtifExporter with session and agent metadata, register it before scoped work, run instrumented calls, deregister, flush, and validate the output.",
+      "expected_behavior": [
+        "Choose ATIF rather than live OTLP tracing",
+        "Create and register an AtifExporter before work runs",
+        "Run scoped tool or LLM activity",
+        "Deregister or flush and verify the trajectory output"
+      ]
+    },
+    {
+      "id": "neg-otel-backend",
+      "question": "Send NeMo Relay traces to my OTLP-compatible tracing backend.",
+      "expected_skill": "nemo-relay-export-otel",
+      "expected_script": null,
+      "ground_truth": "OTLP tracing belongs to nemo-relay-export-otel, not ATIF trajectory export.",
+      "expected_behavior": [
+        "nemo-relay-export-atif-trajectories stays silent",
+        "nemo-relay-export-otel handles OTLP setup"
+      ]
+    }
+  ]
+}

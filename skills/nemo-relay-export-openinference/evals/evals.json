@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-export-openinference",
+  "cases": [
+    {
+      "id": "openinference-semantic-export",
+      "question": "Configure NeMo Relay export for a backend that understands OpenInference spans and LLM semantics.",
+      "expected_skill": "nemo-relay-export-openinference",
+      "expected_script": null,
+      "ground_truth": "Use the OpenInference export skill to configure the OpenInference subscriber/export path, preserve model and tool metadata, and validate semantic span fields.",
+      "expected_behavior": [
+        "Choose OpenInference rather than generic OTEL when semantic LLM fields matter",
+        "Configure the OpenInference subscriber or exporter path",
+        "Preserve model, tool, and scope metadata",
+        "Validate emitted semantic fields in the target backend or test output"
+      ]
+    },
+    {
+      "id": "neg-portable-trajectory",
+      "question": "I need a portable ATIF document for offline replay.",
+      "expected_skill": "nemo-relay-export-atif-trajectories",
+      "expected_script": null,
+      "ground_truth": "Portable ATIF documents belong to nemo-relay-export-atif-trajectories.",
+      "expected_behavior": [
+        "nemo-relay-export-openinference stays silent",
+        "nemo-relay-export-atif-trajectories handles the offline trajectory"
+      ]
+    }
+  ]
+}

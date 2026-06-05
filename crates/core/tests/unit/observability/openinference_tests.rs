@@ -738,6 +738,148 @@ fn openclaw_model_timing_marks_attach_to_parent_spans() {
 }
 
 #[test]
+fn openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_usage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "messages": [],
+                "imagesCount": 1,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "assistant_texts_count": 1,
+            "usage": {
+                "cost_usd": 0.001
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.process(&make_start_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "prompt": "visible prompt",
+                "messages": [{"role": "user", "content": "visible prompt"}],
+                "imagesCount": 0,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "visible answer",
+            "usage": {
+                "prompt_tokens": 42
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+
+    let stripped_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.cost.total") == Some(&"0.001".to_string())
+        })
+        .expect("missing stripped OpenClaw fallback span");
+    let stripped_attributes = attr_map(&stripped_span.attributes);
+    assert_eq!(
+        stripped_attributes.get("input.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_input = stripped_attributes
+        .get("input.value")
+        .expect("missing stripped input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(stripped_input).unwrap();
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert!(parsed_input["headers"].is_null() || parsed_input.get("headers").is_none());
+    assert_eq!(
+        stripped_attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_output = stripped_attributes
+        .get("output.value")
+        .expect("missing stripped output.value");
+    let parsed_output: serde_json::Value = serde_json::from_str(stripped_output).unwrap();
+    assert!(parsed_output.get("content").is_none());
+    assert_eq!(parsed_output["assistant_texts_count"], json!(1));
+    assert_eq!(
+        stripped_attributes.get("llm.cost.total"),
+        Some(&"0.001".to_string())
+    );
+    assert!(!stripped_attributes.contains_key("llm.token_count.prompt"));
+    assert!(!stripped_attributes.contains_key("llm.output_messages.0.message.content"));
+    assert!(!stripped_attributes.contains_key("llm.input_messages.0.message.role"));
+    assert_no_attr_contains(&stripped_attributes, "secret-token");
+
+    let partial_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.token_count.prompt") == Some(&"42".to_string())
+        })
+        .expect("missing partial-usage OpenClaw fallback span");
+    let partial_attributes = attr_map(&partial_span.attributes);
+    assert_eq!(
+        partial_attributes.get("input.value"),
+        Some(&"user: visible prompt".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("output.value"),
+        Some(&"visible answer".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("llm.token_count.prompt"),
+        Some(&"42".to_string())
+    );
+    assert!(!partial_attributes.contains_key("llm.token_count.completion"));
+    assert!(!partial_attributes.contains_key("llm.token_count.total"));
+    assert!(!partial_attributes.contains_key("llm.cost.total"));
+}
+
+#[test]
 fn llm_input_value_omits_request_headers() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -2341,6 +2483,116 @@ fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
         &attributes,
         "metadata",
         "\"fidelity_source\":\"hermes_api_hooks_sanitized\"",
+    );
+}
+
+#[test]
+fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let start_metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+    let end_metadata = json!({
+        "provider_payload_exact": false,
+        "fidelity_source": "hermes_api_hooks"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .metadata(start_metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }))
+            .metadata(end_metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(attributes.get("output.value").unwrap()).unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            attributes.get("nemo_relay.end.output_json").unwrap(),
+        )
+        .unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":false");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks\"",
     );
 }
 

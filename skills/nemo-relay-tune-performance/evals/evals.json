@@ -1,0 +1,29 @@
+{
+  "skill": "nemo-relay-tune-performance",
+  "cases": [
+    {
+      "id": "measured-performance-rollout",
+      "question": "Plan a measured NeMo Relay adaptive tuning rollout to improve latency and tool parallelism after baseline observability is working.",
+      "expected_skill": "nemo-relay-tune-performance",
+      "expected_script": null,
+      "ground_truth": "Use the performance tuning skill to require a working baseline, choose metrics, tune from runtime signals, and roll out changes with measurement.",
+      "expected_behavior": [
+        "Confirm scopes, tool calls, LLM calls, and observability already work",
+        "Define latency, parallelism, cache, or model-request metrics",
+        "Tune from runtime signals rather than guesses",
+        "Recommend measured rollout and comparison to baseline"
+      ]
+    },
+    {
+      "id": "neg-first-observability",
+      "question": "I do not have NeMo Relay observability working yet; help me choose a trace export path.",
+      "expected_skill": "nemo-relay-setup-observability",
+      "expected_script": null,
+      "ground_truth": "Observability setup comes before performance tuning and belongs to nemo-relay-setup-observability.",
+      "expected_behavior": [
+        "nemo-relay-tune-performance stays silent or redirects",
+        "nemo-relay-setup-observability handles trace setup"
+      ]
+    }
+  ]
+}
