@@ -56,6 +56,28 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'mode']);
   });
 
+  it('serializes ATOF streaming endpoints', () => {
+    const config = observability.atofConfig({
+      endpoints: [
+        {
+          url: 'http://localhost:8080/events',
+          transport: 'http_post',
+          headers: { 'X-Test': 'yes' },
+          timeout_millis: 1000,
+        },
+      ],
+    });
+
+    assert.deepEqual(config.endpoints, [
+      {
+        url: 'http://localhost:8080/events',
+        transport: 'http_post',
+        headers: { 'X-Test': 'yes' },
+        timeout_millis: 1000,
+      },
+    ]);
+  });
+
   it('passes through mixed ATIF remote storage config', () => {
     const s3 = {
       type: 's3',

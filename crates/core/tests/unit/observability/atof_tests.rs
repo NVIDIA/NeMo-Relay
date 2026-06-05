@@ -12,9 +12,17 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+use futures_util::StreamExt;
 use serde_json::{Map, json};
 use std::fs;
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+use std::io::{Read, Write};
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+use std::net::TcpListener;
 use std::sync::Arc;
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -223,6 +231,123 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+    let mut data = Vec::new();
+    let mut buf = [0_u8; 1];
+    while !data.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut buf).unwrap();
+        data.push(buf[0]);
+    }
+    let headers = String::from_utf8_lossy(&data).to_string();
+    if let Some(length) = headers
+        .lines()
+        .find_map(|line| {
+            line.split_once(':').and_then(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then_some(value.trim())
+            })
+        })
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        let mut body = vec![0_u8; length];
+        stream.read_exact(&mut body).unwrap();
+        return String::from_utf8(body).unwrap();
+    }
+    if headers
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("Transfer-Encoding: chunked"))
+    {
+        let mut body = Vec::new();
+        loop {
+            let mut size_line = Vec::new();
+            loop {
+                stream.read_exact(&mut buf).unwrap();
+                size_line.push(buf[0]);
+                if size_line.ends_with(b"\r\n") {
+                    break;
+                }
+            }
+            let size_text = String::from_utf8_lossy(&size_line);
+            let size = usize::from_str_radix(size_text.trim(), 16).unwrap();
+            if size == 0 {
+                let mut trailer = [0_u8; 2];
+                stream.read_exact(&mut trailer).unwrap();
+                break;
+            }
+            let mut chunk = vec![0_u8; size];
+            stream.read_exact(&mut chunk).unwrap();
+            body.extend(chunk);
+            let mut crlf = [0_u8; 2];
+            stream.read_exact(&mut crlf).unwrap();
+        }
+        return String::from_utf8(body).unwrap();
+    }
+    String::new()
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let thread_captures = Arc::clone(&captures);
+    std::thread::spawn(move || {
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request_captures = Arc::clone(&thread_captures);
+            std::thread::spawn(move || {
+                let body = read_http_request(&mut stream);
+                request_captures.lock().unwrap().push(body);
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .unwrap();
+            });
+        }
+    });
+    (url, captures)
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec<String> {
+    for _ in 0..100 {
+        let snapshot = captures.lock().unwrap().clone();
+        if snapshot.len() >= expected {
+            return snapshot;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    captures.lock().unwrap().clone()
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn start_websocket_capture_server(
+    listener: TcpListener,
+    captures: Arc<Mutex<Vec<String>>>,
+    expected_messages: usize,
+) {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(message) = websocket.next().await {
+                let message = message.unwrap();
+                if message.is_text() {
+                    captures
+                        .lock()
+                        .unwrap()
+                        .push(message.into_text().unwrap().to_string());
+                    if captures.lock().unwrap().len() >= expected_messages {
+                        return;
+                    }
+                }
+            }
+        });
+    });
+}
+
 #[test]
 fn default_config_uses_cwd_append_and_timestamped_filename() {
     let config = AtofExporterConfig::default();
@@ -328,6 +453,125 @@ fn subscriber_writes_canonical_event_jsonl() {
         lines[0]["category_profile"]["annotated_request"]["model"],
         "demo-model"
     );
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
+    let dir = temp_dir("atof-streaming-http");
+    let (url, captures) = start_http_capture_server(4);
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl")
+            .with_endpoint(AtofEndpointConfig::new(
+                url.clone(),
+                AtofEndpointTransport::HttpPost,
+            ))
+            .with_endpoint(AtofEndpointConfig::new(url, AtofEndpointTransport::Ndjson)),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    subscriber(&make_mark_event("first"));
+    subscriber(&make_mark_event("second"));
+    exporter.force_flush().unwrap();
+    subscriber(&make_mark_event("after-flush"));
+    exporter.shutdown().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["name"], "first");
+    assert_eq!(lines[1]["name"], "second");
+    assert_eq!(lines[2]["name"], "after-flush");
+
+    let bodies = wait_for_captures(&captures, 4);
+    assert_eq!(bodies.len(), 4, "captured bodies: {bodies:?}");
+    let all_streamed = bodies.join("");
+    assert!(all_streamed.contains("\"name\":\"first\""));
+    assert!(all_streamed.contains("\"name\":\"second\""));
+    assert!(all_streamed.contains("\"name\":\"after-flush\""));
+    assert_eq!(
+        all_streamed
+            .lines()
+            .filter(|line| line.contains("\"kind\":\"mark\""))
+            .count(),
+        6,
+        "three HTTP POST records plus three NDJSON records: {bodies:?}"
+    );
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn websocket_endpoint_receives_fifo_json_text_events() {
+    let dir = temp_dir("atof-streaming-websocket");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    start_websocket_capture_server(listener, Arc::clone(&captures), 2);
+
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl")
+            .with_endpoint(AtofEndpointConfig::new(
+                url,
+                AtofEndpointTransport::Websocket,
+            )),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    subscriber(&make_mark_event("first"));
+    subscriber(&make_mark_event("second"));
+    exporter.force_flush().unwrap();
+
+    let messages = wait_for_captures(&captures, 2);
+    assert_eq!(messages.len(), 2);
+    assert!(messages[0].contains("\"name\":\"first\""));
+    assert!(messages[1].contains("\"name\":\"second\""));
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn websocket_flush_drains_events_queued_before_reconnect() {
+    let dir = temp_dir("atof-streaming-websocket-reconnect");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let local_addr = listener.local_addr().unwrap();
+    drop(listener);
+
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl")
+            .with_endpoint(
+                AtofEndpointConfig::new(
+                    format!("ws://{local_addr}"),
+                    AtofEndpointTransport::Websocket,
+                )
+                .with_timeout_millis(200),
+            ),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    subscriber(&make_mark_event("first"));
+    subscriber(&make_mark_event("second"));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let listener = TcpListener::bind(local_addr).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    start_websocket_capture_server(listener, Arc::clone(&captures), 2);
+
+    exporter.force_flush().unwrap();
+
+    let messages = wait_for_captures(&captures, 2);
+    assert_eq!(messages.len(), 2);
+    assert!(messages[0].contains("\"name\":\"first\""));
+    assert!(messages[1].contains("\"name\":\"second\""));
+    exporter.shutdown().unwrap();
 }
 
 #[test]
@@ -931,6 +1175,80 @@ fn invalid_filename_errors_cleanly() {
 }
 
 #[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn invalid_endpoint_config_errors_cleanly() {
+    let dir = temp_dir("atof-invalid-endpoint");
+
+    let error = match AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl")
+            .with_endpoint(AtofEndpointConfig::new(
+                "not a url",
+                AtofEndpointTransport::HttpPost,
+            )),
+    ) {
+        Ok(_) => panic!("expected invalid endpoint config error"),
+        Err(error) => error,
+    };
+
+    match error {
+        AtofExporterError::InvalidEndpoint(message) => {
+            assert!(message.contains("endpoints[0]"));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn invalid_endpoint_scheme_errors_cleanly() {
+    let dir = temp_dir("atof-invalid-endpoint-scheme");
+
+    let cases = [
+        (
+            AtofEndpointTransport::HttpPost,
+            "ws://localhost:8080/events",
+            "http_post",
+            "ws",
+        ),
+        (
+            AtofEndpointTransport::Ndjson,
+            "ws://localhost:8080/events",
+            "ndjson",
+            "ws",
+        ),
+        (
+            AtofEndpointTransport::Websocket,
+            "http://localhost:8080/events",
+            "websocket",
+            "http",
+        ),
+    ];
+
+    for (transport, url, transport_name, scheme) in cases {
+        let error = match AtofExporter::new(
+            AtofExporterConfig::new()
+                .with_output_directory(&dir)
+                .with_filename(format!("{transport_name}.jsonl"))
+                .with_endpoint(AtofEndpointConfig::new(url, transport)),
+        ) {
+            Ok(_) => panic!("expected invalid endpoint scheme error"),
+            Err(error) => error,
+        };
+
+        match error {
+            AtofExporterError::InvalidEndpoint(message) => {
+                assert!(message.contains("endpoints[0]"));
+                assert!(message.contains(transport_name));
+                assert!(message.contains(scheme));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+}
+
+#[test]
 fn force_flush_reports_stored_subscriber_failure() {
     let dir = temp_dir("atof-stored-failure");
     let exporter = AtofExporter::new(
@@ -950,4 +1268,28 @@ fn force_flush_reports_stored_subscriber_failure() {
         }
         other => panic!("unexpected error: {other}"),
     }
+}
+
+#[test]
+fn force_flush_keeps_exporter_open_and_shutdown_is_terminal() {
+    let dir = temp_dir("atof-flush-not-terminal");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    subscriber(&make_mark_event("before_flush"));
+    exporter.force_flush().unwrap();
+    subscriber(&make_mark_event("after_flush"));
+    exporter.shutdown().unwrap();
+    subscriber(&make_mark_event("after_shutdown"));
+    exporter.shutdown().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["name"], "before_flush");
+    assert_eq!(lines[1]["name"], "after_flush");
 }

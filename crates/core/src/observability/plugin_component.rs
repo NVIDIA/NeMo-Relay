@@ -34,7 +34,8 @@ use crate::api::scope::ScopeType;
 use crate::api::subscriber::{scope_deregister_subscriber, scope_register_subscriber};
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
-    AtofExporter, AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode,
+    AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointTransport, AtofExporter,
+    AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode,
 };
 #[cfg(feature = "openinference")]
 use crate::observability::openinference::{
@@ -159,6 +160,9 @@ pub struct AtofSectionConfig {
     #[serde(default = "default_atof_mode")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "atof_mode_schema"))]
     pub mode: String,
+    /// Optional streaming endpoints that receive every raw ATOF event.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<AtofEndpointSectionConfig>,
 }
 
 impl Default for AtofSectionConfig {
@@ -168,8 +172,30 @@ impl Default for AtofSectionConfig {
             output_directory: None,
             filename: None,
             mode: default_atof_mode(),
+            endpoints: Vec::new(),
         }
     }
+}
+
+/// Streaming destination for raw ATOF events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AtofEndpointSectionConfig {
+    /// Endpoint URL.
+    pub url: String,
+    /// Transport: `http_post`, `websocket`, or `ndjson`.
+    #[serde(default = "default_atof_endpoint_transport")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "atof_endpoint_transport_schema")
+    )]
+    pub transport: String,
+    /// Headers applied to endpoint requests or handshakes.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Per-endpoint timeout in milliseconds.
+    #[serde(default = "default_timeout_millis")]
+    pub timeout_millis: u64,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -432,6 +458,7 @@ crate::editor_config! {
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename => { label: "filename", kind: String, optional: true },
         mode => { label: "mode", kind: Enum, values: ["append", "overwrite"] },
+        endpoints => { label: "endpoints", kind: Json, optional: true },
     }
 }
 
@@ -529,6 +556,17 @@ fn atof_mode_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemar
 }
 
 #[cfg(feature = "schema")]
+fn atof_endpoint_transport_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(
+        generator,
+        &["http_post", "websocket", "ndjson"],
+        Some("http_post"),
+    )
+}
+
+#[cfg(feature = "schema")]
 fn otlp_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
@@ -588,6 +626,13 @@ fn register_atof_exporter(
     if let Some(filename) = section.filename {
         config = config.with_filename(filename);
     }
+    let endpoints = section
+        .endpoints
+        .into_iter()
+        .enumerate()
+        .map(|(index, endpoint)| build_atof_endpoint_config(index, endpoint))
+        .collect::<PluginResult<Vec<_>>>()?;
+    config = config.with_endpoints(endpoints);
 
     let exporter = Arc::new(AtofExporter::new(config).map_err(observability_registration_error)?);
     ctx.register_subscriber("atof", exporter.subscriber())?;
@@ -601,6 +646,23 @@ fn register_atof_exporter(
         }),
     ));
     Ok(())
+}
+
+fn build_atof_endpoint_config(
+    index: usize,
+    endpoint: AtofEndpointSectionConfig,
+) -> PluginResult<CoreAtofEndpointConfig> {
+    let transport = AtofEndpointTransport::parse(&endpoint.transport).ok_or_else(|| {
+        PluginError::InvalidConfig(format!(
+            "ATOF endpoints[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"
+        ))
+    })?;
+    let mut config = CoreAtofEndpointConfig::new(endpoint.url, transport)
+        .with_timeout_millis(endpoint.timeout_millis);
+    for (key, value) in endpoint.headers {
+        config = config.with_header(key, value);
+    }
+    Ok(config)
 }
 
 type AtifStorageList = Arc<Vec<Arc<AtifRemoteStorage>>>;
@@ -1308,7 +1370,13 @@ fn validate_observability_plugin_config(
         &config.policy,
         plugin_config,
         "atof",
-        &["enabled", "output_directory", "filename", "mode"],
+        &[
+            "enabled",
+            "output_directory",
+            "filename",
+            "mode",
+            "endpoints",
+        ],
     );
     validate_section_fields(
         &mut diagnostics,
@@ -1375,6 +1443,28 @@ fn validate_observability_plugin_config(
                 Some("atof".to_string()),
                 Some("enabled".to_string()),
                 "ATOF file export is not supported on WebAssembly".to_string(),
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
+        if section.enabled && !section.endpoints.is_empty() {
+            push_policy_diag(
+                &mut diagnostics,
+                config.policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atof".to_string()),
+                Some("endpoints".to_string()),
+                "ATOF streaming endpoints are not supported on WebAssembly".to_string(),
+            );
+        }
+        #[cfg(all(not(feature = "atof-streaming"), not(target_arch = "wasm32")))]
+        if section.enabled && !section.endpoints.is_empty() {
+            push_policy_diag(
+                &mut diagnostics,
+                config.policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atof".to_string()),
+                Some("endpoints".to_string()),
+                "ATOF streaming endpoints are not enabled in this build".to_string(),
             );
         }
     }
@@ -1497,6 +1587,68 @@ fn validate_atof_values(
             "ATOF mode must be 'append' or 'overwrite'".to_string(),
         );
     }
+    for (index, endpoint) in section.endpoints.iter().enumerate() {
+        validate_atof_endpoint_values(diagnostics, policy, index, endpoint);
+    }
+}
+
+fn validate_atof_endpoint_values(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    endpoint: &AtofEndpointSectionConfig,
+) {
+    if endpoint.url.trim().is_empty() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("endpoints[{index}].url")),
+            format!("ATOF endpoints[{index}].url must be non-empty"),
+        );
+    } else if !is_valid_atof_endpoint_url(&endpoint.url) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("endpoints[{index}].url")),
+            format!("ATOF endpoints[{index}].url must be a valid URL"),
+        );
+    }
+    if AtofEndpointTransport::parse(&endpoint.transport).is_none() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("endpoints[{index}].transport")),
+            format!(
+                "ATOF endpoints[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"
+            ),
+        );
+    }
+    if endpoint.timeout_millis == 0 {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("endpoints[{index}].timeout_millis")),
+            format!("ATOF endpoints[{index}].timeout_millis must be greater than 0"),
+        );
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn is_valid_atof_endpoint_url(url: &str) -> bool {
+    reqwest::Url::parse(url).is_ok()
+}
+
+#[cfg(any(not(feature = "atof-streaming"), target_arch = "wasm32"))]
+fn is_valid_atof_endpoint_url(_url: &str) -> bool {
+    true
 }
 
 fn validate_atif_values(
@@ -1809,6 +1961,10 @@ fn default_observability_config_version() -> u32 {
 
 fn default_atof_mode() -> String {
     "append".to_string()
+}
+
+fn default_atof_endpoint_transport() -> String {
+    "http_post".to_string()
 }
 
 fn default_agent_name() -> String {

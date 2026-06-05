@@ -228,6 +228,7 @@ extern void nemo_relay_atif_exporter_free(void*);
 
 // ATOF JSONL exporter
 extern int32_t nemo_relay_atof_exporter_create(const char*, const char*, const char*, void**);
+extern int32_t nemo_relay_atof_exporter_create_from_json(const char*, void**);
 extern int32_t nemo_relay_atof_exporter_register(const void*, const char*);
 extern int32_t nemo_relay_atof_exporter_deregister(const char*);
 extern int32_t nemo_relay_atof_exporter_force_flush(const void*);
@@ -322,6 +323,17 @@ var (
 	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
 		if config.Mode == "" {
 			config.Mode = AtofExporterModeAppend
+		}
+		if len(config.Endpoints) > 0 {
+			payload, err := json.Marshal(config)
+			if err != nil {
+				return nil, err
+			}
+			cConfig := C.CString(string(payload))
+			defer C.free(unsafe.Pointer(cConfig))
+			var ptr unsafe.Pointer
+			status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
+			return checkedValue(int32(status), &AtofExporter{ptr: ptr})
 		}
 
 		var cOutputDirectory *C.char
@@ -1628,9 +1640,30 @@ const (
 
 // AtofExporterConfig configures the filesystem-backed ATOF JSONL exporter.
 type AtofExporterConfig struct {
-	OutputDirectory string
-	Mode            AtofExporterMode
-	Filename        string
+	OutputDirectory string               `json:"output_directory,omitempty"`
+	Mode            AtofExporterMode     `json:"mode,omitempty"`
+	Filename        string               `json:"filename,omitempty"`
+	Endpoints       []AtofEndpointConfig `json:"endpoints,omitempty"`
+}
+
+// AtofEndpointTransport controls how an ATOF streaming endpoint receives events.
+type AtofEndpointTransport string
+
+const (
+	// AtofEndpointTransportHTTPPost sends each event as one HTTP POST JSONL record.
+	AtofEndpointTransportHTTPPost AtofEndpointTransport = "http_post"
+	// AtofEndpointTransportWebsocket sends each event as one WebSocket JSON text message.
+	AtofEndpointTransportWebsocket AtofEndpointTransport = "websocket"
+	// AtofEndpointTransportNDJSON sends events over one long-lived HTTP NDJSON upload.
+	AtofEndpointTransportNDJSON AtofEndpointTransport = "ndjson"
+)
+
+// AtofEndpointConfig configures one streaming destination for raw ATOF events.
+type AtofEndpointConfig struct {
+	URL           string                `json:"url"`
+	Transport     AtofEndpointTransport `json:"transport,omitempty"`
+	Headers       map[string]string     `json:"headers,omitempty"`
+	TimeoutMillis uint64                `json:"timeout_millis,omitempty"`
 }
 
 // NewAtofExporterConfig returns a config initialized with native defaults.

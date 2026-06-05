@@ -11,6 +11,14 @@ export interface AtofConfig {
   output_directory?: string;
   filename?: string;
   mode?: 'append' | 'overwrite' | string;
+  endpoints?: AtofEndpointConfig[];
+}
+
+export interface AtofEndpointConfig {
+  url: string;
+  transport?: 'http_post' | 'websocket' | 'ndjson' | string;
+  headers?: Record<string, string>;
+  timeout_millis?: number;
 }
 
 export interface S3StorageConfig {
