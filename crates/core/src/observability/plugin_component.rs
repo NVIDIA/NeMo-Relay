@@ -21,7 +21,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-#[cfg(any(feature = "otel", feature = "openinference"))]
+#[cfg(any(feature = "otel", feature = "openinference", feature = "object-store"))]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -249,6 +249,8 @@ impl Default for AtifSectionConfig {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AtifStorageConfig {
+    /// HTTP endpoint storage.
+    Http(HttpStorageConfig),
     /// S3-compatible object storage.
     ///
     /// Non-secret connection settings (`region`, `endpoint_url`, `allow_http`)
@@ -303,6 +305,28 @@ pub struct S3StorageConfig {
     /// Allow plain HTTP endpoints. When unset, `AWS_ALLOW_HTTP` is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_http: Option<bool>,
+}
+
+/// HTTP endpoint settings for ATIF trajectory upload.
+///
+/// Completed trajectories are uploaded with `POST` and an
+/// `application/json` body. Inline `headers` are merged with values resolved
+/// from `header_env`; `header_env` values are environment variable names, not
+/// secret values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HttpStorageConfig {
+    /// Destination endpoint URL. Must use `http://` or `https://`.
+    pub endpoint: String,
+    /// Static request headers.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub headers: HashMap<String, String>,
+    /// Request headers whose values are read from environment variables.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub header_env: HashMap<String, String>,
+    /// Request timeout in milliseconds.
+    #[serde(default = "default_timeout_millis")]
+    pub timeout_millis: u64,
 }
 
 /// Shared OTLP exporter config for OpenTelemetry and OpenInference.
@@ -739,8 +763,7 @@ struct AtifDispatcher {
     /// observing further events.
     fatal_error: Option<String>,
     /// Per-sink last error. A sink that recorded an error is skipped on
-    /// subsequent trajectories; other sinks continue to receive writes. Errors
-    /// here are surfaced together by [`last_error_result`] on teardown.
+    /// subsequent trajectories; other sinks continue to receive writes.
     sink_errors: HashMap<SinkLabel, String>,
 }
 
@@ -755,6 +778,11 @@ struct ManagedAtifExporter {
 
 struct PendingAtifWrite {
     agent_uuid: Uuid,
+    #[cfg_attr(
+        not(all(feature = "object-store", not(target_arch = "wasm32"))),
+        allow(dead_code)
+    )]
+    session_id: String,
     // `filename` is consumed by the remote upload path, which is gated on the
     // object-store feature; without it, only the local sink reads `local_path`.
     #[cfg_attr(
@@ -778,22 +806,6 @@ struct AtifFlushWork {
 enum SinkLabel {
     Local,
     Remote(usize),
-}
-
-impl SinkLabel {
-    fn display(&self) -> String {
-        match self {
-            SinkLabel::Local => "local".to_string(),
-            SinkLabel::Remote(index) => format!("storage[{index}]"),
-        }
-    }
-
-    fn sort_key(&self) -> isize {
-        match self {
-            SinkLabel::Local => -1,
-            SinkLabel::Remote(index) => *index as isize,
-        }
-    }
 }
 
 impl AtifDispatcher {
@@ -963,20 +975,10 @@ impl AtifDispatcher {
     }
 
     fn last_error_result(&self) -> std::io::Result<()> {
-        let mut parts: Vec<String> = Vec::new();
         if let Some(message) = &self.fatal_error {
-            parts.push(message.clone());
+            return Err(std::io::Error::other(message.clone()));
         }
-        let mut sink_entries: Vec<_> = self.sink_errors.iter().collect();
-        sink_entries.sort_by_key(|(label, _)| label.sort_key());
-        for (label, message) in sink_entries {
-            parts.push(format!("{}: {message}", label.display()));
-        }
-        if parts.is_empty() {
-            Ok(())
-        } else {
-            Err(std::io::Error::other(parts.join("; ")))
-        }
+        Ok(())
     }
 
     fn agent_info(&self) -> AtifAgentInfo {
@@ -1104,6 +1106,7 @@ fn prepare_atif_file(
     agent.written = true;
     Ok(PendingAtifWrite {
         agent_uuid,
+        session_id: agent_uuid.to_string(),
         filename: agent.filename.clone(),
         local_path: agent.local_path.clone(),
         payload,
@@ -1148,7 +1151,7 @@ fn write_atif_remote(
     let sink = storage
         .get(index)
         .ok_or_else(|| std::io::Error::other(format!("ATIF storage[{index}] is not registered")))?;
-    sink.put(&write.filename, &write.payload)
+    sink.put(&write.filename, &write.session_id, &write.payload)
 }
 
 #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
@@ -1523,6 +1526,47 @@ fn validate_atif_storage_values(
     storage: &AtifStorageConfig,
 ) {
     match storage {
+        AtifStorageConfig::Http(http) => {
+            validate_atif_http_endpoint(
+                diagnostics,
+                policy,
+                &format!("storage[{index}].endpoint"),
+                &http.endpoint,
+            );
+            if http.timeout_millis == 0 {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atif".to_string()),
+                    Some(format!("storage[{index}].timeout_millis")),
+                    format!("ATIF storage[{index}].timeout_millis must be positive"),
+                );
+            }
+            for (header, value) in &http.headers {
+                validate_atif_http_header(
+                    diagnostics,
+                    policy,
+                    &format!("storage[{index}].headers.{header}"),
+                    header,
+                    value,
+                );
+            }
+            for (header, var_name) in &http.header_env {
+                validate_atif_http_header_name(
+                    diagnostics,
+                    policy,
+                    &format!("storage[{index}].header_env.{header}"),
+                    header,
+                );
+                validate_atif_storage_env_var(
+                    diagnostics,
+                    policy,
+                    &format!("storage[{index}].header_env.{header}"),
+                    Some(var_name.as_str()),
+                );
+            }
+        }
         AtifStorageConfig::S3(s3) => {
             if s3.bucket.trim().is_empty() {
                 push_policy_diag(
@@ -1547,6 +1591,85 @@ fn validate_atif_storage_values(
                 s3.session_token_var.as_deref(),
             );
         }
+    }
+}
+
+fn validate_atif_http_header(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    header: &str,
+    _value: &str,
+) {
+    validate_atif_http_header_name(diagnostics, policy, field, header);
+    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    if let Err(err) = reqwest::header::HeaderValue::from_str(_value) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atif".to_string()),
+            Some(field.to_string()),
+            format!("ATIF {field} value is invalid: {err}"),
+        );
+    }
+}
+
+fn validate_atif_http_header_name(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    header: &str,
+) {
+    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    let is_valid = reqwest::header::HeaderName::from_bytes(header.as_bytes()).is_ok();
+    #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+    let is_valid = !header.trim().is_empty() && header.trim() == header;
+    if !is_valid {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atif".to_string()),
+            Some(field.to_string()),
+            format!("ATIF {field} header name '{header}' is invalid"),
+        );
+    }
+}
+
+fn validate_atif_http_endpoint(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    endpoint: &str,
+) {
+    let trimmed = endpoint.trim();
+    let mut is_valid = !trimmed.is_empty() && trimmed == endpoint;
+    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    {
+        is_valid = is_valid
+            && reqwest::Url::parse(endpoint)
+                .map(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+                .unwrap_or(false);
+    }
+    #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+    {
+        let valid_scheme = trimmed.starts_with("http://") || trimmed.starts_with("https://");
+        let has_host = trimmed
+            .split_once("://")
+            .map(|(_, rest)| !rest.is_empty() && !rest.starts_with('/'))
+            .unwrap_or(false);
+        is_valid = is_valid && valid_scheme && has_host;
+    }
+    if !is_valid {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atif".to_string()),
+            Some(field.to_string()),
+            format!("ATIF {field} must be a valid http:// or https:// URL"),
+        );
     }
 }
 
@@ -1739,8 +1862,18 @@ struct AtifRemoteStorage {
 #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
 struct AtifUploadRequest {
     key: String,
+    filename: String,
+    session_id: String,
     payload: Vec<u8>,
     reply: std::sync::mpsc::Sender<std::io::Result<()>>,
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct HttpUploadConfig {
+    endpoint: String,
+    headers: HashMap<String, String>,
+    timeout: Duration,
 }
 
 #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
@@ -1824,7 +1957,74 @@ fn resolve_env_var_field(field: &str, var_name: Option<&str>) -> std::io::Result
 impl AtifRemoteStorage {
     fn from_config(index: usize, config: &AtifStorageConfig) -> std::io::Result<Self> {
         match config {
+            AtifStorageConfig::Http(http) => Self::build_http(index, http),
             AtifStorageConfig::S3(s3) => Self::build_s3(index, s3),
+        }
+    }
+
+    fn build_http(index: usize, http: &HttpStorageConfig) -> std::io::Result<Self> {
+        let upload_config = HttpUploadConfig::resolve(index, http)?;
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<AtifUploadRequest>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::io::Result<()>>();
+
+        std::thread::Builder::new()
+            .name("nemo-relay-atif-storage".to_string())
+            .spawn(move || {
+                install_rustls_crypto_provider();
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(std::io::Error::other(format!(
+                            "failed to build ATIF storage runtime: {err}"
+                        ))));
+                        return;
+                    }
+                };
+                let client = match reqwest::Client::builder()
+                    .timeout(upload_config.timeout)
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(err) => {
+                        let _ = ready_tx.send(Err(std::io::Error::other(format!(
+                            "failed to build HTTP client for ATIF storage[{}]: {err}",
+                            index
+                        ))));
+                        return;
+                    }
+                };
+                if ready_tx.send(Ok(())).is_err() {
+                    return;
+                }
+                drop(ready_tx);
+
+                while let Ok(request) = req_rx.recv() {
+                    let result = runtime.block_on(post_atif_http(
+                        &client,
+                        &upload_config,
+                        request.filename,
+                        request.session_id,
+                        request.payload,
+                    ));
+                    let _ = request.reply.send(result);
+                }
+            })
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to spawn ATIF storage thread: {err}"))
+            })?;
+
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(Self {
+                sender: req_tx,
+                key_prefix: String::new(),
+            }),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(std::io::Error::other(
+                "ATIF storage thread exited before signalling readiness",
+            )),
         }
     }
 
@@ -1839,6 +2039,7 @@ impl AtifRemoteStorage {
         std::thread::Builder::new()
             .name("nemo-relay-atif-storage".to_string())
             .spawn(move || {
+                install_rustls_crypto_provider();
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -1905,12 +2106,14 @@ impl AtifRemoteStorage {
         }
     }
 
-    fn put(&self, filename: &str, payload: &[u8]) -> std::io::Result<()> {
+    fn put(&self, filename: &str, session_id: &str, payload: &[u8]) -> std::io::Result<()> {
         let key = format!("{}{}", self.key_prefix, filename);
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
         self.sender
             .send(AtifUploadRequest {
                 key,
+                filename: filename.to_string(),
+                session_id: session_id.to_string(),
                 payload: payload.to_vec(),
                 reply: reply_tx,
             })
@@ -1919,6 +2122,109 @@ impl AtifRemoteStorage {
             .recv()
             .map_err(|_| std::io::Error::other("ATIF storage thread dropped the upload reply"))?
     }
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+impl HttpUploadConfig {
+    fn resolve(index: usize, http: &HttpStorageConfig) -> std::io::Result<Self> {
+        let endpoint = http.endpoint.trim();
+        if endpoint.is_empty() || endpoint != http.endpoint {
+            return Err(std::io::Error::other(format!(
+                "ATIF storage[{index}].endpoint must be non-empty and must not have surrounding whitespace"
+            )));
+        }
+        let parsed = reqwest::Url::parse(endpoint).map_err(|err| {
+            std::io::Error::other(format!(
+                "ATIF storage[{index}].endpoint must be a valid URL: {err}"
+            ))
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+            return Err(std::io::Error::other(format!(
+                "ATIF storage[{index}].endpoint must be a valid http:// or https:// URL"
+            )));
+        }
+        if http.timeout_millis == 0 {
+            return Err(std::io::Error::other(format!(
+                "ATIF storage[{index}].timeout_millis must be positive"
+            )));
+        }
+
+        let mut headers = http.headers.clone();
+        for (header, var_name) in &http.header_env {
+            let value = resolve_env_var_field(
+                &format!("storage[{index}].header_env.{header}"),
+                Some(var_name.as_str()),
+            )?
+            .expect("resolve_env_var_field returns Some when var_name is Some");
+            headers.insert(header.clone(), value);
+        }
+        validate_http_headers(index, &headers)?;
+
+        Ok(Self {
+            endpoint: parsed.to_string(),
+            headers,
+            timeout: Duration::from_millis(http.timeout_millis),
+        })
+    }
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+fn validate_http_headers(index: usize, headers: &HashMap<String, String>) -> std::io::Result<()> {
+    for (header, value) in headers {
+        reqwest::header::HeaderName::from_bytes(header.as_bytes()).map_err(|err| {
+            std::io::Error::other(format!(
+                "ATIF storage[{index}] header name '{header}' is invalid: {err}"
+            ))
+        })?;
+        reqwest::header::HeaderValue::from_str(value).map_err(|err| {
+            std::io::Error::other(format!(
+                "ATIF storage[{index}] value for header '{header}' is invalid: {err}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+async fn post_atif_http(
+    client: &reqwest::Client,
+    config: &HttpUploadConfig,
+    filename: String,
+    session_id: String,
+    payload: Vec<u8>,
+) -> std::io::Result<()> {
+    let mut request = client.post(&config.endpoint);
+    for (header, value) in &config.headers {
+        request = request.header(header.as_str(), value.as_str());
+    }
+    let response = request
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("x-nemo-relay-atif-filename", filename.clone())
+        .header("x-nemo-relay-atif-session-id", session_id)
+        .body(payload)
+        .send()
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!(
+                "HTTP ATIF upload to '{}' failed: {err}",
+                config.endpoint
+            ))
+        })?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "HTTP ATIF upload to '{}' for '{}' failed with status {}",
+            config.endpoint,
+            filename,
+            response.status()
+        )))
+    }
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]

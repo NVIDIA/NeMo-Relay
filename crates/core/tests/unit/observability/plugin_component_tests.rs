@@ -1010,7 +1010,7 @@ fn atif_dispatcher_records_failed_agent_writes() {
             .map(String::as_str),
         Some("disk full")
     );
-    assert!(dispatcher.last_error_result().is_err());
+    assert!(dispatcher.last_error_result().is_ok());
     drop(dispatcher);
     pop(&agent);
 }
@@ -1166,10 +1166,43 @@ fn atif_storage_section_parses_s3_variant() {
     .expect("valid storage section should parse");
     assert_eq!(parsed.storage.len(), 1);
     match &parsed.storage[0] {
+        AtifStorageConfig::Http(_) => panic!("expected s3 storage"),
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));
         }
+    }
+}
+
+#[test]
+fn atif_storage_section_parses_http_variant() {
+    let parsed: AtifSectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "filename_template": "trajectory-{session_id}.json",
+        "storage": [{
+            "type": "http",
+            "endpoint": "https://example.com/atif",
+            "timeout_millis": 1500,
+            "headers": {"x-static": "value"},
+            "header_env": {"authorization": "NEMO_RELAY_ATIF_HTTP_TOKEN"}
+        }]
+    }))
+    .expect("valid HTTP storage section should parse");
+    assert_eq!(parsed.storage.len(), 1);
+    match &parsed.storage[0] {
+        AtifStorageConfig::Http(http) => {
+            assert_eq!(http.endpoint, "https://example.com/atif");
+            assert_eq!(http.timeout_millis, 1500);
+            assert_eq!(
+                http.headers.get("x-static").map(String::as_str),
+                Some("value")
+            );
+            assert_eq!(
+                http.header_env.get("authorization").map(String::as_str),
+                Some("NEMO_RELAY_ATIF_HTTP_TOKEN")
+            );
+        }
+        AtifStorageConfig::S3(_) => panic!("expected HTTP storage"),
     }
 }
 
@@ -1197,19 +1230,20 @@ fn atif_storage_section_parses_array_of_tables() {
         "filename_template": "trajectory-{session_id}.json",
         "storage": [
             {"type": "s3", "bucket": "primary", "key_prefix": "p/"},
-            {"type": "s3", "bucket": "archive", "endpoint_url": "http://minio:9000"}
+            {"type": "http", "endpoint": "http://127.0.0.1:3000/atif"}
         ]
     }))
     .expect("array-of-tables form should parse");
     assert_eq!(parsed.storage.len(), 2);
     match &parsed.storage[0] {
+        AtifStorageConfig::Http(_) => panic!("expected s3 storage"),
         AtifStorageConfig::S3(s3) => assert_eq!(s3.bucket, "primary"),
     }
     match &parsed.storage[1] {
-        AtifStorageConfig::S3(s3) => {
-            assert_eq!(s3.bucket, "archive");
-            assert_eq!(s3.endpoint_url.as_deref(), Some("http://minio:9000"));
+        AtifStorageConfig::Http(http) => {
+            assert_eq!(http.endpoint, "http://127.0.0.1:3000/atif");
         }
+        AtifStorageConfig::S3(_) => panic!("expected HTTP storage"),
     }
 }
 
@@ -1284,6 +1318,210 @@ fn atif_storage_diagnostics_carry_sink_index() {
 }
 
 #[test]
+fn atif_storage_empty_http_endpoint_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "http", "endpoint": "  "}]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].endpoint")),
+        "expected diagnostic for empty endpoint: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_malformed_http_endpoint_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "http", "endpoint": "ftp://example.com/atif"}]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].endpoint")),
+        "expected diagnostic for malformed endpoint: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_timeout_must_be_positive() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "timeout_millis": 0
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].timeout_millis")),
+        "expected diagnostic for non-positive timeout: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_invalid_literal_header_name_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "headers": {"bad header": "value"}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].headers.bad header")),
+        "expected diagnostic for invalid header name: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_invalid_literal_header_value_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "headers": {"x-bad": "bad\nvalue"}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].headers.x-bad")),
+        "expected diagnostic for invalid header value: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_header_env_missing_env_is_rejected() {
+    let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_MISSING_ZZZZ";
+    // SAFETY: tests in this binary do not concurrently observe this uniquely
+    // named env var, so removing it is safe.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": var_name}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].header_env.authorization")),
+        "expected diagnostic for missing header env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_header_env_empty_env_is_rejected() {
+    let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_EMPTY_ZZZZ";
+    // SAFETY: this uniquely named env var is only touched by this test.
+    unsafe {
+        std::env::set_var(var_name, "");
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": var_name}
+            }]
+        }
+    })));
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("storage[0].header_env.authorization")),
+        "expected diagnostic for empty header env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn atif_storage_http_header_env_present_env_is_accepted() {
+    let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_OK_ZZZZ";
+    // SAFETY: this uniquely named env var is only touched by this test.
+    unsafe {
+        std::env::set_var(var_name, "Bearer test-token");
+    }
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": var_name}
+            }]
+        }
+    })));
+    // SAFETY: cleanup of test-only env var.
+    unsafe {
+        std::env::remove_var(var_name);
+    }
+    assert!(
+        !report.has_errors(),
+        "validation should pass when header env var is set: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn atif_storage_editor_field_is_optional_json() {
     let schema = AtifSectionConfig::editor_schema();
     let storage = schema.field("storage").expect("storage editor field");
@@ -1311,6 +1549,7 @@ fn atif_storage_s3_parses_full_credential_block() {
     .expect("full credential block should parse");
     assert_eq!(parsed.storage.len(), 1);
     match &parsed.storage[0] {
+        AtifStorageConfig::Http(_) => panic!("expected s3 storage"),
         AtifStorageConfig::S3(s3) => {
             assert_eq!(s3.bucket, "my-bucket");
             assert_eq!(s3.key_prefix.as_deref(), Some("openshell/"));

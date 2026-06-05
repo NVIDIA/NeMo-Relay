@@ -22,6 +22,8 @@ guardrails-remote = [
 ]
 object-store = [
     "dep:object_store",
+    "dep:reqwest",
+    "dep:rustls",
     "tokio/net",
     "tokio/time",
 ]
