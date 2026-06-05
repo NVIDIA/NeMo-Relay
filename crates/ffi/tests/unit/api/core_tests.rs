@@ -599,7 +599,12 @@ fn test_ffi_pop_scope_merges_scope_metadata() {
             NemoRelayStatus::Ok
         );
         assert_eq!(
-            api::nemo_relay_pop_scope(scope, ptr::null(), invalid_end_metadata.as_ptr(), ptr::null()),
+            api::nemo_relay_pop_scope(
+                scope,
+                ptr::null(),
+                invalid_end_metadata.as_ptr(),
+                ptr::null()
+            ),
             NemoRelayStatus::InvalidJson
         );
         assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
