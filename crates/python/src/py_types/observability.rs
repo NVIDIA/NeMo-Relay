@@ -162,6 +162,72 @@ impl From<nemo_relay::observability::atof::AtofExporterMode> for PyAtofExporterM
     }
 }
 
+/// Mutable configuration object for an ATOF streaming endpoint.
+///
+/// Configures a remote endpoint URL, transport (`http_post`, `websocket`, or
+/// `ndjson`), optional string headers, and a positive timeout in milliseconds.
+#[pyclass(name = "AtofEndpointConfig", from_py_object)]
+#[derive(Clone)]
+pub struct PyAtofEndpointConfig {
+    #[pyo3(get, set)]
+    pub(crate) url: String,
+    #[pyo3(get, set)]
+    pub(crate) transport: String,
+    #[pyo3(get, set)]
+    pub(crate) headers: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) timeout_millis: u64,
+}
+
+impl PyAtofEndpointConfig {
+    fn to_rust_config(&self) -> PyResult<nemo_relay::observability::atof::AtofEndpointConfig> {
+        let Some(transport) =
+            nemo_relay::observability::atof::AtofEndpointTransport::parse(&self.transport)
+        else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "endpoint transport must be 'http_post', 'websocket', or 'ndjson'",
+            ));
+        };
+        let mut config =
+            nemo_relay::observability::atof::AtofEndpointConfig::new(self.url.clone(), transport)
+                .with_timeout_millis(self.timeout_millis);
+        for (key, value) in &self.headers {
+            config = config.with_header(key.clone(), value.clone());
+        }
+        Ok(config)
+    }
+}
+
+#[pymethods]
+impl PyAtofEndpointConfig {
+    #[new]
+    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, timeout_millis=3000))]
+    pub(crate) fn new(
+        url: String,
+        transport: String,
+        headers: Option<&Bound<'_, PyAny>>,
+        timeout_millis: u64,
+    ) -> PyResult<Self> {
+        let headers = match headers {
+            Some(headers) if !headers.is_none() => py_string_map(headers, "headers")?,
+            _ => HashMap::new(),
+        };
+        Ok(Self {
+            url,
+            transport,
+            headers,
+            timeout_millis,
+        })
+    }
+
+    pub(crate) fn __repr__(&self) -> String {
+        format!(
+            "<AtofEndpointConfig transport={:?} url={:?}>",
+            self.transport, self.url
+        )
+    }
+}
+
 /// Mutable configuration object for the filesystem-backed ATOF JSONL exporter.
 #[pyclass(name = "AtofExporterConfig")]
 pub struct PyAtofExporterConfig {
@@ -171,14 +237,22 @@ pub struct PyAtofExporterConfig {
     pub(crate) mode: PyAtofExporterMode,
     #[pyo3(get, set)]
     pub(crate) filename: String,
+    #[pyo3(get, set)]
+    pub(crate) endpoints: Vec<PyAtofEndpointConfig>,
 }
 
 impl PyAtofExporterConfig {
-    fn to_rust_config(&self) -> nemo_relay::observability::atof::AtofExporterConfig {
-        nemo_relay::observability::atof::AtofExporterConfig::new()
+    fn to_rust_config(&self) -> PyResult<nemo_relay::observability::atof::AtofExporterConfig> {
+        let endpoints = self
+            .endpoints
+            .iter()
+            .map(PyAtofEndpointConfig::to_rust_config)
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(nemo_relay::observability::atof::AtofExporterConfig::new()
             .with_output_directory(PathBuf::from(self.output_directory.clone()))
             .with_mode(self.mode.clone().into())
             .with_filename(self.filename.clone())
+            .with_endpoints(endpoints))
     }
 }
 
@@ -191,6 +265,7 @@ impl PyAtofExporterConfig {
             output_directory: config.output_directory.to_string_lossy().into_owned(),
             mode: config.mode.into(),
             filename: config.filename,
+            endpoints: Vec::new(),
         }
     }
 
@@ -215,7 +290,7 @@ pub struct PyAtofExporter {
 impl PyAtofExporter {
     #[new]
     pub(crate) fn new(config: PyRef<'_, PyAtofExporterConfig>) -> PyResult<Self> {
-        let inner = nemo_relay::observability::atof::AtofExporter::new(config.to_rust_config())
+        let inner = nemo_relay::observability::atof::AtofExporter::new(config.to_rust_config()?)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }

@@ -67,6 +67,11 @@ fn editor_schema_tracks_observability_config_types() {
     let mode = atof_schema.field("mode").expect("atof mode field");
     assert_eq!(mode.kind, EditorFieldKind::Enum);
     assert_eq!(mode.enum_values, &["append", "overwrite"]);
+    let endpoints = atof_schema
+        .field("endpoints")
+        .expect("atof endpoints field");
+    assert_eq!(endpoints.kind, EditorFieldKind::Json);
+    assert!(endpoints.optional);
 
     let otlp = schema
         .field("openinference")
@@ -213,6 +218,7 @@ fn schema_contains_every_supported_observability_option() {
         "output_directory",
         "filename",
         "mode",
+        "endpoints",
         "agent_name",
         "agent_version",
         "model_name",
@@ -455,6 +461,51 @@ fn invalid_shapes_and_strict_policy_are_reported() {
             .diagnostics
             .iter()
             .any(|diag| diag.field.as_deref() == Some("transport"))
+    );
+}
+
+#[test]
+fn atof_endpoint_validation_rejects_bad_values() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "endpoints": [
+                {"url": "", "transport": "http_post"},
+                {"url": "http://localhost/events", "transport": "bogus"},
+                {"url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
+                {"url": "not a url", "transport": "http_post"}
+            ]
+        }
+    })));
+
+    assert!(report.has_errors());
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[0].url") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[1].transport") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[2].timeout_millis") })
+    );
+    #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[3].url") })
     );
 }
 
