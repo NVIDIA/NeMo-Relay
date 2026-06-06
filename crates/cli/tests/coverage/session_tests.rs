@@ -69,6 +69,95 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
         .collect()
 }
 
+async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
+    let outcome = crate::adapters::codex::adapt(payload, headers);
+    manager.apply_events(headers, outcome.events).await.unwrap();
+}
+
+async fn start_codex_prompt_turn(manager: &SessionManager, headers: &HeaderMap, session_id: &str) {
+    for payload in [
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "sessionStart",
+            "model": "gpt-test"
+        }),
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Inspect the repository."
+        }),
+    ] {
+        apply_codex_payload(manager, headers, payload).await;
+    }
+}
+
+async fn run_codex_responses_tool_activity(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    session_id: &str,
+) {
+    let llm = manager
+        .start_llm(
+            headers,
+            llm_start_with_responses_task(session_id, "Inspect the repository."),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            llm,
+            json!({
+                "id": "resp_1",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "tool-call-1",
+                        "name": "Read",
+                        "arguments": "{\"file_path\":\"README.md\"}",
+                        "status": "completed"
+                    }
+                ]
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    for payload in [
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "README.md" }
+        }),
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PostToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_output": { "content": "hello" },
+            "status": "success"
+        }),
+    ] {
+        apply_codex_payload(manager, headers, payload).await;
+    }
+}
+
+async fn stop_codex_turn(manager: &SessionManager, headers: &HeaderMap, session_id: &str) {
+    apply_codex_payload(
+        manager,
+        headers,
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "Stop",
+            "response": "Done."
+        }),
+    )
+    .await;
+}
+
 fn hermes_routed_gateway_metadata(gateway_path: &str, test_session_marker: Option<&str>) -> Value {
     let mut metadata = json!({ "gateway_path": gateway_path });
     if let Some(marker) = test_session_marker {
@@ -1507,6 +1596,194 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     assert_eq!(
         atif["extra"]["observed_events"][0]["name"],
         json!("codex-turn")
+    );
+}
+
+#[tokio::test]
+async fn codex_stop_snapshots_atif_without_session_end() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    start_codex_prompt_turn(&manager, &headers, "codex-atif-stop").await;
+    run_codex_responses_tool_activity(&manager, &headers, "codex-atif-stop").await;
+    assert!(
+        std::fs::read_dir(&atif_dir).unwrap().next().is_none(),
+        "Codex ATIF should wait for Stop before writing a per-turn snapshot"
+    );
+
+    stop_codex_turn(&manager, &headers, "codex-atif-stop").await;
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "codex-atif-stop");
+    assert_eq!(atif["schema_version"], json!("ATIF-v1.7"));
+    assert_eq!(atif["trajectory_id"], atif["session_id"]);
+    assert!(atif["subagent_trajectories"].is_null());
+    assert_eq!(atif["final_metrics"]["total_steps"], json!(2));
+
+    let observed = atif["extra"]["observed_events"].as_array().unwrap();
+    assert!(observed.iter().all(|event| {
+        event["metadata"]["hook_event_name"] != json!("sessionEnd")
+            && event["metadata"]["hook_event_name"] != json!("session_end")
+    }));
+    let turn_start = observed
+        .iter()
+        .find(|event| {
+            event["name"] == "codex-turn"
+                && event["category"] == "agent"
+                && event["scope_category"] == "start"
+        })
+        .expect("Codex turn start should be observed");
+    let turn_end = observed
+        .iter()
+        .find(|event| {
+            event["name"] == "codex-turn"
+                && event["category"] == "agent"
+                && event["scope_category"] == "end"
+        })
+        .expect("Codex Stop should close the turn scope");
+    assert_eq!(turn_start["uuid"], atif["session_id"]);
+    assert_eq!(turn_end["uuid"], atif["session_id"]);
+    assert_eq!(
+        turn_end["data"]["output"][0]["call_id"],
+        json!("tool-call-1")
+    );
+
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["source"], json!("user"));
+    assert_eq!(steps[0]["message"], json!("Inspect the repository."));
+    assert_eq!(
+        steps[0]["extra"]["ancestry"]["parent_name"],
+        json!("codex-turn")
+    );
+    assert_eq!(steps[1]["source"], json!("agent"));
+    assert_eq!(steps[1]["model_name"], json!("gpt-test"));
+    assert_eq!(steps[1]["llm_call_count"], json!(1));
+    assert_eq!(
+        steps[1]["tool_calls"][0],
+        json!({
+            "tool_call_id": "tool-call-1",
+            "function_name": "Read",
+            "arguments": { "file_path": "README.md" },
+            "extra": { "status": "completed" }
+        })
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["source_call_id"],
+        json!("tool-call-1")
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["content"],
+        json!(null)
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["extra"]["tool_result"],
+        json!({ "content": "hello" })
+    );
+    assert_eq!(
+        steps[1]["extra"]["tool_ancestry"][0]["parent_name"],
+        json!("codex-turn")
+    );
+    assert_eq!(
+        steps[1]["extra"]["tool_invocations"][0]["invocation_id"],
+        json!("tool-call-1")
+    );
+}
+
+#[tokio::test]
+async fn codex_openinference_spans_match_shared_contract() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-codex-openinference-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("codex-test-scope");
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    start_codex_prompt_turn(&manager, &headers, "codex-openinference").await;
+    run_codex_responses_tool_activity(&manager, &headers, "codex-openinference").await;
+    stop_codex_turn(&manager, &headers, "codex-openinference").await;
+
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes_by_span = spans
+        .iter()
+        .map(|span| (span.name.as_ref(), attr_map(&span.attributes)))
+        .collect::<HashMap<_, _>>();
+    let turn_attributes = attributes_by_span
+        .get("codex-turn")
+        .expect("Codex turn should export an OpenInference span");
+    let llm_attributes = attributes_by_span
+        .get("openai.responses")
+        .expect("Codex LLM call should export an OpenInference span");
+    let tool_attributes = attributes_by_span
+        .get("Read")
+        .expect("Codex tool call should export an OpenInference span");
+
+    assert_eq!(
+        turn_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("AGENT")
+    );
+    assert_eq!(
+        llm_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("LLM")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("TOOL")
+    );
+    assert!(turn_attributes.contains_key("nemo_relay.uuid"));
+    assert!(llm_attributes.contains_key("nemo_relay.parent_uuid"));
+    assert!(tool_attributes.contains_key("nemo_relay.parent_uuid"));
+    let turn_metadata = serde_json::from_str::<serde_json::Value>(
+        turn_attributes
+            .get("metadata")
+            .expect("turn span should include OpenInference metadata"),
+    )
+    .unwrap();
+    assert_eq!(turn_metadata["session_id"], json!("codex-openinference"));
+    assert_eq!(
+        llm_attributes.get("llm.model_name").map(String::as_str),
+        Some("gpt-test")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("tool_call.function.name")
+            .map(String::as_str),
+        Some("Read")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("tool_call.function.arguments")
+            .map(String::as_str),
+        Some("{\"file_path\":\"README.md\"}")
+    );
+    assert_eq!(
+        tool_attributes.get("tool_call.id").map(String::as_str),
+        Some("tool-call-1")
+    );
+    assert!(
+        llm_attributes
+            .values()
+            .any(|value| value.contains("Requested tools: Read"))
+    );
+    assert!(
+        attributes_by_span
+            .values()
+            .flat_map(|attributes| attributes.values())
+            .all(|value| !value.contains("sessionEnd"))
     );
 }
 

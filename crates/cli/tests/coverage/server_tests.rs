@@ -43,6 +43,14 @@ impl Drop for ToolGuardrailCleanup {
     }
 }
 
+struct SubscriberCleanup(&'static str);
+
+impl Drop for SubscriberCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_subscriber(self.0);
+    }
+}
+
 fn test_http_client() -> reqwest::Client {
     crate::tls::install_rustls_crypto_provider();
     reqwest::Client::new()
@@ -105,6 +113,28 @@ fn test_config() -> GatewayConfig {
         metadata: None,
         plugin_config: None,
     }
+}
+
+fn find_scope_event<'a>(
+    events: &'a [Value],
+    name: &str,
+    category: &str,
+    scope_category: &str,
+) -> &'a Value {
+    events
+        .iter()
+        .find(|event| {
+            event["kind"] == "scope"
+                && event["name"] == name
+                && event["category"] == category
+                && event["scope_category"] == scope_category
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected {scope_category} {category} scope named {name}, got: {}",
+                serde_json::to_string_pretty(events).unwrap()
+            )
+        })
 }
 
 #[tokio::test]
@@ -1076,6 +1106,139 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
 }
 
 #[tokio::test]
+async fn serve_listener_records_codex_stop_atof_contract() {
+    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+    for payload in [
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "sessionStart",
+            "cwd": "/workspace",
+            "model": "gpt-5.1-codex"
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Inspect the repository."
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "PreToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "README.md" }
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "PostToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_output": { "bytes": 42 },
+            "status": "success"
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "Stop",
+            "response": "Done."
+        }),
+    ] {
+        let response = client
+            .post(format!("{url}/hooks/codex"))
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap(), json!({}));
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(events.iter().all(|event| event["atof_version"] == "0.1"));
+    assert!(!events.iter().any(|event| {
+        event["kind"] == "scope"
+            && event["scope_category"] == "start"
+            && event["category"] == "agent"
+            && event["name"] == "codex"
+    }));
+
+    let turn_start = find_scope_event(&events, "codex-turn", "agent", "start");
+    let turn_end = find_scope_event(&events, "codex-turn", "agent", "end");
+    assert_eq!(turn_start["uuid"], turn_end["uuid"]);
+    assert_eq!(
+        turn_start["data"],
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Inspect the repository."
+        })
+    );
+    assert_eq!(turn_start["metadata"]["session_id"], "codex-atof-session");
+    assert_eq!(turn_start["metadata"]["agent_kind"], "codex");
+    assert_eq!(turn_start["metadata"]["nemo_relay_scope_role"], "turn");
+    assert_eq!(turn_start["metadata"]["turn_source"], "user_prompt");
+    assert_eq!(turn_end["data"]["hook_event_name"], "Stop");
+    assert_eq!(turn_end["data"]["response"], "Done.");
+
+    let tool_start = find_scope_event(&events, "Read", "tool", "start");
+    let tool_end = find_scope_event(&events, "Read", "tool", "end");
+    assert_eq!(tool_start["uuid"], tool_end["uuid"]);
+    assert_eq!(tool_start["parent_uuid"], turn_start["uuid"]);
+    assert_eq!(tool_end["parent_uuid"], turn_start["uuid"]);
+    assert_eq!(
+        tool_start["category_profile"]["tool_call_id"],
+        "tool-call-1"
+    );
+    assert_eq!(tool_end["category_profile"]["tool_call_id"], "tool-call-1");
+    assert_eq!(tool_start["data"], json!({ "file_path": "README.md" }));
+    assert_eq!(tool_end["data"], json!({ "bytes": 42 }));
+    assert_eq!(tool_start["metadata"]["agent_kind"], "codex");
+    assert_eq!(tool_end["metadata"]["agent_kind"], "codex");
+    assert_eq!(tool_end["metadata"]["status"], "success");
+}
+
+#[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
     let _guard = PLUGIN_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
@@ -1634,6 +1797,7 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
         }),
     )
     .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
 
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
@@ -1677,7 +1841,6 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
         captured_llm_starts.lock().unwrap().is_empty(),
         "Claude startup probe must not emit a managed LLM span"
     );
-    deregister_subscriber(subscriber_name).unwrap();
 }
 
 async fn wait_for_gateway(url: &str) {
