@@ -1,0 +1,211 @@
+---
+title: "PII Redaction Configuration"
+sidebar-title: "Configuration"
+description: ""
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this page when you want to configure the built-in PII redaction plugin
+component. The component kind is `pii_redaction`.
+
+For plugin file discovery, precedence, merge behavior, editor controls, and
+gateway conflict rules, see
+[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+
+<Note>
+NeMo Relay plugin configuration uses the generic plugin document shape, so
+field names stay `snake_case` in every binding and in `plugins.toml`.
+
+</Note>
+
+## Component Shape
+
+The top-level PII redaction object contains:
+
+| Field | Purpose |
+|---|---|
+| `version` | PII redaction config schema version. Defaults to `1`. |
+| `mode` | Backend mode. Current values are `builtin` and `local_model`. |
+| `input` | Enables managed LLM request sanitization. |
+| `output` | Enables managed LLM response sanitization. |
+| `tool_input` | Enables managed tool-argument sanitization before execution. |
+| `tool_output` | Enables managed tool-result sanitization after execution. |
+| `priority` | Guardrail priority. Lower values run earlier. |
+| `codec` | Managed LLM provider codec. Required when `input` or `output` is enabled. |
+| `builtin` | Built-in backend settings used when `mode = "builtin"`. |
+| `local` | Local-backend settings used when `mode = "local_model"`. |
+| `policy` | Component-local handling for unknown fields and unsupported values. |
+
+At least one managed redaction surface must be enabled.
+
+## Backend Support
+
+| Area | `builtin` | `local_model` |
+|---|---|---|
+| Built-in component kind and config validation | Supported | Supported |
+| Managed LLM `input` | Supported | Extension point only in this PR |
+| Managed LLM `output` | Supported | Extension point only in this PR |
+| Managed `tool_input` | Supported | Extension point only in this PR |
+| Managed `tool_output` | Supported | Extension point only in this PR |
+| Built-in actions | `remove`, `regex_replace`, `hash` | N/A |
+| Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
+| Runtime availability | Any runtime that includes the built-in core plugin | Runtimes that install a local backend provider |
+
+## Builtin Mode
+
+Use `builtin` mode when NeMo Relay should sanitize emitted observability
+payloads with a deterministic first-party backend.
+
+### Requirements
+
+To use `mode = "builtin"`:
+
+- `builtin` settings are required.
+- `codec` is required when `input` or `output` is enabled.
+- `builtin.action` must be `remove`, `regex_replace`, or `hash`.
+- `builtin.pattern` is required when `builtin.action = "regex_replace"`.
+
+### `plugins.toml` Example
+
+You can write this config directly in `plugins.toml`, or create and edit it
+through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
+precedence, merge behavior, and editor controls, see
+[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+
+```toml
+version = 1
+
+[[components]]
+kind = "pii_redaction"
+enabled = true
+
+[components.config]
+version = 1
+mode = "builtin"
+codec = "openai_chat"
+input = true
+output = true
+tool_input = true
+tool_output = true
+
+[components.config.builtin]
+action = "regex_replace"
+pattern = "sk-[A-Za-z0-9_-]+"
+replacement = "[REDACTED]"
+target_paths = [
+  "/messages/0/content",
+  "/message",
+  "/api_key",
+  "/result/secret",
+]
+
+[components.config.policy]
+unknown_component = "warn"
+unknown_field = "warn"
+unsupported_value = "error"
+```
+
+This example configures the built-in backend for:
+
+- LLM request redaction from the normalized request path
+  `/messages/0/content`
+- LLM response redaction from the normalized response path `/message`
+- tool argument redaction at `/api_key`
+- tool result redaction at `/result/secret`
+
+### CLI Editor Support
+
+The NeMo Relay CLI plugin editor now exposes `pii_redaction` directly through
+`nemo-relay plugins edit`.
+
+Use the editor when you want to:
+
+- toggle the component on or off
+- choose `builtin` or `local_model`
+- set the LLM `codec`
+- edit `builtin` action settings such as `action`, `target_paths`,
+  `pattern`, and `replacement`
+- edit `local.backend` for a runtime-provided future local-model backend
+
+The editor preserves unknown fields when it rewrites an existing
+`pii_redaction` component, so future or runtime-specific settings are not
+discarded by the interactive edit flow.
+
+## Builtin Settings
+
+The `builtin` section contains:
+
+| Field | Purpose |
+|---|---|
+| `action` | Sanitization action. Current values are `remove`, `regex_replace`, and `hash`. |
+| `target_paths` | Exact JSON-pointer paths to sanitize. Empty means every matching string leaf. |
+| `pattern` | Regex pattern used when `action = "regex_replace"`. |
+| `replacement` | Replacement text used when `action = "regex_replace"`. Defaults to `[REDACTED]`. |
+
+## Action Semantics
+
+### `remove`
+
+`remove` is structural.
+
+When a target matches:
+
+- object fields are removed
+- array elements become `null`
+- targeted scalar or root values become `null`
+
+### `regex_replace`
+
+`regex_replace` applies the configured regex to matching string leaves and
+replaces matches with the configured `replacement`.
+
+### `hash`
+
+`hash` replaces matching string leaves with their SHA-256 hex digest.
+
+## Path Semantics
+
+`target_paths` are exact JSON-pointer matches.
+
+The plugin uses different payload boundaries for tools and LLMs:
+
+- Tools use JSON-native payloads. Paths point into the emitted tool args or
+  tool result shape directly.
+- LLMs use the selected built-in codec. Prefer normalized Relay paths such as:
+  - `/messages/0/content` for request message content
+  - `/message` for the normalized assistant response text
+
+The current implementation also preserves provider-shaped response-path
+compatibility for the supported codecs, but normalized LLM paths are the
+recommended contract for new configuration.
+
+If `target_paths` is empty, the built-in backend sanitizes every matching
+string leaf in the selected payload boundary.
+
+## Observability Semantics
+
+The built-in plugin uses sanitize guardrails.
+
+That means:
+
+- the real provider response value is unchanged
+- the emitted NeMo Relay start or end event payload is sanitized
+- `annotated_response` is populated from the sanitized end-event payload when a
+  response codec is provided
+
+## Local Model Mode
+
+`local_model` is reserved for a future in-process local-model backend.
+
+### Current Status
+
+In this PR:
+
+- the plugin contract accepts `mode = "local_model"`
+- the `local` section currently supports `backend`
+- actual behavior depends on a runtime-installed local backend provider
+
+Without a provider, runtimes report the local backend as unavailable during
+plugin initialization.

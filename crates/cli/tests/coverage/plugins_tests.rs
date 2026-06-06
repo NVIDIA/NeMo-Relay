@@ -225,6 +225,38 @@ fn typed_editor_model_contains_nemo_guardrails_options() {
 }
 
 #[test]
+fn typed_editor_model_contains_pii_redaction_options() {
+    let schema = PiiRedactionConfig::editor_schema();
+    assert!(!schema.fields.iter().any(|field| field.name == "version"));
+    assert_eq!(
+        schema.field("mode").unwrap().enum_values,
+        &["builtin", "local_model"]
+    );
+    assert_eq!(schema.field("codec").unwrap().kind, EditorFieldKind::Enum);
+    assert_eq!(
+        schema.field("tool_output").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+
+    let builtin = schema.field("builtin").unwrap().schema().unwrap();
+    assert_eq!(builtin.field("action").unwrap().kind, EditorFieldKind::Enum);
+    assert_eq!(
+        builtin.field("target_paths").unwrap().kind,
+        EditorFieldKind::Json
+    );
+    assert_eq!(
+        builtin.field("replacement").unwrap().kind,
+        EditorFieldKind::String
+    );
+
+    let local = schema.field("local").unwrap().schema().unwrap();
+    assert_eq!(
+        local.field("backend").unwrap().kind,
+        EditorFieldKind::String
+    );
+}
+
+#[test]
 fn plugin_menu_uses_setup_theme_markers() {
     let theme = ColorfulTheme::default();
     let lines = render_menu(
