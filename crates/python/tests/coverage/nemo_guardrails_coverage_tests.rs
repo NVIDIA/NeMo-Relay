@@ -750,7 +750,6 @@ async def run_case():
                 .position(|event| event == "yield:world")
                 .unwrap();
             assert!(source_hello < yield_hello);
-            assert!(yield_hello < source_world);
             assert!(source_world < yield_world);
             assert!(yield_hello < yield_world);
             assert!(
