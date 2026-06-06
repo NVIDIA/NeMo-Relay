@@ -14,7 +14,31 @@ fn gateway_bin() -> &'static str {
 }
 
 fn toml_basic_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    let escaped = value
+        .chars()
+        .map(|character| match character {
+            '\\' => "\\\\".to_string(),
+            '"' => "\\\"".to_string(),
+            '\n' => "\\n".to_string(),
+            '\t' => "\\t".to_string(),
+            '\r' => "\\r".to_string(),
+            '\u{08}' => "\\b".to_string(),
+            '\u{0c}' => "\\f".to_string(),
+            '\u{00}'..='\u{1f}' | '\u{7f}' => {
+                format!("\\u{:04X}", character as u32)
+            }
+            character => character.to_string(),
+        })
+        .collect::<String>();
+    format!("\"{escaped}\"")
+}
+
+#[test]
+fn toml_basic_string_escapes_toml_control_characters() {
+    assert_eq!(
+        toml_basic_string("a\\b\"c\nd\te\rf\u{08}g\u{0c}h\u{01}\u{7f}"),
+        "\"a\\\\b\\\"c\\nd\\te\\rf\\bg\\fh\\u0001\\u007F\""
+    );
 }
 
 #[test]
