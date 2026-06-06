@@ -3,7 +3,7 @@
 
 //! Coverage tests for Python-facing local NeMo Guardrails integration.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -39,6 +39,7 @@ struct FakeGuardrailsPackage {
     root: PathBuf,
     module_name: String,
     python_executable: PathBuf,
+    previous_pythonpath: Option<OsString>,
 }
 
 impl FakeGuardrailsPackage {
@@ -60,12 +61,14 @@ impl FakeGuardrailsPackage {
         )
         .unwrap();
 
-        let python_executable = write_python_wrapper(&root, &python_executable_for_worker(py));
+        let previous_pythonpath = prepend_pythonpath(&root);
+        let python_executable = PathBuf::from(python_executable_for_worker(py));
 
         Self {
             root,
             module_name: module_name.to_string(),
             python_executable,
+            previous_pythonpath,
         }
     }
 }
@@ -93,7 +96,30 @@ fn python_executable_for_worker(py: Python<'_>) -> String {
 
 impl Drop for FakeGuardrailsPackage {
     fn drop(&mut self) {
+        restore_pythonpath(&self.previous_pythonpath);
         let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn prepend_pythonpath(root: &Path) -> Option<OsString> {
+    let previous = std::env::var_os("PYTHONPATH");
+    let mut paths = vec![root.to_path_buf()];
+    if let Some(previous_value) = previous.as_ref().filter(|value| !value.is_empty()) {
+        paths.extend(std::env::split_paths(previous_value));
+    }
+    let pythonpath = std::env::join_paths(paths).unwrap();
+    unsafe {
+        std::env::set_var("PYTHONPATH", pythonpath);
+    }
+    previous
+}
+
+fn restore_pythonpath(previous: &Option<OsString>) {
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("PYTHONPATH", value),
+            None => std::env::remove_var("PYTHONPATH"),
+        }
     }
 }
 
@@ -222,46 +248,6 @@ class LLMRails:
                 yield '{"error": {"message": "Blocked by output rails: output-policy", "type": "guardrails_violation"}}'
         return _run()
 "#
-}
-
-#[cfg(unix)]
-fn write_python_wrapper(root: &Path, python_executable: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let wrapper = root.join("python-wrapper");
-    fs::write(
-        &wrapper,
-        format!(
-            "#!/bin/sh\nPYTHONPATH='{}' exec '{}' \"$@\"\n",
-            shell_single_quote(root),
-            shell_single_quote(Path::new(python_executable))
-        ),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).unwrap();
-    wrapper
-}
-
-#[cfg(windows)]
-fn write_python_wrapper(root: &Path, python_executable: &str) -> PathBuf {
-    let wrapper = root.join("python-wrapper.cmd");
-    fs::write(
-        &wrapper,
-        format!(
-            "@echo off\r\nset \"PYTHONPATH={};%PYTHONPATH%\"\r\n\"{}\" %*\r\n",
-            root.display(),
-            python_executable.replace('"', "\"\"")
-        ),
-    )
-    .unwrap();
-    wrapper
-}
-
-#[cfg(unix)]
-fn shell_single_quote(path: &Path) -> String {
-    path.to_string_lossy().replace('\'', "'\\''")
 }
 
 fn with_isolated_nemo_relay_modules<T>(
