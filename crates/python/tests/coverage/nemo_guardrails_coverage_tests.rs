@@ -650,6 +650,7 @@ async def run_stream(request):
         async def _stream():
             event_log.append("source:hello")
             yield {{"choices": [{{"delta": {{"content": "hello"}}}}]}}
+            await __import__("asyncio").sleep(0.01)
             event_log.append("source:world")
             yield {{"choices": [{{"delta": {{"content": "world"}}}}]}}
         return _stream()
@@ -748,8 +749,8 @@ async def run_case():
                 .iter()
                 .position(|event| event == "yield:world")
                 .unwrap();
-            assert!(source_hello < source_world);
             assert!(source_hello < yield_hello);
+            assert!(yield_hello < source_world);
             assert!(source_world < yield_world);
             assert!(yield_hello < yield_world);
             assert!(

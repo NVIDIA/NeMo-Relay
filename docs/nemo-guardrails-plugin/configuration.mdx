@@ -327,18 +327,20 @@ The current local mode supports streaming LLM input checks before the stream
 callback runs.
 
 When output rails are configured, the current local mode uses Guardrails-native
-streaming output rails and buffers provider chunks until the local output rail
-monitor clears the stream. That requires `rails.output.streaming.enabled = true`
+streaming output rails and lets provider chunks flow while the local output rail
+monitor evaluates the streamed text. That requires `rails.output.streaming.enabled = true`
 in the Guardrails config.
 
 Guardrails calls the main streaming-output switch
 `rails.output.streaming.stream_first`.
 
-When `stream_first = true`, the current local mode keeps provider-shaped chunks
-buffered while Guardrails evaluates the streamed text:
+When `stream_first = true`, the current local mode uses pass-through-first
+streaming semantics:
 
-- provider chunks are not released to the caller until the monitor finishes
-- if Guardrails blocks the stream, the call fails without delivering those chunks
+- provider chunks can flow to the caller immediately
+- Guardrails evaluates the streamed text in parallel
+- if Guardrails later blocks the stream, the call fails at that point even
+  though some chunks may already have been delivered
 
 The current local mode does not support `rails.output.streaming.stream_first = false`
 yet. That mode would require Guardrails-first chunk reconstruction:

@@ -383,7 +383,7 @@ async fn stream_monitor_records_blocked_message() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn guarded_provider_stream_reports_block_before_buffered_chunks() {
+async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
     let provider_stream: LlmJsonStream = Box::pin(tokio_stream::iter(vec![Ok(json!({
         "choices": [{"delta": {"content": "blocked"}}],
     }))]));
@@ -413,6 +413,14 @@ async fn guarded_provider_stream_reports_block_before_buffered_chunks() {
         blocked,
     )
     .await;
+
+    let chunk = chunk_rx.recv().await.unwrap().unwrap();
+    assert_eq!(
+        chunk,
+        json!({
+            "choices": [{"delta": {"content": "blocked"}}],
+        })
+    );
 
     let error = chunk_rx.recv().await.unwrap().unwrap_err();
     assert!(

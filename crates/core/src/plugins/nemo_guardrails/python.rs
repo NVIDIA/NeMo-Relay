@@ -993,7 +993,6 @@ async fn forward_guarded_provider_stream(
     monitor: JoinHandle<FlowResult<()>>,
     blocked: Arc<Mutex<Option<String>>>,
 ) {
-    let mut buffered_chunks = Vec::new();
     while let Some(item) = provider_stream.next().await {
         let chunk = match item {
             Ok(chunk) => chunk,
@@ -1011,36 +1010,21 @@ async fn forward_guarded_provider_stream(
             let _ = monitor.await;
             return;
         }
-
-        let text = extract_stream_text(codec, &chunk);
-
-        if let Some(text) = text {
-            if text_tx.send(Some(text)).await.is_err() {
-                send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
-                return;
-            }
-
-            if let Some(message) = blocked_message(&blocked) {
-                let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
-                let _ = text_tx.send(None).await;
-                let _ = monitor.await;
-                return;
-            }
+        if let Some(text) = extract_stream_text(codec, &chunk)
+            && text_tx.send(Some(text)).await.is_err()
+        {
+            send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
+            return;
         }
 
-        buffered_chunks.push(chunk);
-    }
-
-    let _ = text_tx.send(None).await;
-    if send_stream_monitor_error(monitor, &chunk_tx, &blocked).await {
-        return;
-    }
-
-    for chunk in buffered_chunks {
         if chunk_tx.send(Ok(chunk)).await.is_err() {
+            let _ = text_tx.send(None).await;
+            let _ = monitor.await;
             return;
         }
     }
+    let _ = text_tx.send(None).await;
+    let _ = send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
 }
 
 async fn send_stream_monitor_error(
