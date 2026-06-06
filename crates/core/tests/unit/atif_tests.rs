@@ -802,12 +802,12 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
 }
 
 #[test]
-fn test_non_usd_reported_cost_blocks_model_pricing_estimation() {
+fn test_reported_cost_object_blocks_model_pricing_estimation() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_test_pricing("priced-model");
     let _reset_guard = ResetPricingResolverGuard;
 
-    let metrics = extract_metrics(
+    let non_usd_metrics = extract_metrics(
         &json!({
             "usage": {
                 "prompt_tokens": 1000,
@@ -824,7 +824,64 @@ fn test_non_usd_reported_cost_blocks_model_pricing_estimation() {
     )
     .unwrap();
 
-    assert_eq!(metrics.cost_usd, None);
+    assert_eq!(non_usd_metrics.cost_usd, None);
+
+    let missing_total_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "currency": "USD"
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(missing_total_metrics.cost_usd, None);
+
+    let legacy_missing_currency_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "total": 0.42
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(legacy_missing_currency_metrics.cost_usd, Some(0.42));
+
+    let component_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "currency": "USD",
+                    "input": 0.25,
+                    "output": 0.5,
+                    "cache_read": 0.125
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(component_metrics.cost_usd, Some(0.875));
 }
 
 #[test]

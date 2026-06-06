@@ -77,6 +77,46 @@ fn install_test_pricing(model_id: &str) {
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
+fn install_provider_disambiguation_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "other",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 1000.0,
+                        "output_per_million": 1000.0
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                },
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
@@ -881,6 +921,46 @@ fn helper_functions_cover_additional_otel_branches() {
         );
     }
 
+    {
+        let _pricing_guard = pricing_test_mutex().lock().unwrap();
+        install_provider_disambiguation_pricing("priced-model");
+        let _reset_guard = ResetPricingResolverGuard;
+        let provider_qualified_cost_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "test",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .model_name("priced-model")
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            total_tokens: Some(1_500),
+                            cache_read_tokens: Some(200),
+                            cache_write_tokens: None,
+                            cost: None,
+                        }),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let provider_qualified_cost_attributes =
+            attr_map(&end_attributes(&provider_qualified_cost_event));
+        assert_eq!(
+            provider_qualified_cost_attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"0.000435".to_string())
+        );
+        assert_eq!(
+            provider_qualified_cost_attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"USD".to_string())
+        );
+    }
+
     let normalized_cost_event = make_scope_event_with_profile(
         ScopeCategory::End,
         Uuid::now_v7(),
@@ -924,6 +1004,52 @@ fn helper_functions_cover_additional_otel_branches() {
         normalized_cost_attributes.get("nemo_relay.llm.cost.currency"),
         Some(&"USD".to_string())
     );
+
+    {
+        let _pricing_guard = pricing_test_mutex().lock().unwrap();
+        install_test_pricing("priced-model");
+        let _reset_guard = ResetPricingResolverGuard;
+        let reported_cost_without_total_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "test",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .model_name("priced-model")
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            cost: Some(CostEstimate {
+                                total: None,
+                                currency: "EUR".into(),
+                                input: Some(0.10),
+                                output: None,
+                                cache_read: None,
+                                cache_write: None,
+                                source: CostSource::ProviderReported,
+                                pricing_provider: Some("external".to_string()),
+                                pricing_model: Some("external-model".to_string()),
+                                pricing_as_of: Some("2026-06-04".to_string()),
+                                pricing_source: None,
+                            }),
+                            ..Usage::default()
+                        }),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let reported_cost_without_total_attributes =
+            attr_map(&end_attributes(&reported_cost_without_total_event));
+        assert!(!reported_cost_without_total_attributes.contains_key("nemo_relay.llm.cost.total"));
+        assert!(
+            !reported_cost_without_total_attributes.contains_key("nemo_relay.llm.cost.currency")
+        );
+    }
 
     {
         let _pricing_guard = pricing_test_mutex().lock().unwrap();

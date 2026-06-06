@@ -1099,27 +1099,28 @@ fn cost_total_from_manual_llm_output(output: Option<&Json>) -> Option<f64> {
 }
 
 fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> Option<f64> {
-    cost_total_from_manual_llm_output(event.output())
-        .or_else(|| {
-            let response = event.annotated_response()?;
-            let usage = response.usage.as_ref()?;
-            usage.cost.as_ref()?.total_for_currency("USD")
-        })
-        .or_else(|| {
-            let response = event.annotated_response()?;
-            let usage = response.usage.as_ref()?;
-            let model_name = response.model.as_deref().or_else(|| event.model_name())?;
-            estimate_cost_for_provider(Some(event.name()), model_name, usage)
-                .and_then(|cost| cost.total_for_currency("USD"))
-        })
-        .or_else(|| {
-            let usage = fallback_usage?;
-            let model_name = event
-                .model_name()
-                .or_else(|| model_name_from_manual_llm_output(event.output()))?;
-            estimate_cost_for_provider(Some(event.name()), model_name, usage)
-                .and_then(|cost| cost.total_for_currency("USD"))
-        })
+    if let Some(cost) = cost_total_from_manual_llm_output(event.output()) {
+        return Some(cost);
+    }
+
+    if let Some(response) = event.annotated_response()
+        && let Some(usage) = response.usage.as_ref()
+    {
+        if let Some(cost) = usage.cost.as_ref() {
+            return cost.total_for_currency("USD");
+        }
+        if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
+            return estimate_cost_for_provider(Some(event.name()), model_name, usage)
+                .and_then(|cost| cost.total_for_currency("USD"));
+        }
+    }
+
+    let usage = fallback_usage?;
+    let model_name = event
+        .model_name()
+        .or_else(|| model_name_from_manual_llm_output(event.output()))?;
+    estimate_cost_for_provider(Some(event.name()), model_name, usage)
+        .and_then(|cost| cost.total_for_currency("USD"))
 }
 
 fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {

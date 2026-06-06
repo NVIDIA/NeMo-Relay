@@ -686,26 +686,12 @@ fn extract_metrics(
         &["cache_creation_input_tokens", "cache_write_tokens"],
     );
     let cached = sum_options(cache_read, cache_write);
-    let explicit_cost = usage.get("cost_usd").and_then(Json::as_f64).or_else(|| {
-        let cost = usage.get("cost")?.as_object()?;
-        if cost
-            .get("currency")
-            .and_then(Json::as_str)
-            .is_some_and(|currency| currency != "USD")
-        {
-            return None;
-        }
-        cost.get("total").and_then(Json::as_f64)
-    });
-    let has_non_usd_cost = usage
-        .get("cost")
-        .and_then(Json::as_object)
-        .is_some_and(|cost| {
-            cost.get("currency")
-                .and_then(Json::as_str)
-                .is_some_and(|currency| currency != "USD")
-        });
-    let cost = if has_non_usd_cost {
+    let explicit_cost = usage
+        .get("cost_usd")
+        .and_then(Json::as_f64)
+        .or_else(|| usage.get("cost").and_then(cost_usd_from_cost_object));
+    let has_reported_cost = usage.get("cost").is_some();
+    let cost = if has_reported_cost {
         explicit_cost
     } else {
         explicit_cost.or_else(|| {
@@ -760,6 +746,30 @@ fn extract_metrics(
         completion_token_ids: completion_ids,
         logprobs,
         extra,
+    })
+}
+
+fn cost_usd_from_cost_object(cost: &Json) -> Option<f64> {
+    let cost = cost.as_object()?;
+    let currency = cost.get("currency").and_then(Json::as_str);
+    let is_relay_normalized_cost = cost
+        .get("source")
+        .and_then(Json::as_str)
+        .is_some_and(|source| matches!(source, "provider_reported" | "model_pricing"));
+    let has_legacy_provider_total =
+        currency.is_none() && cost.get("total").and_then(Json::as_f64).is_some();
+    let is_usd_cost = matches!(currency, Some("USD"))
+        || currency.is_none() && (is_relay_normalized_cost || has_legacy_provider_total);
+    if !is_usd_cost {
+        return None;
+    }
+
+    cost.get("total").and_then(Json::as_f64).or_else(|| {
+        let (has_component, component_total) = ["input", "output", "cache_read", "cache_write"]
+            .iter()
+            .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
+            .fold((false, 0.0), |(_, total), value| (true, total + value));
+        has_component.then_some(component_total)
     })
 }
 
