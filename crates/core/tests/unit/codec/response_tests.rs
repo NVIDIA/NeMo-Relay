@@ -894,6 +894,10 @@ fn test_provider_reported_cost_keeps_top_level_provider_usd_currency() {
         Some(0.42),
         Some(RawUsageCost {
             currency: Some("EUR".to_string()),
+            input: Some(0.10),
+            output: Some(0.20),
+            cache_read: Some(0.01),
+            cache_write: Some(0.02),
             ..RawUsageCost::default()
         }),
     )
@@ -901,7 +905,34 @@ fn test_provider_reported_cost_keeps_top_level_provider_usd_currency() {
 
     assert_eq!(cost.total, Some(0.42));
     assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.input, None);
+    assert_eq!(cost.output, None);
+    assert_eq!(cost.cache_read, None);
+    assert_eq!(cost.cache_write, None);
     assert_eq!(cost.total_for_currency("USD"), Some(0.42));
+}
+
+#[test]
+fn test_provider_reported_cost_keeps_usd_components_with_top_level_usd_cost() {
+    let cost = provider_reported_cost(
+        Some(0.42),
+        Some(RawUsageCost {
+            currency: Some("usd".to_string()),
+            input: Some(0.10),
+            output: Some(0.20),
+            cache_read: Some(0.01),
+            cache_write: Some(0.02),
+            ..RawUsageCost::default()
+        }),
+    )
+    .expect("top-level and nested USD cost fields should be retained");
+
+    assert_eq!(cost.total, Some(0.42));
+    assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.input, Some(0.10));
+    assert_eq!(cost.output, Some(0.20));
+    assert_eq!(cost.cache_read, Some(0.01));
+    assert_eq!(cost.cache_write, Some(0.02));
 }
 
 #[test]

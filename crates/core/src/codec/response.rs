@@ -213,10 +213,16 @@ pub(crate) fn provider_reported_cost(
     cost: Option<RawUsageCost>,
 ) -> Option<CostEstimate> {
     let cost = cost.unwrap_or_default();
-    let input = cost.input;
-    let output = cost.output;
-    let cache_read = cost.cache_read;
-    let cache_write = cost.cache_write;
+    let provider_total_uses_default_currency = provider_total_cost.is_some();
+    let nested_currency_is_default = cost
+        .currency
+        .as_deref()
+        .is_none_or(|currency| currency.eq_ignore_ascii_case("USD"));
+    let keep_component_costs = !provider_total_uses_default_currency || nested_currency_is_default;
+    let input = keep_component_costs.then_some(cost.input).flatten();
+    let output = keep_component_costs.then_some(cost.output).flatten();
+    let cache_read = keep_component_costs.then_some(cost.cache_read).flatten();
+    let cache_write = keep_component_costs.then_some(cost.cache_write).flatten();
     let has_currency_native_amount = cost.total.is_some()
         || cost.input.is_some()
         || cost.output.is_some()
@@ -243,7 +249,7 @@ pub(crate) fn provider_reported_cost(
 
     Some(CostEstimate {
         total,
-        currency: if provider_total_cost.is_some() {
+        currency: if provider_total_uses_default_currency {
             default_cost_currency()
         } else if has_currency_native_amount {
             cost.currency.unwrap_or_else(default_cost_currency)
