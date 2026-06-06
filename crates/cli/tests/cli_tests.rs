@@ -56,7 +56,10 @@ fn cli_agents_json_emits_supported_agent_shapes() {
 #[test]
 fn cli_doctor_json_emits_versioned_report() {
     let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
     let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .args(["doctor", "--json"])
