@@ -205,7 +205,13 @@ worker = None
 streams = {}
 
 
-async def handle_message(message):
+def track_task(pending_tasks, task):
+    pending_tasks.add(task)
+    task.add_done_callback(pending_tasks.discard)
+    return task
+
+
+async def handle_message(message, pending_tasks):
     global worker
 
     request_id = str(message.get("id", ""))
@@ -235,7 +241,10 @@ async def handle_message(message):
         elif command == "stream_start":
             queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAXSIZE)
             streams[request_id] = queue
-            asyncio.create_task(worker.monitor_stream(request_id, message.get("messages") or [], queue, streams))
+            track_task(
+                pending_tasks,
+                asyncio.create_task(worker.monitor_stream(request_id, message.get("messages") or [], queue, streams)),
+            )
         elif command == "stream_text":
             queue = streams.get(request_id)
             if queue is not None:
@@ -254,19 +263,29 @@ async def handle_message(message):
 
 
 async def main():
-    while True:
-        line = await asyncio.to_thread(sys.stdin.readline)
-        if not line:
-            return
-        try:
-            message = json.loads(line)
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
-            continue
-        if str(message.get("command", "")).startswith("stream_"):
-            await handle_message(message)
-        else:
-            asyncio.create_task(handle_message(message))
+    pending_tasks = set()
+    try:
+        while True:
+            line = await asyncio.to_thread(sys.stdin.readline)
+            if not line:
+                return
+            try:
+                message = json.loads(line)
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                continue
+            if str(message.get("command", "")).startswith("stream_"):
+                await handle_message(message, pending_tasks)
+            else:
+                track_task(
+                    pending_tasks,
+                    asyncio.create_task(handle_message(message, pending_tasks)),
+                )
+    finally:
+        for task in tuple(pending_tasks):
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
 
 
 asyncio.run(main())
