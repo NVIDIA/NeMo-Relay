@@ -73,6 +73,13 @@ or framework-reported cost remains authoritative; the resolver is used only when
 estimates require a configured inline, file, or embedding-provided pricing
 source. With no configured source, every model is treated as unknown for pricing.
 
+Pricing is runtime state, not a CLI-only feature. Any host that initializes
+Relay plugins can activate the built-in `pricing` component before it runs
+managed LLM calls. This includes application code, eval harnesses, custom
+agents, framework integrations, and third-party patches. The CLI commands below
+are a file-management convenience for the local gateway; embedded hosts can pass
+the same component config directly through the plugin APIs.
+
 Source precedence is deployment controlled:
 
 1. Project or application overrides.
@@ -213,6 +220,87 @@ or embed a custom Rust `PricingSource` that reads from a database and installs a
 External pricing catalogs should be converted into Relay catalog JSON
 out-of-band and then loaded through a `file` source, unless the embedding
 application installs a custom Rust `PricingSource` directly.
+
+Embedded applications and eval harnesses can initialize the built-in pricing
+component directly:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+config = nemo_relay.plugin.PluginConfig(
+    components=[
+        nemo_relay.plugin.ComponentSpec(
+            kind="pricing",
+            config={
+                "sources": [
+                    {"type": "file", "path": "./pricing.json"},
+                ],
+            },
+        )
+    ]
+)
+
+report = nemo_relay.plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await nemo_relay.plugin.initialize(config)
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```ts
+import * as plugin from 'nemo-relay-node/plugin';
+
+const config = plugin.defaultConfig();
+config.components = [
+  plugin.ComponentSpec('pricing', {
+    sources: [{ type: 'file', path: './pricing.json' }],
+  }),
+];
+
+const report = plugin.validate(config);
+if (report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
+  throw new Error(JSON.stringify(report.diagnostics));
+}
+
+await plugin.initialize(config);
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use serde_json::json;
+
+let config: PluginConfig = serde_json::from_value(json!({
+    "version": 1,
+    "components": [{
+        "kind": "pricing",
+        "config": {
+            "sources": [
+                {"type": "file", "path": "./pricing.json"}
+            ]
+        }
+    }]
+}))?;
+
+let report = validate_plugin_config(&config);
+if report.has_errors() {
+    return Err("invalid pricing plugin config".into());
+}
+
+initialize_plugins(config).await?;
+```
+</Tab>
+</Tabs>
+
+Initialize pricing once during process or harness startup, before the managed
+LLM calls whose responses should be cost-annotated. In tests or reusable
+harnesses, clear plugin configuration during teardown if later cases need a
+different resolver.
 
 Built-in response codecs attach estimated cost directly to
 `AnnotatedLlmResponse.usage.cost` when pricing is known. Managed LLM wrappers
