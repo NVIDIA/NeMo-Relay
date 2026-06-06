@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -377,7 +378,7 @@ impl LocalGuardrailsWorker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
-        if let Some(python_path) = python_path(config) {
+        if let Some(python_path) = worker_python_path(config) {
             command.env("PYTHONPATH", python_path);
         }
 
@@ -688,6 +689,22 @@ fn python_path(config: &NeMoGuardrailsConfig) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn worker_python_path(config: &NeMoGuardrailsConfig) -> Option<OsString> {
+    let configured = python_path(config)?;
+    merge_python_path(
+        OsStr::new(&configured),
+        env::var_os("PYTHONPATH").as_deref(),
+    )
+}
+
+fn merge_python_path(configured: &OsStr, inherited: Option<&OsStr>) -> Option<OsString> {
+    let mut paths = env::split_paths(configured).collect::<Vec<_>>();
+    if let Some(inherited) = inherited.filter(|value| !value.is_empty()) {
+        paths.extend(env::split_paths(inherited));
+    }
+    env::join_paths(paths).ok()
 }
 
 fn set_request_id(payload: &mut Json, id: &str) -> FlowResult<()> {

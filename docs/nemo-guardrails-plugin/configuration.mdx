@@ -303,8 +303,8 @@ When `mode = "local"`:
   the default `nemoguardrails` package.
 - `local.python_executable` is optional and defaults to the
   `NEMO_RELAY_PYTHON` environment variable when set, otherwise `python3`.
-- `local.python_path` is optional and sets `PYTHONPATH` only for the local
-  Guardrails worker subprocess.
+- `local.python_path` is optional and is prepended to `PYTHONPATH` only for
+  the local Guardrails worker subprocess.
 
 ### Codec Boundary
 

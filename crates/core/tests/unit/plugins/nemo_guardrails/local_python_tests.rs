@@ -22,6 +22,22 @@ use crate::plugins::nemo_guardrails::component::LocalBackendConfig;
 #[cfg(unix)]
 static NEXT_FIXTURE_ID: AtomicUsize = AtomicUsize::new(1);
 
+#[test]
+fn worker_python_path_prepends_configured_path_to_inherited_pythonpath() {
+    let configured = std::path::PathBuf::from("fake-guardrails");
+    let stdlib = std::path::PathBuf::from("stdlib");
+    let platstdlib = std::path::PathBuf::from("platstdlib");
+    let configured_path = std::env::join_paths([configured.clone()]).unwrap();
+    let inherited_path = std::env::join_paths([stdlib.clone(), platstdlib.clone()]).unwrap();
+
+    let merged = merge_python_path(&configured_path, Some(&inherited_path)).unwrap();
+
+    assert_eq!(
+        std::env::split_paths(&merged).collect::<Vec<_>>(),
+        vec![configured, stdlib, platstdlib]
+    );
+}
+
 #[cfg(unix)]
 struct FakeGuardrails {
     root: PathBuf,

@@ -71,24 +71,39 @@ impl FakeGuardrailsPackage {
 }
 
 fn python_executable_for_worker(py: Python<'_>) -> String {
-    let executable = py
+    let sys_executable = py
         .import("sys")
         .and_then(|sys| sys.getattr("executable"))
         .and_then(|executable| executable.extract::<String>())
-        .unwrap_or_else(|_| "python3".to_string());
-    if Command::new(&executable)
-        .arg("-c")
-        .arg("import sys")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .ok();
+
+    for executable in [
+        std::env::var("PYO3_PYTHON").ok(),
+        std::env::var("UV_PYTHON").ok(),
+        sys_executable,
+        Some("python3".to_string()),
+    ]
+    .into_iter()
+    .flatten()
     {
-        executable
-    } else {
-        "python3".to_string()
+        let executable = executable.trim();
+        if executable.is_empty() {
+            continue;
+        }
+        if Command::new(executable)
+            .arg("-c")
+            .arg("import sys")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return executable.to_string();
+        }
     }
+
+    "python3".to_string()
 }
 
 impl Drop for FakeGuardrailsPackage {
