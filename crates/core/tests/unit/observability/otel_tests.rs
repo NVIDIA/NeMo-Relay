@@ -1045,9 +1045,13 @@ fn helper_functions_cover_additional_otel_branches() {
         );
         let reported_cost_without_total_attributes =
             attr_map(&end_attributes(&reported_cost_without_total_event));
-        assert!(!reported_cost_without_total_attributes.contains_key("nemo_relay.llm.cost.total"));
-        assert!(
-            !reported_cost_without_total_attributes.contains_key("nemo_relay.llm.cost.currency")
+        assert_eq!(
+            reported_cost_without_total_attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"0.1".to_string())
+        );
+        assert_eq!(
+            reported_cost_without_total_attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"EUR".to_string())
         );
     }
 

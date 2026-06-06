@@ -704,7 +704,7 @@ fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
 }
 
 fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
-    Some((cost.total?, cost.currency.clone()))
+    Some((cost.total_or_component_sum()?, cost.currency.clone()))
 }
 
 fn cost_from_manual_llm_output(output: Option<&Json>) -> Option<(f64, String)> {
@@ -723,8 +723,16 @@ fn cost_from_manual_usage(usage: &serde_json::Map<String, Json>) -> Option<(f64,
         .map(|total| (total, "USD".to_string()))
         .or_else(|| {
             let cost = usage.get("cost")?.as_object()?;
+            let total = cost.get("total").and_then(Json::as_f64).or_else(|| {
+                let (has_component, component_total) =
+                    ["input", "output", "cache_read", "cache_write"]
+                        .iter()
+                        .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
+                        .fold((false, 0.0), |(_, total), value| (true, total + value));
+                has_component.then_some(component_total)
+            })?;
             Some((
-                cost.get("total")?.as_f64()?,
+                total,
                 cost.get("currency")
                     .and_then(Json::as_str)
                     .unwrap_or("USD")

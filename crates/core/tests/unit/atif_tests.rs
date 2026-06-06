@@ -869,7 +869,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
                 "completion_tokens": 500,
                 "total_tokens": 1500,
                 "cost": {
-                    "currency": "USD",
+                    "currency": "usd",
                     "input": 0.25,
                     "output": 0.5,
                     "cache_read": 0.125

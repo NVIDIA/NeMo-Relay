@@ -758,7 +758,7 @@ fn cost_usd_from_cost_object(cost: &Json) -> Option<f64> {
         .is_some_and(|source| matches!(source, "provider_reported" | "model_pricing"));
     let has_legacy_provider_total =
         currency.is_none() && cost.get("total").and_then(Json::as_f64).is_some();
-    let is_usd_cost = matches!(currency, Some("USD"))
+    let is_usd_cost = currency.is_some_and(|currency| currency.eq_ignore_ascii_case("USD"))
         || currency.is_none() && (is_relay_normalized_cost || has_legacy_provider_total);
     if !is_usd_cost {
         return None;

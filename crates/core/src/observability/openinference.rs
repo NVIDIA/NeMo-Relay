@@ -1107,7 +1107,7 @@ fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> O
         && let Some(usage) = response.usage.as_ref()
     {
         if let Some(cost) = usage.cost.as_ref() {
-            return cost.total_for_currency("USD");
+            return cost.total_or_component_sum_for_currency("USD");
         }
         if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
             return estimate_cost_for_provider(Some(event.name()), model_name, usage)
@@ -1128,10 +1128,21 @@ fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
 }
 
 fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
-    usage
-        .get("cost_usd")
-        .and_then(Json::as_f64)
-        .or_else(|| usage.get("cost")?.as_object()?.get("total")?.as_f64())
+    usage.get("cost_usd").and_then(Json::as_f64).or_else(|| {
+        let cost = usage.get("cost")?.as_object()?;
+        let currency = cost.get("currency").and_then(Json::as_str);
+        let is_usd_cost = currency.is_none_or(|currency| currency.eq_ignore_ascii_case("USD"));
+        if !is_usd_cost {
+            return None;
+        }
+        cost.get("total").and_then(Json::as_f64).or_else(|| {
+            let (has_component, component_total) = ["input", "output", "cache_read", "cache_write"]
+                .iter()
+                .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
+                .fold((false, 0.0), |(_, total), value| (true, total + value));
+            has_component.then_some(component_total)
+        })
+    })
 }
 
 fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {

@@ -151,12 +151,34 @@ pub struct CostEstimate {
 }
 
 impl CostEstimate {
+    /// Returns the explicit total, or the sum of component costs when no total was supplied.
+    #[must_use]
+    pub fn total_or_component_sum(&self) -> Option<f64> {
+        self.total.or_else(|| {
+            let (has_component, total) =
+                [self.input, self.output, self.cache_read, self.cache_write]
+                    .into_iter()
+                    .flatten()
+                    .fold((false, 0.0), |(_, total), value| (true, total + value));
+            has_component.then_some(total)
+        })
+    }
+
     /// Returns the total only when it is denominated in the requested currency.
     #[must_use]
     pub fn total_for_currency(&self, currency: &str) -> Option<f64> {
         self.currency
             .eq_ignore_ascii_case(currency)
             .then_some(self.total)
+            .flatten()
+    }
+
+    /// Returns the explicit or component-derived total in the requested currency.
+    #[must_use]
+    pub fn total_or_component_sum_for_currency(&self, currency: &str) -> Option<f64> {
+        self.currency
+            .eq_ignore_ascii_case(currency)
+            .then(|| self.total_or_component_sum())
             .flatten()
     }
 }

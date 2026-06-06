@@ -2317,6 +2317,56 @@ fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
 }
 
 #[test]
+fn llm_end_with_component_only_usd_usage_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: None,
+                            currency: "usd".into(),
+                            input: Some(0.25),
+                            output: Some(0.5),
+                            cache_read: Some(0.125),
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.875".to_string()));
+}
+
+#[test]
 fn llm_end_with_non_usd_normalized_usage_cost_blocks_model_pricing_estimate() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_test_pricing("priced-model");
