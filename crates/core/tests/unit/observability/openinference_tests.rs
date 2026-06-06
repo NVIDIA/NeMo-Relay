@@ -2267,6 +2267,41 @@ fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
 }
 
 #[test]
+fn llm_end_with_manual_component_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "unknown-model",
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "cost": {
+                    "currency": "usd",
+                    "input": 0.25,
+                    "output": 0.5,
+                    "cache_read": 0.125
+                }
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.875".to_string()));
+}
+
+#[test]
 fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
     let (provider, exporter) = make_provider();
     let mut processor =

@@ -1086,6 +1086,38 @@ fn helper_functions_cover_additional_otel_branches() {
             Some(&"USD".to_string())
         );
 
+        let manual_component_cost_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({
+                "model": "unknown-model",
+                "usage": {
+                    "prompt_tokens": 1_000,
+                    "completion_tokens": 500,
+                    "cost": {
+                        "currency": "EUR",
+                        "input": 0.25,
+                        "output": 0.5,
+                        "cache_read": 0.125
+                    }
+                }
+            })),
+            None,
+        );
+        let manual_component_cost_attributes =
+            attr_map(&end_attributes(&manual_component_cost_event));
+        assert_eq!(
+            manual_component_cost_attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"0.875".to_string())
+        );
+        assert_eq!(
+            manual_component_cost_attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"EUR".to_string())
+        );
+
         let annotated_without_model_event = make_scope_event_with_profile(
             ScopeCategory::End,
             Uuid::now_v7(),

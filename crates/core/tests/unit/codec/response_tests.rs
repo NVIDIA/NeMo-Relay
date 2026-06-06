@@ -905,6 +905,49 @@ fn test_provider_reported_cost_keeps_top_level_provider_usd_currency() {
 }
 
 #[test]
+fn test_cost_estimate_total_helpers_sum_components_and_match_currency() {
+    let component_cost = CostEstimate {
+        total: None,
+        currency: "usd".to_string(),
+        input: Some(0.12),
+        output: Some(0.30),
+        cache_read: Some(0.01),
+        cache_write: Some(0.02),
+        source: CostSource::ProviderReported,
+        pricing_provider: None,
+        pricing_model: None,
+        pricing_as_of: None,
+        pricing_source: None,
+    };
+
+    assert_eq!(component_cost.total_or_component_sum(), Some(0.45));
+    assert_eq!(
+        component_cost.total_or_component_sum_for_currency("USD"),
+        Some(0.45)
+    );
+    assert_eq!(component_cost.total_for_currency("USD"), None);
+    assert_eq!(
+        component_cost.total_or_component_sum_for_currency("EUR"),
+        None
+    );
+
+    let empty_cost = CostEstimate {
+        total: None,
+        currency: "USD".to_string(),
+        input: None,
+        output: None,
+        cache_read: None,
+        cache_write: None,
+        source: CostSource::ProviderReported,
+        pricing_provider: None,
+        pricing_model: None,
+        pricing_as_of: None,
+        pricing_source: None,
+    };
+    assert_eq!(empty_cost.total_or_component_sum(), None);
+}
+
+#[test]
 fn test_usage_cost_round_trip_preserves_model_pricing_codec_compatibility() {
     let catalog = pricing_catalog(json!([
         {
