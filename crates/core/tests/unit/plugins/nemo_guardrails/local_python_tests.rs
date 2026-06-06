@@ -16,11 +16,82 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::*;
-#[cfg(unix)]
 use crate::plugins::nemo_guardrails::component::LocalBackendConfig;
 
 #[cfg(unix)]
 static NEXT_FIXTURE_ID: AtomicUsize = AtomicUsize::new(1);
+static PYTHON_EXECUTABLE_ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+struct EnvVarGuard {
+    name: &'static str,
+    value: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(name: &'static str, value: &str) -> Self {
+        let old_value = std::env::var_os(name);
+        unsafe {
+            std::env::set_var(name, value);
+        }
+        Self {
+            name,
+            value: old_value,
+        }
+    }
+
+    fn remove(name: &'static str) -> Self {
+        let old_value = std::env::var_os(name);
+        unsafe {
+            std::env::remove_var(name);
+        }
+        Self {
+            name,
+            value: old_value,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.value {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+}
+
+#[test]
+fn python_executable_prefers_config_over_environment() {
+    let _env_guard = PYTHON_EXECUTABLE_ENV_MUTEX.lock().unwrap();
+    let _nemo_python = EnvVarGuard::set(PYTHON_EXECUTABLE_ENV, "env-python");
+    let _pyo3_python = EnvVarGuard::set(PYO3_PYTHON_ENV, "pyo3-python");
+    let _uv_python = EnvVarGuard::set(UV_PYTHON_ENV, "uv-python");
+
+    let config = NeMoGuardrailsConfig {
+        local: Some(LocalBackendConfig {
+            python_executable: Some("configured-python".to_string()),
+            ..LocalBackendConfig::default()
+        }),
+        ..NeMoGuardrailsConfig::default()
+    };
+
+    assert_eq!(python_executable(&config), "configured-python");
+}
+
+#[test]
+fn python_executable_uses_python_environment_before_default() {
+    let _env_guard = PYTHON_EXECUTABLE_ENV_MUTEX.lock().unwrap();
+    let _nemo_python = EnvVarGuard::remove(PYTHON_EXECUTABLE_ENV);
+    let _pyo3_python = EnvVarGuard::set(PYO3_PYTHON_ENV, "pyo3-python");
+    let _uv_python = EnvVarGuard::set(UV_PYTHON_ENV, "uv-python");
+
+    assert_eq!(
+        python_executable(&NeMoGuardrailsConfig::default()),
+        "pyo3-python"
+    );
+}
 
 #[test]
 fn worker_python_path_prepends_configured_path_to_inherited_pythonpath() {

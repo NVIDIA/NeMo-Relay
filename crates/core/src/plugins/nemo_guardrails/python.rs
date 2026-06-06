@@ -31,8 +31,13 @@ use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResu
 
 use super::NeMoGuardrailsConfig;
 
+#[cfg(not(windows))]
 const DEFAULT_PYTHON_EXECUTABLE: &str = "python3";
+#[cfg(windows)]
+const DEFAULT_PYTHON_EXECUTABLE: &str = "python";
 const PYTHON_EXECUTABLE_ENV: &str = "NEMO_RELAY_PYTHON";
+const PYO3_PYTHON_ENV: &str = "PYO3_PYTHON";
+const UV_PYTHON_ENV: &str = "UV_PYTHON";
 const WORKER_INIT_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_SCRIPT: &str = include_str!("local_worker.py");
@@ -672,13 +677,17 @@ fn python_executable(config: &NeMoGuardrailsConfig) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .or_else(|| {
-            env::var(PYTHON_EXECUTABLE_ENV)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
+        .or_else(|| env_executable(PYTHON_EXECUTABLE_ENV))
+        .or_else(|| env_executable(PYO3_PYTHON_ENV))
+        .or_else(|| env_executable(UV_PYTHON_ENV))
         .unwrap_or_else(|| DEFAULT_PYTHON_EXECUTABLE.to_string())
+}
+
+fn env_executable(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn python_path(config: &NeMoGuardrailsConfig) -> Option<String> {
