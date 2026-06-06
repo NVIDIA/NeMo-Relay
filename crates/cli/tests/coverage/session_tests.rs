@@ -4,24 +4,20 @@
 use axum::http::HeaderMap;
 use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
-use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
-use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
-use opentelemetry_proto::tonic::trace::v1::Span;
-use prost::Message;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::net::TcpListener as StdTcpListener;
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use super::*;
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
 
 static OBSERVABILITY_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const HERMES_ROUTED_TEST_SESSION_KEY: &str = "hermes_routed_test_session_id";
 
 async fn install_test_atif_plugin(output_directory: &Path) {
     let _ = clear_plugin_configuration();
@@ -47,126 +43,28 @@ async fn install_test_atif_plugin(output_directory: &Path) {
     initialize_plugins(config).await.unwrap();
 }
 
-async fn install_test_openinference_plugin(endpoint: &str) {
-    let _ = clear_plugin_configuration();
-    let config: PluginConfig = serde_json::from_value(json!({
-        "version": 1,
-        "components": [
-            {
-                "kind": "observability",
-                "enabled": true,
-                "config": {
-                    "version": 1,
-                    "openinference": {
-                        "enabled": true,
-                        "transport": "http_binary",
-                        "endpoint": endpoint,
-                        "service_name": "codex-openinference-test",
-                        "timeout_millis": 1000
-                    }
-                }
-            }
-        ]
-    }))
-    .unwrap();
-    initialize_plugins(config).await.unwrap();
+fn make_openinference_test_subscriber(
+    scope: &str,
+) -> (
+    OpenInferenceSubscriber,
+    opentelemetry_sdk::trace::InMemorySpanExporter,
+) {
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = OpenInferenceSubscriber::from_tracer_provider(provider, scope.to_string());
+    (subscriber, exporter)
 }
 
-fn start_otlp_collector() -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
-    let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("http://{}/v1/traces", listener.local_addr().unwrap());
-    let handle = thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let (mut stream, _) = loop {
-            match listener.accept() {
-                Ok(connection) => break connection,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
-                        && Instant::now() < deadline =>
-                {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    panic!("collector should receive an OTLP request")
-                }
-                Err(error) => panic!("collector failed to accept OTLP request: {error}"),
-            }
-        };
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut buffer = Vec::new();
-        let mut content_length = None;
-        let mut header_end = None;
-        loop {
-            let mut chunk = [0_u8; 4096];
-            let read = stream.read(&mut chunk).unwrap();
-            if read == 0 {
-                break;
-            }
-            buffer.extend_from_slice(&chunk[..read]);
-            if header_end.is_none()
-                && let Some(position) = buffer.windows(4).position(|window| window == b"\r\n\r\n")
-            {
-                header_end = Some(position + 4);
-                let headers = String::from_utf8_lossy(&buffer[..position]);
-                content_length = headers.lines().find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())
-                        .flatten()
-                });
-            }
-            if let (Some(header_end), Some(content_length)) = (header_end, content_length)
-                && buffer.len() >= header_end + content_length
-            {
-                break;
-            }
-        }
-
-        let header_end = header_end.expect("collector should receive HTTP headers");
-        let content_length = content_length.expect("collector should receive content length");
-        let request = String::from_utf8_lossy(&buffer[..header_end]).to_string();
-        let body = buffer[header_end..header_end + content_length].to_vec();
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-            .unwrap();
-        (request, body)
-    });
-    (endpoint, handle)
-}
-
-fn decode_otlp_spans(body: &[u8]) -> Vec<Span> {
-    let request = ExportTraceServiceRequest::decode(body)
-        .unwrap_or_else(|error| panic!("expected a valid OTLP trace request: {error}"));
-    request
-        .resource_spans
-        .into_iter()
-        .flat_map(|resource_span| resource_span.scope_spans)
-        .flat_map(|scope_span| scope_span.spans)
-        .collect()
-}
-
-fn any_value_to_string(value: &AnyValue) -> Option<String> {
-    match value.value.as_ref()? {
-        any_value::Value::StringValue(value) => Some(value.clone()),
-        any_value::Value::BoolValue(value) => Some(value.to_string()),
-        any_value::Value::IntValue(value) => Some(value.to_string()),
-        any_value::Value::DoubleValue(value) => Some(value.to_string()),
-        any_value::Value::BytesValue(value) => Some(String::from_utf8_lossy(value).to_string()),
-        any_value::Value::ArrayValue(_) | any_value::Value::KvlistValue(_) => None,
-    }
-}
-
-fn otlp_attr_map(attributes: &[KeyValue]) -> HashMap<&str, String> {
+fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
     attributes
         .iter()
-        .filter_map(|attribute| {
-            Some((
-                attribute.key.as_str(),
-                any_value_to_string(attribute.value.as_ref()?)?,
-            ))
+        .map(|attribute| {
+            (
+                attribute.key.as_str().to_string(),
+                attribute.value.to_string(),
+            )
         })
         .collect()
 }
@@ -260,6 +158,14 @@ async fn stop_codex_turn(manager: &SessionManager, headers: &HeaderMap, session_
     .await;
 }
 
+fn hermes_routed_gateway_metadata(gateway_path: &str, test_session_marker: Option<&str>) -> Value {
+    let mut metadata = json!({ "gateway_path": gateway_path });
+    if let Some(marker) = test_session_marker {
+        metadata[HERMES_ROUTED_TEST_SESSION_KEY] = json!(marker);
+    }
+    metadata
+}
+
 fn read_atif_for_session(output_directory: &Path, session_id: &str) -> Value {
     flush_subscribers().unwrap();
     std::fs::read_dir(output_directory)
@@ -314,6 +220,187 @@ async fn has_pending_alignment(manager: &SessionManager, session_id: &str) -> bo
         .lock()
         .await
         .has_pending_session(session_id)
+}
+
+async fn drive_hermes_routed_provider_session(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    session_id: &str,
+    test_session_marker: Option<&str>,
+) {
+    manager
+        .apply_events(
+            headers,
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: session_id.into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_start".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let anthropic = manager
+        .start_llm(
+            headers,
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-sonnet-4".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("msg-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "claude-sonnet-4",
+                        "messages": [{"role": "user", "content": "Find the file."}],
+                        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: hermes_routed_gateway_metadata("/v1/messages", test_session_marker),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            anthropic,
+            json!({
+                "id": "msg_01",
+                "type": "message",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let responses = manager
+        .start_llm(
+            headers,
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("resp-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "input": "Find the weather.",
+                        "tools": [{"type": "function", "name": "get_weather"}]
+                    }),
+                },
+                streaming: false,
+                metadata: hermes_routed_gateway_metadata("/v1/responses", test_session_marker),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            responses,
+            json!({
+                "id": "resp_1",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "I will check the weather."}]},
+                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
+                ],
+                "usage": {
+                    "input_tokens": 75,
+                    "output_tokens": 20,
+                    "total_tokens": 95,
+                    "input_tokens_details": {"cached_tokens": 10},
+                    "cost_usd": 0.005
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let chat = manager
+        .start_llm(
+            headers,
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "openai.chat_completions".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("chat-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": "Inspect the files."}],
+                        "tools": [{"type": "function", "function": {"name": "read"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: hermes_routed_gateway_metadata(
+                    "/v1/chat/completions",
+                    test_session_marker,
+                ),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            chat,
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect.",
+                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "cost_usd": 0.001
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            headers,
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: session_id.into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_finalize".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1610,8 +1697,10 @@ async fn codex_stop_snapshots_atif_without_session_end() {
 #[tokio::test]
 async fn codex_openinference_spans_match_shared_contract() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
-    let (endpoint, collector) = start_otlp_collector();
-    install_test_openinference_plugin(&endpoint).await;
+    let subscriber_name = "cli-codex-openinference-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("codex-test-scope");
+    subscriber.register(subscriber_name).unwrap();
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();
 
@@ -1619,15 +1708,13 @@ async fn codex_openinference_spans_match_shared_contract() {
     run_codex_responses_tool_activity(&manager, &headers, "codex-openinference").await;
     stop_codex_turn(&manager, &headers, "codex-openinference").await;
 
-    clear_plugin_configuration().unwrap();
-    let (request, body) = collector.join().unwrap();
-    assert!(request.starts_with("POST /v1/traces HTTP/1.1"));
-    assert!(request.contains("content-type: application/x-protobuf"));
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
 
-    let spans = decode_otlp_spans(&body);
+    let spans = exporter.get_finished_spans().unwrap();
     let attributes_by_span = spans
         .iter()
-        .map(|span| (span.name.as_str(), otlp_attr_map(&span.attributes)))
+        .map(|span| (span.name.as_ref(), attr_map(&span.attributes)))
         .collect::<HashMap<_, _>>();
     let turn_attributes = attributes_by_span
         .get("codex-turn")
@@ -2726,177 +2813,7 @@ async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
     install_test_atif_plugin(&atif_dir).await;
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();
-
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::AgentStarted(SessionEvent {
-                session_id: "hermes-routed".into(),
-                agent_kind: AgentKind::Hermes,
-                event_name: "on_session_start".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let anthropic = manager
-        .start_llm(
-            &headers,
-            LlmGatewayStart {
-                session_id: Some("hermes-routed".into()),
-                provider: "anthropic.messages".into(),
-                model_name: Some("claude-sonnet-4".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: Some("msg-request".into()),
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "claude-sonnet-4",
-                        "messages": [{"role": "user", "content": "Find the file."}],
-                        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
-                    }),
-                },
-                streaming: false,
-                metadata: json!({ "gateway_path": "/v1/messages" }),
-            },
-        )
-        .await
-        .unwrap();
-    manager
-        .end_llm(
-            anthropic,
-            json!({
-                "id": "msg_01",
-                "type": "message",
-                "content": [
-                    {"type": "text", "text": "I will search."},
-                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
-                ],
-                "usage": {
-                    "input_tokens": 11,
-                    "output_tokens": 7,
-                    "cache_read_input_tokens": 3,
-                    "cost": {"total": 0.0042}
-                }
-            }),
-            json!({}),
-        )
-        .await
-        .unwrap();
-
-    let responses = manager
-        .start_llm(
-            &headers,
-            LlmGatewayStart {
-                session_id: Some("hermes-routed".into()),
-                provider: "openai.responses".into(),
-                model_name: Some("gpt-4o".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: Some("resp-request".into()),
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "gpt-4o",
-                        "input": "Find the weather.",
-                        "tools": [{"type": "function", "name": "get_weather"}]
-                    }),
-                },
-                streaming: false,
-                metadata: json!({ "gateway_path": "/v1/responses" }),
-            },
-        )
-        .await
-        .unwrap();
-    manager
-        .end_llm(
-            responses,
-            json!({
-                "id": "resp_1",
-                "output": [
-                    {"type": "message", "content": [{"type": "output_text", "text": "I will check the weather."}]},
-                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
-                ],
-                "usage": {
-                    "input_tokens": 75,
-                    "output_tokens": 20,
-                    "total_tokens": 95,
-                    "input_tokens_details": {"cached_tokens": 10},
-                    "cost_usd": 0.005
-                }
-            }),
-            json!({}),
-        )
-        .await
-        .unwrap();
-
-    let chat = manager
-        .start_llm(
-            &headers,
-            LlmGatewayStart {
-                session_id: Some("hermes-routed".into()),
-                provider: "openai.chat_completions".into(),
-                model_name: Some("gpt-4o".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: Some("chat-request".into()),
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "gpt-4o",
-                        "messages": [{"role": "user", "content": "Inspect the files."}],
-                        "tools": [{"type": "function", "function": {"name": "read"}}]
-                    }),
-                },
-                streaming: false,
-                metadata: json!({ "gateway_path": "/v1/chat/completions" }),
-            },
-        )
-        .await
-        .unwrap();
-    manager
-        .end_llm(
-            chat,
-            json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": "I will inspect.",
-                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
-                    }
-                }],
-                "usage": {
-                    "prompt_tokens": 3,
-                    "completion_tokens": 4,
-                    "total_tokens": 7,
-                    "prompt_tokens_details": {"cached_tokens": 2},
-                    "cost_usd": 0.001
-                }
-            }),
-            json!({}),
-        )
-        .await
-        .unwrap();
-
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "hermes-routed".into(),
-                agent_kind: AgentKind::Hermes,
-                event_name: "on_session_finalize".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
+    drive_hermes_routed_provider_session(&manager, &headers, "hermes-routed", None).await;
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-routed");
@@ -2934,6 +2851,131 @@ async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
     assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(31));
     assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(15));
     assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0102));
+}
+
+#[tokio::test]
+async fn hermes_routed_provider_payloads_emit_openinference_text_usage_and_cost() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-hermes-routed-openinference-test";
+    let session_id = "hermes-routed-openinference";
+    let _ = deregister_subscriber(subscriber_name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("session-test-scope");
+    let openinference_subscriber = subscriber.subscriber();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            // Manual test-path LLM events do not carry the owning session id in metadata,
+            // so the routed helper tags them with a stable test marker for subscriber isolation.
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get(HERMES_ROUTED_TEST_SESSION_KEY))
+                .and_then(Value::as_str)
+                == Some(session_id)
+            {
+                openinference_subscriber(event);
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    drive_hermes_routed_provider_session(&manager, &headers, session_id, Some(session_id)).await;
+
+    subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let llm_spans: Vec<HashMap<String, String>> = spans
+        .iter()
+        .map(|span| attr_map(&span.attributes))
+        .filter(|attributes| {
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("LLM")
+        })
+        .collect();
+    assert_eq!(llm_spans.len(), 3);
+
+    let anthropic = llm_spans
+        .iter()
+        .find(|attributes| {
+            attributes.get("output.value")
+                == Some(&"I will search.\nRequested tools: search".to_string())
+        })
+        .expect("expected Hermes-routed Anthropic OpenInference span");
+    assert_eq!(
+        anthropic.get("llm.model_name"),
+        Some(&"claude-sonnet-4".to_string())
+    );
+    assert_eq!(
+        anthropic.get("input.value"),
+        Some(&"user: Find the file.".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.prompt"),
+        Some(&"11".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.completion"),
+        Some(&"7".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"3".to_string())
+    );
+    assert_eq!(anthropic.get("llm.cost.total"), Some(&"0.0042".to_string()));
+
+    let responses = llm_spans
+        .iter()
+        .find(|attributes| {
+            attributes.get("output.value")
+                == Some(&"I will check the weather.\nRequested tools: get_weather".to_string())
+        })
+        .expect("expected Hermes-routed Responses OpenInference span");
+    assert_eq!(responses.get("llm.model_name"), Some(&"gpt-4o".to_string()));
+    assert_eq!(
+        responses.get("llm.token_count.prompt"),
+        Some(&"75".to_string())
+    );
+    assert_eq!(
+        responses.get("llm.token_count.completion"),
+        Some(&"20".to_string())
+    );
+    assert_eq!(
+        responses.get("llm.token_count.total"),
+        Some(&"95".to_string())
+    );
+    assert_eq!(
+        responses.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"10".to_string())
+    );
+    assert_eq!(responses.get("llm.cost.total"), Some(&"0.005".to_string()));
+
+    let chat = llm_spans
+        .iter()
+        .find(|attributes| {
+            attributes.get("output.value")
+                == Some(&"I will inspect.\nRequested tools: read".to_string())
+        })
+        .expect("expected Hermes-routed chat completions OpenInference span");
+    assert_eq!(chat.get("llm.model_name"), Some(&"gpt-4o".to_string()));
+    assert_eq!(
+        chat.get("input.value"),
+        Some(&"user: Inspect the files.".to_string())
+    );
+    assert_eq!(chat.get("llm.token_count.prompt"), Some(&"3".to_string()));
+    assert_eq!(
+        chat.get("llm.token_count.completion"),
+        Some(&"4".to_string())
+    );
+    assert_eq!(chat.get("llm.token_count.total"), Some(&"7".to_string()));
+    assert_eq!(
+        chat.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"2".to_string())
+    );
+    assert_eq!(chat.get("llm.cost.total"), Some(&"0.001".to_string()));
 }
 
 #[tokio::test]
