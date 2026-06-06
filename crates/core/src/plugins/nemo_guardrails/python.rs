@@ -377,6 +377,9 @@ impl LocalGuardrailsWorker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
+        if let Some(python_path) = python_path(config) {
+            command.env("PYTHONPATH", python_path);
+        }
 
         let mut child = command.spawn().map_err(|err| {
             PluginError::RegistrationFailed(format!(
@@ -675,6 +678,16 @@ fn python_executable(config: &NeMoGuardrailsConfig) -> String {
                 .filter(|value| !value.is_empty())
         })
         .unwrap_or_else(|| DEFAULT_PYTHON_EXECUTABLE.to_string())
+}
+
+fn python_path(config: &NeMoGuardrailsConfig) -> Option<String> {
+    config
+        .local
+        .as_ref()
+        .and_then(|local| local.python_path.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn set_request_id(payload: &mut Json, id: &str) -> FlowResult<()> {

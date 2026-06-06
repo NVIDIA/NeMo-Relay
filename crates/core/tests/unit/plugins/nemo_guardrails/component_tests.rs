@@ -362,6 +362,7 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
         "timeout_millis",
         "python_module",
         "python_executable",
+        "python_path",
         "context",
         "thread_id",
         "state",
@@ -762,7 +763,7 @@ fn invalid_shapes_and_values_are_reported() {
         "config_yaml": "",
         "colang_content": "",
         "codec": "openai_chat",
-        "local": {"python_module": "", "python_executable": ""}
+        "local": {"python_module": "", "python_executable": "", "python_path": ""}
     })));
     assert!(local_empty_fields.has_errors());
     assert!(
@@ -794,6 +795,12 @@ fn invalid_shapes_and_values_are_reported() {
             .diagnostics
             .iter()
             .any(|diag| diag.field.as_deref() == Some("local.python_executable"))
+    );
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("local.python_path"))
     );
 
     let local_request_defaults = validate_plugin_config(&plugin_config(json!({

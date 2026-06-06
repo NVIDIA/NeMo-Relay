@@ -75,6 +75,7 @@ impl FakeGuardrails {
             local: Some(LocalBackendConfig {
                 python_module: Some(self.module_name.clone()),
                 python_executable: Some(self.python.to_string_lossy().into_owned()),
+                python_path: None,
             }),
             ..NeMoGuardrailsConfig::default()
         }

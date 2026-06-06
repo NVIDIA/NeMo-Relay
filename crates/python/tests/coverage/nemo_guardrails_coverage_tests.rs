@@ -3,10 +3,10 @@
 
 //! Coverage tests for Python-facing local NeMo Guardrails integration.
 
-use std::ffi::{CString, OsString};
+use std::ffi::CString;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{self, Command, Stdio};
 use std::sync::{
     Mutex,
@@ -39,7 +39,6 @@ struct FakeGuardrailsPackage {
     root: PathBuf,
     module_name: String,
     python_executable: PathBuf,
-    previous_pythonpath: Option<OsString>,
 }
 
 impl FakeGuardrailsPackage {
@@ -61,14 +60,12 @@ impl FakeGuardrailsPackage {
         )
         .unwrap();
 
-        let previous_pythonpath = prepend_pythonpath(&root);
         let python_executable = PathBuf::from(python_executable_for_worker(py));
 
         Self {
             root,
             module_name: module_name.to_string(),
             python_executable,
-            previous_pythonpath,
         }
     }
 }
@@ -96,30 +93,7 @@ fn python_executable_for_worker(py: Python<'_>) -> String {
 
 impl Drop for FakeGuardrailsPackage {
     fn drop(&mut self) {
-        restore_pythonpath(&self.previous_pythonpath);
         let _ = fs::remove_dir_all(&self.root);
-    }
-}
-
-fn prepend_pythonpath(root: &Path) -> Option<OsString> {
-    let previous = std::env::var_os("PYTHONPATH");
-    let mut paths = vec![root.to_path_buf()];
-    if let Some(previous_value) = previous.as_ref().filter(|value| !value.is_empty()) {
-        paths.extend(std::env::split_paths(previous_value));
-    }
-    let pythonpath = std::env::join_paths(paths).unwrap();
-    unsafe {
-        std::env::set_var("PYTHONPATH", pythonpath);
-    }
-    previous
-}
-
-fn restore_pythonpath(previous: &Option<OsString>) {
-    unsafe {
-        match previous {
-            Some(value) => std::env::set_var("PYTHONPATH", value),
-            None => std::env::remove_var("PYTHONPATH"),
-        }
     }
 }
 
@@ -127,6 +101,7 @@ fn fake_guardrails_module_prelude(
     module_name: &str,
     python_dir: &str,
     python_executable: &str,
+    python_path: &str,
 ) -> String {
     format!(
         r#"
@@ -136,10 +111,12 @@ sys.path.insert(0, {python_dir:?})
 
 MODULE_NAME = {module_name:?}
 PYTHON_EXECUTABLE = {python_executable:?}
+PYTHONPATH = {python_path:?}
 "#,
         python_dir = python_dir,
         module_name = module_name,
         python_executable = python_executable,
+        python_path = python_path,
     )
 }
 
@@ -406,6 +383,7 @@ fn test_guardrails_local_runtime_enforces_llm_input_and_output_checks() {
                 &fake.module_name,
                 &python_dir.display().to_string(),
                 &fake.python_executable.display().to_string(),
+                &fake.root.display().to_string(),
             );
             let module = load_module(
                 py,
@@ -436,6 +414,7 @@ async def run_case():
                         "local": {{
                             "python_module": MODULE_NAME,
                             "python_executable": PYTHON_EXECUTABLE,
+                            "python_path": PYTHONPATH,
                         }},
                     }},
                 }}
@@ -536,6 +515,7 @@ fn test_guardrails_local_runtime_rejects_unsupported_nemoguardrails_version() {
                 &fake.module_name,
                 &python_dir.display().to_string(),
                 &fake.python_executable.display().to_string(),
+                &fake.root.display().to_string(),
             );
             let module = load_module(
                 py,
@@ -561,6 +541,7 @@ async def run_case():
                         "local": {{
                             "python_module": MODULE_NAME,
                             "python_executable": PYTHON_EXECUTABLE,
+                            "python_path": PYTHONPATH,
                         }},
                     }},
                 }}
@@ -612,6 +593,7 @@ fn test_guardrails_local_runtime_enforces_streamed_output_rails() {
                 &fake.module_name,
                 &python_dir.display().to_string(),
                 &fake.python_executable.display().to_string(),
+                &fake.root.display().to_string(),
             );
             let module = load_module(
                 py,
@@ -639,6 +621,7 @@ def plugin_config(config_yaml="models: []"):
                     "local": {{
                         "python_module": MODULE_NAME,
                         "python_executable": PYTHON_EXECUTABLE,
+                        "python_path": PYTHONPATH,
                     }},
                 }},
             }}
@@ -793,6 +776,7 @@ fn test_local_guardrails_provider_initializes_and_enforces_managed_core_calls() 
                 &fake.module_name,
                 &python_dir.display().to_string(),
                 &fake.python_executable.display().to_string(),
+                &fake.root.display().to_string(),
             );
             let module = load_module(
                 py,
@@ -824,6 +808,7 @@ async def run_case():
                         "local": {{
                             "python_module": MODULE_NAME,
                             "python_executable": PYTHON_EXECUTABLE,
+                            "python_path": PYTHONPATH,
                         }},
                     }},
                 }}

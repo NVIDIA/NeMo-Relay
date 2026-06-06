@@ -1350,6 +1350,7 @@ fn nemo_guardrails_config_map_serializes_local_mode_fields() {
         local: Some(LocalBackendConfig {
             python_module: Some("custom_guardrails".into()),
             python_executable: Some("/opt/python/bin/python3".into()),
+            python_path: None,
         }),
         ..NeMoGuardrailsConfig::default()
     })
