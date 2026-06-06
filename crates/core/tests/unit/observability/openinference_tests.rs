@@ -33,6 +33,14 @@ use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
 
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
@@ -2179,6 +2187,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
 fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
     let (provider, exporter) = make_provider();
     let mut processor =
         OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
@@ -2218,7 +2227,43 @@ fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
         attributes.get("llm.cost.total"),
         Some(&"0.000435".to_string())
     );
-    reset_active_pricing_resolver().unwrap();
+}
+
+#[test]
+fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "priced-model",
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "total_tokens": 1_500,
+                "prompt_tokens_details": {"cached_tokens": 200}
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
 }
 
 #[test]
@@ -2273,6 +2318,9 @@ fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
 
 #[test]
 fn llm_end_with_unknown_model_usage_omits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
     let (provider, exporter) = make_provider();
     let mut processor =
         OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());

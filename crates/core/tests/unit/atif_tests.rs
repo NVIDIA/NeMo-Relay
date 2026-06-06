@@ -18,6 +18,14 @@ use crate::codec::response::{
 use serde_json::json;
 use std::collections::HashSet;
 
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum EventType {
     Start,
@@ -739,7 +747,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
                 "output_tokens": 22,
                 "cache_read_input_tokens": 3,
                 "cache_creation_input_tokens": 5,
-                "cost": { "total": 0.0042 }
+                "cost": { "total": 0.0042, "currency": "USD" }
             }
         }),
         None,
@@ -750,6 +758,20 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     assert_eq!(anthropic_metrics.completion_tokens, Some(22));
     assert_eq!(anthropic_metrics.cached_tokens, Some(8));
     assert_eq!(anthropic_metrics.cost_usd, Some(0.0042));
+
+    let non_usd_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "input_tokens": 11,
+                "output_tokens": 22,
+                "cost": { "total": 0.0042, "currency": "EUR" }
+            }
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(non_usd_metrics.cost_usd, None);
 }
 
 #[test]
@@ -779,6 +801,7 @@ fn test_exporter_derives_llm_cost_from_model_pricing() {
     )
     .unwrap();
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
 
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();
@@ -810,7 +833,6 @@ fn test_exporter_derives_llm_cost_from_model_pricing() {
         trajectory.final_metrics.as_ref().unwrap().total_cost_usd,
         Some(0.000_435)
     );
-    reset_active_pricing_resolver().unwrap();
 }
 
 #[test]

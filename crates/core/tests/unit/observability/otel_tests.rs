@@ -29,6 +29,14 @@ use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
 
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
 fn empty_annotated_response() -> AnnotatedLlmResponse {
     AnnotatedLlmResponse {
         id: None,
@@ -837,6 +845,7 @@ fn helper_functions_cover_additional_otel_branches() {
     {
         let _pricing_guard = pricing_test_mutex().lock().unwrap();
         install_test_pricing("priced-model");
+        let _reset_guard = ResetPricingResolverGuard;
         let llm_cost_event = make_scope_event_with_profile(
             ScopeCategory::End,
             Uuid::now_v7(),
@@ -870,7 +879,6 @@ fn helper_functions_cover_additional_otel_branches() {
             llm_cost_attributes.get("nemo_relay.llm.cost.currency"),
             Some(&"USD".to_string())
         );
-        reset_active_pricing_resolver().unwrap();
     }
 
     let normalized_cost_event = make_scope_event_with_profile(
@@ -916,6 +924,38 @@ fn helper_functions_cover_additional_otel_branches() {
         normalized_cost_attributes.get("nemo_relay.llm.cost.currency"),
         Some(&"USD".to_string())
     );
+
+    {
+        let _pricing_guard = pricing_test_mutex().lock().unwrap();
+        install_test_pricing("priced-model");
+        let _reset_guard = ResetPricingResolverGuard;
+        let manual_cost_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({
+                "model": "priced-model",
+                "usage": {
+                    "prompt_tokens": 1_000,
+                    "completion_tokens": 500,
+                    "total_tokens": 1_500,
+                    "prompt_tokens_details": {"cached_tokens": 200}
+                }
+            })),
+            None,
+        );
+        let manual_cost_attributes = attr_map(&end_attributes(&manual_cost_event));
+        assert_eq!(
+            manual_cost_attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"0.000435".to_string())
+        );
+        assert_eq!(
+            manual_cost_attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"USD".to_string())
+        );
+    }
 
     let mark = Event::Mark(MarkEvent::new(
         BaseEvent::builder()

@@ -25,8 +25,9 @@ use crate::api::event::ScopeCategory;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use crate::codec::response::{CostEstimate, estimate_cost_for_provider};
+use crate::codec::response::{CostEstimate, Usage, estimate_cost_for_provider};
 use crate::error::FlowError;
+use crate::json::Json;
 use chrono::{DateTime, Utc};
 use opentelemetry::trace::{
     Span as _, SpanContext, SpanKind, TraceContextExt, Tracer, TracerProvider as _,
@@ -680,18 +681,199 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
 }
 
 fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
-    let response = event.annotated_response()?;
-    let usage = response.usage.as_ref()?;
-    if let Some(cost) = usage.cost.as_ref().and_then(cost_total_and_currency) {
+    if let Some(cost) = cost_from_manual_llm_output(event.output()) {
         return Some(cost);
     }
-    let model_name = response.model.as_deref().or_else(|| event.model_name())?;
-    estimate_cost_for_provider(Some(event.name()), model_name, usage)
+    if let Some(response) = event.annotated_response()
+        && let Some(usage) = response.usage.as_ref()
+    {
+        if let Some(cost) = usage.cost.as_ref().and_then(cost_total_and_currency) {
+            return Some(cost);
+        }
+        let model_name = response.model.as_deref().or_else(|| event.model_name())?;
+        return estimate_cost_for_provider(Some(event.name()), model_name, usage)
+            .and_then(|cost| cost_total_and_currency(&cost));
+    }
+    let usage = usage_from_manual_llm_output(event.output())?;
+    let model_name = event
+        .model_name()
+        .or_else(|| model_name_from_manual_llm_output(event.output()))?;
+    estimate_cost_for_provider(Some(event.name()), model_name, &usage)
         .and_then(|cost| cost_total_and_currency(&cost))
 }
 
 fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
     Some((cost.total?, cost.currency.clone()))
+}
+
+fn cost_from_manual_llm_output(output: Option<&Json>) -> Option<(f64, String)> {
+    let object = output?.as_object()?;
+    let usage = object.get("usage").and_then(Json::as_object);
+    let token_usage = object.get("token_usage").and_then(Json::as_object);
+    usage
+        .and_then(cost_from_manual_usage)
+        .or_else(|| token_usage.and_then(cost_from_manual_usage))
+}
+
+fn cost_from_manual_usage(usage: &serde_json::Map<String, Json>) -> Option<(f64, String)> {
+    usage
+        .get("cost_usd")
+        .and_then(Json::as_f64)
+        .map(|total| (total, "USD".to_string()))
+        .or_else(|| {
+            let cost = usage.get("cost")?.as_object()?;
+            Some((
+                cost.get("total")?.as_f64()?,
+                cost.get("currency")
+                    .and_then(Json::as_str)
+                    .unwrap_or("USD")
+                    .to_string(),
+            ))
+        })
+}
+
+fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
+    let object = output?.as_object()?;
+    let usage = object.get("usage").and_then(Json::as_object);
+    let token_usage = object.get("token_usage").and_then(Json::as_object);
+    if usage.is_none() && token_usage.is_none() {
+        return None;
+    }
+
+    let prompt_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &["prompt_tokens", "input_tokens", "inputTokens", "input"],
+    );
+    let completion_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "completion_tokens",
+            "output_tokens",
+            "completionTokens",
+            "outputTokens",
+            "output",
+        ],
+    );
+    let reported_total_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &["total_tokens", "totalTokens", "total"],
+    );
+    let cache_read_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "cache_read_tokens",
+            "cached_tokens",
+            "cache_read_input_tokens",
+            "cacheReadTokens",
+            "cachedTokens",
+            "cacheReadInputTokens",
+            "cacheRead",
+        ],
+    )
+    .or_else(|| {
+        first_nested_u64_from_manual_usage(
+            usage,
+            token_usage,
+            "input_tokens_details",
+            "cached_tokens",
+        )
+    })
+    .or_else(|| {
+        first_nested_u64_from_manual_usage(
+            usage,
+            token_usage,
+            "prompt_tokens_details",
+            "cached_tokens",
+        )
+    });
+    let cache_write_tokens = first_u64_from_manual_usage(
+        usage,
+        token_usage,
+        &[
+            "cache_write_tokens",
+            "cache_creation_input_tokens",
+            "cacheWriteTokens",
+            "cacheCreationInputTokens",
+            "cacheWrite",
+        ],
+    );
+
+    if prompt_tokens.is_none()
+        && completion_tokens.is_none()
+        && reported_total_tokens.is_none()
+        && cache_read_tokens.is_none()
+        && cache_write_tokens.is_none()
+    {
+        return None;
+    }
+
+    Some(Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: normalize_total_tokens(
+            reported_total_tokens,
+            prompt_tokens,
+            completion_tokens,
+        ),
+        cache_read_tokens,
+        cache_write_tokens,
+        cost: None,
+    })
+}
+
+fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
+    output?.as_object()?.get("model").and_then(Json::as_str)
+}
+
+fn first_u64_from_manual_usage(
+    usage: Option<&serde_json::Map<String, Json>>,
+    token_usage: Option<&serde_json::Map<String, Json>>,
+    keys: &[&str],
+) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        usage
+            .and_then(|usage| usage.get(*key).and_then(Json::as_u64))
+            .or_else(|| token_usage.and_then(|usage| usage.get(*key).and_then(Json::as_u64)))
+    })
+}
+
+fn first_nested_u64_from_manual_usage(
+    usage: Option<&serde_json::Map<String, Json>>,
+    token_usage: Option<&serde_json::Map<String, Json>>,
+    parent: &str,
+    key: &str,
+) -> Option<u64> {
+    usage
+        .and_then(|usage| usage.get(parent).and_then(Json::as_object))
+        .and_then(|details| details.get(key).and_then(Json::as_u64))
+        .or_else(|| {
+            token_usage
+                .and_then(|usage| usage.get(parent).and_then(Json::as_object))
+                .and_then(|details| details.get(key).and_then(Json::as_u64))
+        })
+}
+
+fn normalize_total_tokens(
+    reported_total_tokens: Option<u64>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+) -> Option<u64> {
+    let calculated_total = match (prompt_tokens, completion_tokens) {
+        (Some(prompt), Some(completion)) => Some(prompt + completion),
+        (Some(prompt), None) => Some(prompt),
+        (None, Some(completion)) => Some(completion),
+        (None, None) => None,
+    };
+    match (reported_total_tokens, calculated_total) {
+        (Some(reported), Some(calculated)) if reported >= calculated => Some(reported),
+        (Some(_), Some(calculated)) => Some(calculated),
+        (Some(reported), None) => Some(reported),
+        (None, calculated) => calculated,
+    }
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {

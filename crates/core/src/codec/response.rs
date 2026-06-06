@@ -221,7 +221,9 @@ pub(crate) fn provider_reported_cost(
 
     Some(CostEstimate {
         total,
-        currency: if has_currency_native_amount {
+        currency: if provider_total_cost.is_some() {
+            default_cost_currency()
+        } else if has_currency_native_amount {
             cost.currency.unwrap_or_else(default_cost_currency)
         } else {
             default_cost_currency()

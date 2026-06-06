@@ -49,15 +49,19 @@ pub(crate) fn init(command: PricingInitCommand) -> Result<(), CliError> {
 }
 
 pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliError> {
-    read_pricing_catalog(&command.path)?;
+    let source_path = std::fs::canonicalize(&command.path).map_err(|source| {
+        CliError::Config(format!(
+            "could not canonicalize pricing catalog '{}': {source}",
+            command.path.display()
+        ))
+    })?;
+    read_pricing_catalog(&source_path)?;
     let scope = target_pricing_scope(&command.scope)?;
     let path = target_path(scope)?;
     let mut plugin_config = read_plugin_config(&path)?;
     let index = ensure_pricing_component(&mut plugin_config)?;
     let mut pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
-    let source = PricingSourceConfig::File {
-        path: command.path.clone(),
-    };
+    let source = PricingSourceConfig::File { path: source_path };
 
     if !pricing_config.sources.contains(&source) {
         if command.append {
@@ -81,6 +85,11 @@ pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliErro
 
 pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {
     let sources = pricing_catalog_sources_from_current_config()?;
+    if sources.is_empty() {
+        return Err(CliError::Config(
+            "no pricing sources configured; run `nemo-relay pricing add-source <catalog.json>` or enable the pricing component".into(),
+        ));
+    }
     let resolved = resolve_pricing(&sources, command.provider.as_deref(), &command.model)
         .ok_or_else(|| {
             CliError::Config(format!(

@@ -1114,10 +1114,16 @@ fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> O
         })
         .or_else(|| {
             let usage = fallback_usage?;
-            let model_name = event.model_name()?;
+            let model_name = event
+                .model_name()
+                .or_else(|| model_name_from_manual_llm_output(event.output()))?;
             estimate_cost_for_provider(Some(event.name()), model_name, usage)
                 .and_then(|cost| cost.total_for_currency("USD"))
         })
+}
+
+fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
+    output?.as_object()?.get("model").and_then(Json::as_str)
 }
 
 fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {

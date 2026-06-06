@@ -177,12 +177,17 @@ fn cli_pricing_add_source_validates_and_updates_user_plugin_config() {
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     std::fs::write(&catalog, pricing_catalog_json("custom-model")).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::copy(&catalog, cwd.join("pricing.json")).unwrap();
+    let canonical = std::fs::canonicalize(cwd.join("pricing.json")).unwrap();
 
     let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .args(["pricing", "add-source"])
-        .arg(&catalog)
+        .arg("pricing.json")
         .output()
         .unwrap();
 
@@ -196,7 +201,7 @@ fn cli_pricing_add_source_validates_and_updates_user_plugin_config() {
     .unwrap();
     assert!(rendered.contains("kind = \"pricing\""));
     assert!(rendered.contains("type = \"file\""));
-    assert!(rendered.contains(catalog.to_str().unwrap()));
+    assert!(rendered.contains(canonical.to_str().unwrap()));
 }
 
 #[test]
@@ -256,6 +261,28 @@ path = {}
     assert!(stdout.contains("model = custom-model"));
     assert!(stdout.contains("estimated_total"));
     assert!(stdout.contains("currency = USD"));
+}
+
+#[test]
+fn cli_pricing_resolve_reports_missing_sources_distinctly() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["pricing", "resolve", "custom-model"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no pricing sources configured"),
+        "expected missing pricing source error, got:\n{stderr}"
+    );
 }
 
 #[test]

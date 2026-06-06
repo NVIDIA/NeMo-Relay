@@ -16,6 +16,22 @@ use crate::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
 };
 
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
+struct ClearPluginConfigurationGuard;
+
+impl Drop for ClearPluginConfigurationGuard {
+    fn drop(&mut self) {
+        let _ = clear_plugin_configuration();
+    }
+}
+
 /// Helper: build a fully-populated AnnotatedLlmResponse.
 fn full_response() -> AnnotatedLlmResponse {
     AnnotatedLlmResponse {
@@ -482,6 +498,7 @@ fn test_attach_estimated_cost_uses_event_provider() {
         flat_pricing_entry("azure/openai", "same-model", 10.0, 20.0)
     ]));
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
 
     let mut response = AnnotatedLlmResponse {
         model: Some("same-model".into()),
@@ -498,7 +515,6 @@ fn test_attach_estimated_cost_uses_event_provider() {
     let cost = response.usage.unwrap().cost.unwrap();
     assert_eq!(cost.total, Some(0.02));
     assert_eq!(cost.pricing_provider.as_deref(), Some("azure/openai"));
-    reset_active_pricing_resolver().unwrap();
 }
 
 #[test]
@@ -672,6 +688,25 @@ fn test_pricing_resolver_loads_inline_and_file_sources_in_order() {
 }
 
 #[test]
+fn test_pricing_resolver_validates_inline_catalogs() {
+    let config = PricingConfig {
+        sources: vec![PricingSourceConfig::Inline {
+            catalog: PricingCatalog {
+                version: 2,
+                entries: vec![],
+            },
+        }],
+    };
+
+    let err = PricingResolver::from_config(&config).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("unsupported pricing catalog version 2")
+    );
+}
+
+#[test]
 fn test_pricing_resolver_accepts_custom_database_backed_sources() {
     struct TestDatabasePricingSource {
         catalog: PricingCatalog,
@@ -703,6 +738,32 @@ fn test_pricing_resolver_accepts_custom_database_backed_sources() {
 
     assert_eq!(cost.total, Some(0.02));
     assert_eq!(cost.pricing_provider.as_deref(), Some("database"));
+}
+
+#[test]
+fn test_pricing_resolver_validates_custom_source_catalogs() {
+    struct InvalidDatabasePricingSource;
+
+    impl PricingSource for InvalidDatabasePricingSource {
+        fn source_name(&self) -> &str {
+            "invalid-test-db"
+        }
+
+        fn load_catalog(&self) -> Result<Option<PricingCatalog>, PricingCatalogError> {
+            Ok(Some(PricingCatalog {
+                version: 2,
+                entries: vec![],
+            }))
+        }
+    }
+
+    let err =
+        PricingResolver::from_sources(vec![Box::new(InvalidDatabasePricingSource)]).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("unsupported pricing catalog version 2")
+    );
 }
 
 #[test]
@@ -741,6 +802,7 @@ fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(async { initialize_plugins(config).await.unwrap() });
+    let _clear_guard = ClearPluginConfigurationGuard;
     let usage = Usage {
         prompt_tokens: Some(1_000),
         completion_tokens: Some(500),

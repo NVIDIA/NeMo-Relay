@@ -688,6 +688,13 @@ fn extract_metrics(
     let cached = sum_options(cache_read, cache_write);
     let explicit_cost = usage.get("cost_usd").and_then(Json::as_f64).or_else(|| {
         let cost = usage.get("cost")?.as_object()?;
+        if cost
+            .get("currency")
+            .and_then(Json::as_str)
+            .is_some_and(|currency| currency != "USD")
+        {
+            return None;
+        }
         cost.get("total").and_then(Json::as_f64)
     });
     let cost = explicit_cost.or_else(|| {

@@ -197,7 +197,10 @@ impl PricingResolver {
         let mut catalogs = Vec::new();
         for source in &config.sources {
             match source {
-                PricingSourceConfig::Inline { catalog } => catalogs.push(catalog.clone()),
+                PricingSourceConfig::Inline { catalog } => {
+                    catalog.validate()?;
+                    catalogs.push(catalog.clone());
+                }
                 PricingSourceConfig::File { path } => {
                     let raw = std::fs::read_to_string(path).map_err(|source| {
                         PricingCatalogError::FileRead {
@@ -217,6 +220,7 @@ impl PricingResolver {
         let mut catalogs = Vec::new();
         for source in sources {
             if let Some(catalog) = source.load_catalog()? {
+                catalog.validate()?;
                 catalogs.push(catalog);
             }
         }
