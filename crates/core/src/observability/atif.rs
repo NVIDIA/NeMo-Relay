@@ -697,22 +697,34 @@ fn extract_metrics(
         }
         cost.get("total").and_then(Json::as_f64)
     });
-    let cost = explicit_cost.or_else(|| {
-        let model_name = model_name.or_else(|| response_model_name(output))?;
-        estimate_cost_for_provider(
-            provider,
-            model_name,
-            &Usage {
-                prompt_tokens: prompt,
-                completion_tokens: completion,
-                total_tokens: usage_u64(usage, &["total_tokens"]),
-                cache_read_tokens: cache_read,
-                cache_write_tokens: cache_write,
-                cost: None,
-            },
-        )
-        .and_then(|cost| cost.total_for_currency("USD"))
-    });
+    let has_non_usd_cost = usage
+        .get("cost")
+        .and_then(Json::as_object)
+        .is_some_and(|cost| {
+            cost.get("currency")
+                .and_then(Json::as_str)
+                .is_some_and(|currency| currency != "USD")
+        });
+    let cost = if has_non_usd_cost {
+        explicit_cost
+    } else {
+        explicit_cost.or_else(|| {
+            let model_name = model_name.or_else(|| response_model_name(output))?;
+            estimate_cost_for_provider(
+                provider,
+                model_name,
+                &Usage {
+                    prompt_tokens: prompt,
+                    completion_tokens: completion,
+                    total_tokens: usage_u64(usage, &["total_tokens"]),
+                    cache_read_tokens: cache_read,
+                    cache_write_tokens: cache_write,
+                    cost: None,
+                },
+            )
+            .and_then(|cost| cost.total_for_currency("USD"))
+        })
+    };
     let prompt_ids = usage
         .get("prompt_token_ids")
         .and_then(Json::as_array)

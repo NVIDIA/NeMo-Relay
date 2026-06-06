@@ -690,9 +690,10 @@ fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
         if let Some(cost) = usage.cost.as_ref().and_then(cost_total_and_currency) {
             return Some(cost);
         }
-        let model_name = response.model.as_deref().or_else(|| event.model_name())?;
-        return estimate_cost_for_provider(Some(event.name()), model_name, usage)
-            .and_then(|cost| cost_total_and_currency(&cost));
+        if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
+            return estimate_cost_for_provider(Some(event.name()), model_name, usage)
+                .and_then(|cost| cost_total_and_currency(&cost));
+        }
     }
     let usage = usage_from_manual_llm_output(event.output())?;
     let model_name = event

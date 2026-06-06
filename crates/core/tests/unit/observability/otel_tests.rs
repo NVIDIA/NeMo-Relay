@@ -955,6 +955,47 @@ fn helper_functions_cover_additional_otel_branches() {
             manual_cost_attributes.get("nemo_relay.llm.cost.currency"),
             Some(&"USD".to_string())
         );
+
+        let annotated_without_model_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({
+                "model": "priced-model",
+                "usage": {
+                    "prompt_tokens": 1_000,
+                    "completion_tokens": 500,
+                    "total_tokens": 1_500,
+                    "prompt_tokens_details": {"cached_tokens": 200}
+                }
+            })),
+            Some(
+                CategoryProfile::builder()
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            total_tokens: Some(1_500),
+                            cache_read_tokens: Some(200),
+                            ..Usage::default()
+                        }),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let annotated_without_model_attributes =
+            attr_map(&end_attributes(&annotated_without_model_event));
+        assert_eq!(
+            annotated_without_model_attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"0.000435".to_string())
+        );
+        assert_eq!(
+            annotated_without_model_attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"USD".to_string())
+        );
     }
 
     let mark = Event::Mark(MarkEvent::new(

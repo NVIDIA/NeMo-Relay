@@ -26,6 +26,33 @@ impl Drop for ResetPricingResolverGuard {
     }
 }
 
+fn install_test_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
 #[derive(Debug, Clone, Copy)]
 enum EventType {
     Start,
@@ -775,32 +802,35 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
 }
 
 #[test]
-fn test_exporter_derives_llm_cost_from_model_pricing() {
+fn test_non_usd_reported_cost_blocks_model_pricing_estimation() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
-    let catalog = PricingCatalog::from_json_str(
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let metrics = extract_metrics(
         &json!({
-            "version": 1,
-            "entries": [
-                {
-                    "provider": "test",
-                    "model_id": "priced-model",
-                    "pricing_as_of": "2026-06-05",
-                    "pricing_source": "test",
-                    "rates": {
-                        "input_per_million": 0.15,
-                        "output_per_million": 0.60,
-                        "cache_read_per_million": 0.075
-                    },
-                    "prompt_cache": {
-                        "read_accounting": "included_in_prompt_tokens"
-                    }
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "total": 0.42,
+                    "currency": "EUR"
                 }
-            ]
-        })
-        .to_string(),
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
     )
     .unwrap();
-    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    assert_eq!(metrics.cost_usd, None);
+}
+
+#[test]
+fn test_exporter_derives_llm_cost_from_model_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
     let _reset_guard = ResetPricingResolverGuard;
 
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
