@@ -148,6 +148,9 @@ counts are supplied, the estimated total cost. The source line is one of
 entries debuggable. This is a dry diagnostic command; it does not mutate
 configuration.
 
+`nemo-relay doctor` also validates enabled pricing sources and reports missing,
+unreadable, or invalid catalogs before the gateway starts.
+
 Model lookup is provider-aware and route-aware. Relay uses the managed LLM call
 name as the provider/route and first tries provider-scoped keys for the full
 model and terminal model name, then falls back to model-only suffixes. For
