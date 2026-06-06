@@ -33,6 +33,7 @@ use super::NeMoGuardrailsConfig;
 const DEFAULT_PYTHON_EXECUTABLE: &str = "python3";
 const PYTHON_EXECUTABLE_ENV: &str = "NEMO_RELAY_PYTHON";
 const WORKER_INIT_TIMEOUT: Duration = Duration::from_secs(30);
+const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_SCRIPT: &str = include_str!("local_worker.py");
 
 pub(super) fn register_local_backend(
@@ -358,7 +359,7 @@ impl LocalGuardrailsBridge {
 }
 
 struct LocalGuardrailsWorker {
-    stdin: Mutex<ChildStdin>,
+    writer: Mutex<Option<WorkerCommandWriter>>,
     child: Mutex<Child>,
     waiters: Arc<Mutex<HashMap<String, std_mpsc::Sender<WorkerEnvelope>>>>,
     stream_events: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkerEnvelope>>>>,
@@ -394,7 +395,7 @@ impl LocalGuardrailsWorker {
         })?;
 
         let worker = Arc::new(Self {
-            stdin: Mutex::new(stdin),
+            writer: Mutex::new(Some(WorkerCommandWriter::spawn(stdin))),
             child: Mutex::new(child),
             waiters: Arc::new(Mutex::new(HashMap::new())),
             stream_events: Arc::new(Mutex::new(HashMap::new())),
@@ -461,10 +462,21 @@ impl LocalGuardrailsWorker {
 
     async fn request(&self, mut payload: Json) -> FlowResult<Json> {
         let receiver = self.send_request(&mut payload)?;
-        let envelope = tokio::task::spawn_blocking(move || receiver.recv())
-            .await
-            .map_err(|err| FlowError::Internal(format!("worker response task failed: {err}")))?
-            .map_err(|err| FlowError::Internal(format!("worker response channel closed: {err}")))?;
+        let response_task = tokio::task::spawn_blocking(move || receiver.recv());
+        let envelope = match tokio::time::timeout(WORKER_RPC_TIMEOUT, response_task).await {
+            Ok(result) => result
+                .map_err(|err| FlowError::Internal(format!("worker response task failed: {err}")))?
+                .map_err(|err| {
+                    FlowError::Internal(format!("worker response channel closed: {err}"))
+                })?,
+            Err(_) => {
+                self.shutdown();
+                return Err(FlowError::Internal(format!(
+                    "worker request timed out after {} seconds",
+                    WORKER_RPC_TIMEOUT.as_secs()
+                )));
+            }
+        };
         worker_result(envelope)
     }
 
@@ -542,21 +554,85 @@ impl LocalGuardrailsWorker {
         let line = serde_json::to_string(payload).map_err(|err| {
             FlowError::Internal(format!("failed to serialize worker command: {err}"))
         })?;
-        let mut stdin = self
-            .stdin
+        let writer = self
+            .writer
             .lock()
-            .map_err(|err| FlowError::Internal(format!("worker stdin lock poisoned: {err}")))?;
-        writeln!(stdin, "{line}")
-            .and_then(|_| stdin.flush())
-            .map_err(|err| FlowError::Internal(format!("failed to write worker command: {err}")))
+            .map_err(|err| FlowError::Internal(format!("worker writer lock poisoned: {err}")))?;
+        writer
+            .as_ref()
+            .ok_or_else(|| FlowError::Internal("worker command writer is closed".to_string()))?
+            .send(line)
+    }
+
+    fn shutdown(&self) {
+        let writer = self.writer.lock().ok().and_then(|mut writer| writer.take());
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(writer) = writer {
+            writer.join();
+        }
     }
 }
 
 impl Drop for LocalGuardrailsWorker {
     fn drop(&mut self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+        self.shutdown();
+    }
+}
+
+struct WorkerCommandWriter {
+    sender: std_mpsc::Sender<String>,
+    error: Arc<Mutex<Option<String>>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl WorkerCommandWriter {
+    fn spawn(mut stdin: ChildStdin) -> Self {
+        let (sender, receiver) = std_mpsc::channel::<String>();
+        let error = Arc::new(Mutex::new(None));
+        let writer_error = Arc::clone(&error);
+        let handle = thread::spawn(move || {
+            for line in receiver {
+                if let Err(err) = writeln!(stdin, "{line}").and_then(|_| stdin.flush()) {
+                    if let Ok(mut stored_error) = writer_error.lock() {
+                        *stored_error = Some(err.to_string());
+                    }
+                    return;
+                }
+            }
+            let _ = stdin.flush();
+        });
+        Self {
+            sender,
+            error,
+            handle: Some(handle),
+        }
+    }
+
+    fn send(&self, line: String) -> FlowResult<()> {
+        if let Some(error) = self
+            .error
+            .lock()
+            .map_err(|err| {
+                FlowError::Internal(format!("worker writer error lock poisoned: {err}"))
+            })?
+            .clone()
+        {
+            return Err(FlowError::Internal(format!(
+                "failed to write worker command: {error}"
+            )));
+        }
+        self.sender.send(line).map_err(|err| {
+            FlowError::Internal(format!("worker command writer channel closed: {err}"))
+        })
+    }
+
+    fn join(mut self) {
+        drop(self.sender);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -684,7 +760,10 @@ fn parse_check_result(result: Json) -> FlowResult<LocalCheckOutcome> {
         "modified" => Ok(LocalCheckOutcome::Modified {
             content: result.content.unwrap_or_default(),
         }),
-        _ => Ok(LocalCheckOutcome::Passed),
+        "passed" => Ok(LocalCheckOutcome::Passed),
+        unexpected => Err(FlowError::Internal(format!(
+            "unexpected worker check status: {unexpected}"
+        ))),
     }
 }
 
@@ -875,6 +954,7 @@ async fn forward_guarded_provider_stream(
     monitor: JoinHandle<FlowResult<()>>,
     blocked: Arc<Mutex<Option<String>>>,
 ) {
+    let mut buffered_chunks = Vec::new();
     while let Some(item) = provider_stream.next().await {
         let chunk = match item {
             Ok(chunk) => chunk,
@@ -897,10 +977,9 @@ async fn forward_guarded_provider_stream(
 
         if let Some(text) = text {
             if text_tx.send(Some(text)).await.is_err() {
-                finish_stream_monitor(monitor, &chunk_tx, &blocked).await;
+                send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
                 return;
             }
-            tokio::task::yield_now().await;
 
             if let Some(message) = blocked_message(&blocked) {
                 let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
@@ -910,27 +989,31 @@ async fn forward_guarded_provider_stream(
             }
         }
 
-        if chunk_tx.send(Ok(chunk)).await.is_err() {
-            let _ = text_tx.send(None).await;
-            let _ = monitor.await;
-            return;
-        }
+        buffered_chunks.push(chunk);
     }
 
     let _ = text_tx.send(None).await;
-    finish_stream_monitor(monitor, &chunk_tx, &blocked).await;
+    if send_stream_monitor_error(monitor, &chunk_tx, &blocked).await {
+        return;
+    }
+
+    for chunk in buffered_chunks {
+        if chunk_tx.send(Ok(chunk)).await.is_err() {
+            return;
+        }
+    }
 }
 
-async fn finish_stream_monitor(
+async fn send_stream_monitor_error(
     monitor: JoinHandle<FlowResult<()>>,
     chunk_tx: &mpsc::Sender<FlowResult<Json>>,
     blocked: &Arc<Mutex<Option<String>>>,
-) {
+) -> bool {
     match monitor.await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
             let _ = chunk_tx.send(Err(err)).await;
-            return;
+            return true;
         }
         Err(err) => {
             let _ = chunk_tx
@@ -938,13 +1021,16 @@ async fn finish_stream_monitor(
                     "nemo_guardrails stream monitor task failed: {err}"
                 ))))
                 .await;
-            return;
+            return true;
         }
     }
 
     if let Some(message) = blocked_message(blocked) {
         let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+        return true;
     }
+
+    false
 }
 
 fn blocked_message(blocked: &Arc<Mutex<Option<String>>>) -> Option<String> {

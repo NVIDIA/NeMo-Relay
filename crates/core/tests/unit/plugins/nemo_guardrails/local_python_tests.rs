@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(unix)]
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -293,6 +292,65 @@ async fn stream_monitor_records_blocked_message() {
     monitor.await.unwrap().unwrap();
 
     assert_eq!(blocked.lock().unwrap().as_deref(), Some("blocked stream"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guarded_provider_stream_reports_block_before_buffered_chunks() {
+    let provider_stream: LlmJsonStream = Box::pin(tokio_stream::iter(vec![Ok(json!({
+        "choices": [{"delta": {"content": "blocked"}}],
+    }))]));
+    let (text_tx, mut text_rx) = mpsc::channel::<Option<String>>(8);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(8);
+    let blocked = Arc::new(Mutex::new(None));
+    let monitor_blocked = Arc::clone(&blocked);
+    let monitor = tokio::spawn(async move {
+        while let Some(item) = text_rx.recv().await {
+            match item {
+                Some(text) if text.contains("blocked") => {
+                    *monitor_blocked.lock().unwrap() = Some("blocked stream".to_string());
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+        Ok(())
+    });
+
+    forward_guarded_provider_stream(
+        provider_stream,
+        LocalGuardrailsCodec::OpenAIChat,
+        text_tx,
+        chunk_tx,
+        monitor,
+        blocked,
+    )
+    .await;
+
+    let error = chunk_rx.recv().await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("blocked stream"),
+        "unexpected error: {error}"
+    );
+    assert!(chunk_rx.recv().await.is_none());
+}
+
+#[test]
+fn parse_check_result_rejects_unknown_status() {
+    assert!(matches!(
+        parse_check_result(json!({"status": "passed"})).unwrap(),
+        LocalCheckOutcome::Passed
+    ));
+
+    let error = match parse_check_result(json!({"status": "surprising"})) {
+        Ok(_) => panic!("expected unknown status to fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("unexpected worker check status: surprising"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

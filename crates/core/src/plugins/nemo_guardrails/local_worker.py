@@ -263,7 +263,10 @@ async def main():
         except Exception:
             traceback.print_exc(file=sys.stderr)
             continue
-        asyncio.create_task(handle_message(message))
+        if str(message.get("command", "")).startswith("stream_"):
+            await handle_message(message)
+        else:
+            asyncio.create_task(handle_message(message))
 
 
 asyncio.run(main())
