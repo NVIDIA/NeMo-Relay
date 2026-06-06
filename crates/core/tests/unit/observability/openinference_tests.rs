@@ -13,11 +13,15 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
+use crate::codec::pricing::pricing_test_mutex;
 use crate::codec::request::{
     AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
     ToolDefinition,
 };
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
+use crate::codec::response::{
+    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
+    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
@@ -116,6 +120,33 @@ fn empty_annotated_response() -> AnnotatedLlmResponse {
         api_specific: None,
         extra: serde_json::Map::new(),
     }
+}
+
+fn install_test_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
 fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
@@ -2107,6 +2138,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
                         total_tokens: Some(150),
                         cache_read_tokens: Some(25),
                         cache_write_tokens: Some(10),
+                        cost: None,
                     }),
                     api_specific: None,
                     extra: serde_json::Map::new(),
@@ -2141,6 +2173,139 @@ fn llm_end_with_usage_emits_token_count_attributes() {
         Some(&"10".to_string())
     );
     assert!(!attributes.contains_key("llm.output_messages.0.message.role"));
+}
+
+#[test]
+fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        total_tokens: Some(1_500),
+                        cache_read_tokens: Some(200),
+                        cache_write_tokens: None,
+                        cost: None,
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+    reset_active_pricing_resolver().unwrap();
+}
+
+#[test]
+fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: Some(0.42),
+                            currency: "USD".into(),
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.42".to_string()));
+}
+
+#[test]
+fn llm_end_with_unknown_model_usage_omits_derived_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.cost.total"));
 }
 
 #[test]
@@ -2692,6 +2857,7 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
                         total_tokens: None,
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        cost: None,
                     }),
                     api_specific: None,
                     extra: serde_json::Map::new(),

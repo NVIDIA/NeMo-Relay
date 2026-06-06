@@ -28,8 +28,11 @@ use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::request::MessageContent;
-use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::response::FinishReason;
+use nemo_relay::codec::response::{
+    AnnotatedLlmResponse, PricingCatalog, PricingResolver, Usage, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
+};
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
 use nemo_relay::json::Json;
@@ -58,6 +61,33 @@ fn setup_isolated_thread() {
 fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
     flush_subscribers().unwrap();
     events.lock().unwrap().clone()
+}
+
+fn install_mock_response_pricing() {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "openai",
+                    "model_id": "gpt-4o-mini",
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -890,11 +920,18 @@ impl LlmResponseCodec for MockResponseCodec {
     fn decode_response(&self, _response: &Json) -> Result<AnnotatedLlmResponse> {
         Ok(AnnotatedLlmResponse {
             id: Some("mock-resp-id".into()),
-            model: Some("mock-model".into()),
+            model: Some("gpt-4o-mini".into()),
             message: Some(MessageContent::Text("mock response text".into())),
             tool_calls: None,
             finish_reason: Some(FinishReason::Complete),
-            usage: None,
+            usage: Some(Usage {
+                prompt_tokens: Some(1_000),
+                completion_tokens: Some(500),
+                total_tokens: Some(1_500),
+                cache_read_tokens: Some(200),
+                cache_write_tokens: None,
+                cost: None,
+            }),
             api_specific: None,
             extra: serde_json::Map::new(),
         })
@@ -915,6 +952,7 @@ async fn test_response_codec_populates_annotated_response() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
+    install_mock_response_pricing();
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
@@ -931,7 +969,7 @@ async fn test_response_codec_populates_annotated_response() {
 
     let _result = llm_call_execute(
         LlmCallExecuteParams::builder()
-            .name("test_llm")
+            .name("openai")
             .request(request)
             .func(noop_exec_fn())
             .response_codec(response_codec)
@@ -951,8 +989,16 @@ async fn test_response_codec_populates_annotated_response() {
         .expect("annotated_response should be Some when response codec is active");
     assert_eq!(ann.id, Some("mock-resp-id".into()));
     assert_eq!(ann.response_text(), Some("mock response text"));
+    assert_eq!(
+        ann.usage
+            .as_ref()
+            .and_then(|usage| usage.cost.as_ref())
+            .and_then(|cost| cost.total),
+        Some(0.000_435)
+    );
 
     deregister_subscriber("resp_codec_sub").unwrap();
+    reset_active_pricing_resolver().unwrap();
 }
 
 #[tokio::test]
@@ -1100,6 +1146,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
+    install_mock_response_pricing();
 
     let events = Arc::new(Mutex::new(Vec::new()));
     let ec = events.clone();
@@ -1120,7 +1167,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
 
     let mut stream = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
-            .name("test_stream")
+            .name("openai")
             .request(request)
             .func(noop_stream_exec_fn())
             .collector(collector)
@@ -1145,6 +1192,14 @@ async fn test_stream_response_codec_populates_annotated_response() {
         .expect("annotated_response should be Some on stream path when response codec is active");
     assert_eq!(ann.id, Some("mock-resp-id".into()));
     assert_eq!(ann.response_text(), Some("mock response text"));
+    assert_eq!(
+        ann.usage
+            .as_ref()
+            .and_then(|usage| usage.cost.as_ref())
+            .and_then(|cost| cost.total),
+        Some(0.000_435)
+    );
 
     deregister_subscriber("stream_resp_codec_sub").unwrap();
+    reset_active_pricing_resolver().unwrap();
 }

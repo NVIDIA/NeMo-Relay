@@ -91,25 +91,74 @@ test('WebAssembly typed tool wrappers execute asynchronous flows', async () => {
 
 test('WebAssembly typed llm wrappers support response codecs', async () => {
   const passthrough = new JsonPassthrough();
+  const responseEvents = [];
+  const subscriberName = unique('wrapper_llm_cost');
+  wasm.registerSubscriber(subscriberName, (event) => responseEvents.push(event));
 
-  const llmResult = await typedLlmExecute(
-    'wrapper_llm',
-    makeLlmRequest('test-model'),
-    () => ({
-      response: 'ok',
-    }),
-    passthrough,
-    {
-      responseCodec: {
-        decodeResponse(response) {
-          return response;
+  try {
+    const llmResult = await typedLlmExecute(
+      'wrapper_llm',
+      makeLlmRequest('gpt-4o-mini'),
+      () => ({
+        response: 'ok',
+        model: 'gpt-4o-mini',
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          total_tokens: 15,
+          cost: {
+            total: 0.00001,
+            source: 'provider_reported',
+            pricing_provider: 'wasm-provider',
+            pricing_model: 'gpt-4o-mini',
+            pricing_as_of: '2026-06-04',
+            pricing_source: 'https://example.test/pricing',
+          },
+        },
+      }),
+      passthrough,
+      {
+        responseCodec: {
+          decodeResponse(response) {
+            return response;
+          },
         },
       },
-    },
-  );
-  assert.deepEqual(llmResult, {
-    response: 'ok',
-  });
+    );
+    assert.deepEqual(llmResult, {
+      response: 'ok',
+      model: 'gpt-4o-mini',
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: {
+          total: 0.00001,
+          source: 'provider_reported',
+          pricing_provider: 'wasm-provider',
+          pricing_model: 'gpt-4o-mini',
+          pricing_as_of: '2026-06-04',
+          pricing_source: 'https://example.test/pricing',
+        },
+      },
+    });
+
+    const endEvent = await waitFor(() =>
+      responseEvents.find(
+        (event) =>
+          event.kind === 'scope' &&
+          event.category === 'llm' &&
+          event.scope_category === 'end' &&
+          event.name === 'wrapper_llm',
+      ),
+    );
+    assert.equal(
+      endEvent.category_profile.annotated_response.usage.cost.pricing_provider,
+      'wasm-provider',
+    );
+  } finally {
+    wasm.deregisterSubscriber(subscriberName);
+  }
 });
 
 test('WebAssembly typed llm wrappers execute synchronous flows', async () => {

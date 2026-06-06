@@ -23,7 +23,7 @@ use crate::api::shared::{
     snapshot_event_subscribers,
 };
 use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::response::AnnotatedLlmResponse;
+use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
@@ -585,7 +585,11 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         Ok(response) => {
             let annotated_response = response_codec
                 .as_ref()
-                .and_then(|codec| codec.decode_response(&response).ok())
+                .and_then(|codec| {
+                    let mut decoded = codec.decode_response(&response).ok()?;
+                    attach_estimated_cost_for_provider(&mut decoded, Some(&name));
+                    Some(decoded)
+                })
                 .map(Arc::new);
             llm_call_end(
                 LlmCallEndParams::builder()

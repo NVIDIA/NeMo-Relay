@@ -25,6 +25,7 @@ use crate::api::event::ScopeCategory;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use crate::codec::response::{CostEstimate, estimate_cost_for_provider};
 use crate::error::FlowError;
 use chrono::{DateTime, Utc};
 use opentelemetry::trace::{
@@ -667,7 +668,30 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         "nemo_relay.end.output_json",
         event.output(),
     );
+    if event
+        .category()
+        .is_some_and(|category| category.as_str() == "llm")
+        && let Some((cost, currency)) = cost_from_llm_event(event)
+    {
+        attributes.push(KeyValue::new("nemo_relay.llm.cost.total", cost));
+        attributes.push(KeyValue::new("nemo_relay.llm.cost.currency", currency));
+    }
     attributes
+}
+
+fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
+    let response = event.annotated_response()?;
+    let usage = response.usage.as_ref()?;
+    if let Some(cost) = usage.cost.as_ref().and_then(cost_total_and_currency) {
+        return Some(cost);
+    }
+    let model_name = response.model.as_deref().or_else(|| event.model_name())?;
+    estimate_cost_for_provider(Some(event.name()), model_name, usage)
+        .and_then(|cost| cost_total_and_currency(&cost))
+}
+
+fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
+    Some((cost.total?, cost.currency.clone()))
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {

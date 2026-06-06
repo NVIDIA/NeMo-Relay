@@ -1943,9 +1943,85 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(10));
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(5));
     assert_eq!(atif["steps"][1]["metrics"]["cached_tokens"], json!(3));
+    assert!(atif["steps"][1]["metrics"].get("cost_usd").is_none());
     assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(10));
     assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(5));
     assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(3));
+    assert!(atif["final_metrics"].get("total_cost_usd").is_none());
+}
+
+#[tokio::test]
+async fn writes_hermes_api_hook_reported_cost_to_atif_metrics() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://127.0.0.1".into(),
+
+        anthropic_base_url: "http://127.0.0.1".into(),
+        metadata: None,
+        plugin_config: None,
+    };
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_start".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmStarted(LlmEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "pre_api_request".into(),
+                    api_call_id: "hermes-cost:task-1:1".into(),
+                    provider: "custom".into(),
+                    model_name: Some("qwen".into()),
+                    request: json!({ "model": "qwen" }),
+                    response: Value::Null,
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmEnded(LlmEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "post_api_request".into(),
+                    api_call_id: "hermes-cost:task-1:1".into(),
+                    provider: "custom".into(),
+                    model_name: Some("qwen".into()),
+                    request: json!({}),
+                    response: json!({
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "cost_usd": 0.123
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_finalize".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-cost");
+    assert_eq!(atif["steps"][1]["metrics"]["cost_usd"], json!(0.123));
+    assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.123));
 }
 
 #[tokio::test]

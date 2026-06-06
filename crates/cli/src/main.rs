@@ -15,6 +15,7 @@ mod installer;
 mod launcher;
 mod model;
 mod plugins;
+mod pricing;
 mod server;
 mod session;
 mod setup;
@@ -24,7 +25,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::config::{Cli, CodingAgent, Command, PluginsSubcommand};
+use crate::config::{Cli, CodingAgent, Command, PluginsSubcommand, PricingSubcommand};
 
 #[tokio::main]
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
@@ -78,6 +79,15 @@ async fn run() -> Result<ExitCode, error::CliError> {
         Some(Command::Plugins(command)) => {
             match command.command {
                 PluginsSubcommand::Edit(command) => plugins::edit(command)?,
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Pricing(command)) => {
+            match command.command {
+                PricingSubcommand::Validate(command) => pricing::validate(command)?,
+                PricingSubcommand::Init(command) => pricing::init(command)?,
+                PricingSubcommand::AddSource(command) => pricing::add_source(command)?,
+                PricingSubcommand::Resolve(command) => pricing::resolve(command)?,
             }
             Ok(ExitCode::SUCCESS)
         }

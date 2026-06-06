@@ -17,13 +17,13 @@ use crate::config::{
 use crate::error::CliError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum TargetScope {
+pub(crate) enum TargetScope {
     User,
     Project,
     Global,
 }
 
-pub(super) fn target_scope(command: &PluginsEditCommand) -> Result<TargetScope, CliError> {
+pub(crate) fn target_scope(command: &PluginsEditCommand) -> Result<TargetScope, CliError> {
     let selected = [command.user, command.project, command.global]
         .into_iter()
         .filter(|selected| *selected)
@@ -42,7 +42,7 @@ pub(super) fn target_scope(command: &PluginsEditCommand) -> Result<TargetScope, 
     }
 }
 
-pub(super) fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
+pub(crate) fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
     match scope {
         TargetScope::User => user_plugin_config_path().ok_or_else(|| {
             CliError::Config(
@@ -57,7 +57,7 @@ pub(super) fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
     }
 }
 
-pub(super) fn read_plugin_config(path: &Path) -> Result<PluginConfig, CliError> {
+pub(crate) fn read_plugin_config(path: &Path) -> Result<PluginConfig, CliError> {
     if !path.exists() {
         return Ok(PluginConfig::default());
     }
@@ -78,7 +78,7 @@ pub(super) fn read_plugin_config(path: &Path) -> Result<PluginConfig, CliError> 
     .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))
 }
 
-pub(super) fn write_plugin_config(path: &Path, config: &PluginConfig) -> Result<(), CliError> {
+pub(crate) fn write_plugin_config(path: &Path, config: &PluginConfig) -> Result<(), CliError> {
     let mut value = serde_json::to_value(config)
         .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
     prune_plugin_defaults(&mut value);
@@ -115,7 +115,7 @@ pub(super) fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(super) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
+pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
     register_adaptive_component().map_err(|error| {
         CliError::Config(format!("adaptive plugin registration failed: {error}"))
     })?;

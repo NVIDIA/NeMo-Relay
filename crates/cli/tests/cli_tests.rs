@@ -13,6 +13,10 @@ fn gateway_bin() -> &'static str {
     env!("CARGO_BIN_EXE_nemo-relay")
 }
 
+fn toml_basic_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 #[test]
 fn cli_help_exits_successfully() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
@@ -95,6 +99,157 @@ fn cli_plugins_edit_requires_tty() {
         "stderr was:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn cli_pricing_validate_accepts_valid_catalog() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("pricing.json");
+    std::fs::write(&catalog, pricing_catalog_json("test-model")).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .args(["pricing", "validate"])
+        .arg(&catalog)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Valid pricing catalog"));
+    assert!(stdout.contains("1 entry"));
+}
+
+#[test]
+fn cli_pricing_validate_rejects_invalid_catalog() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("pricing.json");
+    std::fs::write(
+        &catalog,
+        r#"{
+  "version": 1,
+  "entries": [{
+    "provider": "test",
+    "model_id": "bad-model",
+    "prompt_cache": { "read_accounting": "included_in_prompt_tokens" },
+    "pricing_as_of": "2026-06-05",
+    "pricing_source": "test"
+  }]
+}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .args(["pricing", "validate"])
+        .arg(&catalog)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid pricing catalog"));
+    assert!(stderr.contains("rates or rate_schedule"));
+}
+
+#[test]
+fn cli_pricing_init_creates_project_pricing_component() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&project)
+        .args(["pricing", "init", "--project"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let path = project.join(".nemo-relay/plugins.toml");
+    let rendered = std::fs::read_to_string(path).unwrap();
+    assert!(rendered.contains("kind = \"pricing\""));
+    assert!(!rendered.contains("include_bundled"));
+}
+
+#[test]
+fn cli_pricing_add_source_validates_and_updates_user_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("pricing.json");
+    std::fs::write(&catalog, pricing_catalog_json("custom-model")).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["pricing", "add-source"])
+        .arg(&catalog)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let rendered = std::fs::read_to_string(
+        temp.path()
+            .join("xdg")
+            .join("nemo-relay")
+            .join("plugins.toml"),
+    )
+    .unwrap();
+    assert!(rendered.contains("kind = \"pricing\""));
+    assert!(rendered.contains("type = \"file\""));
+    assert!(rendered.contains(catalog.to_str().unwrap()));
+}
+
+#[test]
+fn cli_pricing_resolve_reports_source_match_and_estimate() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("pricing.json");
+    let xdg = temp.path().join("xdg/nemo-relay");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::write(&catalog, pricing_catalog_json("custom-model")).unwrap();
+    std::fs::write(
+        xdg.join("plugins.toml"),
+        format!(
+            r#"
+[[components]]
+kind = "pricing"
+
+[components.config]
+[[components.config.sources]]
+type = "file"
+path = {}
+"#,
+            toml_basic_string(&catalog.display().to_string())
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "pricing",
+            "resolve",
+            "custom-model",
+            "--provider",
+            "test",
+            "--prompt-tokens",
+            "1000",
+            "--completion-tokens",
+            "500",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}\nstdout was:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Resolved pricing"));
+    assert!(stdout.contains(&format!("source = file:{}", catalog.display())));
+    assert!(stdout.contains("provider = test"));
+    assert!(stdout.contains("model = custom-model"));
+    assert!(stdout.contains("estimated_total"));
+    assert!(stdout.contains("currency = USD"));
 }
 
 #[test]
@@ -559,4 +714,24 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
 
 fn find_header_end(buffer: &[u8]) -> Option<usize> {
     buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn pricing_catalog_json(model_id: &str) -> String {
+    format!(
+        r#"{{
+  "version": 1,
+  "entries": [{{
+    "provider": "test",
+    "model_id": "{model_id}",
+    "rates": {{
+      "input_per_million": 1.0,
+      "output_per_million": 2.0,
+      "cache_read_per_million": 0.1
+    }},
+    "prompt_cache": {{ "read_accounting": "included_in_prompt_tokens" }},
+    "pricing_as_of": "2026-06-05",
+    "pricing_source": "test"
+  }}]
+}}"#
+    )
 }

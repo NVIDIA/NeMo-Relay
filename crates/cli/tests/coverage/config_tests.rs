@@ -404,6 +404,70 @@ source = "user"
 }
 
 #[test]
+fn discovered_pricing_plugin_sources_layer_user_before_lower_priority_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let system_plugin = temp.path().join("system-plugins.toml");
+    let user_plugin = temp.path().join("user-plugins.toml");
+    std::fs::write(
+        &system_plugin,
+        r#"
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "file"
+path = "/etc/nemo-relay/pricing.json"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &user_plugin,
+        r#"
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "file"
+path = "/home/user/.config/nemo-relay/pricing.json"
+"#,
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![system_plugin, user_plugin]).unwrap();
+
+    assert_eq!(
+        resolved.map(|config| config.value),
+        Some(json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "pricing",
+                    "enabled": true,
+                    "config": {
+                        "sources": [
+                            {
+                                "type": "file",
+                                "path": "/home/user/.config/nemo-relay/pricing.json"
+                            },
+                            {
+                                "type": "file",
+                                "path": "/etc/nemo-relay/pricing.json"
+                            }
+                        ]
+                    }
+                }
+            ]
+        }))
+    );
+}
+
+#[test]
 fn discovered_plugins_toml_can_disable_lower_priority_observability_section() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugin = temp.path().join("project-plugins.toml");

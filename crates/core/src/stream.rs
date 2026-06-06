@@ -36,7 +36,7 @@ use crate::api::llm::LlmHandle;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
-use crate::codec::response::AnnotatedLlmResponse;
+use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::Result;
 use crate::json::Json;
@@ -144,7 +144,11 @@ impl LlmStreamWrapper {
         let annotated_response: Option<Arc<AnnotatedLlmResponse>> = self
             .response_codec
             .as_ref()
-            .and_then(|c| c.decode_response(&aggregated).ok())
+            .and_then(|c| {
+                let mut decoded = c.decode_response(&aggregated).ok()?;
+                attach_estimated_cost_for_provider(&mut decoded, Some(&self.handle.name));
+                Some(decoded)
+            })
             .map(Arc::new);
 
         let event_snapshot = {

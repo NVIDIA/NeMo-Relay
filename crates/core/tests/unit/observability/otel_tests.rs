@@ -13,6 +13,11 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
+use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::response::{
+    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
+    reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
@@ -23,6 +28,46 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
+
+fn empty_annotated_response() -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        id: None,
+        model: None,
+        message: None,
+        tool_calls: None,
+        finish_reason: None,
+        usage: None,
+        api_specific: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn install_test_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
 
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
@@ -773,7 +818,7 @@ fn helper_functions_cover_additional_otel_branches() {
         Some(&"{\"meta\":true}".to_string())
     );
 
-    let end_attributes = attr_map(&end_attributes(&Event::Scope(ScopeEvent::new(
+    let tool_end_attributes = attr_map(&end_attributes(&Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
             .metadata(json!({"phase": "complete"}))
@@ -785,8 +830,91 @@ fn helper_functions_cover_additional_otel_branches() {
         Some(CategoryProfile::builder().tool_call_id("call-456").build()),
     ))));
     assert_eq!(
-        end_attributes.get("nemo_relay.end.output_json"),
+        tool_end_attributes.get("nemo_relay.end.output_json"),
         Some(&"{\"result\":true}".to_string())
+    );
+
+    {
+        let _pricing_guard = pricing_test_mutex().lock().unwrap();
+        install_test_pricing("priced-model");
+        let llm_cost_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "chat",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .model_name("priced-model")
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            total_tokens: Some(1_500),
+                            cache_read_tokens: Some(200),
+                            cache_write_tokens: None,
+                            cost: None,
+                        }),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let llm_cost_attributes = attr_map(&end_attributes(&llm_cost_event));
+        assert_eq!(
+            llm_cost_attributes.get("nemo_relay.llm.cost.total"),
+            Some(&"0.000435".to_string())
+        );
+        assert_eq!(
+            llm_cost_attributes.get("nemo_relay.llm.cost.currency"),
+            Some(&"USD".to_string())
+        );
+        reset_active_pricing_resolver().unwrap();
+    }
+
+    let normalized_cost_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"answer": "ok"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: Some(0.42),
+                            currency: "USD".into(),
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let normalized_cost_attributes = attr_map(&end_attributes(&normalized_cost_event));
+    assert_eq!(
+        normalized_cost_attributes.get("nemo_relay.llm.cost.total"),
+        Some(&"0.42".to_string())
+    );
+    assert_eq!(
+        normalized_cost_attributes.get("nemo_relay.llm.cost.currency"),
+        Some(&"USD".to_string())
     );
 
     let mark = Event::Mark(MarkEvent::new(

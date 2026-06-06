@@ -27,7 +27,9 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
+use crate::codec::response::{
+    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, estimate_cost_for_provider,
+};
 use crate::error::FlowError;
 use crate::json::Json;
 use chrono::{DateTime, Utc};
@@ -750,7 +752,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
             ));
         }
     }
-    if is_llm && let Some(cost_total) = cost_total_from_manual_llm_output(event.output()) {
+    if is_llm && let Some(cost_total) = cost_total_from_llm_event(event, fallback_usage.as_ref()) {
         attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
     }
     if is_llm {
@@ -1096,6 +1098,28 @@ fn cost_total_from_manual_llm_output(output: Option<&Json>) -> Option<f64> {
         .or_else(|| token_usage.and_then(cost_total_from_usage))
 }
 
+fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> Option<f64> {
+    cost_total_from_manual_llm_output(event.output())
+        .or_else(|| {
+            let response = event.annotated_response()?;
+            let usage = response.usage.as_ref()?;
+            usage.cost.as_ref()?.total_for_currency("USD")
+        })
+        .or_else(|| {
+            let response = event.annotated_response()?;
+            let usage = response.usage.as_ref()?;
+            let model_name = response.model.as_deref().or_else(|| event.model_name())?;
+            estimate_cost_for_provider(Some(event.name()), model_name, usage)
+                .and_then(|cost| cost.total_for_currency("USD"))
+        })
+        .or_else(|| {
+            let usage = fallback_usage?;
+            let model_name = event.model_name()?;
+            estimate_cost_for_provider(Some(event.name()), model_name, usage)
+                .and_then(|cost| cost.total_for_currency("USD"))
+        })
+}
+
 fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
     usage
         .get("cost_usd")
@@ -1190,6 +1214,7 @@ fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cost: None,
     })
 }
 
