@@ -201,7 +201,9 @@ fn cli_pricing_resolve_reports_source_match_and_estimate() {
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     let xdg = temp.path().join("xdg/nemo-relay");
+    let project = temp.path().join("project");
     std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
     std::fs::write(&catalog, pricing_catalog_json("custom-model")).unwrap();
     std::fs::write(
         xdg.join("plugins.toml"),
@@ -221,6 +223,7 @@ path = {}
     .unwrap();
 
     let output = Command::new(gateway_bin())
+        .current_dir(&project)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .args([
