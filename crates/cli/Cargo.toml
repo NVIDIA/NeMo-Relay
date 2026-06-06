@@ -50,5 +50,7 @@ toml_edit = "0.23"
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
+opentelemetry-proto = { version = "0.31", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

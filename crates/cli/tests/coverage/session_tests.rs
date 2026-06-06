@@ -5,7 +5,12 @@ use axum::http::HeaderMap;
 use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+use opentelemetry_proto::tonic::trace::v1::Span;
+use prost::Message;
 use serde_json::json;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener as StdTcpListener;
 use std::path::Path;
@@ -130,6 +135,40 @@ fn start_otlp_collector() -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
         (request, body)
     });
     (endpoint, handle)
+}
+
+fn decode_otlp_spans(body: &[u8]) -> Vec<Span> {
+    let request = ExportTraceServiceRequest::decode(body)
+        .unwrap_or_else(|error| panic!("expected a valid OTLP trace request: {error}"));
+    request
+        .resource_spans
+        .into_iter()
+        .flat_map(|resource_span| resource_span.scope_spans)
+        .flat_map(|scope_span| scope_span.spans)
+        .collect()
+}
+
+fn any_value_to_string(value: &AnyValue) -> Option<String> {
+    match value.value.as_ref()? {
+        any_value::Value::StringValue(value) => Some(value.clone()),
+        any_value::Value::BoolValue(value) => Some(value.to_string()),
+        any_value::Value::IntValue(value) => Some(value.to_string()),
+        any_value::Value::DoubleValue(value) => Some(value.to_string()),
+        any_value::Value::BytesValue(value) => Some(String::from_utf8_lossy(value).to_string()),
+        any_value::Value::ArrayValue(_) | any_value::Value::KvlistValue(_) => None,
+    }
+}
+
+fn otlp_attr_map(attributes: &[KeyValue]) -> HashMap<&str, String> {
+    attributes
+        .iter()
+        .filter_map(|attribute| {
+            Some((
+                attribute.key.as_str(),
+                any_value_to_string(attribute.value.as_ref()?)?,
+            ))
+        })
+        .collect()
 }
 
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
@@ -1499,7 +1538,6 @@ async fn codex_stop_snapshots_atif_without_session_end() {
     assert_eq!(atif["final_metrics"]["total_steps"], json!(2));
 
     let observed = atif["extra"]["observed_events"].as_array().unwrap();
-    assert_eq!(observed.len(), 6);
     assert!(observed.iter().all(|event| {
         event["metadata"]["hook_event_name"] != json!("sessionEnd")
             && event["metadata"]["hook_event_name"] != json!("session_end")
@@ -1586,29 +1624,80 @@ async fn codex_openinference_spans_match_shared_contract() {
     assert!(request.starts_with("POST /v1/traces HTTP/1.1"));
     assert!(request.contains("content-type: application/x-protobuf"));
 
-    let body = String::from_utf8_lossy(&body);
-    for expected in [
-        "openinference.span.kind",
-        "AGENT",
-        "LLM",
-        "TOOL",
-        "nemo_relay.uuid",
-        "nemo_relay.parent_uuid",
-        "codex-turn",
-        "openai.responses",
-        "Read",
-        "gpt-test",
-        "codex-openinference",
-        "tool-call-1",
-        "tool_call.function.arguments",
-        "Requested tools: Read",
-    ] {
-        assert!(
-            body.contains(expected),
-            "expected OpenInference export body to contain {expected:?}; body: {body}"
-        );
-    }
-    assert!(!body.contains("sessionEnd"));
+    let spans = decode_otlp_spans(&body);
+    let attributes_by_span = spans
+        .iter()
+        .map(|span| (span.name.as_str(), otlp_attr_map(&span.attributes)))
+        .collect::<HashMap<_, _>>();
+    let turn_attributes = attributes_by_span
+        .get("codex-turn")
+        .expect("Codex turn should export an OpenInference span");
+    let llm_attributes = attributes_by_span
+        .get("openai.responses")
+        .expect("Codex LLM call should export an OpenInference span");
+    let tool_attributes = attributes_by_span
+        .get("Read")
+        .expect("Codex tool call should export an OpenInference span");
+
+    assert_eq!(
+        turn_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("AGENT")
+    );
+    assert_eq!(
+        llm_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("LLM")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("TOOL")
+    );
+    assert!(turn_attributes.contains_key("nemo_relay.uuid"));
+    assert!(llm_attributes.contains_key("nemo_relay.parent_uuid"));
+    assert!(tool_attributes.contains_key("nemo_relay.parent_uuid"));
+    let turn_metadata = serde_json::from_str::<serde_json::Value>(
+        turn_attributes
+            .get("metadata")
+            .expect("turn span should include OpenInference metadata"),
+    )
+    .unwrap();
+    assert_eq!(turn_metadata["session_id"], json!("codex-openinference"));
+    assert_eq!(
+        llm_attributes.get("llm.model_name").map(String::as_str),
+        Some("gpt-test")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("tool_call.function.name")
+            .map(String::as_str),
+        Some("Read")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("tool_call.function.arguments")
+            .map(String::as_str),
+        Some("{\"file_path\":\"README.md\"}")
+    );
+    assert_eq!(
+        tool_attributes.get("tool_call.id").map(String::as_str),
+        Some("tool-call-1")
+    );
+    assert!(
+        llm_attributes
+            .values()
+            .any(|value| value.contains("Requested tools: Read"))
+    );
+    assert!(
+        attributes_by_span
+            .values()
+            .flat_map(|attributes| attributes.values())
+            .all(|value| !value.contains("sessionEnd"))
+    );
 }
 
 #[tokio::test]

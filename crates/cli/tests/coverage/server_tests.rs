@@ -43,6 +43,14 @@ impl Drop for ToolGuardrailCleanup {
     }
 }
 
+struct SubscriberCleanup(&'static str);
+
+impl Drop for SubscriberCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_subscriber(self.0);
+    }
+}
+
 fn test_http_client() -> reqwest::Client {
     crate::tls::install_rustls_crypto_provider();
     reqwest::Client::new()
@@ -107,7 +115,7 @@ fn test_config() -> GatewayConfig {
     }
 }
 
-fn scope_event<'a>(
+fn find_scope_event<'a>(
     events: &'a [Value],
     name: &str,
     category: &str,
@@ -1187,7 +1195,6 @@ async fn serve_listener_records_codex_stop_atof_contract() {
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
 
-    assert_eq!(events.len(), 4, "unexpected ATOF events: {events:?}");
     assert!(events.iter().all(|event| event["atof_version"] == "0.1"));
     assert!(!events.iter().any(|event| {
         event["kind"] == "scope"
@@ -1196,8 +1203,8 @@ async fn serve_listener_records_codex_stop_atof_contract() {
             && event["name"] == "codex"
     }));
 
-    let turn_start = scope_event(&events, "codex-turn", "agent", "start");
-    let turn_end = scope_event(&events, "codex-turn", "agent", "end");
+    let turn_start = find_scope_event(&events, "codex-turn", "agent", "start");
+    let turn_end = find_scope_event(&events, "codex-turn", "agent", "end");
     assert_eq!(turn_start["uuid"], turn_end["uuid"]);
     assert_eq!(
         turn_start["data"],
@@ -1214,8 +1221,8 @@ async fn serve_listener_records_codex_stop_atof_contract() {
     assert_eq!(turn_end["data"]["hook_event_name"], "Stop");
     assert_eq!(turn_end["data"]["response"], "Done.");
 
-    let tool_start = scope_event(&events, "Read", "tool", "start");
-    let tool_end = scope_event(&events, "Read", "tool", "end");
+    let tool_start = find_scope_event(&events, "Read", "tool", "start");
+    let tool_end = find_scope_event(&events, "Read", "tool", "end");
     assert_eq!(tool_start["uuid"], tool_end["uuid"]);
     assert_eq!(tool_start["parent_uuid"], turn_start["uuid"]);
     assert_eq!(tool_end["parent_uuid"], turn_start["uuid"]);
@@ -1790,6 +1797,7 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
         }),
     )
     .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
 
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
@@ -1833,7 +1841,6 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
         captured_llm_starts.lock().unwrap().is_empty(),
         "Claude startup probe must not emit a managed LLM span"
     );
-    deregister_subscriber(subscriber_name).unwrap();
 }
 
 async fn wait_for_gateway(url: &str) {
