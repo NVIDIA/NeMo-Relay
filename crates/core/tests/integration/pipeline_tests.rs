@@ -19,15 +19,19 @@ use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
-use nemo_relay::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
+use nemo_relay::api::registry::{
+    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
+    deregister_llm_sanitize_response_guardrail, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+};
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::request::MessageContent;
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay::codec::response::FinishReason;
 use nemo_relay::codec::response::{
     AnnotatedLlmResponse, PricingCatalog, PricingResolver, Usage, reset_active_pricing_resolver,
@@ -223,6 +227,50 @@ fn make_llm_request(content: Json) -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
         content,
+    }
+}
+
+fn make_openai_chat_request(content: &str) -> LlmRequest {
+    make_llm_request(json!({
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": content}],
+    }))
+}
+
+fn make_openai_chat_response(content: &str) -> Json {
+    json!({
+        "id": "chatcmpl-test",
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    })
+}
+
+fn first_message_text(request: &AnnotatedLlmRequest) -> Option<&str> {
+    match request.messages.first()? {
+        Message::System {
+            content: MessageContent::Text(text),
+            ..
+        }
+        | Message::User {
+            content: MessageContent::Text(text),
+            ..
+        }
+        | Message::Tool {
+            content: MessageContent::Text(text),
+            ..
+        } => Some(text.as_str()),
+        Message::Assistant {
+            content: Some(MessageContent::Text(text)),
+            ..
+        } => Some(text.as_str()),
+        _ => None,
     }
 }
 
@@ -1002,6 +1050,66 @@ async fn test_response_codec_populates_annotated_response() {
 }
 
 #[tokio::test]
+async fn test_response_codec_annotation_uses_sanitized_managed_response() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "sanitized_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "sanitize_resp_codec_annotation",
+        1,
+        Arc::new(|_response| make_openai_chat_response("Sanitized")),
+    )
+    .unwrap();
+
+    let func: LlmExecutionNextFn =
+        Arc::new(|_req| Box::pin(async move { Ok(make_openai_chat_response("SECRET")) }));
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_openai_chat_request("hello"))
+            .func(func)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["choices"][0]["message"]["content"], json!("SECRET"));
+
+    let captured = captured_events_snapshot(&events);
+    let end_event = captured
+        .iter()
+        .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
+        .expect("expected LlmEnd event");
+    assert_eq!(
+        end_event.output().unwrap()["choices"][0]["message"]["content"],
+        json!("Sanitized")
+    );
+    let annotated = end_event
+        .annotated_response()
+        .expect("annotated_response should be decoded from sanitized output");
+    assert_eq!(annotated.response_text(), Some("Sanitized"));
+    assert!(
+        !serde_json::to_string(end_event).unwrap().contains("SECRET"),
+        "end event should not retain raw response content"
+    );
+
+    deregister_subscriber("sanitized_resp_codec_sub").unwrap();
+    deregister_llm_sanitize_response_guardrail("sanitize_resp_codec_annotation").unwrap();
+}
+
+#[tokio::test]
 async fn test_response_codec_none_when_no_codec() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -1142,6 +1250,67 @@ async fn test_request_codec_populates_annotated_request() {
 }
 
 #[tokio::test]
+async fn test_request_codec_annotation_uses_sanitized_start_payload() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "sanitized_req_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_request_guardrail(
+        "sanitize_req_codec_annotation",
+        1,
+        Arc::new(|request| LlmRequest {
+            headers: request.headers,
+            content: make_openai_chat_request("Sanitized").content,
+        }),
+    )
+    .unwrap();
+
+    let request_codec: Arc<dyn LlmCodec> = Arc::new(OpenAIChatCodec);
+    let _result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(make_openai_chat_request("SECRET"))
+            .func(noop_exec_fn())
+            .codec(request_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let start_event = captured
+        .iter()
+        .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::Start))
+        .expect("expected LlmStart event");
+    assert_eq!(
+        start_event.input().unwrap()["content"]["messages"][0]["content"],
+        json!("Sanitized")
+    );
+    let annotated = start_event
+        .annotated_request()
+        .expect("annotated_request should be decoded from sanitized input");
+    assert_eq!(first_message_text(annotated), Some("Sanitized"));
+    assert!(
+        !serde_json::to_string(start_event)
+            .unwrap()
+            .contains("SECRET"),
+        "start event should not retain raw request content"
+    );
+
+    deregister_subscriber("sanitized_req_codec_sub").unwrap();
+    deregister_llm_sanitize_request_guardrail("sanitize_req_codec_annotation").unwrap();
+}
+
+#[tokio::test]
 async fn test_stream_response_codec_populates_annotated_response() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -1202,4 +1371,68 @@ async fn test_stream_response_codec_populates_annotated_response() {
 
     deregister_subscriber("stream_resp_codec_sub").unwrap();
     reset_active_pricing_resolver().unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_response() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "stream_sanitized_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "stream_sanitize_resp_codec_annotation",
+        1,
+        Arc::new(|_response| make_openai_chat_response("Sanitized")),
+    )
+    .unwrap();
+
+    let collector: Box<dyn FnMut(Json) -> Result<()> + Send> = Box::new(|_chunk| Ok(()));
+    let finalizer: Box<dyn FnOnce() -> Json + Send> =
+        Box::new(|| make_openai_chat_response("SECRET"));
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("openai")
+            .request(make_openai_chat_request("stream me"))
+            .func(noop_stream_exec_fn())
+            .collector(collector)
+            .finalizer(finalizer)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    while let Some(_chunk) = stream.next().await {}
+
+    let captured = captured_events_snapshot(&events);
+    let end_event = captured
+        .iter()
+        .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
+        .expect("expected LlmEnd event after stream drain");
+    assert_eq!(
+        end_event.output().unwrap()["choices"][0]["message"]["content"],
+        json!("Sanitized")
+    );
+    let annotated = end_event
+        .annotated_response()
+        .expect("annotated_response should be decoded from sanitized stream output");
+    assert_eq!(annotated.response_text(), Some("Sanitized"));
+    assert!(
+        !serde_json::to_string(end_event).unwrap().contains("SECRET"),
+        "stream end event should not retain raw aggregated response content"
+    );
+
+    deregister_subscriber("stream_sanitized_resp_codec_sub").unwrap();
+    deregister_llm_sanitize_response_guardrail("stream_sanitize_resp_codec_annotation").unwrap();
 }
