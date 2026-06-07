@@ -1348,9 +1348,23 @@ fn validate_observability_plugin_config(
     };
 
     let mut diagnostics = vec![];
+    validate_top_level_observability_fields(&mut diagnostics, &config.policy, plugin_config);
+    validate_version(&mut diagnostics, &config.policy, config.version);
+    validate_policy_fields(&mut diagnostics, &config.policy, plugin_config);
+    validate_observability_section_fields(&mut diagnostics, &config.policy, plugin_config);
+    validate_observability_section_values(&mut diagnostics, &config);
+
+    diagnostics
+}
+
+fn validate_top_level_observability_fields(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+) {
     validate_unknown_fields(
-        &mut diagnostics,
-        &config.policy,
+        diagnostics,
+        policy,
         Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
         plugin_config,
         &[
@@ -1362,12 +1376,16 @@ fn validate_observability_plugin_config(
             "policy",
         ],
     );
+}
 
-    validate_version(&mut diagnostics, &config.policy, config.version);
-    validate_policy_fields(&mut diagnostics, &config.policy, plugin_config);
+fn validate_observability_section_fields(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    plugin_config: &Map<String, Json>,
+) {
     validate_section_fields(
-        &mut diagnostics,
-        &config.policy,
+        diagnostics,
+        policy,
         plugin_config,
         "atof",
         &[
@@ -1379,8 +1397,8 @@ fn validate_observability_plugin_config(
         ],
     );
     validate_section_fields(
-        &mut diagnostics,
-        &config.policy,
+        diagnostics,
+        policy,
         plugin_config,
         "atif",
         &[
@@ -1396,8 +1414,8 @@ fn validate_observability_plugin_config(
         ],
     );
     validate_section_fields(
-        &mut diagnostics,
-        &config.policy,
+        diagnostics,
+        policy,
         plugin_config,
         "opentelemetry",
         &[
@@ -1414,8 +1432,8 @@ fn validate_observability_plugin_config(
         ],
     );
     validate_section_fields(
-        &mut diagnostics,
-        &config.policy,
+        diagnostics,
+        policy,
         plugin_config,
         "openinference",
         &[
@@ -1431,98 +1449,219 @@ fn validate_observability_plugin_config(
             "timeout_millis",
         ],
     );
+}
 
+fn validate_observability_section_values(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    config: &ObservabilityConfig,
+) {
     if let Some(section) = &config.atof {
-        validate_atof_values(&mut diagnostics, &config.policy, section);
-        #[cfg(target_arch = "wasm32")]
-        if section.enabled {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.unsupported_value",
-                Some("atof".to_string()),
-                Some("enabled".to_string()),
-                "ATOF file export is not supported on WebAssembly".to_string(),
-            );
-        }
-        #[cfg(target_arch = "wasm32")]
-        if section.enabled && !section.endpoints.is_empty() {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.unsupported_value",
-                Some("atof".to_string()),
-                Some("endpoints".to_string()),
-                "ATOF streaming endpoints are not supported on WebAssembly".to_string(),
-            );
-        }
-        #[cfg(all(not(feature = "atof-streaming"), not(target_arch = "wasm32")))]
-        if section.enabled && !section.endpoints.is_empty() {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.unsupported_value",
-                Some("atof".to_string()),
-                Some("endpoints".to_string()),
-                "ATOF streaming endpoints are not enabled in this build".to_string(),
-            );
-        }
+        validate_atof_section(diagnostics, &config.policy, section);
     }
     if let Some(section) = &config.atif {
-        validate_atif_values(&mut diagnostics, &config.policy, section);
-        #[cfg(target_arch = "wasm32")]
-        if section.enabled {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.unsupported_value",
-                Some("atif".to_string()),
-                Some("enabled".to_string()),
-                "ATIF file export is not supported on WebAssembly".to_string(),
-            );
-        }
-        #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
-        if !section.storage.is_empty() {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.feature_disabled",
-                Some("atif".to_string()),
-                Some("storage".to_string()),
-                "ATIF storage support is not enabled in this build".to_string(),
-            );
-        }
+        validate_atif_section(diagnostics, &config.policy, section);
     }
     if let Some(section) = &config.opentelemetry {
-        validate_otlp_values(&mut diagnostics, &config.policy, "opentelemetry", section);
-        #[cfg(not(feature = "otel"))]
-        if section.enabled {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.feature_disabled",
-                Some("opentelemetry".to_string()),
-                Some("enabled".to_string()),
-                "OpenTelemetry support is not enabled in this build".to_string(),
-            );
-        }
+        validate_opentelemetry_section(diagnostics, &config.policy, section);
     }
     if let Some(section) = &config.openinference {
-        validate_otlp_values(&mut diagnostics, &config.policy, "openinference", section);
-        #[cfg(not(feature = "openinference"))]
-        if section.enabled {
-            push_policy_diag(
-                &mut diagnostics,
-                config.policy.unsupported_value,
-                "observability.feature_disabled",
-                Some("openinference".to_string()),
-                Some("enabled".to_string()),
-                "OpenInference support is not enabled in this build".to_string(),
-            );
-        }
+        validate_openinference_section(diagnostics, &config.policy, section);
     }
+}
 
-    diagnostics
+fn validate_atof_section(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtofSectionConfig,
+) {
+    validate_atof_values(diagnostics, policy, section);
+    validate_atof_feature_support(diagnostics, policy, section);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validate_atof_feature_support(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtofSectionConfig,
+) {
+    if section.enabled {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some("enabled".to_string()),
+            "ATOF file export is not supported on WebAssembly".to_string(),
+        );
+    }
+    if section.enabled && !section.endpoints.is_empty() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some("endpoints".to_string()),
+            "ATOF streaming endpoints are not supported on WebAssembly".to_string(),
+        );
+    }
+}
+
+#[cfg(all(not(feature = "atof-streaming"), not(target_arch = "wasm32")))]
+fn validate_atof_feature_support(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtofSectionConfig,
+) {
+    if section.enabled && !section.endpoints.is_empty() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some("endpoints".to_string()),
+            "ATOF streaming endpoints are not enabled in this build".to_string(),
+        );
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn validate_atof_feature_support(
+    _diagnostics: &mut Vec<ConfigDiagnostic>,
+    _policy: &ConfigPolicy,
+    _section: &AtofSectionConfig,
+) {
+}
+
+fn validate_atif_section(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtifSectionConfig,
+) {
+    validate_atif_values(diagnostics, policy, section);
+    validate_atif_file_export_support(diagnostics, policy, section);
+    validate_atif_storage_support(diagnostics, policy, section);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validate_atif_file_export_support(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtifSectionConfig,
+) {
+    if section.enabled {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atif".to_string()),
+            Some("enabled".to_string()),
+            "ATIF file export is not supported on WebAssembly".to_string(),
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_atif_file_export_support(
+    _diagnostics: &mut Vec<ConfigDiagnostic>,
+    _policy: &ConfigPolicy,
+    _section: &AtifSectionConfig,
+) {
+}
+
+#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+fn validate_atif_storage_support(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &AtifSectionConfig,
+) {
+    if !section.storage.is_empty() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.feature_disabled",
+            Some("atif".to_string()),
+            Some("storage".to_string()),
+            "ATIF storage support is not enabled in this build".to_string(),
+        );
+    }
+}
+
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+fn validate_atif_storage_support(
+    _diagnostics: &mut Vec<ConfigDiagnostic>,
+    _policy: &ConfigPolicy,
+    _section: &AtifSectionConfig,
+) {
+}
+
+fn validate_opentelemetry_section(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &OtlpSectionConfig,
+) {
+    validate_otlp_values(diagnostics, policy, "opentelemetry", section);
+    validate_opentelemetry_feature_support(diagnostics, policy, section);
+}
+
+#[cfg(not(feature = "otel"))]
+fn validate_opentelemetry_feature_support(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &OtlpSectionConfig,
+) {
+    if section.enabled {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.feature_disabled",
+            Some("opentelemetry".to_string()),
+            Some("enabled".to_string()),
+            "OpenTelemetry support is not enabled in this build".to_string(),
+        );
+    }
+}
+
+#[cfg(feature = "otel")]
+fn validate_opentelemetry_feature_support(
+    _diagnostics: &mut Vec<ConfigDiagnostic>,
+    _policy: &ConfigPolicy,
+    _section: &OtlpSectionConfig,
+) {
+}
+
+fn validate_openinference_section(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &OtlpSectionConfig,
+) {
+    validate_otlp_values(diagnostics, policy, "openinference", section);
+    validate_openinference_feature_support(diagnostics, policy, section);
+}
+
+#[cfg(not(feature = "openinference"))]
+fn validate_openinference_feature_support(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    section: &OtlpSectionConfig,
+) {
+    if section.enabled {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.feature_disabled",
+            Some("openinference".to_string()),
+            Some("enabled".to_string()),
+            "OpenInference support is not enabled in this build".to_string(),
+        );
+    }
+}
+
+#[cfg(feature = "openinference")]
+fn validate_openinference_feature_support(
+    _diagnostics: &mut Vec<ConfigDiagnostic>,
+    _policy: &ConfigPolicy,
+    _section: &OtlpSectionConfig,
+) {
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {

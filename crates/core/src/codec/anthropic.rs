@@ -283,6 +283,75 @@ fn encode_anthropic_tools(tools: &[ToolDefinition]) -> Vec<Json> {
         .collect()
 }
 
+fn anthropic_text_message(content_blocks: Option<&[Json]>) -> Option<MessageContent> {
+    let text_parts: Vec<&str> = content_blocks
+        .map(|blocks| blocks.iter().filter_map(anthropic_text_block).collect())
+        .unwrap_or_default();
+
+    (!text_parts.is_empty()).then(|| MessageContent::Text(text_parts.join("\n")))
+}
+
+fn anthropic_text_block(block: &Json) -> Option<&str> {
+    if block.get("type")?.as_str()? != "text" {
+        return None;
+    }
+    block.get("text")?.as_str()
+}
+
+fn anthropic_tool_calls(content_blocks: Option<&[Json]>) -> Option<Vec<ResponseToolCall>> {
+    let tool_calls: Vec<ResponseToolCall> = content_blocks
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(anthropic_tool_call_block)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    (!tool_calls.is_empty()).then_some(tool_calls)
+}
+
+fn anthropic_tool_call_block(block: &Json) -> Option<ResponseToolCall> {
+    if block.get("type")?.as_str()? != "tool_use" {
+        return None;
+    }
+    Some(ResponseToolCall {
+        id: block.get("id")?.as_str()?.to_string(),
+        name: block.get("name")?.as_str()?.to_string(),
+        // CRITICAL: input is already parsed JSON -- clone directly.
+        arguments: block.get("input")?.clone(),
+    })
+}
+
+fn anthropic_usage(
+    raw_usage: Option<RawAnthropicUsage>,
+    model_for_pricing: Option<&str>,
+) -> Option<Usage> {
+    let model_provider = infer_model_provider("anthropic", model_for_pricing);
+    raw_usage.map(|u| {
+        let prompt = u.input_tokens;
+        let completion = u.output_tokens;
+        let mut usage = Usage {
+            prompt_tokens: prompt,
+            completion_tokens: completion,
+            // Anthropic does not supply total_tokens; compute it.
+            total_tokens: match (prompt, completion) {
+                (Some(p), Some(c)) => Some(p + c),
+                _ => None,
+            },
+            cache_read_tokens: u.cache_read_input_tokens,
+            cache_write_tokens: u.cache_creation_input_tokens,
+            cost: provider_reported_cost(u.provider_cost, u.cost),
+        };
+        if usage.cost.is_none() {
+            usage.cost = model_for_pricing.and_then(|model| {
+                estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
+            });
+        }
+        usage
+    })
+}
+
 // ---------------------------------------------------------------------------
 // LlmResponseCodec implementation
 // ---------------------------------------------------------------------------
@@ -292,91 +361,16 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         let raw: RawAnthropicResponse = serde_json::from_value(response.clone())
             .map_err(|e| FlowError::Internal(format!("Anthropic Messages response decode: {e}")))?;
 
-        // Process content blocks.
-        let content_blocks = raw.content.as_ref();
-
-        // Extract text from all "text" blocks, concatenated with newline.
-        let text_parts: Vec<&str> = content_blocks
-            .map(|blocks| {
-                blocks
-                    .iter()
-                    .filter_map(|block| {
-                        let block_type = block.get("type")?.as_str()?;
-                        if block_type == "text" {
-                            block.get("text")?.as_str()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let message = if text_parts.is_empty() {
-            None
-        } else {
-            Some(MessageContent::Text(text_parts.join("\n")))
-        };
-
+        let content_blocks = raw.content.as_deref();
+        let message = anthropic_text_message(content_blocks);
         // Extract tool_use blocks (only "tool_use" type, NOT mcp_tool_use or server_tool_use).
-        let tool_calls: Vec<ResponseToolCall> = content_blocks
-            .map(|blocks| {
-                blocks
-                    .iter()
-                    .filter_map(|block| {
-                        let block_type = block.get("type")?.as_str()?;
-                        if block_type == "tool_use" {
-                            let id = block.get("id")?.as_str()?.to_string();
-                            let name = block.get("name")?.as_str()?.to_string();
-                            // CRITICAL: input is already parsed JSON -- clone directly.
-                            let arguments = block.get("input")?.clone();
-                            Some(ResponseToolCall {
-                                id,
-                                name,
-                                arguments,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let tool_calls = if tool_calls.is_empty() {
-            None
-        } else {
-            Some(tool_calls)
-        };
+        let tool_calls = anthropic_tool_calls(content_blocks);
 
         // Map stop_reason to FinishReason.
         let finish_reason = raw.stop_reason.as_deref().map(map_anthropic_stop_reason);
 
         // Map usage.
-        let model_for_pricing = raw.model.as_deref();
-        let model_provider = infer_model_provider("anthropic", model_for_pricing);
-        let usage = raw.usage.map(|u| {
-            let prompt = u.input_tokens;
-            let completion = u.output_tokens;
-            let mut usage = Usage {
-                prompt_tokens: prompt,
-                completion_tokens: completion,
-                // Anthropic does not supply total_tokens; compute it.
-                total_tokens: match (prompt, completion) {
-                    (Some(p), Some(c)) => Some(p + c),
-                    _ => None,
-                },
-                cache_read_tokens: u.cache_read_input_tokens,
-                cache_write_tokens: u.cache_creation_input_tokens,
-                cost: provider_reported_cost(u.provider_cost, u.cost),
-            };
-            if usage.cost.is_none() {
-                usage.cost = model_for_pricing.and_then(|model| {
-                    estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
-                });
-            }
-            usage
-        });
+        let usage = anthropic_usage(raw.usage, raw.model.as_deref());
 
         // Build API-specific fields: all content blocks + stop_sequence.
         let api_specific_content_blocks = raw.content.clone();

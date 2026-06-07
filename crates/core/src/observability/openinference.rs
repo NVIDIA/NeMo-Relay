@@ -729,28 +729,8 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         .annotated_response()
         .and_then(|response| response.usage.as_ref())
         .or(fallback_usage.as_ref());
-    if is_llm && let Some(usage) = usage {
-        if let Some(v) = usage.prompt_tokens {
-            attributes.push(KeyValue::new(oi::llm::token_count::PROMPT, v as i64));
-        }
-        if let Some(v) = usage.completion_tokens {
-            attributes.push(KeyValue::new(oi::llm::token_count::COMPLETION, v as i64));
-        }
-        if let Some(v) = usage.total_tokens {
-            attributes.push(KeyValue::new(oi::llm::token_count::TOTAL, v as i64));
-        }
-        if let Some(v) = usage.cache_read_tokens {
-            attributes.push(KeyValue::new(
-                oi::llm::token_count::prompt_details::CACHE_READ,
-                v as i64,
-            ));
-        }
-        if let Some(v) = usage.cache_write_tokens {
-            attributes.push(KeyValue::new(
-                oi::llm::token_count::prompt_details::CACHE_WRITE,
-                v as i64,
-            ));
-        }
+    if is_llm {
+        push_llm_usage_attributes(&mut attributes, usage);
     }
     if is_llm && let Some(cost_total) = cost_total_from_llm_event(event, fallback_usage.as_ref()) {
         attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
@@ -759,6 +739,33 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         push_llm_response_attributes(&mut attributes, event);
     }
     attributes
+}
+
+fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usage>) {
+    let Some(usage) = usage else {
+        return;
+    };
+    if let Some(v) = usage.prompt_tokens {
+        attributes.push(KeyValue::new(oi::llm::token_count::PROMPT, v as i64));
+    }
+    if let Some(v) = usage.completion_tokens {
+        attributes.push(KeyValue::new(oi::llm::token_count::COMPLETION, v as i64));
+    }
+    if let Some(v) = usage.total_tokens {
+        attributes.push(KeyValue::new(oi::llm::token_count::TOTAL, v as i64));
+    }
+    if let Some(v) = usage.cache_read_tokens {
+        attributes.push(KeyValue::new(
+            oi::llm::token_count::prompt_details::CACHE_READ,
+            v as i64,
+        ));
+    }
+    if let Some(v) = usage.cache_write_tokens {
+        attributes.push(KeyValue::new(
+            oi::llm::token_count::prompt_details::CACHE_WRITE,
+            v as i64,
+        ));
+    }
 }
 
 fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {

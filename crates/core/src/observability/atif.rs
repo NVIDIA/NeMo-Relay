@@ -439,36 +439,50 @@ fn unwrap_llm_request(input: &Json) -> Json {
 /// Tool-call-only responses use an empty string message and keep the full
 /// response under `Step.extra.llm_response`.
 fn extract_llm_response_message(output: &Json) -> Json {
-    if let Some(obj) = output.as_object() {
-        if let Some(content) = non_null_object_field(obj, "content") {
-            if let Some(message) = anthropic_messages_content_message(output, &content) {
-                return message;
-            }
-            return atif_content_value(&content);
-        }
-        if let Some(content) = obj
-            .get("assistant_message")
-            .and_then(Json::as_object)
-            .and_then(|assistant| non_null_object_field(assistant, "content"))
-        {
-            return atif_content_value(&content);
-        }
-        if let Some(content) = raw_response_message_field(output, "content")
-            && !content.is_null()
-        {
-            return atif_content_value(content);
-        }
-        if let Some(answer) = non_null_object_field(obj, "answer") {
-            return atif_content_value(&answer);
-        }
-        if let Some(content) = openai_responses_output_message(output) {
-            return content;
-        }
-        if tool_call_array(output).is_some() {
-            return empty_message();
-        }
+    let Some(obj) = output.as_object() else {
+        return atif_content_value(output);
+    };
+
+    if let Some(message) = extract_object_llm_response_message(output, obj) {
+        return message;
     }
+
     atif_content_value(output)
+}
+
+fn extract_object_llm_response_message(
+    output: &Json,
+    obj: &serde_json::Map<String, Json>,
+) -> Option<Json> {
+    if let Some(content) = non_null_object_field(obj, "content") {
+        return Some(extract_content_message(output, &content));
+    }
+    if let Some(content) = assistant_message_content(obj) {
+        return Some(atif_content_value(&content));
+    }
+    if let Some(content) = raw_response_message_field(output, "content")
+        && !content.is_null()
+    {
+        return Some(atif_content_value(content));
+    }
+    if let Some(answer) = non_null_object_field(obj, "answer") {
+        return Some(atif_content_value(&answer));
+    }
+    if let Some(content) = openai_responses_output_message(output) {
+        return Some(content);
+    }
+    tool_call_array(output).map(|_| empty_message())
+}
+
+fn extract_content_message(output: &Json, content: &Json) -> Json {
+    anthropic_messages_content_message(output, content)
+        .unwrap_or_else(|| atif_content_value(content))
+}
+
+fn assistant_message_content(obj: &serde_json::Map<String, Json>) -> Option<Json> {
+    obj.get("assistant_message")
+        .and_then(Json::as_object)
+        .and_then(|assistant| non_null_object_field(assistant, "content"))
 }
 
 fn non_null_object_field(obj: &serde_json::Map<String, Json>, key: &str) -> Option<Json> {
@@ -1162,48 +1176,51 @@ fn event_extra(event: &Event) -> Json {
 /// Always returns `Some(AtifFinalMetrics)` with `total_steps` set. Each token
 /// or cost total is populated only when at least one step provides that field.
 fn compute_final_metrics(steps: &[AtifStep]) -> Option<AtifFinalMetrics> {
-    let mut total_prompt: u64 = 0;
-    let mut total_completion: u64 = 0;
-    let mut total_cached: u64 = 0;
-    let mut total_cost: f64 = 0.0;
-    let mut has_prompt = false;
-    let mut has_completion = false;
-    let mut has_cached = false;
-    let mut has_cost = false;
+    let mut totals = FinalMetricsTotals::default();
+    for metrics in steps.iter().filter_map(|step| step.metrics.as_ref()) {
+        totals.add(metrics);
+    }
+    Some(totals.into_final_metrics(steps.len()))
+}
 
-    for step in steps {
-        if let Some(m) = &step.metrics {
-            if let Some(prompt_tokens) = m.prompt_tokens {
-                has_prompt = true;
-                total_prompt += prompt_tokens;
-            }
-            if let Some(completion_tokens) = m.completion_tokens {
-                has_completion = true;
-                total_completion += completion_tokens;
-            }
-            if let Some(cached_tokens) = m.cached_tokens {
-                has_cached = true;
-                total_cached += cached_tokens;
-            }
-            if let Some(cost) = m.cost_usd {
-                has_cost = true;
-                total_cost += cost;
-            }
-        }
+#[derive(Default)]
+struct FinalMetricsTotals {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    cached_tokens: Option<u64>,
+    cost_usd: Option<f64>,
+}
+
+impl FinalMetricsTotals {
+    fn add(&mut self, metrics: &AtifMetrics) {
+        add_u64_total(&mut self.prompt_tokens, metrics.prompt_tokens);
+        add_u64_total(&mut self.completion_tokens, metrics.completion_tokens);
+        add_u64_total(&mut self.cached_tokens, metrics.cached_tokens);
+        add_f64_total(&mut self.cost_usd, metrics.cost_usd);
     }
 
-    Some(AtifFinalMetrics {
-        total_prompt_tokens: if has_prompt { Some(total_prompt) } else { None },
-        total_completion_tokens: if has_completion {
-            Some(total_completion)
-        } else {
-            None
-        },
-        total_cached_tokens: if has_cached { Some(total_cached) } else { None },
-        total_cost_usd: if has_cost { Some(total_cost) } else { None },
-        total_steps: Some(steps.len() as u64),
-        extra: None,
-    })
+    fn into_final_metrics(self, step_count: usize) -> AtifFinalMetrics {
+        AtifFinalMetrics {
+            total_prompt_tokens: self.prompt_tokens,
+            total_completion_tokens: self.completion_tokens,
+            total_cached_tokens: self.cached_tokens,
+            total_cost_usd: self.cost_usd,
+            total_steps: Some(step_count as u64),
+            extra: None,
+        }
+    }
+}
+
+fn add_u64_total(total: &mut Option<u64>, value: Option<u64>) {
+    if let Some(value) = value {
+        *total = Some(total.unwrap_or(0) + value);
+    }
+}
+
+fn add_f64_total(total: &mut Option<f64>, value: Option<f64>) {
+    if let Some(value) = value {
+        *total = Some(total.unwrap_or(0.0) + value);
+    }
 }
 
 // ---------------------------------------------------------------------------

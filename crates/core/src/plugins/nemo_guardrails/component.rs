@@ -611,123 +611,112 @@ fn validate_non_empty_strings(
     policy: &ConfigPolicy,
     config: &NeMoGuardrailsConfig,
 ) {
-    if let Some(config_path) = &config.config_path
-        && config_path.trim().is_empty()
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("config_path".to_string()),
-            "config_path must not be empty".to_string(),
-        );
-    }
-
-    if let Some(config_yaml) = &config.config_yaml
-        && config_yaml.trim().is_empty()
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("config_yaml".to_string()),
-            "config_yaml must not be empty".to_string(),
-        );
-    }
-
-    if let Some(colang_content) = &config.colang_content
-        && colang_content.trim().is_empty()
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("colang_content".to_string()),
-            "colang_content must not be empty".to_string(),
-        );
-    }
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "config_path",
+        config.config_path.as_deref(),
+        "config_path must not be empty",
+    );
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "config_yaml",
+        config.config_yaml.as_deref(),
+        "config_yaml must not be empty",
+    );
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "colang_content",
+        config.colang_content.as_deref(),
+        "colang_content must not be empty",
+    );
 
     if let Some(remote) = &config.remote {
-        if let Some(endpoint) = &remote.endpoint
-            && endpoint.trim().is_empty()
-        {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "nemo_guardrails.unsupported_value",
-                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                Some("remote.endpoint".to_string()),
-                "remote.endpoint must not be empty".to_string(),
-            );
-        }
-        if let Some(config_id) = &remote.config_id
-            && config_id.trim().is_empty()
-        {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "nemo_guardrails.unsupported_value",
-                Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                Some("remote.config_id".to_string()),
-                "remote.config_id must not be empty".to_string(),
-            );
-        }
-        for (index, config_id) in remote.config_ids.iter().enumerate() {
-            if config_id.trim().is_empty() {
-                push_policy_diag(
-                    diagnostics,
-                    policy.unsupported_value,
-                    "nemo_guardrails.unsupported_value",
-                    Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                    Some(format!("remote.config_ids[{index}]")),
-                    "remote.config_ids entries must not be empty".to_string(),
-                );
-            }
-        }
+        validate_remote_non_empty_strings(diagnostics, policy, remote);
     }
 
-    if let Some(local) = &config.local
-        && let Some(python_module) = &local.python_module
-        && python_module.trim().is_empty()
-    {
-        push_policy_diag(
+    if let Some(local) = &config.local {
+        validate_local_non_empty_strings(diagnostics, policy, local);
+    }
+}
+
+fn validate_remote_non_empty_strings(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    remote: &RemoteBackendConfig,
+) {
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "remote.endpoint",
+        remote.endpoint.as_deref(),
+        "remote.endpoint must not be empty",
+    );
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "remote.config_id",
+        remote.config_id.as_deref(),
+        "remote.config_id must not be empty",
+    );
+    for (index, config_id) in remote.config_ids.iter().enumerate() {
+        validate_optional_non_empty_string(
             diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("local.python_module".to_string()),
-            "local.python_module must not be empty".to_string(),
+            policy,
+            format!("remote.config_ids[{index}]"),
+            Some(config_id.as_str()),
+            "remote.config_ids entries must not be empty",
         );
     }
+}
 
-    if let Some(local) = &config.local
-        && let Some(python_executable) = &local.python_executable
-        && python_executable.trim().is_empty()
+fn validate_local_non_empty_strings(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    local: &LocalBackendConfig,
+) {
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "local.python_module",
+        local.python_module.as_deref(),
+        "local.python_module must not be empty",
+    );
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "local.python_executable",
+        local.python_executable.as_deref(),
+        "local.python_executable must not be empty",
+    );
+    validate_optional_non_empty_string(
+        diagnostics,
+        policy,
+        "local.python_path",
+        local.python_path.as_deref(),
+        "local.python_path must not be empty",
+    );
+}
+
+fn validate_optional_non_empty_string(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: impl Into<String>,
+    value: Option<&str>,
+    message: &str,
+) {
+    if let Some(value) = value
+        && value.trim().is_empty()
     {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("local.python_executable".to_string()),
-            "local.python_executable must not be empty".to_string(),
-        );
-    }
-
-    if let Some(local) = &config.local
-        && let Some(python_path) = &local.python_path
-        && python_path.trim().is_empty()
-    {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "nemo_guardrails.unsupported_value",
-            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-            Some("local.python_path".to_string()),
-            "local.python_path must not be empty".to_string(),
+            Some(field.into()),
+            message.to_string(),
         );
     }
 }

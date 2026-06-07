@@ -778,26 +778,57 @@ async fn run_ndjson_endpoint(
     config: AtofEndpointConfig,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
-    let client = match reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(config.timeout_millis))
-        .default_headers(match build_header_map(&config.headers) {
-            Ok(headers) => headers,
-            Err(error) => {
-                eprintln!("nemo_relay: ATOF endpoint[{index}] disabled: {error}");
-                drain_closed(rx).await;
-                return;
-            }
-        })
-        .build()
-    {
+    let client = match build_ndjson_client(&config) {
         Ok(client) => client,
         Err(error) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] client build failed: {error}");
+            eprintln!("nemo_relay: ATOF endpoint[{index}] {error}");
             drain_closed(rx).await;
             return;
         }
     };
 
+    let (body_tx, body) = ndjson_body_channel();
+    let request = tokio::spawn(async move {
+        client
+            .post(config.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+            .body(body)
+            .send()
+            .await
+    });
+    let close_timeout = Duration::from_millis(config.timeout_millis);
+
+    while let Some(message) = rx.recv().await {
+        match message {
+            EndpointMessage::Event(raw_json) => send_ndjson_event(index, &body_tx, raw_json),
+            EndpointMessage::Flush(done) => send_ndjson_flush(index, &body_tx, done),
+            EndpointMessage::Close(done) => {
+                drop(body_tx);
+                finish_ndjson_upload(index, request, close_timeout, done).await;
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn build_ndjson_client(
+    config: &AtofEndpointConfig,
+) -> std::result::Result<reqwest::Client, String> {
+    let headers =
+        build_header_map(&config.headers).map_err(|error| format!("disabled: {error}"))?;
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(config.timeout_millis))
+        .default_headers(headers)
+        .build()
+        .map_err(|error| format!("client build failed: {error}"))
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn ndjson_body_channel() -> (
+    tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
+    reqwest::Body,
+) {
     let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel::<NdjsonBodyMessage>();
     let body_stream = stream::unfold(body_rx, |mut body_rx| async {
         loop {
@@ -811,57 +842,56 @@ async fn run_ndjson_endpoint(
             }
         }
     });
-    let body = reqwest::Body::wrap_stream(body_stream);
-    let request = tokio::spawn(async move {
-        client
-            .post(config.url)
-            .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
-            .body(body)
-            .send()
-            .await
-    });
-    let close_timeout = Duration::from_millis(config.timeout_millis);
+    (body_tx, reqwest::Body::wrap_stream(body_stream))
+}
 
-    while let Some(message) = rx.recv().await {
-        match message {
-            EndpointMessage::Event(raw_json) => {
-                if let Err(error) = body_tx.send(NdjsonBodyMessage::Event(
-                    format!("{raw_json}\n").into_bytes(),
-                )) {
-                    eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON send failed: {error}");
-                }
-            }
-            EndpointMessage::Flush(done) => {
-                if let Err(error) = body_tx.send(NdjsonBodyMessage::Flush(done)) {
-                    eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON flush failed: {error}");
-                    error.0.acknowledge_if_flush();
-                }
-            }
-            EndpointMessage::Close(done) => {
-                drop(body_tx);
-                match tokio::time::timeout(close_timeout, request).await {
-                    Ok(Ok(Ok(response))) if response.status().is_success() => {}
-                    Ok(Ok(Ok(response))) => eprintln!(
-                        "nemo_relay: ATOF endpoint[{index}] NDJSON HTTP status {}",
-                        response.status()
-                    ),
-                    Ok(Ok(Err(error))) => {
-                        eprintln!(
-                            "nemo_relay: ATOF endpoint[{index}] NDJSON upload failed: {error}"
-                        )
-                    }
-                    Ok(Err(error)) => {
-                        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON task failed: {error}")
-                    }
-                    Err(_) => {
-                        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON close timed out")
-                    }
-                }
-                let _ = done.send(());
-                return;
-            }
-        }
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn send_ndjson_event(
+    index: usize,
+    body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
+    raw_json: String,
+) {
+    if let Err(error) = body_tx.send(NdjsonBodyMessage::Event(
+        format!("{raw_json}\n").into_bytes(),
+    )) {
+        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON send failed: {error}");
     }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn send_ndjson_flush(
+    index: usize,
+    body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
+    done: std_mpsc::Sender<()>,
+) {
+    if let Err(error) = body_tx.send(NdjsonBodyMessage::Flush(done)) {
+        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON flush failed: {error}");
+        error.0.acknowledge_if_flush();
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn finish_ndjson_upload(
+    index: usize,
+    request: tokio::task::JoinHandle<reqwest::Result<reqwest::Response>>,
+    close_timeout: Duration,
+    done: std_mpsc::Sender<()>,
+) {
+    match tokio::time::timeout(close_timeout, request).await {
+        Ok(Ok(Ok(response))) if response.status().is_success() => {}
+        Ok(Ok(Ok(response))) => eprintln!(
+            "nemo_relay: ATOF endpoint[{index}] NDJSON HTTP status {}",
+            response.status()
+        ),
+        Ok(Ok(Err(error))) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON upload failed: {error}")
+        }
+        Ok(Err(error)) => {
+            eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON task failed: {error}")
+        }
+        Err(_) => eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON close timed out"),
+    }
+    let _ = done.send(());
 }
 
 #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
