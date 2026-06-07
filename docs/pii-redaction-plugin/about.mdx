@@ -31,6 +31,8 @@ Start here when you need to:
   them.
 - Keep privacy behavior inside the same plugin config surface used by other
   first-party NeMo Relay components.
+- Use built-in detector presets for common values such as emails, phone
+  numbers, URLs, API keys, and IP addresses without writing custom regexes.
 
 ## Current Scope
 
@@ -46,6 +48,7 @@ The current built-in backend supports three actions:
 - `remove`
 - `regex_replace`
 - `hash`
+- `mask`
 
 The current backend boundary is intentional:
 

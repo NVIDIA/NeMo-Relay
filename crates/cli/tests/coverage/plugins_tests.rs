@@ -245,14 +245,46 @@ fn typed_editor_model_contains_pii_redaction_options() {
         EditorFieldKind::Json
     );
     assert_eq!(
+        builtin.field("detector").unwrap().kind,
+        EditorFieldKind::Enum
+    );
+    assert_eq!(
         builtin.field("replacement").unwrap().kind,
         EditorFieldKind::String
+    );
+    assert_eq!(
+        builtin.field("mask_char").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        builtin.field("unmasked_prefix").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    assert_eq!(
+        builtin.field("unmasked_suffix").unwrap().kind,
+        EditorFieldKind::Integer
     );
 
     let local = schema.field("local").unwrap().schema().unwrap();
     assert_eq!(
         local.field("backend").unwrap().kind,
         EditorFieldKind::String
+    );
+    assert_eq!(
+        local.field("model_id").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        local.field("detector_profile").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        local.field("allow_network").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+    assert_eq!(
+        local.field("max_latency_ms").unwrap().kind,
+        EditorFieldKind::Integer
     );
 }
 

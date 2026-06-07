@@ -202,6 +202,64 @@ fn validate_rejects_regex_replace_without_pattern() {
 }
 
 #[test]
+fn validate_rejects_mask_with_empty_mask_char() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "builtin": {
+            "action": "mask",
+            "mask_char": ""
+        }
+    })));
+
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("builtin.mask_char")
+            && diag.message.contains("must not be empty")
+    }));
+}
+
+#[test]
+fn validate_rejects_builtin_detector_and_pattern_together() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "builtin": {
+            "action": "mask",
+            "pattern": "secret",
+            "detector": "email"
+        }
+    })));
+
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("builtin.detector")
+            && diag.message.contains("cannot both be set")
+    }));
+}
+
+#[test]
+fn validate_rejects_unknown_builtin_detector() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "builtin": {
+            "action": "mask",
+            "detector": "ssn-ish"
+        }
+    })));
+
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("builtin.detector")
+            && diag.message.contains("must be 'email'")
+    }));
+}
+
+#[test]
 fn local_backend_provider_is_invoked_for_local_model_mode() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -376,6 +434,124 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
     );
 
     deregister_subscriber("pii-redaction-remove-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_preserves_configured_prefix_and_suffix() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": true,
+        "builtin": {
+            "action": "mask",
+            "mask_char": "*",
+            "unmasked_prefix": 2,
+            "unmasked_suffix": 2,
+            "target_paths": ["/account", "/result/token"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-mask-events");
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("lookup")
+            .args(json!({
+                "account": "abcdef1234",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .result(json!({
+                "result": {
+                    "token": "9876543210",
+                    "public": "ok"
+                }
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "account": "ab******34",
+            "keep": "unchanged"
+        }))
+    );
+    assert_eq!(
+        captured_events[1].output(),
+        Some(&json!({
+            "result": {
+                "token": "98******10",
+                "public": "ok"
+            }
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_detector_masks_only_matching_substrings() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "mask_char": "*",
+            "target_paths": ["/message"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-detector-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "message": "Email alice@example.com or bob@example.com",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "message": "Email ***************** or ***************",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-detector-mask-events").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

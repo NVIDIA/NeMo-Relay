@@ -49,7 +49,7 @@ At least one managed redaction surface must be enabled.
 | Managed LLM `output` | Supported | Extension point only in this PR |
 | Managed `tool_input` | Supported | Extension point only in this PR |
 | Managed `tool_output` | Supported | Extension point only in this PR |
-| Built-in actions | `remove`, `regex_replace`, `hash` | N/A |
+| Built-in actions | `remove`, `regex_replace`, `hash`, `mask` | N/A |
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the built-in core plugin | Runtimes that install a local backend provider |
 
@@ -64,8 +64,8 @@ To use `mode = "builtin"`:
 
 - `builtin` settings are required.
 - `codec` is required when `input` or `output` is enabled.
-- `builtin.action` must be `remove`, `regex_replace`, or `hash`.
-- `builtin.pattern` is required when `builtin.action = "regex_replace"`.
+- `builtin.action` must be `remove`, `regex_replace`, `hash`, or `mask`.
+- `builtin.pattern` or `builtin.detector` is required when `builtin.action = "regex_replace"`.
 
 ### `plugins.toml` Example
 
@@ -126,7 +126,7 @@ Use the editor when you want to:
 - choose `builtin` or `local_model`
 - set the LLM `codec`
 - edit `builtin` action settings such as `action`, `target_paths`,
-  `pattern`, and `replacement`
+  `pattern`, `detector`, `replacement`, and masking fields
 - edit `local.backend` for a runtime-provided future local-model backend
 
 The editor preserves unknown fields when it rewrites an existing
@@ -139,10 +139,14 @@ The `builtin` section contains:
 
 | Field | Purpose |
 |---|---|
-| `action` | Sanitization action. Current values are `remove`, `regex_replace`, and `hash`. |
+| `action` | Sanitization action. Current values are `remove`, `regex_replace`, `hash`, and `mask`. |
 | `target_paths` | Exact JSON-pointer paths to sanitize. Empty means every matching string leaf. |
 | `pattern` | Regex pattern used when `action = "regex_replace"`. |
+| `detector` | Optional built-in matcher preset. Current values are `email`, `phone`, `api_key`, `ip_address`, and `url`. |
 | `replacement` | Replacement text used when `action = "regex_replace"`. Defaults to `[REDACTED]`. |
+| `mask_char` | Masking token used when `action = "mask"`. Defaults to `*`. |
+| `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`. |
+| `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`. |
 
 ## Action Semantics
 
@@ -161,9 +165,27 @@ When a target matches:
 `regex_replace` applies the configured regex to matching string leaves and
 replaces matches with the configured `replacement`.
 
+If you set `detector` instead of `pattern`, the built-in backend uses the
+detector's stock matcher regex.
+
 ### `hash`
 
 `hash` replaces matching string leaves with their SHA-256 hex digest.
+
+When `pattern` or `detector` is set, `hash` only replaces the matching
+substring instead of hashing the entire string leaf.
+
+### `mask`
+
+`mask` replaces the middle portion of each matching string leaf with the
+configured `mask_char`.
+
+Use `unmasked_prefix` and `unmasked_suffix` when you want to preserve a small
+leading or trailing segment for correlation or debugging, such as the last four
+characters of a token.
+
+When `pattern` or `detector` is set, `mask` only masks matching substrings
+inside the string leaf.
 
 ## Path Semantics
 
@@ -180,6 +202,18 @@ The plugin uses different payload boundaries for tools and LLMs:
 The current implementation also preserves provider-shaped response-path
 compatibility for the supported codecs, but normalized LLM paths are the
 recommended contract for new configuration.
+
+## Detector Presets
+
+The built-in detector presets are intended for common structured values:
+
+- `email`
+- `phone`
+- `api_key`
+- `ip_address`
+- `url`
+
+They are deterministic regex-backed helpers, not model inference.
 
 If `target_paths` is empty, the built-in backend sanitizes every matching
 string leaf in the selected payload boundary.
@@ -204,7 +238,12 @@ That means:
 In this PR:
 
 - the plugin contract accepts `mode = "local_model"`
-- the `local` section currently supports `backend`
+- the `local` section currently supports:
+  - `backend`
+  - `model_id`
+  - `detector_profile`
+  - `allow_network`
+  - `max_latency_ms`
 - actual behavior depends on a runtime-installed local backend provider
 
 Without a provider, runtimes report the local backend as unavailable during

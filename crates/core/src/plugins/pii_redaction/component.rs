@@ -143,9 +143,21 @@ pub struct BuiltinBackendConfig {
     /// Regex pattern used when `action = "regex_replace"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    /// Built-in detector preset used when you do not want to write a regex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector: Option<String>,
     /// Replacement text used when `action = "regex_replace"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
+    /// Masking token used when `action = "mask"`. Defaults to `*`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mask_char: Option<String>,
+    /// Number of leading characters to keep when `action = "mask"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmasked_prefix: Option<usize>,
+    /// Number of trailing characters to keep when `action = "mask"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmasked_suffix: Option<usize>,
 }
 
 /// Local-backend settings for a future in-process local-model runtime.
@@ -155,6 +167,18 @@ pub struct LocalBackendConfig {
     /// Optional local-model backend identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
+    /// Optional model identifier reserved for future local-model runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Optional detector profile reserved for future local-model runtimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector_profile: Option<String>,
+    /// Whether a future local-model backend may use network calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_network: Option<bool>,
+    /// Target latency budget hint for a future local-model backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_latency_ms: Option<u64>,
 }
 
 crate::editor_config! {
@@ -203,17 +227,30 @@ crate::editor_config! {
         action => {
             label: "action",
             kind: Enum,
-            values: ["remove", "regex_replace", "hash"],
+            values: ["remove", "regex_replace", "hash", "mask"],
         },
         target_paths => { label: "target_paths", kind: Json },
         pattern => { label: "pattern", kind: String, optional: true },
+        detector => {
+            label: "detector",
+            kind: Enum,
+            values: ["email", "phone", "api_key", "ip_address", "url"],
+            optional: true,
+        },
         replacement => { label: "replacement", kind: String, optional: true },
+        mask_char => { label: "mask_char", kind: String, optional: true },
+        unmasked_prefix => { label: "unmasked_prefix", kind: Integer, optional: true },
+        unmasked_suffix => { label: "unmasked_suffix", kind: Integer, optional: true },
     }
 }
 
 crate::editor_config! {
     impl LocalBackendConfig {
         backend => { label: "backend", kind: String, optional: true },
+        model_id => { label: "model_id", kind: String, optional: true },
+        detector_profile => { label: "detector_profile", kind: String, optional: true },
+        allow_network => { label: "allow_network", kind: Boolean, optional: true },
+        max_latency_ms => { label: "max_latency_ms", kind: Integer, optional: true },
     }
 }
 
@@ -279,7 +316,7 @@ fn builtin_action_schema(
 ) -> schemars::schema::Schema {
     string_enum_schema(
         generator,
-        &["remove", "regex_replace", "hash"],
+        &["remove", "regex_replace", "hash", "mask"],
         Some("remove"),
     )
 }
@@ -377,14 +414,29 @@ fn validate_pii_redaction_plugin_config(
         &config.policy,
         plugin_config,
         "builtin",
-        &["action", "target_paths", "pattern", "replacement"],
+        &[
+            "action",
+            "target_paths",
+            "pattern",
+            "detector",
+            "replacement",
+            "mask_char",
+            "unmasked_prefix",
+            "unmasked_suffix",
+        ],
     );
     validate_section_fields(
         &mut diagnostics,
         &config.policy,
         plugin_config,
         "local",
-        &["backend"],
+        &[
+            "backend",
+            "model_id",
+            "detector_profile",
+            "allow_network",
+            "max_latency_ms",
+        ],
     );
     validate_mode(&mut diagnostics, &config.policy, &config);
     validate_surface_selection(&mut diagnostics, &config.policy, &config);
@@ -500,25 +552,73 @@ fn validate_builtin_action_requirements(
         return;
     };
 
-    if !matches!(builtin.action.as_str(), "remove" | "regex_replace" | "hash") {
+    if !matches!(
+        builtin.action.as_str(),
+        "remove" | "regex_replace" | "hash" | "mask"
+    ) {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "pii_redaction.unsupported_value",
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("builtin.action".to_string()),
-            "builtin.action must be 'remove', 'regex_replace', or 'hash'".to_string(),
+            "builtin.action must be 'remove', 'regex_replace', 'hash', or 'mask'".to_string(),
         );
     }
 
-    if builtin.action == "regex_replace" && builtin.pattern.is_none() {
+    if builtin.action == "regex_replace" && builtin.pattern.is_none() && builtin.detector.is_none()
+    {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "pii_redaction.unsupported_value",
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("builtin.pattern".to_string()),
-            "builtin.pattern is required when builtin.action = 'regex_replace'".to_string(),
+            "builtin.pattern or builtin.detector is required when builtin.action = 'regex_replace'"
+                .to_string(),
+        );
+    }
+
+    if builtin.pattern.is_some() && builtin.detector.is_some() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.detector".to_string()),
+            "builtin.pattern and builtin.detector cannot both be set".to_string(),
+        );
+    }
+
+    if builtin
+        .detector
+        .as_deref()
+        .is_some_and(|detector| detector_regex_pattern(detector).is_none())
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.detector".to_string()),
+            "builtin.detector must be 'email', 'phone', 'api_key', 'ip_address', or 'url'"
+                .to_string(),
+        );
+    }
+
+    if builtin.action == "mask"
+        && builtin
+            .mask_char
+            .as_deref()
+            .is_some_and(|mask_char| mask_char.is_empty())
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.mask_char".to_string()),
+            "builtin.mask_char must not be empty when builtin.action = 'mask'".to_string(),
         );
     }
 }
@@ -600,7 +700,15 @@ struct CompiledBuiltinBackend {
 #[derive(Clone)]
 enum BuiltinAction {
     Remove,
-    Hash,
+    Hash {
+        matcher: Option<Arc<Regex>>,
+    },
+    Mask {
+        matcher: Option<Arc<Regex>>,
+        mask_char: Arc<String>,
+        unmasked_prefix: usize,
+        unmasked_suffix: usize,
+    },
     RegexReplace {
         pattern: Arc<Regex>,
         replacement: Arc<String>,
@@ -620,23 +728,24 @@ impl<T> BuiltinRequestResponseCodec for T where T: LlmCodec + LlmResponseCodec +
 
 impl CompiledBuiltinBackend {
     fn new(config: BuiltinBackendConfig, codec_name: Option<String>) -> PluginResult<Self> {
+        let matcher = compile_builtin_matcher(config.pattern.clone(), config.detector.clone())?;
         let action = match config.action.as_str() {
             "remove" => BuiltinAction::Remove,
-            "hash" => BuiltinAction::Hash,
+            "hash" => BuiltinAction::Hash { matcher },
+            "mask" => BuiltinAction::Mask {
+                matcher,
+                mask_char: Arc::new(config.mask_char.unwrap_or_else(|| "*".to_string())),
+                unmasked_prefix: config.unmasked_prefix.unwrap_or(0),
+                unmasked_suffix: config.unmasked_suffix.unwrap_or(0),
+            },
             "regex_replace" => {
-                let pattern_text = config.pattern.ok_or_else(|| {
+                let pattern = matcher.ok_or_else(|| {
                     PluginError::InvalidConfig(
-                        "builtin.pattern is required when builtin.action = 'regex_replace'"
-                            .to_string(),
+                        "builtin.pattern or builtin.detector is required when builtin.action = 'regex_replace'".to_string(),
                     )
                 })?;
-                let pattern = Regex::new(&pattern_text).map_err(|err| {
-                    PluginError::InvalidConfig(format!(
-                        "invalid builtin.pattern regex '{pattern_text}': {err}"
-                    ))
-                })?;
                 BuiltinAction::RegexReplace {
-                    pattern: Arc::new(pattern),
+                    pattern,
                     replacement: Arc::new(
                         config
                             .replacement
@@ -728,7 +837,45 @@ impl CompiledBuiltinBackend {
     fn sanitize_string_value(&self, text: String) -> Option<Json> {
         match &self.action {
             BuiltinAction::Remove => None,
-            BuiltinAction::Hash => Some(Json::String(hex_sha256(&text))),
+            BuiltinAction::Hash { matcher } => Some(Json::String(match matcher {
+                Some(matcher) => matcher
+                    .replace_all(&text, |captures: &regex::Captures<'_>| {
+                        hex_sha256(
+                            captures
+                                .get(0)
+                                .map(|capture| capture.as_str())
+                                .unwrap_or(""),
+                        )
+                    })
+                    .into_owned(),
+                None => hex_sha256(&text),
+            })),
+            BuiltinAction::Mask {
+                matcher,
+                mask_char,
+                unmasked_prefix,
+                unmasked_suffix,
+            } => Some(Json::String(match matcher {
+                Some(matcher) => matcher
+                    .replace_all(&text, |captures: &regex::Captures<'_>| {
+                        mask_text(
+                            captures
+                                .get(0)
+                                .map(|capture| capture.as_str())
+                                .unwrap_or(""),
+                            mask_char.as_str(),
+                            *unmasked_prefix,
+                            *unmasked_suffix,
+                        )
+                    })
+                    .into_owned(),
+                None => mask_text(
+                    &text,
+                    mask_char.as_str(),
+                    *unmasked_prefix,
+                    *unmasked_suffix,
+                ),
+            })),
             BuiltinAction::RegexReplace {
                 pattern,
                 replacement,
@@ -807,6 +954,69 @@ fn hex_sha256(text: &str) -> String {
         let _ = write!(&mut output, "{byte:02x}");
     }
     output
+}
+
+fn mask_text(
+    text: &str,
+    mask_char: &str,
+    unmasked_prefix: usize,
+    unmasked_suffix: usize,
+) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if len <= unmasked_prefix + unmasked_suffix {
+        return text.to_string();
+    }
+
+    let mut output = String::new();
+    for ch in chars.iter().take(unmasked_prefix) {
+        output.push(*ch);
+    }
+    for _ in 0..(len - unmasked_prefix - unmasked_suffix) {
+        output.push_str(mask_char);
+    }
+    for ch in chars.iter().skip(len - unmasked_suffix) {
+        output.push(*ch);
+    }
+    output
+}
+
+fn compile_builtin_matcher(
+    pattern: Option<String>,
+    detector: Option<String>,
+) -> PluginResult<Option<Arc<Regex>>> {
+    let pattern_text = match (pattern, detector) {
+        (Some(pattern), None) => Some(pattern),
+        (None, Some(detector)) => detector_regex_pattern(&detector).map(str::to_string),
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            return Err(PluginError::InvalidConfig(
+                "builtin.pattern and builtin.detector cannot both be set".to_string(),
+            ));
+        }
+    };
+
+    let Some(pattern_text) = pattern_text else {
+        return Ok(None);
+    };
+
+    let pattern = Regex::new(&pattern_text).map_err(|err| {
+        PluginError::InvalidConfig(format!(
+            "invalid builtin matcher regex '{pattern_text}': {err}"
+        ))
+    })?;
+    Ok(Some(Arc::new(pattern)))
+}
+
+fn detector_regex_pattern(detector: &str) -> Option<&'static str> {
+    match detector {
+        "email" => Some(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
+        "phone" => Some(r"\+?[0-9][0-9()\-\s]{6,}[0-9]"),
+        "api_key" => Some(r"(?:sk|rk|pk|ak)-[A-Za-z0-9_-]{8,}"),
+        "ip_address" => Some(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+        "url" => Some(r"https?://[^\s]+"),
+        _ => None,
+    }
 }
 
 fn instantiate_builtin_codec(
