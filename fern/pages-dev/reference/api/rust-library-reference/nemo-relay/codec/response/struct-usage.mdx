@@ -2,14 +2,14 @@
 title: "Struct Usage"
 sidebar-title: "Usage"
 description: "Token usage statistics from an LLM API response."
-position: 3
+position: 27
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct Usage &#123;\n    pub prompt_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub completion_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub total_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_write_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct Usage &#123;\n    pub prompt_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub completion_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub total_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub cache_write_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub cost: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-costestimate\">CostEstimate</a>&gt;,\n&#125;"}} /></pre>
 
 Token usage statistics from an LLM API response.
 
@@ -36,6 +36,10 @@ Tokens served from prompt cache (read).
 ### `cache_write_tokens: Option<u64>`
 
 Tokens written to prompt cache.
+
+### `cost: Option<CostEstimate>`
+
+Optional cost reported by provider data or estimated from Relay pricing.
 
 ## Trait Implementations
 
@@ -94,10 +98,6 @@ Tokens written to prompt cache.
 #### `serialize`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
-
-### `impl Eq for Usage`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-usage\">Usage</a>"}} /></pre>
 
 ### `impl StructuralPartialEq for Usage`
 
