@@ -705,14 +705,34 @@ enum BuiltinAction {
     },
     Mask {
         matcher: Option<Arc<Regex>>,
-        mask_char: Arc<String>,
-        unmasked_prefix: usize,
-        unmasked_suffix: usize,
+        strategy: BuiltinMaskStrategy,
     },
     RegexReplace {
         pattern: Arc<Regex>,
         replacement: Arc<String>,
     },
+}
+
+#[derive(Clone)]
+enum BuiltinMaskStrategy {
+    Generic {
+        mask_char: Arc<String>,
+        unmasked_prefix: usize,
+        unmasked_suffix: usize,
+    },
+    DetectorDefault {
+        detector: BuiltinDetector,
+        mask_char: Arc<String>,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum BuiltinDetector {
+    Email,
+    Phone,
+    ApiKey,
+    IpAddress,
+    Url,
 }
 
 #[derive(Clone, Copy)]
@@ -728,15 +748,18 @@ impl<T> BuiltinRequestResponseCodec for T where T: LlmCodec + LlmResponseCodec +
 
 impl CompiledBuiltinBackend {
     fn new(config: BuiltinBackendConfig, codec_name: Option<String>) -> PluginResult<Self> {
-        let matcher = compile_builtin_matcher(config.pattern.clone(), config.detector.clone())?;
+        let detector = config
+            .detector
+            .as_deref()
+            .map(BuiltinDetector::parse)
+            .transpose()?;
+        let matcher = compile_builtin_matcher(config.pattern.clone(), detector)?;
         let action = match config.action.as_str() {
             "remove" => BuiltinAction::Remove,
             "hash" => BuiltinAction::Hash { matcher },
             "mask" => BuiltinAction::Mask {
                 matcher,
-                mask_char: Arc::new(config.mask_char.unwrap_or_else(|| "*".to_string())),
-                unmasked_prefix: config.unmasked_prefix.unwrap_or(0),
-                unmasked_suffix: config.unmasked_suffix.unwrap_or(0),
+                strategy: build_mask_strategy(&config, detector),
             },
             "regex_replace" => {
                 let pattern = matcher.ok_or_else(|| {
@@ -850,31 +873,19 @@ impl CompiledBuiltinBackend {
                     .into_owned(),
                 None => hex_sha256(&text),
             })),
-            BuiltinAction::Mask {
-                matcher,
-                mask_char,
-                unmasked_prefix,
-                unmasked_suffix,
-            } => Some(Json::String(match matcher {
+            BuiltinAction::Mask { matcher, strategy } => Some(Json::String(match matcher {
                 Some(matcher) => matcher
                     .replace_all(&text, |captures: &regex::Captures<'_>| {
-                        mask_text(
+                        mask_with_strategy(
                             captures
                                 .get(0)
                                 .map(|capture| capture.as_str())
                                 .unwrap_or(""),
-                            mask_char.as_str(),
-                            *unmasked_prefix,
-                            *unmasked_suffix,
+                            strategy,
                         )
                     })
                     .into_owned(),
-                None => mask_text(
-                    &text,
-                    mask_char.as_str(),
-                    *unmasked_prefix,
-                    *unmasked_suffix,
-                ),
+                None => mask_with_strategy(&text, strategy),
             })),
             BuiltinAction::RegexReplace {
                 pattern,
@@ -981,13 +992,47 @@ fn mask_text(
     output
 }
 
+fn build_mask_strategy(
+    config: &BuiltinBackendConfig,
+    detector: Option<BuiltinDetector>,
+) -> BuiltinMaskStrategy {
+    let mask_char = Arc::new(config.mask_char.clone().unwrap_or_else(|| "*".to_string()));
+    match detector {
+        Some(detector) if config.unmasked_prefix.is_none() && config.unmasked_suffix.is_none() => {
+            BuiltinMaskStrategy::DetectorDefault {
+                detector,
+                mask_char,
+            }
+        }
+        _ => BuiltinMaskStrategy::Generic {
+            mask_char,
+            unmasked_prefix: config.unmasked_prefix.unwrap_or(0),
+            unmasked_suffix: config.unmasked_suffix.unwrap_or(0),
+        },
+    }
+}
+
+fn mask_with_strategy(text: &str, strategy: &BuiltinMaskStrategy) -> String {
+    match strategy {
+        BuiltinMaskStrategy::Generic {
+            mask_char,
+            unmasked_prefix,
+            unmasked_suffix,
+        } => mask_text(text, mask_char.as_str(), *unmasked_prefix, *unmasked_suffix),
+        BuiltinMaskStrategy::DetectorDefault {
+            detector,
+            mask_char,
+        } => detector.default_mask(text, mask_char.as_str()),
+    }
+}
+
 fn compile_builtin_matcher(
     pattern: Option<String>,
-    detector: Option<String>,
+    detector: Option<BuiltinDetector>,
 ) -> PluginResult<Option<Arc<Regex>>> {
     let pattern_text = match (pattern, detector) {
         (Some(pattern), None) => Some(pattern),
-        (None, Some(detector)) => detector_regex_pattern(&detector).map(str::to_string),
+        (None, Some(detector)) => Some(detector.regex_pattern().to_string()),
         (None, None) => None,
         (Some(_), Some(_)) => {
             return Err(PluginError::InvalidConfig(
@@ -1009,14 +1054,120 @@ fn compile_builtin_matcher(
 }
 
 fn detector_regex_pattern(detector: &str) -> Option<&'static str> {
-    match detector {
-        "email" => Some(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
-        "phone" => Some(r"\+?[0-9][0-9()\-\s]{6,}[0-9]"),
-        "api_key" => Some(r"(?:sk|rk|pk|ak)-[A-Za-z0-9_-]{8,}"),
-        "ip_address" => Some(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
-        "url" => Some(r"https?://[^\s]+"),
-        _ => None,
+    BuiltinDetector::parse(detector)
+        .ok()
+        .map(BuiltinDetector::regex_pattern)
+}
+
+impl BuiltinDetector {
+    fn parse(value: &str) -> PluginResult<Self> {
+        match value {
+            "email" => Ok(Self::Email),
+            "phone" => Ok(Self::Phone),
+            "api_key" => Ok(Self::ApiKey),
+            "ip_address" => Ok(Self::IpAddress),
+            "url" => Ok(Self::Url),
+            other => Err(PluginError::InvalidConfig(format!(
+                "unsupported builtin.detector '{other}'"
+            ))),
+        }
     }
+
+    fn regex_pattern(self) -> &'static str {
+        match self {
+            Self::Email => r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+            Self::Phone => r"\+?[0-9][0-9()\-\s]{6,}[0-9]",
+            Self::ApiKey => r"(?:sk|rk|pk|ak)-[A-Za-z0-9_-]{8,}",
+            Self::IpAddress => r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+            Self::Url => r"https?://[^\s]+",
+        }
+    }
+
+    fn default_mask(self, text: &str, mask_char: &str) -> String {
+        match self {
+            Self::Email => mask_email(text, mask_char),
+            Self::Phone => mask_phone(text, mask_char),
+            Self::ApiKey => mask_api_key(text, mask_char),
+            Self::IpAddress => mask_ip_address(text, mask_char),
+            Self::Url => mask_url(text, mask_char),
+        }
+    }
+}
+
+fn mask_email(text: &str, mask_char: &str) -> String {
+    let Some((local, domain)) = text.split_once('@') else {
+        return mask_text(text, mask_char, 0, 0);
+    };
+
+    let local_chars: Vec<char> = local.chars().collect();
+    if local_chars.len() <= 1 {
+        return text.to_string();
+    }
+
+    let mut output = String::new();
+    output.push(local_chars[0]);
+    for _ in 1..local_chars.len() {
+        output.push_str(mask_char);
+    }
+    output.push('@');
+    output.push_str(domain);
+    output
+}
+
+fn mask_phone(text: &str, mask_char: &str) -> String {
+    let total_digits = text.chars().filter(|ch| ch.is_ascii_digit()).count();
+    if total_digits <= 4 {
+        return text.to_string();
+    }
+
+    let mut masked_digits_remaining = total_digits - 4;
+    let mut output = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii_digit() {
+            if masked_digits_remaining > 0 {
+                output.push_str(mask_char);
+                masked_digits_remaining -= 1;
+            } else {
+                output.push(ch);
+            }
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn mask_api_key(text: &str, mask_char: &str) -> String {
+    let prefix = text.find('-').map_or(0, |idx| idx + 1);
+    mask_text(text, mask_char, prefix, 4)
+}
+
+fn mask_ip_address(text: &str, mask_char: &str) -> String {
+    let mut octets = text.split('.').collect::<Vec<_>>();
+    if octets.len() != 4 {
+        return mask_text(text, mask_char, 0, 0);
+    }
+
+    for octet in octets.iter_mut().take(3) {
+        *octet = "***";
+    }
+    octets.join(".")
+}
+
+fn mask_url(text: &str, mask_char: &str) -> String {
+    let Some(scheme_idx) = text.find("://") else {
+        return mask_text(text, mask_char, 0, 0);
+    };
+    let prefix_end = scheme_idx + 3;
+    let remainder = &text[prefix_end..];
+    let Some(path_idx) = remainder.find('/') else {
+        return text.to_string();
+    };
+
+    let mut output = String::with_capacity(text.len());
+    output.push_str(&text[..prefix_end + path_idx + 1]);
+    output.push_str(mask_char);
+    output
 }
 
 fn instantiate_builtin_codec(

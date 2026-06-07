@@ -546,12 +546,153 @@ fn builtin_mask_with_detector_masks_only_matching_substrings() {
     assert_eq!(
         captured_events[0].input(),
         Some(&json!({
-            "message": "Email ***************** or ***************",
+            "message": "Email a****@example.com or b**@example.com",
             "keep": "unchanged"
         }))
     );
 
     deregister_subscriber("pii-redaction-detector-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_email_detector_preserves_domain_by_default() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "target_paths": ["/contact"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-email-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "contact": "alice@example.com",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "contact": "a****@example.com",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-email-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_phone_detector_preserves_last_four_digits_by_default() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "phone",
+            "target_paths": ["/phone"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-phone-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "phone": "+1 (555) 123-4567",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "phone": "+* (***) ***-4567",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-phone-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_api_key_detector_preserves_prefix_and_last_four_by_default() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "api_key",
+            "target_paths": ["/api_key"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-api-key-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "api_key": "sk-abcdef123456",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "api_key": "sk-********3456",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-api-key-default-mask-events").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

@@ -145,8 +145,8 @@ The `builtin` section contains:
 | `detector` | Optional built-in matcher preset. Current values are `email`, `phone`, `api_key`, `ip_address`, and `url`. |
 | `replacement` | Replacement text used when `action = "regex_replace"`. Defaults to `[REDACTED]`. |
 | `mask_char` | Masking token used when `action = "mask"`. Defaults to `*`. |
-| `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`. |
-| `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`. |
+| `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
+| `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
 
 ## Action Semantics
 
@@ -186,6 +186,15 @@ characters of a token.
 
 When `pattern` or `detector` is set, `mask` only masks matching substrings
 inside the string leaf.
+
+When `detector` is set and you do not specify `unmasked_prefix` or
+`unmasked_suffix`, the built-in backend applies detector-aware defaults:
+
+- `email`: preserves the domain and the first local-part character
+- `phone`: preserves the last four digits while keeping separators intact
+- `api_key`: preserves the vendor-style prefix such as `sk-` and the last four characters
+- `ip_address`: preserves the last octet
+- `url`: preserves the scheme and host, then collapses the path/query tail
 
 ## Path Semantics
 
