@@ -699,14 +699,14 @@ fn register_atif_dispatcher(
                 let mut guard = manager.lock().map_err(|err| {
                     PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
                 })?;
-                guard
-                    .flush_open_agents()
-                    .map_err(observability_registration_error)?
+                guard.flush_open_agents()
             };
             for (scope_uuid, name) in work.scope_subscribers {
                 let _ = scope_deregister_subscriber(&scope_uuid, &name);
             }
-            for write in work.writes {
+            for export in work.exports {
+                let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
+                    .map_err(observability_registration_error)?;
                 let agent_uuid = write.agent_uuid;
                 let targets = {
                     let guard = manager.lock().map_err(|err| {
@@ -857,8 +857,15 @@ struct PendingAtifWrite {
 }
 
 struct AtifFlushWork {
-    writes: Vec<PendingAtifWrite>,
+    exports: Vec<PendingAtifExport>,
     scope_subscribers: Vec<(Uuid, String)>,
+}
+
+struct PendingAtifExport {
+    agent_uuid: Uuid,
+    exporter: AtifExporter,
+    filename: String,
+    local_path: Option<PathBuf>,
 }
 
 /// Identifier for a single output sink. `Local` is used when `storage` is empty
@@ -1012,7 +1019,7 @@ impl AtifDispatcher {
             .map(|name| (agent_uuid, name))
     }
 
-    fn flush_open_agents(&mut self) -> std::io::Result<AtifFlushWork> {
+    fn flush_open_agents(&mut self) -> AtifFlushWork {
         // Plugin teardown may run before an agent scope closes. Remove dynamic
         // scope-local subscribers first so the later scope end event cannot
         // trigger a second write after the dispatcher has flushed.
@@ -1024,16 +1031,29 @@ impl AtifDispatcher {
             .iter()
             .filter_map(|(agent_uuid, agent)| (!agent.written).then_some(*agent_uuid))
             .collect::<Vec<_>>();
-        let mut writes = Vec::with_capacity(agent_uuids.len());
+        let mut exports = Vec::with_capacity(agent_uuids.len());
         for agent_uuid in agent_uuids {
             if let Some(agent) = self.agents.get_mut(&agent_uuid) {
-                writes.push(prepare_atif_file(agent_uuid, agent)?);
+                agent.written = true;
+                exports.push(PendingAtifExport {
+                    agent_uuid,
+                    exporter: agent.exporter.clone(),
+                    filename: agent.filename.clone(),
+                    local_path: agent.local_path.clone(),
+                });
             }
         }
-        Ok(AtifFlushWork {
-            writes,
+        AtifFlushWork {
+            exports,
             scope_subscribers,
-        })
+        }
+    }
+
+    fn observed_events(&self, agent_uuid: Uuid) -> Vec<Event> {
+        self.agents
+            .get(&agent_uuid)
+            .map(|agent| agent.observed_events.clone())
+            .unwrap_or_default()
     }
 
     fn last_error_result(&self) -> std::io::Result<()> {
@@ -1155,22 +1175,62 @@ fn prepare_atif_file(
         .exporter
         .try_export()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let observed_events = agent.observed_events.clone();
+    agent.written = true;
+    prepare_atif_payload(
+        agent_uuid,
+        agent.filename.clone(),
+        agent.local_path.clone(),
+        trajectory,
+        observed_events,
+    )
+}
+
+fn prepare_atif_shutdown_file(
+    export: &PendingAtifExport,
+    manager: Arc<Mutex<AtifDispatcher>>,
+) -> std::io::Result<PendingAtifWrite> {
+    let trajectory = export
+        .exporter
+        .try_export()
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let observed_events = {
+        let guard = manager.lock().map_err(|err| {
+            std::io::Error::other(format!("ATIF dispatcher lock poisoned: {err}"))
+        })?;
+        guard.observed_events(export.agent_uuid)
+    };
+    prepare_atif_payload(
+        export.agent_uuid,
+        export.filename.clone(),
+        export.local_path.clone(),
+        trajectory,
+        observed_events,
+    )
+}
+
+fn prepare_atif_payload(
+    agent_uuid: Uuid,
+    filename: String,
+    local_path: Option<PathBuf>,
+    trajectory: crate::observability::atif::AtifTrajectory,
+    observed_events: Vec<Event>,
+) -> std::io::Result<PendingAtifWrite> {
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
         object.insert(
             "extra".to_string(),
             serde_json::json!({
-                "observed_events": agent.observed_events,
+                "observed_events": observed_events,
             }),
         );
     }
     let payload = serde_json::to_vec_pretty(&value)?;
-    agent.written = true;
     Ok(PendingAtifWrite {
         agent_uuid,
         session_id: agent_uuid.to_string(),
-        filename: agent.filename.clone(),
-        local_path: agent.local_path.clone(),
+        filename,
+        local_path,
         payload,
     })
 }

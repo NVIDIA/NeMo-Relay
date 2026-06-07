@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
+use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
-static OBSERVABILITY_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const HERMES_ROUTED_TEST_SESSION_KEY: &str = "hermes_routed_test_session_id";
 
 async fn install_test_atif_plugin(output_directory: &Path) {
@@ -1719,7 +1719,7 @@ async fn codex_subagent_gateway_llm_routes_to_parent_subagent() {
 
 #[tokio::test]
 async fn writes_atif_on_session_end_from_plugin_config() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1784,7 +1784,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
 
 #[tokio::test]
 async fn codex_stop_snapshots_atif_without_session_end() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1879,7 +1879,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
 
 #[tokio::test]
 async fn codex_openinference_spans_match_shared_contract() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "cli-codex-openinference-test";
     let _ = deregister_subscriber(subscriber_name);
     let (subscriber, exporter) = make_openinference_test_subscriber("codex-test-scope");
@@ -1976,7 +1976,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     // per session. Without idempotency in `end_agent`, the second AgentEnded would re-open an
     // empty agent scope via `ensure_agent_started`, close it, and write an empty ATIF on top of
     // the just-written real trajectory.
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2054,7 +2054,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
 
 #[tokio::test]
 async fn writes_hermes_api_hook_usage_to_atif_metrics() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2135,7 +2135,7 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
 
 #[tokio::test]
 async fn writes_hermes_api_hook_reported_cost_to_atif_metrics() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2209,7 +2209,7 @@ async fn writes_hermes_api_hook_reported_cost_to_atif_metrics() {
 
 #[tokio::test]
 async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2320,7 +2320,7 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
 
 #[tokio::test]
 async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2442,7 +2442,7 @@ async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
 
 #[tokio::test]
 async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2532,7 +2532,7 @@ async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
 
 #[tokio::test]
 async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2579,7 +2579,7 @@ async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory
 
 #[tokio::test]
 async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2759,7 +2759,7 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
 
 #[tokio::test]
 async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2887,7 +2887,7 @@ async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
 
 #[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2924,7 +2924,7 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
 
 #[tokio::test]
 async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let tracked_sessions = tracked_sessions(&["hermes-orphan"]);
     let temp = tempfile::tempdir().unwrap();
     let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
@@ -3015,7 +3015,7 @@ async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
 
 #[tokio::test]
 async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -3060,7 +3060,7 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
 
 #[tokio::test]
 async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let tracked_sessions = tracked_sessions(&["parent-session", "child-session"]);
     let temp = tempfile::tempdir().unwrap();
     let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
@@ -3177,7 +3177,7 @@ async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage(
 
 #[tokio::test]
 async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -3225,7 +3225,7 @@ async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
 
 #[tokio::test]
 async fn hermes_routed_provider_payloads_emit_openinference_text_usage_and_cost() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let subscriber_name = "cli-hermes-routed-openinference-test";
     let session_id = "hermes-routed-openinference";
     let _ = deregister_subscriber(subscriber_name);
@@ -3350,7 +3350,7 @@ async fn hermes_routed_provider_payloads_emit_openinference_text_usage_and_cost(
 
 #[tokio::test]
 async fn empty_hook_marks_do_not_create_empty_atif_steps() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -3790,7 +3790,7 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
 
 #[tokio::test]
 async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
