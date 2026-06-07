@@ -249,14 +249,19 @@ fn plugin_menu_builds_ordered_component_actions() {
     let components = editable_components(&config).unwrap();
 
     let (items, actions) = plugin_menu_items(&components, &temp.path().join("plugins.toml"));
+    let plain_labels = items
+        .iter()
+        .map(|item| console::strip_ansi_codes(&item.label).into_owned())
+        .collect::<Vec<_>>();
 
     assert_eq!(items.len(), actions.len());
-    assert_eq!(items[0].label, "Toggle Observability component [on]");
-    assert_eq!(items[1].label, "  Edit Observability ATOF");
-    assert!(items.iter().any(|item| {
-        item.label
-            .contains("Toggle NeMo Guardrails component [off]")
-    }));
+    assert_eq!(plain_labels[0], "Toggle Observability component [on]");
+    assert_eq!(plain_labels[1], "  Edit Observability ATOF");
+    assert!(
+        plain_labels
+            .iter()
+            .any(|label| { label.contains("Toggle NeMo Guardrails component [off]") })
+    );
     assert!(matches!(actions[0], MenuAction::ToggleComponent(0)));
     assert!(matches!(
         actions[1],

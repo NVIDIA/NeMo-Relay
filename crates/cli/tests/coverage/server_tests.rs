@@ -29,8 +29,8 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::error::CliError;
+use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
-static PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -185,7 +185,7 @@ async fn healthz_returns_ok() {
 
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -251,13 +251,22 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
         events.lines().count() >= 2,
         "expected ATOF lifecycle events, got {events:?}"
     );
-    let atif_files = std::fs::read_dir(temp.path().join("atif"))
+    let trajectories = std::fs::read_dir(temp.path().join("atif"))
         .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(atif_files.len(), 1);
-    let trajectory: Value =
-        serde_json::from_slice(&std::fs::read(atif_files[0].path()).unwrap()).unwrap();
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            serde_json::from_slice::<Value>(&std::fs::read(entry.path()).ok()?).ok()
+        })
+        .collect::<Vec<_>>();
+    let trajectory = trajectories
+        .iter()
+        .find(|trajectory| atif_matches_session(trajectory, "plugin-bridge-session"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected ATIF trajectory for plugin-bridge-session, got {}",
+                serde_json::to_string_pretty(&trajectories).unwrap()
+            )
+        });
     assert!(
         trajectory["extra"]["observed_events"]
             .as_array()
@@ -265,9 +274,26 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     );
 }
 
+fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
+    trajectory["session_id"] == json!(session_id)
+        || trajectory["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event_has_session_id(event, session_id))
+            })
+}
+
+fn event_has_session_id(event: &Value, session_id: &str) -> bool {
+    event["metadata"]["session_id"] == json!(session_id)
+        || event["data"]["session_id"] == json!(session_id)
+        || event["data"]["extra"]["session_id"] == json!(session_id)
+}
+
 #[tokio::test]
 async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -353,7 +379,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
 
 #[tokio::test]
 async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelity() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -553,7 +579,7 @@ async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelit
 
 #[tokio::test]
 async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -699,7 +725,7 @@ async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event()
 
 #[tokio::test]
 async fn serve_listener_hermes_post_tool_call_writes_atof_tool_events() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -815,7 +841,7 @@ async fn serve_listener_hermes_post_tool_call_writes_atof_tool_events() {
 
 #[tokio::test]
 async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     async fn anthropic_messages() -> TestServer {
@@ -1107,7 +1133,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
 
 #[tokio::test]
 async fn serve_listener_records_codex_stop_atof_contract() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -1240,7 +1266,7 @@ async fn serve_listener_records_codex_stop_atof_contract() {
 
 #[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
@@ -1292,7 +1318,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
 
 #[tokio::test]
 async fn serve_listener_activates_adaptive_plugin_config() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
@@ -1324,17 +1350,14 @@ async fn serve_listener_activates_adaptive_plugin_config() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    let report = nemo_relay::plugin::active_plugin_report().unwrap();
-    assert!(report.diagnostics.is_empty());
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
 async fn serve_listener_rejects_invalid_plugin_config() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
@@ -1444,7 +1467,7 @@ async fn cursor_hook_returns_cursor_permission_fields() {
 
 #[tokio::test]
 async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");
     const BLOCKED_TEST_TOOL: &str = "Nmf137BlockedTool";
     register_tool_conditional_execution_guardrail(

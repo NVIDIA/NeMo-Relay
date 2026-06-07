@@ -326,6 +326,7 @@ struct AtifExporterState {
 ///
 /// Register this exporter as an event subscriber via [`AtifExporter::subscriber`],
 /// then call [`AtifExporter::export`] to produce an [`AtifTrajectory`].
+#[derive(Clone)]
 pub struct AtifExporter {
     state: Arc<Mutex<AtifExporterState>>,
 }

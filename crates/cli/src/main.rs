@@ -137,3 +137,9 @@ async fn run() -> Result<ExitCode, error::CliError> {
         }
     }
 }
+
+#[cfg(test)]
+mod test_support {
+    pub(crate) static PLUGIN_CONFIG_TEST_LOCK: tokio::sync::Mutex<()> =
+        tokio::sync::Mutex::const_new(());
+}
