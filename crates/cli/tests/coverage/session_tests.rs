@@ -96,6 +96,11 @@ fn event_session_id(event: &Event) -> Option<&str> {
         .and_then(|metadata| metadata.get("session_id"))
         .and_then(Value::as_str)
         .or_else(|| {
+            if event.scope_category().is_some() {
+                return None;
+            }
+            // Synthetic marks keep the original hook payload, so the payload session id is the
+            // only stable way to keep those events in the filtered test stream.
             event.data().and_then(|data| {
                 data.get("session_id")
                     .and_then(Value::as_str)
