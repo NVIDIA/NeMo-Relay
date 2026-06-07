@@ -510,7 +510,7 @@ describe('typedLlmExecute', () => {
         makeAnthropicRequest(),
         () => ({
           id: 'msg_123',
-          model: 'claude-3-5-sonnet',
+          model: 'claude-sonnet-4',
           content: [
             {
               type: 'text',
@@ -521,6 +521,12 @@ describe('typedLlmExecute', () => {
           usage: {
             input_tokens: 5,
             output_tokens: 3,
+            cost: {
+              total: 0.00006,
+              source: 'provider_reported',
+              pricing_provider: 'anthropic',
+              pricing_model: 'claude-sonnet-4',
+            },
           },
         }),
         new JsonPassthrough(),
@@ -552,9 +558,12 @@ describe('typedLlmExecute', () => {
           event.scope_category === 'end' &&
           event.name === 'typed_anthropic_codec_llm',
       );
-      assert.equal(endEvent.category_profile.annotated_response.model, 'claude-3-5-sonnet');
+      assert.equal(endEvent.category_profile.annotated_response.model, 'claude-sonnet-4');
       assert.equal(endEvent.category_profile.annotated_response.message, 'Anthropic hello');
       assert.equal(endEvent.category_profile.annotated_response.finish_reason, 'complete');
+      assert.equal(endEvent.category_profile.annotated_response.usage.cost.total, 0.00006);
+      assert.equal(endEvent.category_profile.annotated_response.usage.cost.pricing_provider, 'anthropic');
+      assert.equal(endEvent.category_profile.annotated_response.usage.cost.pricing_model, 'claude-sonnet-4');
     } finally {
       deregisterSubscriber('typed_anthropic_codec_sub');
       popScope(scope);

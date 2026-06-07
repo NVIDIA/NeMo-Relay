@@ -4,3 +4,4 @@
 //! First-party plugin implementations for NeMo Relay Core.
 
 pub mod nemo_guardrails;
+pub mod pricing;

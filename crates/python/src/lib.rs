@@ -23,6 +23,7 @@
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
 
 mod convert;
 #[doc(hidden)]
@@ -62,3 +63,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 #[path = "../tests/coverage/coverage_tests.rs"]
 mod coverage_tests;
+
+#[cfg(test)]
+#[path = "../tests/coverage/nemo_guardrails_coverage_tests.rs"]
+mod nemo_guardrails_coverage_tests;

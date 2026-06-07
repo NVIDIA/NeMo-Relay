@@ -1,0 +1,57 @@
+[
+  {
+    "id": "nemo-relay-tune-adaptive-config-001",
+    "question": "I need to use the nemo-relay-tune-adaptive-config skill to set up the adaptive plugin component in my Python application. I want to start with in-memory state and telemetry enabled. Can you walk me through the configuration?",
+    "expected_skill": "nemo-relay-tune-adaptive-config",
+    "expected_script": null,
+    "ground_truth": "The agent used nemo-relay-tune-adaptive-config and provided a complete Python configuration example using AdaptiveConfig, ComponentSpec, and PluginConfig with in_memory backend and telemetry enabled, validated before initialization.",
+    "expected_behavior": [
+      "The agent read the nemo-relay-tune-adaptive-config SKILL.md before responding",
+      "The agent provided Python code using nemo_relay.adaptive.AdaptiveConfig with state.backend set to in_memory",
+      "The agent included validation of the plugin config before initialization",
+      "The agent recommended enabling telemetry first before adding other active sections",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  },
+  {
+    "id": "nemo-relay-tune-adaptive-config-002",
+    "question": "I'm building a Node.js service that uses NeMo Relay and I want to configure the adaptive plugin with tool_parallelism in observe_only mode. How do I set up the plugin config, validate it, and initialize the plugin system?",
+    "expected_skill": "nemo-relay-tune-adaptive-config",
+    "expected_script": null,
+    "ground_truth": "The agent provided a Node.js adaptive plugin configuration using nemo-relay-node/adaptive helpers including defaultConfig(), inMemoryBackend(), toolParallelismConfig(), and ComponentSpec(), with validation and initialization through nemo-relay-node/plugin.",
+    "expected_behavior": [
+      "The agent referenced the nemo-relay-tune-adaptive-config skill content for Node.js-specific helpers",
+      "The agent showed how to use require('nemo-relay-node/adaptive') with toolParallelismConfig set to observe_only mode",
+      "The agent included config validation before calling the plugin initialization step",
+      "The agent advised starting with telemetry or observe-only behavior as the initial rollout",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  },
+  {
+    "id": "nemo-relay-tune-adaptive-config-003",
+    "question": "We're rolling out a new AI agent service and want to gradually introduce adaptive behavior. Right now we just need to observe how tools are being called in parallel without changing any runtime behavior. We're using Rust with nemo_relay. What's the safest way to configure this so we can measure first and tune later?",
+    "expected_skill": "nemo-relay-tune-adaptive-config",
+    "expected_script": null,
+    "ground_truth": "The agent configured a Rust-based NeMo Relay adaptive plugin with tool_parallelism in observe_only mode, in_memory backend, telemetry enabled, and validated the config before initialization, following the measured rollout approach.",
+    "expected_behavior": [
+      "The agent identified this as an adaptive plugin configuration task and consulted the nemo-relay-tune-adaptive-config skill",
+      "The agent provided Rust code using nemo_relay_adaptive::{AdaptiveConfig, ComponentSpec} with tool_parallelism.mode set to observe_only",
+      "The agent emphasized validating the config with validate_plugin_config before calling initialize_plugins",
+      "The agent warned against enabling multiple active tuning sections simultaneously in the first rollout",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  },
+  {
+    "id": "nemo-relay-tune-adaptive-config-004",
+    "question": "How do I set up OpenTelemetry tracing for my FastAPI application to export spans to Jaeger? I want distributed tracing across my microservices.",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent provided general guidance on configuring OpenTelemetry tracing with FastAPI and Jaeger export, without invoking the nemo-relay-tune-adaptive-config skill since this is a standard observability setup unrelated to NeMo Relay adaptive plugin configuration.",
+    "expected_behavior": [
+      "The agent did not reference or invoke the nemo-relay-tune-adaptive-config skill",
+      "The agent provided information about OpenTelemetry SDK setup for FastAPI with Jaeger exporter",
+      "The agent addressed distributed tracing concepts without mentioning NeMo Relay adaptive components",
+      "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
+    ]
+  }
+]

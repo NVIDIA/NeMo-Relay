@@ -26,6 +26,8 @@ nemo-relay = { version = "0.4.0", path = "crates/core", default-features = false
 nemo-relay-adaptive = { version = "0.4.0", path = "crates/adaptive" }
 nemo-relay-ffi = { version = "0.4.0", path = "crates/ffi" }
 nemo-relay-cli = { version = "0.4.0", path = "crates/cli" }
+opentelemetry = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.31", default-features = false }
 uuid = "=1.18.1"
 
 [workspace.lints.rust]

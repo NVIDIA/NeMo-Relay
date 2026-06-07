@@ -8,11 +8,13 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use the `atof` section when you want the raw Agent Trajectory Observability
-Format (ATOF) `0.1` event stream written as JSONL.
+Format (ATOF) `0.1` event stream written as JSONL or streamed to raw-event
+collectors.
 
 ATOF JSONL export is useful for local debugging, offline inspection, and
 preserving the canonical event stream before it is translated into another
-format.
+format. Streaming endpoints are useful when a collector wants the same raw
+event shape in near real time.
 
 ## `plugins.toml` Example
 
@@ -31,10 +33,16 @@ enabled = true
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "overwrite"
+
+[[components.config.atof.endpoints]]
+url = "http://localhost:8080/events"
+transport = "http_post"
+timeout_millis = 3000
 ```
 
 This configuration registers the plugin-managed ATOF exporter and writes one
-JSON object per lifecycle event to `logs/events.jsonl`.
+JSON object per lifecycle event to `logs/events.jsonl`. It also sends each raw
+ATOF event to the configured endpoint.
 
 ## Fields
 
@@ -44,6 +52,32 @@ JSON object per lifecycle event to `logs/events.jsonl`.
 | `output_directory` | Current working directory | Directory containing the JSONL file. |
 | `filename` | Timestamped `nemo-relay-events-*.jsonl` | Explicit output filename. |
 | `mode` | `append` | `append` or `overwrite`. |
+| `endpoints` | `[]` | Optional streaming destinations. File output remains active when endpoints are configured. |
+
+## Streaming Endpoints
+
+Each endpoint receives the same raw ATOF JSON object that the file exporter
+writes as one JSONL line. Endpoints are independent: a failed endpoint is
+skipped or retried without blocking file output or other endpoints.
+
+| Field | Default | Notes |
+|---|---|---|
+| `url` | Required | Endpoint URL. |
+| `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
+| `headers` | `{}` | String-to-string headers for requests or handshakes. |
+| `timeout_millis` | `3000` | Per-endpoint timeout. Must be greater than `0`. |
+
+- `http_post` sends each event as one JSONL record in an HTTP `POST` request
+  with `Content-Type: application/x-ndjson`. Any `2xx` response is treated as
+  success.
+- `websocket` opens one connection and sends each event as one JSON text
+  message.
+- `ndjson` opens one long-lived HTTP upload and writes each event as one
+  newline-delimited JSON record.
+
+`force_flush()` flushes file output and drains queued endpoint events without
+closing streaming connections. `shutdown()` is terminal: it flushes pending
+work, closes streaming connections, and makes later events no-op.
 
 ## Expected Output
 
@@ -63,7 +97,12 @@ exporter lifecycle.
 <Tab title="Python" language="python">
 ```python
 from nemo_relay import plugin
-from nemo_relay.observability import AtofConfig, ComponentSpec, ObservabilityConfig
+from nemo_relay.observability import (
+    AtofConfig,
+    AtofEndpointConfig,
+    ComponentSpec,
+    ObservabilityConfig,
+)
 
 config = plugin.PluginConfig(
     components=[
@@ -74,6 +113,12 @@ config = plugin.PluginConfig(
                     output_directory="logs",
                     filename="events.jsonl",
                     mode="overwrite",
+                    endpoints=[
+                        AtofEndpointConfig(
+                            url="http://localhost:8080/events",
+                            transport="http_post",
+                        )
+                    ],
                 )
             )
         )
@@ -109,6 +154,12 @@ await plugin.initialize({
         output_directory: "logs",
         filename: "events.jsonl",
         mode: "overwrite",
+        endpoints: [
+          {
+            url: "http://localhost:8080/events",
+            transport: "http_post",
+          },
+        ],
       }),
     }),
   ],
@@ -126,7 +177,7 @@ try {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::plugin_component::{
-    AtofSectionConfig, ComponentSpec, ObservabilityConfig,
+    AtofEndpointSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
 };
 use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
@@ -136,6 +187,12 @@ let component = ComponentSpec::new(ObservabilityConfig {
         output_directory: Some("logs".into()),
         filename: Some("events.jsonl".into()),
         mode: "overwrite".into(),
+        endpoints: vec![AtofEndpointSectionConfig {
+            url: "http://localhost:8080/events".into(),
+            transport: "http_post".into(),
+            headers: Default::default(),
+            timeout_millis: 3000,
+        }],
     }),
     ..ObservabilityConfig::default()
 });
@@ -164,12 +221,15 @@ subscriber name or explicit registration window.
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-from nemo_relay import AtofExporter, AtofExporterConfig, AtofExporterMode
+from nemo_relay import AtofEndpointConfig, AtofExporter, AtofExporterConfig, AtofExporterMode
 
 config = AtofExporterConfig()
 config.output_directory = "logs"
 config.filename = "events.jsonl"
 config.mode = AtofExporterMode.Overwrite
+config.endpoints = [
+    AtofEndpointConfig("http://localhost:8080/events", transport="http_post")
+]
 
 exporter = AtofExporter(config)
 exporter.register("atof-exporter")
@@ -191,6 +251,7 @@ const exporter = new AtofExporter({
   outputDirectory: "logs",
   filename: "events.jsonl",
   mode: "overwrite",
+  endpoints: [{ url: "http://localhost:8080/events", transport: "http_post" }],
 });
 exporter.register("atof-exporter");
 
@@ -209,13 +270,17 @@ try {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::atof::{
-    AtofExporter, AtofExporterConfig, AtofExporterMode,
+    AtofEndpointConfig, AtofEndpointTransport, AtofExporter, AtofExporterConfig, AtofExporterMode,
 };
 
 let config = AtofExporterConfig::new()
     .with_output_directory("logs")
     .with_filename("events.jsonl")
-    .with_mode(AtofExporterMode::Overwrite);
+    .with_mode(AtofExporterMode::Overwrite)
+    .with_endpoint(AtofEndpointConfig::new(
+        "http://localhost:8080/events",
+        AtofEndpointTransport::HttpPost,
+    ));
 let exporter = AtofExporter::new(config)?;
 exporter.register("atof-exporter")?;
 
@@ -233,5 +298,9 @@ exporter.shutdown()?;
 ## Common Validation Failures
 
 - `mode` is not `append` or `overwrite`.
+- `endpoints[i].url` is empty, `endpoints[i].transport` is not supported, or
+  `endpoints[i].timeout_millis` is `0`.
 - The output directory is not writable at runtime.
+- `nemo-relay doctor` cannot deliver its synthetic ATOF mark probe to a
+  configured endpoint.
 - ATOF is enabled in a target that cannot access the native filesystem.

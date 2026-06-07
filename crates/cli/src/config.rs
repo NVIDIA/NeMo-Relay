@@ -79,6 +79,8 @@ pub(crate) enum Command {
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
     Plugins(PluginsCommand),
+    /// Validate and configure model pricing catalogs.
+    Pricing(PricingCommand),
     /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
@@ -158,8 +160,95 @@ pub(crate) struct PluginsCommand {
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
-    /// Interactively create or edit the Observability plugin in `plugins.toml`.
+    /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
     Edit(PluginsEditCommand),
+}
+
+/// Args for `nemo-relay pricing`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingCommand {
+    #[command(subcommand)]
+    pub(crate) command: PricingSubcommand,
+}
+
+/// Pricing catalog and resolver subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum PricingSubcommand {
+    /// Validate a pricing catalog JSON file.
+    Validate(PricingValidateCommand),
+    /// Initialize the pricing plugin component in `plugins.toml`.
+    Init(PricingInitCommand),
+    /// Add a pricing catalog file source to `plugins.toml`.
+    AddSource(PricingAddSourceCommand),
+    /// Resolve which pricing entry matches a model and optional usage.
+    Resolve(PricingResolveCommand),
+}
+
+/// Common target-scope flags for pricing config mutations.
+#[derive(Debug, Clone, Default, Args)]
+#[command(group(
+    ArgGroup::new("pricing_scope")
+        .args(["user", "project", "global"])
+        .multiple(false)
+))]
+pub(crate) struct PricingScopeArgs {
+    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
+    #[arg(long)]
+    pub(crate) user: bool,
+    /// Edit the nearest project config at `.nemo-relay/plugins.toml`.
+    #[arg(long)]
+    pub(crate) project: bool,
+    /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
+    #[arg(long)]
+    pub(crate) global: bool,
+}
+
+/// Args for `nemo-relay pricing validate`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingValidateCommand {
+    /// Path to a Relay pricing catalog JSON file.
+    pub(crate) path: PathBuf,
+}
+
+/// Args for `nemo-relay pricing init`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingInitCommand {
+    #[command(flatten)]
+    pub(crate) scope: PricingScopeArgs,
+}
+
+/// Args for `nemo-relay pricing add-source`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingAddSourceCommand {
+    #[command(flatten)]
+    pub(crate) scope: PricingScopeArgs,
+    /// Path to a Relay pricing catalog JSON file.
+    pub(crate) path: PathBuf,
+    /// Append as a lower-priority source instead of prepending as the highest-priority override.
+    #[arg(long)]
+    pub(crate) append: bool,
+}
+
+/// Args for `nemo-relay pricing resolve`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingResolveCommand {
+    /// Model ID or routed model name to look up.
+    pub(crate) model: String,
+    /// Optional provider or route, such as `openai`, `anthropic`, or `azure/openai`.
+    #[arg(long)]
+    pub(crate) provider: Option<String>,
+    /// Prompt/input token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) prompt_tokens: Option<u64>,
+    /// Completion/output token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) completion_tokens: Option<u64>,
+    /// Prompt-cache read token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) cache_read_tokens: Option<u64>,
+    /// Prompt-cache write token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) cache_write_tokens: Option<u64>,
 }
 
 /// Args for `nemo-relay plugins edit`.
@@ -898,10 +987,44 @@ fn merge_plugin_components(left: &mut toml::Value, right: toml::Value) {
             .iter_mut()
             .find(|candidate| component_kind(candidate) == Some(kind.as_str()))
         {
-            merge_toml(existing, component);
+            if kind == "pricing" {
+                merge_pricing_component(existing, component);
+            } else {
+                merge_toml(existing, component);
+            }
         } else {
             left_components.push(component);
         }
+    }
+}
+
+fn merge_pricing_component(existing: &mut toml::Value, higher_priority: toml::Value) {
+    let lower_priority_sources = pricing_component_sources(existing).cloned();
+    let higher_priority_sources = pricing_component_sources(&higher_priority).cloned();
+    merge_toml(existing, higher_priority);
+
+    let Some(mut sources) = higher_priority_sources else {
+        return;
+    };
+    if let Some(lower_priority_sources) = lower_priority_sources {
+        sources.extend(lower_priority_sources);
+    }
+    set_pricing_component_sources(existing, sources);
+}
+
+fn pricing_component_sources(component: &toml::Value) -> Option<&Vec<toml::Value>> {
+    component
+        .get("config")
+        .and_then(|config| config.get("sources"))
+        .and_then(toml::Value::as_array)
+}
+
+fn set_pricing_component_sources(component: &mut toml::Value, sources: Vec<toml::Value>) {
+    if let Some(config) = component
+        .get_mut("config")
+        .and_then(toml::Value::as_table_mut)
+    {
+        config.insert("sources".into(), toml::Value::Array(sources));
     }
 }
 

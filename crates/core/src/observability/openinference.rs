@@ -27,7 +27,9 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
+use crate::codec::response::{
+    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, estimate_cost_for_provider,
+};
 use crate::error::FlowError;
 use crate::json::Json;
 use chrono::{DateTime, Utc};
@@ -647,6 +649,11 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let is_llm = event
         .category()
         .is_some_and(|category| category.as_str() == "llm");
+    if is_llm {
+        // Final span metadata should reflect the completed event, especially for mixed-fidelity
+        // Hermes flows where the request can be exact but the terminal error is lossy.
+        attributes.retain(|attribute| attribute.key.as_str() != oi::METADATA.as_str());
+    }
     let handle_attributes = event.attributes();
     if handle_attributes.is_some_and(|attributes| !attributes.is_empty()) {
         push_serialized(
@@ -700,6 +707,10 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         .category()
         .is_some_and(|category| category.as_str() == "llm");
 
+    if let Some(metadata) = event.metadata().and_then(to_json_string) {
+        attributes.push(KeyValue::new(oi::METADATA, metadata));
+    }
+
     push_serialized(
         &mut attributes,
         "nemo_relay.end.output_json",
@@ -741,7 +752,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
             ));
         }
     }
-    if is_llm && let Some(cost_total) = cost_total_from_manual_llm_output(event.output()) {
+    if is_llm && let Some(cost_total) = cost_total_from_llm_event(event, fallback_usage.as_ref()) {
         attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
     }
     if is_llm {
@@ -1087,11 +1098,51 @@ fn cost_total_from_manual_llm_output(output: Option<&Json>) -> Option<f64> {
         .or_else(|| token_usage.and_then(cost_total_from_usage))
 }
 
+fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> Option<f64> {
+    if let Some(cost) = cost_total_from_manual_llm_output(event.output()) {
+        return Some(cost);
+    }
+
+    if let Some(response) = event.annotated_response()
+        && let Some(usage) = response.usage.as_ref()
+    {
+        if let Some(cost) = usage.cost.as_ref() {
+            return cost.total_or_component_sum_for_currency("USD");
+        }
+        if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
+            return estimate_cost_for_provider(Some(event.name()), model_name, usage)
+                .and_then(|cost| cost.total_for_currency("USD"));
+        }
+    }
+
+    let usage = fallback_usage?;
+    let model_name = event
+        .model_name()
+        .or_else(|| model_name_from_manual_llm_output(event.output()))?;
+    estimate_cost_for_provider(Some(event.name()), model_name, usage)
+        .and_then(|cost| cost.total_for_currency("USD"))
+}
+
+fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
+    output?.as_object()?.get("model").and_then(Json::as_str)
+}
+
 fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
-    usage
-        .get("cost_usd")
-        .and_then(Json::as_f64)
-        .or_else(|| usage.get("cost")?.as_object()?.get("total")?.as_f64())
+    usage.get("cost_usd").and_then(Json::as_f64).or_else(|| {
+        let cost = usage.get("cost")?.as_object()?;
+        let currency = cost.get("currency").and_then(Json::as_str);
+        let is_usd_cost = currency.is_none_or(|currency| currency.eq_ignore_ascii_case("USD"));
+        if !is_usd_cost {
+            return None;
+        }
+        cost.get("total").and_then(Json::as_f64).or_else(|| {
+            let (has_component, component_total) = ["input", "output", "cache_read", "cache_write"]
+                .iter()
+                .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
+                .fold((false, 0.0), |(_, total), value| (true, total + value));
+            has_component.then_some(component_total)
+        })
+    })
 }
 
 fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
@@ -1181,6 +1232,7 @@ fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
         total_tokens,
         cache_read_tokens,
         cache_write_tokens,
+        cost: None,
     })
 }
 

@@ -17,9 +17,12 @@ use crate::plugin::{
     register_plugin,
 };
 
+#[path = "local.rs"]
+mod local;
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 #[path = "remote.rs"]
 mod remote;
+use local::register_local_backend;
 #[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
 use remote::register_remote_backend;
 
@@ -189,6 +192,12 @@ pub struct LocalBackendConfig {
     /// Optional import path for the Python runtime module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python_module: Option<String>,
+    /// Optional Python executable used to run the local Guardrails worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_executable: Option<String>,
+    /// Optional PYTHONPATH used only by the local Guardrails worker subprocess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_path: Option<String>,
 }
 
 /// Default request semantics applied by the selected Guardrails backend.
@@ -323,6 +332,8 @@ crate::editor_config! {
 crate::editor_config! {
     impl LocalBackendConfig {
         python_module => { label: "python_module", kind: String, optional: true },
+        python_executable => { label: "python_executable", kind: String, optional: true },
+        python_path => { label: "python_path", kind: String, optional: true },
     }
 }
 
@@ -447,9 +458,7 @@ fn register_nemo_guardrails_backend(
 ) -> PluginResult<()> {
     match config.mode.as_str() {
         "remote" => register_remote_backend(config, ctx),
-        "local" => Err(PluginError::RegistrationFailed(
-            "built-in NeMo Guardrails local backend is not implemented yet".to_string(),
-        )),
+        "local" => register_local_backend(config, ctx),
         other => Err(PluginError::InvalidConfig(format!(
             "unsupported NeMo Guardrails mode '{other}'"
         ))),
@@ -525,7 +534,7 @@ fn validate_nemo_guardrails_plugin_config(
         &config.policy,
         plugin_config,
         "local",
-        &["python_module"],
+        &["python_module", "python_executable", "python_path"],
     );
     validate_section_fields(
         &mut diagnostics,
@@ -691,6 +700,34 @@ fn validate_non_empty_strings(
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("local.python_module".to_string()),
             "local.python_module must not be empty".to_string(),
+        );
+    }
+
+    if let Some(local) = &config.local
+        && let Some(python_executable) = &local.python_executable
+        && python_executable.trim().is_empty()
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some("local.python_executable".to_string()),
+            "local.python_executable must not be empty".to_string(),
+        );
+    }
+
+    if let Some(local) = &config.local
+        && let Some(python_path) = &local.python_path
+        && python_path.trim().is_empty()
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some("local.python_path".to_string()),
+            "local.python_path must not be empty".to_string(),
         );
     }
 }
@@ -954,6 +991,18 @@ fn validate_request_defaults(
     let Some(request_defaults) = &config.request_defaults else {
         return;
     };
+
+    if config.mode == "local" {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "nemo_guardrails.unsupported_value",
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+            Some("request_defaults".to_string()),
+            "local mode does not currently support request_defaults".to_string(),
+        );
+        return;
+    }
 
     validate_json_object_field(
         diagnostics,

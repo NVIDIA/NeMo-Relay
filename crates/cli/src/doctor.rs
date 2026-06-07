@@ -13,12 +13,17 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use futures_util::SinkExt;
+use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
+use nemo_relay::codec::pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use uuid::Uuid;
 
 use crate::config::{
     AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, ServerArgs, resolve_server_config,
@@ -26,6 +31,7 @@ use crate::config::{
 use crate::error::CliError;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
+const PRICING_PLUGIN_KIND: &str = "pricing";
 
 /// Outcome of one check inside the doctor report. The `details` field carries human-readable
 /// supplementary text; the `status` is the bottom-line signal callers (and CI) use to decide
@@ -631,6 +637,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             details: "component not configured".into(),
         });
     }
+    collect_pricing_component_checks(&mut checks, &plugin_config);
 
     checks
 }
@@ -644,6 +651,17 @@ async fn collect_observability_component_checks(checks: &mut Vec<Check>, config:
     for section in ["opentelemetry", "openinference"] {
         if let Some(check) = observability_http_exporter_check(config, section).await {
             checks.push(check);
+        }
+    }
+    if section_enabled(config, "atof") && atof_endpoint_count(config) > 0 {
+        if atof_streaming_supported() {
+            checks.extend(observability_atof_endpoint_checks(config).await);
+        } else {
+            checks.push(Check {
+                name: "ATOF endpoint",
+                status: Status::Fail,
+                details: "ATOF streaming endpoints are not available in this binary".into(),
+            });
         }
     }
 }
@@ -701,6 +719,89 @@ fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
         .and_then(|component| component.get("config"))
 }
 
+fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &PluginConfig) {
+    let Some(component) = plugin_config
+        .components
+        .iter()
+        .find(|component| component.kind == PRICING_PLUGIN_KIND)
+    else {
+        checks.push(Check {
+            name: "Pricing",
+            status: Status::Info,
+            details: "component not configured".into(),
+        });
+        return;
+    };
+
+    if !component.enabled {
+        checks.push(Check {
+            name: "Pricing",
+            status: Status::Info,
+            details: "component disabled".into(),
+        });
+        return;
+    }
+
+    let config =
+        match serde_json::from_value::<PricingConfig>(Value::Object(component.config.clone())) {
+            Ok(config) => config,
+            Err(error) => {
+                checks.push(Check {
+                    name: "Pricing",
+                    status: Status::Fail,
+                    details: format!("invalid config: {error}"),
+                });
+                return;
+            }
+        };
+
+    if config.sources.is_empty() {
+        checks.push(Check {
+            name: "Pricing",
+            status: Status::Info,
+            details: "component configured with no sources".into(),
+        });
+        return;
+    }
+
+    for (index, source) in config.sources.iter().enumerate() {
+        checks.push(pricing_source_check(index, source));
+    }
+}
+
+fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
+    match source {
+        PricingSourceConfig::Inline { catalog } => Check {
+            name: "Pricing source",
+            status: Status::Pass,
+            details: format!("inline:{index} valid ({} entries)", catalog.entries.len()),
+        },
+        PricingSourceConfig::File { path } => match std::fs::read_to_string(path) {
+            Ok(raw) => match PricingCatalog::from_json_str(&raw) {
+                Ok(catalog) => Check {
+                    name: "Pricing source",
+                    status: Status::Pass,
+                    details: format!(
+                        "file:{} valid ({} entries)",
+                        path.display(),
+                        catalog.entries.len()
+                    ),
+                },
+                Err(error) => Check {
+                    name: "Pricing source",
+                    status: Status::Fail,
+                    details: format!("file:{} invalid catalog: {error}", path.display()),
+                },
+            },
+            Err(error) => Check {
+                name: "Pricing source",
+                status: Status::Fail,
+                details: format!("file:{} unreadable: {error}", path.display()),
+            },
+        },
+    }
+}
+
 fn section_enabled(config: &Value, section: &str) -> bool {
     config
         .get(section)
@@ -723,6 +824,302 @@ fn section_endpoint(config: &Value, section: &str) -> Option<String> {
         .and_then(|section| section.get("endpoint"))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn atof_endpoint_count(config: &Value) -> usize {
+    config
+        .get("atof")
+        .and_then(|section| section.get("endpoints"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+fn atof_streaming_supported() -> bool {
+    cfg!(all(feature = "atof-streaming", not(target_arch = "wasm32")))
+}
+
+async fn observability_atof_endpoint_checks(config: &Value) -> Vec<Check> {
+    let Some(endpoints) = config
+        .get("atof")
+        .and_then(|section| section.get("endpoints"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let mut checks = Vec::with_capacity(endpoints.len());
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        checks.push(probe_atof_endpoint(index, endpoint).await);
+    }
+    checks
+}
+
+async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
+    let name = "ATOF endpoint";
+    let Some(url) = endpoint.get("url").and_then(Value::as_str) else {
+        return Check {
+            name,
+            status: Status::Fail,
+            details: format!("endpoints[{index}]: missing url"),
+        };
+    };
+    let transport = endpoint
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or("http_post");
+    let timeout_millis = endpoint
+        .get("timeout_millis")
+        .and_then(Value::as_u64)
+        .unwrap_or(3_000);
+    if timeout_millis == 0 {
+        return Check {
+            name,
+            status: Status::Fail,
+            details: format!("endpoints[{index}] {transport} {url}: timeout_millis must be > 0"),
+        };
+    }
+    let headers = match endpoint_headers(endpoint) {
+        Ok(headers) => headers,
+        Err(err) => {
+            return Check {
+                name,
+                status: Status::Fail,
+                details: format!("endpoints[{index}] {transport} {url}: {err}"),
+            };
+        }
+    };
+    let payload = match doctor_atof_probe_payload() {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Check {
+                name,
+                status: Status::Fail,
+                details: format!("endpoints[{index}] {transport} {url}: {err}"),
+            };
+        }
+    };
+    let timeout_duration = Duration::from_millis(timeout_millis);
+    match transport {
+        "http_post" => probe_atof_http_post(url, headers, payload, timeout_duration, index).await,
+        "websocket" => probe_atof_websocket(url, headers, payload, timeout_duration, index).await,
+        "ndjson" => probe_atof_ndjson(url, headers, payload, timeout_duration, index).await,
+        _ => Check {
+            name,
+            status: Status::Fail,
+            details: format!("endpoints[{index}] {transport} {url}: unsupported transport"),
+        },
+    }
+}
+
+fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
+    let Some(headers) = endpoint.get("headers") else {
+        return Ok(Vec::new());
+    };
+    let Some(object) = headers.as_object() else {
+        return Err("headers must be an object of string values".into());
+    };
+    let mut out = Vec::with_capacity(object.len());
+    for (key, value) in object {
+        let Some(value) = value.as_str() else {
+            return Err(format!("headers.{key} must be a string"));
+        };
+        out.push((key.clone(), value.to_string()));
+    }
+    Ok(out)
+}
+
+fn doctor_atof_probe_payload() -> Result<String, String> {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("nemo_relay.doctor.atof_probe")
+            .data(json!({"doctor": true}))
+            .metadata(json!({"source": "nemo-relay doctor"}))
+            .build(),
+        None,
+        None,
+    ));
+    event
+        .try_to_json_value()
+        .and_then(|value| serde_json::to_string(&value))
+        .map_err(|error| error.to_string())
+}
+
+async fn probe_atof_http_post(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+) -> Check {
+    probe_atof_http_upload(url, headers, payload, timeout_duration, index, "http_post").await
+}
+
+async fn probe_atof_ndjson(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+) -> Check {
+    probe_atof_http_upload(url, headers, payload, timeout_duration, index, "ndjson").await
+}
+
+async fn probe_atof_http_upload(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+    transport: &str,
+) -> Check {
+    crate::tls::install_rustls_crypto_provider();
+    let client = match reqwest::Client::builder().timeout(timeout_duration).build() {
+        Ok(client) => client,
+        Err(err) => {
+            return Check {
+                name: "ATOF endpoint",
+                status: Status::Fail,
+                details: format!(
+                    "endpoints[{index}] {transport} {url}: could not build client: {err}"
+                ),
+            };
+        }
+    };
+    let mut request = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+        .body(format!("{payload}\n"));
+    for (key, value) in headers {
+        request = request.header(key, value);
+    }
+    match request.send().await {
+        Ok(response) if response.status().is_success() => Check {
+            name: "ATOF endpoint",
+            status: Status::Pass,
+            details: format!(
+                "endpoints[{index}] {transport} {url} (HTTP {})",
+                response.status()
+            ),
+        },
+        Ok(response) => Check {
+            name: "ATOF endpoint",
+            status: Status::Fail,
+            details: format!(
+                "endpoints[{index}] {transport} {url} (HTTP {})",
+                response.status()
+            ),
+        },
+        Err(err) => Check {
+            name: "ATOF endpoint",
+            status: Status::Fail,
+            details: format!("endpoints[{index}] {transport} {url}: {err}"),
+        },
+    }
+}
+
+async fn probe_atof_websocket(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+) -> Check {
+    match reqwest::Url::parse(url) {
+        Ok(parsed) if matches!(parsed.scheme(), "ws" | "wss") => {}
+        Ok(_) => {
+            return Check {
+                name: "ATOF endpoint",
+                status: Status::Fail,
+                details: format!(
+                    "endpoints[{index}] websocket {url}: invalid scheme (must be ws or wss)"
+                ),
+            };
+        }
+        Err(err) => {
+            return Check {
+                name: "ATOF endpoint",
+                status: Status::Fail,
+                details: format!("endpoints[{index}] websocket {url}: {err}"),
+            };
+        }
+    }
+    let mut request = match url.into_client_request() {
+        Ok(request) => request,
+        Err(err) => {
+            return Check {
+                name: "ATOF endpoint",
+                status: Status::Fail,
+                details: format!("endpoints[{index}] websocket {url}: {err}"),
+            };
+        }
+    };
+    for (key, value) in headers {
+        let name = match tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(
+            key.as_bytes(),
+        ) {
+            Ok(name) => name,
+            Err(err) => {
+                return Check {
+                    name: "ATOF endpoint",
+                    status: Status::Fail,
+                    details: format!("endpoints[{index}] websocket {url}: {err}"),
+                };
+            }
+        };
+        let value =
+            match tokio_tungstenite::tungstenite::http::header::HeaderValue::from_str(&value) {
+                Ok(value) => value,
+                Err(err) => {
+                    return Check {
+                        name: "ATOF endpoint",
+                        status: Status::Fail,
+                        details: format!("endpoints[{index}] websocket {url}: {err}"),
+                    };
+                }
+            };
+        request.headers_mut().insert(name, value);
+    }
+    match timeout(timeout_duration, tokio_tungstenite::connect_async(request)).await {
+        Ok(Ok((mut socket, _))) => {
+            let send = timeout(
+                timeout_duration,
+                socket.send(tokio_tungstenite::tungstenite::Message::Text(
+                    payload.into(),
+                )),
+            )
+            .await;
+            let _ = timeout(timeout_duration, socket.close(None)).await;
+            match send {
+                Ok(Ok(())) => Check {
+                    name: "ATOF endpoint",
+                    status: Status::Pass,
+                    details: format!("endpoints[{index}] websocket {url}"),
+                },
+                Ok(Err(err)) => Check {
+                    name: "ATOF endpoint",
+                    status: Status::Fail,
+                    details: format!("endpoints[{index}] websocket {url}: {err}"),
+                },
+                Err(_) => Check {
+                    name: "ATOF endpoint",
+                    status: Status::Fail,
+                    details: format!(
+                        "endpoints[{index}] websocket {url}: timed out sending probe payload"
+                    ),
+                },
+            }
+        }
+        Ok(Err(err)) => Check {
+            name: "ATOF endpoint",
+            status: Status::Fail,
+            details: format!("endpoints[{index}] websocket {url}: {err}"),
+        },
+        Err(_) => Check {
+            name: "ATOF endpoint",
+            status: Status::Fail,
+            details: format!("endpoints[{index}] websocket {url}: timed out"),
+        },
+    }
 }
 
 fn check_directory(name: &'static str, path: &Path) -> Check {

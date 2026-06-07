@@ -793,6 +793,51 @@ async def initialize_plugins(module, config):
 }
 
 #[test]
+fn invoke_python_plugin_register_rolls_back_partial_registrations_on_error() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let helpers = load_module(
+            py,
+            r#"
+def subscriber(event):
+    return None
+
+class FailingPlugin:
+    def register(self, plugin_config, context):
+        context.register_subscriber("sub", subscriber)
+        raise RuntimeError("boom")
+"#,
+        );
+
+        let plugin = helpers.getattr("FailingPlugin").unwrap().call0().unwrap();
+        let register_fn = plugin.getattr("register").unwrap();
+        let namespace_prefix = "rollback.".to_string();
+
+        for _ in 0..2 {
+            let err = invoke_python_plugin_register(
+                py,
+                "demo.rollback",
+                &register_fn,
+                &serde_json::Map::new(),
+                namespace_prefix.clone(),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("boom"), "{err}");
+
+            let context = PyPluginContext {
+                registrations: Arc::new(Mutex::new(vec![])),
+                namespace_prefix: namespace_prefix.clone(),
+            };
+            context
+                .register_subscriber("sub", helpers.getattr("subscriber").unwrap().unbind())
+                .unwrap();
+            let mut registrations = context.drain_registrations().unwrap();
+            rollback_registrations(&mut registrations);
+        }
+    });
+}
+
+#[test]
 fn plugin_context_lock_poisoning_covers_error_paths() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

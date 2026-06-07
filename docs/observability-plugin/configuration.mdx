@@ -68,6 +68,14 @@ output_directory = "logs"
 filename = "events.jsonl"
 mode = "overwrite"
 
+[[components.config.atof.endpoints]]
+url = "http://localhost:8080/events"
+transport = "http_post"
+timeout_millis = 3000
+
+[components.config.atof.endpoints.headers]
+authorization = "Bearer <token>"
+
 [components.config.atif]
 enabled = true
 output_directory = "logs"
@@ -244,8 +252,8 @@ try {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::observability::plugin_component::{
-    AtifSectionConfig, AtofSectionConfig, ComponentSpec, ObservabilityConfig,
-    OtlpSectionConfig,
+    AtifSectionConfig, AtofEndpointSectionConfig, AtofSectionConfig, ComponentSpec,
+    ObservabilityConfig, OtlpSectionConfig,
 };
 use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 
@@ -255,6 +263,12 @@ let component = ComponentSpec::new(ObservabilityConfig {
         output_directory: Some("logs".into()),
         filename: Some("events.jsonl".into()),
         mode: "overwrite".into(),
+        endpoints: vec![AtofEndpointSectionConfig {
+            url: "http://localhost:8080/events".into(),
+            transport: "http_post".into(),
+            headers: [("authorization".into(), "Bearer <token>".into())].into(),
+            timeout_millis: 3000,
+        }],
     }),
     atif: Some(AtifSectionConfig {
         enabled: true,
@@ -304,13 +318,15 @@ let active = initialize_plugins(config).await?;
 ## Validation And Teardown
 
 Validate plugin configuration before activating it. The plugin reports
-unsupported transports, unsupported ATOF modes, unsafe ATIF filename templates,
-unknown fields according to policy, and enabled exporters that are unavailable
-in the current build or target.
+unsupported transports, unsupported ATOF modes, invalid ATOF streaming endpoint
+URLs, non-string endpoint headers, non-positive endpoint timeouts, unsafe ATIF
+filename templates, unknown fields according to policy, and enabled exporters
+that are unavailable in the current build or target.
 
 Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
 Clearing the plugin config deregisters inferred subscribers, flushes file
-exporters, and shuts down owned OTLP subscribers.
+exporters, drains and closes ATOF streaming endpoints, and shuts down owned OTLP
+subscribers.
 
 Use manual subscriber/exporter APIs instead of the plugin when you need custom
 subscriber names, explicit per-run exporter objects, or direct control over the

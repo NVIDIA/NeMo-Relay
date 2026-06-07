@@ -17,12 +17,11 @@ first-party NeMo Relay plugin.
 The plugin is designed around backend modes:
 
 - `remote`
-  - Implemented now.
   - Calls a Guardrails service over HTTP(S), including streaming over the same
     remote contract.
 - `local`
-  - Planned.
-  - Reserved for a future in-process Python `nemoguardrails` backend.
+  - Calls `nemoguardrails` through a local `python3` worker subprocess instead
+    of a separate Guardrails service.
 
 ## Use This Plugin When
 
@@ -30,39 +29,41 @@ Start here when you need to:
 
 - Apply Guardrails input and output checks around managed `llm.execute(...)`
   calls.
-- Apply Guardrails policy around managed tool execution, including the current
-  remote managed `tool_output` lane.
+- Apply Guardrails policy around managed tool execution.
 - Configure Guardrails behavior through the same plugin config surface used by
   other first-party NeMo Relay components.
-- Keep Guardrails behavior in a reusable process-level config document instead
-  of wiring provider-specific checks into each application call site.
+- Keep Guardrails policy authoring in Guardrails-native config while NeMo Relay
+  owns when those checks run around managed execution.
 
 ## Current Scope
 
-The current shipped user-facing lane is the built-in `remote` backend.
+The built-in plugin currently exposes two user-facing modes:
 
-That lane supports:
+- `remote` for Guardrails-service integration over HTTP(S)
+- `local` for `nemoguardrails` integration through a local Python worker
 
-- Managed non-streaming LLM `input` checks.
-- Managed non-streaming LLM `output` checks.
-- Managed streaming LLM execution over the remote HTTP(S) path.
-- Managed tool-result checks through `tool_output`.
-- Request-time Guardrails defaults passed through to the remote backend.
+Both modes support managed LLM `input` and `output`. The current mode-specific
+differences are:
 
-The current built-in remote backend does not support:
+- `remote` supports `request_defaults` pass-through but does not support managed
+  `tool_input`
+- `local` supports managed `tool_input` and broader LLM codec coverage, but it
+  does not support `request_defaults`
 
-- Managed `tool_input` checks against the stock Guardrails remote contract.
-- `local` mode.
-- Remote managed LLM parity beyond `codec = "openai_chat"`.
+The `local` backend requires a `python3 >= 3.11` executable that can import
+`nemoguardrails==0.22.0`. It does not embed Python into the NeMo Relay binary.
 
 ## Managed Surfaces Versus Request Defaults
 
-The NeMo Guardrails plugin model uses two different concepts:
+Both `remote` mode and `local` mode share the same top-level plugin model, but
+they do not implement every part of that model in the same way.
 
-- Currently supported managed NeMo Relay execution surfaces in the shipped
-  remote backend:
+At the plugin-model level, NeMo Guardrails uses two different concepts:
+
+- Top-level managed NeMo Relay execution surfaces:
   - `input`
   - `output`
+  - `tool_input`
   - `tool_output`
 - Guardrails backend request defaults:
   - `request_defaults.context`
@@ -78,62 +79,43 @@ This distinction matters:
 
 - Managed surfaces wrap real NeMo Relay execution boundaries such as
   `llm.execute(...)` and `tools.execute(...)`.
-- Managed surfaces let NeMo Relay enforce behavior around those boundaries.
-  Depending on the surface, Relay can block work, allow it, or apply managed
-  request or result handling before the application sees the final outcome.
+- Managed surfaces give NeMo Relay an owned enforcement point around a known
+  runtime step. Depending on the backend and surface, Relay can block work,
+  allow it, or apply managed request or result handling before the application
+  sees the outcome.
 - Managed surfaces also give NeMo Relay a stable runtime boundary for its own
-  middleware ordering, lifecycle behavior, and observability marks. Relay knows
-  exactly which step is being wrapped and can attach policy and telemetry to
-  that step directly.
-- `request_defaults` fields are forwarded to the selected Guardrails backend as
-  request semantics. They do not create new NeMo Relay-native execution
-  surfaces.
-- `request_defaults` can still influence Guardrails behavior, but they do not
-  give NeMo Relay a new local runtime step to wrap. Relay is passing backend
-  options along with a request, not creating a new middleware boundary of its
-  own.
-- `request_defaults` are also backend-contract dependent. A selected Guardrails
-  backend can use them when evaluating a request, but the exact effect depends
-  on what that backend supports. Relay is not creating a separate local
-  retrieval, dialog, or tool boundary just because those fields exist in the
-  request.
+  middleware ordering, lifecycle behavior, and observability marks.
 
-In practice, the tradeoff is:
-
-- Managed surfaces give you a Relay-owned enforcement point around a known
-  runtime step, with Relay-owned enforcement, ordering, and marks around that
-  step.
-- `request_defaults` give you backend-level configuration for a request, but
-  not a separate Relay-owned interception point, runtime boundary, or
-  middleware surface.
-
-Another way to think about it:
+In practice:
 
 - Managed surfaces are places where NeMo Relay is holding the steering wheel.
-- `request_defaults` are notes that NeMo Relay passes to the Guardrails backend
-  with a request.
 
-Top-level `tool_input` is still part of the built-in plugin contract, but it is
-not supported by the current stock-remote backend.
+The forwarded request-default side is more mode-specific:
 
-The overlap in names is important:
+- In `remote` mode, `request_defaults` fields are forwarded to the selected
+  Guardrails backend as request semantics. They do not create new NeMo
+  Relay-native execution surfaces.
+- In `local` mode, `request_defaults` is rejected instead of passed through.
+
+The overlap in names is important in `remote` mode:
 
 - Top-level `input` is a managed NeMo Relay execution surface.
 - `request_defaults.rails.input` is a backend pass-through option.
 - Top-level `output` is a managed NeMo Relay execution surface.
 - `request_defaults.rails.output` is a backend pass-through option.
-- Top-level `tool_input` is part of the built-in plugin model, but the current
-  stock-remote backend rejects it.
+- Top-level `tool_input` is a managed NeMo Relay execution surface in the
+  plugin contract. The current stock-remote backend rejects it, while the local
+  backend supports it.
 - `request_defaults.rails.tool_input` is a backend pass-through option.
 - Top-level `tool_output` is a managed NeMo Relay execution surface.
 - `request_defaults.rails.tool_output` is a backend pass-through option.
 
 In particular, `request_defaults.rails.dialog` and
-`request_defaults.rails.retrieval` are simple pass-through options. They are
-not separate managed middleware surfaces in NeMo Relay.
+`request_defaults.rails.retrieval` are pass-through options. They are not
+separate managed middleware surfaces in NeMo Relay.
 
 ## Pages
 
 - [NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration)
-  documents the built-in component shape, remote-mode boundaries, and current
+  documents the built-in component shape, mode boundaries, and the detailed
   support matrix.

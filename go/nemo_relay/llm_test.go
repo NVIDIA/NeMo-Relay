@@ -192,7 +192,31 @@ func TestLlmCallExecuteWithRequestAndResponseCodecs(t *testing.T) {
 	startEvent, endEvent := requireLlmScopeEvents(t, events)
 	_ = startEvent.Attributes()
 	_ = startEvent.AnnotatedRequest()
-	_ = endEvent.AnnotatedResponse()
+	var annotatedResponse map[string]any
+	if err := json.Unmarshal(endEvent.AnnotatedResponse(), &annotatedResponse); err != nil {
+		t.Fatalf("AnnotatedResponse JSON did not parse: %v", err)
+	}
+	usage, ok := annotatedResponse["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected annotated response usage, got %#v", annotatedResponse)
+	}
+	cost, ok := usage["cost"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected annotated response cost, got %#v", usage)
+	}
+	if cost["pricing_provider"] != "openai" {
+		t.Fatalf("expected openai pricing provider, got %#v", cost["pricing_provider"])
+	}
+	if cost["pricing_model"] != "gpt-4o-mini" {
+		t.Fatalf("expected gpt-4o-mini pricing model, got %#v", cost["pricing_model"])
+	}
+	total, ok := cost["total"].(float64)
+	if !ok {
+		t.Fatalf("expected numeric total, got %#v", cost["total"])
+	}
+	if diff := total - 0.0000435; diff > 1e-12 || diff < -1e-12 {
+		t.Fatalf("expected total 0.0000435, got %#v", total)
+	}
 }
 
 func llmRequestResponseCodec() CodecFunc {
@@ -246,7 +270,7 @@ func requireEncodedModelExecutor(t *testing.T) func(json.RawMessage) (json.RawMe
 		if request.Content["model"] != "encoded-model" {
 			t.Fatalf("expected encoded model in execution payload, got %#v", request.Content)
 		}
-		return json.RawMessage(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
+		return json.RawMessage(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":20},"cost":{"total":0.0000435,"source":"provider_reported","pricing_provider":"openai","pricing_model":"gpt-4o-mini"}}}`), nil
 	}
 }
 

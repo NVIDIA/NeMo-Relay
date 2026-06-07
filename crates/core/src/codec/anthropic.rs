@@ -27,7 +27,8 @@ use super::request::{
     ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
 use super::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
+    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
+    estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -65,6 +66,9 @@ struct RawAnthropicUsage {
     output_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_creation_input_tokens: Option<u64>,
+    #[serde(rename = "cost_usd")]
+    provider_cost: Option<f64>,
+    cost: Option<RawUsageCost>,
 }
 
 // ---------------------------------------------------------------------------
@@ -349,10 +353,12 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
         let finish_reason = raw.stop_reason.as_deref().map(map_anthropic_stop_reason);
 
         // Map usage.
+        let model_for_pricing = raw.model.as_deref();
+        let model_provider = infer_model_provider("anthropic", model_for_pricing);
         let usage = raw.usage.map(|u| {
             let prompt = u.input_tokens;
             let completion = u.output_tokens;
-            Usage {
+            let mut usage = Usage {
                 prompt_tokens: prompt,
                 completion_tokens: completion,
                 // Anthropic does not supply total_tokens; compute it.
@@ -362,7 +368,14 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
                 },
                 cache_read_tokens: u.cache_read_input_tokens,
                 cache_write_tokens: u.cache_creation_input_tokens,
+                cost: provider_reported_cost(u.provider_cost, u.cost),
+            };
+            if usage.cost.is_none() {
+                usage.cost = model_for_pricing.and_then(|model| {
+                    estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
+                });
             }
+            usage
         });
 
         // Build API-specific fields: all content blocks + stop_sequence.
