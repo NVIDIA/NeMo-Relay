@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
-use nemo_relay::api::event::ScopeCategory;
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -43,6 +45,17 @@ async fn install_test_atif_plugin(output_directory: &Path) {
     initialize_plugins(config).await.unwrap();
 }
 
+fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExporter {
+    std::fs::create_dir_all(output_directory).unwrap();
+    AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(output_directory)
+            .with_filename(filename)
+            .with_mode(AtofExporterMode::Overwrite),
+    )
+    .unwrap()
+}
+
 fn make_openinference_test_subscriber(
     scope: &str,
 ) -> (
@@ -67,6 +80,54 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
             )
         })
         .collect()
+}
+
+fn read_atof_events(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect()
+}
+
+fn event_session_id(event: &Event) -> Option<&str> {
+    event
+        .metadata()
+        .and_then(|metadata| metadata.get("session_id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            event.data().and_then(|data| {
+                data.get("session_id")
+                    .and_then(Value::as_str)
+                    .or_else(|| data.get("extra")?.get("session_id").and_then(Value::as_str))
+            })
+        })
+}
+
+fn tracked_sessions(session_ids: &[&str]) -> Arc<HashSet<String>> {
+    Arc::new(
+        session_ids
+            .iter()
+            .map(|session_id| (*session_id).to_string())
+            .collect(),
+    )
+}
+
+fn register_filtered_session_subscriber(
+    name: &str,
+    session_ids: Arc<HashSet<String>>,
+    subscriber: EventSubscriberFn,
+) {
+    let _ = deregister_subscriber(name);
+    register_subscriber(
+        name,
+        Arc::new(move |event| {
+            if event_session_id(event).is_some_and(|session_id| session_ids.contains(session_id)) {
+                subscriber(event);
+            }
+        }),
+    )
+    .unwrap();
 }
 
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
@@ -401,6 +462,123 @@ async fn drive_hermes_routed_provider_session(
         )
         .await
         .unwrap();
+}
+
+async fn drive_hermes_orphan_subagent_stop(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    session_id: &str,
+    subagent_id: &str,
+) {
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": session_id
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": session_id,
+            "extra": {
+                "subagent_id": subagent_id,
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": session_id
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, headers);
+        manager.apply_events(headers, outcome.events).await.unwrap();
+    }
+}
+
+async fn drive_hermes_subagent_child_session(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_subagent_id: &str,
+) {
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": parent_session_id
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": parent_session_id,
+            "extra": {
+                "child_goal": "read plugin yaml",
+                "child_role": "leaf",
+                "child_session_id": child_session_id,
+                "child_subagent_id": child_subagent_id,
+                "parent_turn_id": "parent-turn-1",
+                "telemetry_schema_version": "hermes.observer.v1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": child_session_id
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": child_session_id,
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read plugin yaml" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": child_session_id,
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "name: nemo_flow"
+                    },
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": child_session_id
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": parent_session_id,
+            "extra": {
+                "child_session_id": child_session_id,
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": parent_session_id
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, headers);
+        manager.apply_events(headers, outcome.events).await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -2636,30 +2814,7 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
 
-    for payload in [
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "hermes-orphan"
-        }),
-        json!({
-            "hook_event_name": "subagent_stop",
-            "session_id": "hermes-orphan",
-            "extra": {
-                "subagent_id": "worker-1",
-                "child_status": "completed"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_finalize",
-            "session_id": "hermes-orphan"
-        }),
-    ] {
-        let outcome = crate::adapters::hermes::adapt(payload, &headers);
-        manager
-            .apply_events(&headers, outcome.events)
-            .await
-            .unwrap();
-    }
+    drive_hermes_orphan_subagent_stop(&manager, &headers, "hermes-orphan", "worker-1").await;
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
@@ -2687,6 +2842,97 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
 }
 
 #[tokio::test]
+async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let tracked_sessions = tracked_sessions(&["hermes-orphan"]);
+    let temp = tempfile::tempdir().unwrap();
+    let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    let atof_name = "cli-hermes-orphan-atof-test";
+    let openinference_name = "cli-hermes-orphan-openinference-test";
+    register_filtered_session_subscriber(
+        atof_name,
+        Arc::clone(&tracked_sessions),
+        atof_exporter.subscriber(),
+    );
+
+    let (openinference_subscriber, span_exporter) =
+        make_openinference_test_subscriber("session-test-scope");
+    register_filtered_session_subscriber(
+        openinference_name,
+        Arc::clone(&tracked_sessions),
+        openinference_subscriber.subscriber(),
+    );
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    drive_hermes_orphan_subagent_stop(&manager, &headers, "hermes-orphan", "worker-1").await;
+
+    atof_exporter.force_flush().unwrap();
+    openinference_subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(atof_name).unwrap());
+    assert!(deregister_subscriber(openinference_name).unwrap());
+
+    let atof_events = read_atof_events(atof_exporter.path());
+    let turn_start = atof_events
+        .iter()
+        .find(|event| {
+            event["category"] == "agent"
+                && event["scope_category"] == "start"
+                && event["metadata"]["session_id"] == json!("hermes-orphan")
+                && event["metadata"]["nemo_relay_scope_role"] == json!("turn")
+        })
+        .expect("Hermes orphan flow should export a parent turn start event");
+    let orphan_marks = atof_events
+        .iter()
+        .filter(|event| event["name"] == json!("subagent_end_without_start"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        orphan_marks.len(),
+        1,
+        "Hermes orphan flow should export exactly one readable orphan mark: {atof_events:#?}"
+    );
+    assert_eq!(orphan_marks[0]["parent_uuid"], turn_start["uuid"]);
+
+    let spans = span_exporter.get_finished_spans().unwrap();
+    assert!(
+        spans
+            .iter()
+            .all(|span| span.name.as_ref() != "mark:subagent_end_without_start"),
+        "Correlated Hermes orphan mark should attach to the turn span instead of exporting a standalone orphan span"
+    );
+    let turn_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("AGENT")
+                && attributes.get("metadata").is_some_and(|metadata| {
+                    serde_json::from_str::<Value>(metadata)
+                        .ok()
+                        .is_some_and(|metadata| {
+                            metadata["session_id"] == json!("hermes-orphan")
+                                && metadata["nemo_relay_scope_role"] == json!("turn")
+                        })
+                })
+        })
+        .expect("Hermes orphan flow should export an OpenInference turn span");
+    let turn_attributes = attr_map(&turn_span.attributes);
+    let orphan_event = turn_span
+        .events
+        .events
+        .iter()
+        .find(|event| event.name.as_ref() == "subagent_end_without_start")
+        .expect("Hermes orphan mark should attach to the active turn span");
+    let orphan_attributes = attr_map(&orphan_event.attributes);
+    assert_eq!(
+        orphan_attributes.get("nemo_relay.mark.parent_uuid"),
+        turn_attributes.get("nemo_relay.uuid")
+    );
+}
+
+#[tokio::test]
 async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
     let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
@@ -2696,88 +2942,14 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
 
-    for payload in [
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "parent-session"
-        }),
-        json!({
-            "hook_event_name": "subagent_start",
-            "session_id": "parent-session",
-            "extra": {
-                "child_goal": "read plugin yaml",
-                "child_role": "leaf",
-                "child_session_id": "child-session",
-                "child_subagent_id": "sa-1",
-                "parent_turn_id": "parent-turn-1",
-                "telemetry_schema_version": "hermes.observer.v1"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "child-session"
-        }),
-        json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "child-session",
-            "extra": {
-                "task_id": "child-task",
-                "api_call_count": 1,
-                "provider": "custom",
-                "model": "qwen",
-                "request": {
-                    "body": {
-                        "model": "qwen",
-                        "messages": [
-                            { "role": "user", "content": "read plugin yaml" }
-                        ]
-                    }
-                }
-            }
-        }),
-        json!({
-            "hook_event_name": "post_api_request",
-            "session_id": "child-session",
-            "extra": {
-                "task_id": "child-task",
-                "api_call_count": 1,
-                "provider": "custom",
-                "model": "qwen",
-                "response": {
-                    "assistant_message": {
-                        "role": "assistant",
-                        "content": "name: nemo_flow"
-                    },
-                    "usage": {
-                        "prompt_tokens": 3,
-                        "completion_tokens": 2
-                    }
-                }
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_end",
-            "session_id": "child-session"
-        }),
-        json!({
-            "hook_event_name": "subagent_stop",
-            "session_id": "parent-session",
-            "extra": {
-                "child_session_id": "child-session",
-                "child_status": "completed"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_finalize",
-            "session_id": "parent-session"
-        }),
-    ] {
-        let outcome = crate::adapters::hermes::adapt(payload, &headers);
-        manager
-            .apply_events(&headers, outcome.events)
-            .await
-            .unwrap();
-    }
+    drive_hermes_subagent_child_session(
+        &manager,
+        &headers,
+        "parent-session",
+        "child-session",
+        "sa-1",
+    )
+    .await;
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "parent-session");
@@ -2802,6 +2974,123 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
         !serde_json::to_string(&atif)
             .unwrap()
             .contains("subagent_end_without_start")
+    );
+}
+
+#[tokio::test]
+async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage() {
+    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let tracked_sessions = tracked_sessions(&["parent-session", "child-session"]);
+    let temp = tempfile::tempdir().unwrap();
+    let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    let atof_name = "cli-hermes-subagent-atof-test";
+    let openinference_name = "cli-hermes-subagent-openinference-test";
+    register_filtered_session_subscriber(
+        atof_name,
+        Arc::clone(&tracked_sessions),
+        atof_exporter.subscriber(),
+    );
+
+    let (openinference_subscriber, span_exporter) =
+        make_openinference_test_subscriber("session-test-scope");
+    register_filtered_session_subscriber(
+        openinference_name,
+        Arc::clone(&tracked_sessions),
+        openinference_subscriber.subscriber(),
+    );
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    drive_hermes_subagent_child_session(
+        &manager,
+        &headers,
+        "parent-session",
+        "child-session",
+        "sa-1",
+    )
+    .await;
+
+    atof_exporter.force_flush().unwrap();
+    openinference_subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(atof_name).unwrap());
+    assert!(deregister_subscriber(openinference_name).unwrap());
+
+    let atof_events = read_atof_events(atof_exporter.path());
+    let parent_turn = atof_events
+        .iter()
+        .find(|event| {
+            event["category"] == "agent"
+                && event["scope_category"] == "start"
+                && event["metadata"]["session_id"] == json!("parent-session")
+                && event["metadata"]["nemo_relay_scope_role"] == json!("turn")
+        })
+        .expect("Hermes parent session should export a turn start event");
+    let child_subagent_events = atof_events
+        .iter()
+        .filter(|event| {
+            event["category"] == "agent"
+                && event["metadata"]["session_id"] == json!("child-session")
+                && event["metadata"]["nemo_relay_scope_role"] == json!("subagent")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_subagent_events.len(),
+        2,
+        "Hermes child session should export one subagent start/end pair: {atof_events:#?}"
+    );
+    assert!(
+        child_subagent_events
+            .iter()
+            .all(|event| event["parent_uuid"] == parent_turn["uuid"])
+    );
+
+    let spans = span_exporter.get_finished_spans().unwrap();
+    let parent_turn_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("AGENT")
+                && attributes.get("metadata").is_some_and(|metadata| {
+                    serde_json::from_str::<Value>(metadata)
+                        .ok()
+                        .is_some_and(|metadata| {
+                            metadata["session_id"] == json!("parent-session")
+                                && metadata["nemo_relay_scope_role"] == json!("turn")
+                        })
+                })
+        })
+        .expect("Hermes parent session should export an OpenInference turn span");
+    let child_subagent_spans = spans
+        .iter()
+        .filter(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("AGENT")
+                && attributes.get("metadata").is_some_and(|metadata| {
+                    serde_json::from_str::<Value>(metadata)
+                        .ok()
+                        .is_some_and(|metadata| {
+                            metadata["session_id"] == json!("child-session")
+                                && metadata["nemo_relay_scope_role"] == json!("subagent")
+                        })
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_subagent_spans.len(),
+        1,
+        "Hermes child session should export exactly one OpenInference subagent span"
+    );
+    let parent_attributes = attr_map(&parent_turn_span.attributes);
+    let child_attributes = attr_map(&child_subagent_spans[0].attributes);
+    assert_eq!(
+        child_attributes.get("nemo_relay.parent_uuid"),
+        parent_attributes.get("nemo_relay.uuid")
     );
 }
 
