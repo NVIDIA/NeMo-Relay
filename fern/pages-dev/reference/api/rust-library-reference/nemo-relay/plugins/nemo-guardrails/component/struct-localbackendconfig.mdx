@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LocalBackendConfig &#123;\n    pub python_module: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LocalBackendConfig &#123;\n    pub python_module: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub python_executable: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub python_path: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
 
 Local-backend settings for the Python `nemoguardrails` runtime.
 
@@ -19,6 +19,14 @@ Local-backend settings for the Python `nemoguardrails` runtime.
 ### `python_module: Option<String>`
 
 Optional import path for the Python runtime module.
+
+### `python_executable: Option<String>`
+
+Optional Python executable used to run the local Guardrails worker.
+
+### `python_path: Option<String>`
+
+Optional PYTHONPATH used only by the local Guardrails worker subprocess.
 
 ## Trait Implementations
 
