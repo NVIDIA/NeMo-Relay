@@ -1634,7 +1634,7 @@ fn validate_atif_storage_support(
     policy: &ConfigPolicy,
     section: &AtifSectionConfig,
 ) {
-    if !section.storage.is_empty() {
+    if section.enabled && !section.storage.is_empty() {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
