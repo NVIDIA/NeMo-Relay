@@ -494,10 +494,10 @@ export declare function pushScope(name: string, scopeType: ScopeType, handle?: S
 
 Pop an execution scope from the scope stack.
 
-Removes the scope identified by `handle` from the stack and emits an end event. Optional `output` is a semantic JSON payload exported on the scope end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp. Throws if the handle does not match the current top scope.
+Removes the scope identified by `handle` from the stack and emits an end event. Optional `output` is a semantic JSON payload exported on the scope end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp. Optional `metadata` is a JSON metadata payload recorded on the scope end event. Throws if the handle does not match the current top scope.
 
 ```ts
-export declare function popScope(handle: ScopeHandle, output?: Json | undefined | null, timestamp?: number | undefined | null): void
+export declare function popScope(handle: ScopeHandle, output?: Json | undefined | null, timestamp?: number | undefined | null, metadata?: Json | undefined | null): void
 ```
 
 ### `withScope`

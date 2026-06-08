@@ -34,7 +34,7 @@ Push a new child scope and return its handle.
 ### `pop`
 
 ```python
-def pop(handle: ScopeHandle, *, output: Json | None = None, timestamp: datetime | None = None) -> None
+def pop(handle: ScopeHandle, *, output: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
 ```
 
 Pop a scope previously returned by `push()` or `scope()`.

@@ -139,7 +139,7 @@ A scope-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/eve
 
 #### `end_scope_handle`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_scope_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_scope_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build a scope-end event from a handle.
 
@@ -147,6 +147,7 @@ Build a scope-end event from a handle.
 
 - `handle`: Scope handle to serialize into an event.
 - `data`: Optional data payload returned from the scope.
+- `metadata`: Optional metadata payload merged over `handle.metadata`.
 
 ##### Returns
 
@@ -157,6 +158,8 @@ A scope-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_scope_end_event(&amp;self, params: <a href=\"../../scope/struct-endscopehandleparams\">EndScopeHandleParams</a>&lt;'_&gt;) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build a scope-end event from builder parameters.
+
+The `metadata` payload is merged over the metadata already stored on the handle.
 
 ##### Parameters
 
