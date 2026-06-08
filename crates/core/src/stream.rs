@@ -179,12 +179,8 @@ impl LlmStreamWrapper {
                             Some(decoded)
                         })
                         .map(Arc::new);
-                    let event = state.end_llm_handle(
-                        &self.handle,
-                        data,
-                        metadata,
-                        annotated_response,
-                    );
+                    let event =
+                        state.end_llm_handle(&self.handle, data, metadata, annotated_response);
                     Some((event, subscribers))
                 }
                 Err(_) => None,
