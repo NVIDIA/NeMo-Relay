@@ -248,6 +248,20 @@ fn typed_editor_model_contains_pii_redaction_options() {
         builtin.field("detector").unwrap().kind,
         EditorFieldKind::Enum
     );
+    assert!(
+        builtin
+            .field("detector")
+            .unwrap()
+            .enum_values
+            .contains(&"jwt")
+    );
+    assert!(
+        builtin
+            .field("detector")
+            .unwrap()
+            .enum_values
+            .contains(&"aws_access_key_id")
+    );
     assert_eq!(
         builtin.field("replacement").unwrap().kind,
         EditorFieldKind::String

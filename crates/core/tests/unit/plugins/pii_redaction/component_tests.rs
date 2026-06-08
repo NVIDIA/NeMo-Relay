@@ -255,7 +255,7 @@ fn validate_rejects_unknown_builtin_detector() {
 
     assert!(report.diagnostics.iter().any(|diag| {
         diag.field.as_deref() == Some("builtin.detector")
-            && diag.message.contains("must be 'email'")
+            && diag.message.contains("supported built-in detector presets")
     }));
 }
 
@@ -836,6 +836,273 @@ fn builtin_mask_with_url_detector_preserves_scheme_and_host_by_default() {
     );
 
     deregister_subscriber("pii-redaction-url-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_ipv6_detector_preserves_last_segment_by_default() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "ipv6",
+            "target_paths": ["/ip"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-ipv6-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "ip": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "ip": "****:****:****:****:****:****:****:7334",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-ipv6-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_bearer_token_detector_preserves_scheme_and_last_four() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "bearer_token",
+            "target_paths": ["/auth"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-bearer-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "auth": "Bearer token-value-1234",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "auth": "Bearer ************1234",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-bearer-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_credit_card_detector_preserves_last_four_digits() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "credit_card",
+            "target_paths": ["/card"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-credit-card-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "card": "4111 1111 1111 1234",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "card": "**** **** **** 1234",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-credit-card-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_jwt_detector_preserves_header_and_signature_tail() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.cGF5bG9hZA.signaturetail";
+    let expected_jwt = {
+        let parts = jwt.split('.').collect::<Vec<_>>();
+        format!(
+            "{}.{}.{}",
+            parts[0],
+            mask_text(parts[1], "*", 0, 0),
+            mask_text(parts[2], "*", 0, 6)
+        )
+    };
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "jwt",
+            "target_paths": ["/token"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-jwt-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "token": jwt,
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "token": expected_jwt,
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-jwt-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_cloud_key_detectors_preserves_expected_segments() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "aws_access_key_id",
+            "target_paths": ["/key"]
+        }
+    }))))
+    .unwrap();
+    let events = capture_events("pii-redaction-aws-access-key-mask-events");
+    let aws_access_key = "AKIAIOSFODNN7EXAMPLE";
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({"key": aws_access_key}))
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(
+        captured_events_snapshot(&events)[0].input(),
+        Some(&json!({"key": mask_text(aws_access_key, "*", 4, 4)}))
+    );
+    deregister_subscriber("pii-redaction-aws-access-key-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+
+    reset_runtime();
+    setup_isolated_thread();
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "gcp_api_key",
+            "target_paths": ["/key"]
+        }
+    }))))
+    .unwrap();
+    let events = capture_events("pii-redaction-gcp-key-mask-events");
+    let gcp_key = format!("AIza{}", "A".repeat(35));
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({"key": gcp_key}))
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(
+        captured_events_snapshot(&events)[0].input(),
+        Some(&json!({"key": mask_text(&gcp_key, "*", 6, 4)}))
+    );
+    deregister_subscriber("pii-redaction-gcp-key-mask-events").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

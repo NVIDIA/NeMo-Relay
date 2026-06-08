@@ -32,6 +32,10 @@ mod local;
 use local::register_local_backend;
 pub use local::{clear_local_backend_provider, register_local_backend_provider};
 
+#[path = "detectors.rs"]
+mod detectors;
+use detectors::{BuiltinDetector, detector_regex_pattern, supported_detector_summary};
+
 /// The plugin kind reserved for the built-in privacy component.
 pub const PII_REDACTION_PLUGIN_KIND: &str = "pii_redaction";
 
@@ -234,7 +238,22 @@ crate::editor_config! {
         detector => {
             label: "detector",
             kind: Enum,
-            values: ["email", "phone", "api_key", "ip_address", "url"],
+            values: [
+                "email",
+                "phone",
+                "api_key",
+                "ip_address",
+                "ipv6",
+                "url",
+                "uuid",
+                "bearer_token",
+                "jwt",
+                "credit_card",
+                "aws_access_key_id",
+                "aws_secret_access_key",
+                "gcp_api_key",
+                "azure_storage_account_key",
+            ],
             optional: true,
         },
         replacement => { label: "replacement", kind: String, optional: true },
@@ -601,8 +620,10 @@ fn validate_builtin_action_requirements(
             "pii_redaction.unsupported_value",
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("builtin.detector".to_string()),
-            "builtin.detector must be 'email', 'phone', 'api_key', 'ip_address', or 'url'"
-                .to_string(),
+            format!(
+                "builtin.detector must be one of the supported built-in detector presets ({})",
+                supported_detector_summary()
+            ),
         );
     }
 
@@ -724,15 +745,6 @@ enum BuiltinMaskStrategy {
         detector: BuiltinDetector,
         mask_char: Arc<String>,
     },
-}
-
-#[derive(Clone, Copy)]
-enum BuiltinDetector {
-    Email,
-    Phone,
-    ApiKey,
-    IpAddress,
-    Url,
 }
 
 #[derive(Clone, Copy)]
@@ -1052,124 +1064,6 @@ fn compile_builtin_matcher(
     })?;
     Ok(Some(Arc::new(pattern)))
 }
-
-fn detector_regex_pattern(detector: &str) -> Option<&'static str> {
-    BuiltinDetector::parse(detector)
-        .ok()
-        .map(BuiltinDetector::regex_pattern)
-}
-
-impl BuiltinDetector {
-    fn parse(value: &str) -> PluginResult<Self> {
-        match value {
-            "email" => Ok(Self::Email),
-            "phone" => Ok(Self::Phone),
-            "api_key" => Ok(Self::ApiKey),
-            "ip_address" => Ok(Self::IpAddress),
-            "url" => Ok(Self::Url),
-            other => Err(PluginError::InvalidConfig(format!(
-                "unsupported builtin.detector '{other}'"
-            ))),
-        }
-    }
-
-    fn regex_pattern(self) -> &'static str {
-        match self {
-            Self::Email => r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-            Self::Phone => r"\+?[0-9][0-9()\-\s]{6,}[0-9]",
-            Self::ApiKey => r"(?:sk|rk|pk|ak)-[A-Za-z0-9_-]{8,}",
-            Self::IpAddress => r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
-            Self::Url => r"https?://[^\s]+",
-        }
-    }
-
-    fn default_mask(self, text: &str, mask_char: &str) -> String {
-        match self {
-            Self::Email => mask_email(text, mask_char),
-            Self::Phone => mask_phone(text, mask_char),
-            Self::ApiKey => mask_api_key(text, mask_char),
-            Self::IpAddress => mask_ip_address(text, mask_char),
-            Self::Url => mask_url(text, mask_char),
-        }
-    }
-}
-
-fn mask_email(text: &str, mask_char: &str) -> String {
-    let Some((local, domain)) = text.split_once('@') else {
-        return mask_text(text, mask_char, 0, 0);
-    };
-
-    let local_chars: Vec<char> = local.chars().collect();
-    if local_chars.len() <= 1 {
-        return text.to_string();
-    }
-
-    let mut output = String::new();
-    output.push(local_chars[0]);
-    for _ in 1..local_chars.len() {
-        output.push_str(mask_char);
-    }
-    output.push('@');
-    output.push_str(domain);
-    output
-}
-
-fn mask_phone(text: &str, mask_char: &str) -> String {
-    let total_digits = text.chars().filter(|ch| ch.is_ascii_digit()).count();
-    if total_digits <= 4 {
-        return text.to_string();
-    }
-
-    let mut masked_digits_remaining = total_digits - 4;
-    let mut output = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if ch.is_ascii_digit() {
-            if masked_digits_remaining > 0 {
-                output.push_str(mask_char);
-                masked_digits_remaining -= 1;
-            } else {
-                output.push(ch);
-            }
-        } else {
-            output.push(ch);
-        }
-    }
-    output
-}
-
-fn mask_api_key(text: &str, mask_char: &str) -> String {
-    let prefix = text.find('-').map_or(0, |idx| idx + 1);
-    mask_text(text, mask_char, prefix, 4)
-}
-
-fn mask_ip_address(text: &str, mask_char: &str) -> String {
-    let mut octets = text.split('.').collect::<Vec<_>>();
-    if octets.len() != 4 {
-        return mask_text(text, mask_char, 0, 0);
-    }
-
-    for octet in octets.iter_mut().take(3) {
-        *octet = "***";
-    }
-    octets.join(".")
-}
-
-fn mask_url(text: &str, mask_char: &str) -> String {
-    let Some(scheme_idx) = text.find("://") else {
-        return mask_text(text, mask_char, 0, 0);
-    };
-    let prefix_end = scheme_idx + 3;
-    let remainder = &text[prefix_end..];
-    let Some(path_idx) = remainder.find('/') else {
-        return text.to_string();
-    };
-
-    let mut output = String::with_capacity(text.len());
-    output.push_str(&text[..prefix_end + path_idx + 1]);
-    output.push_str(mask_char);
-    output
-}
-
 fn instantiate_builtin_codec(
     codec_name: &str,
 ) -> PluginResult<Arc<dyn BuiltinRequestResponseCodec>> {
