@@ -32414,13 +32414,10 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ```
 
 ## sha2 - 0.10.9
-
 **Repository URL**: https://github.com/RustCrypto/hashes
 **License Type(s)**: Apache-2.0
-
 ### License: https://spdx.org/licenses/Apache-2.0.html
-
-```text
+```
                               Apache License
                         Version 2.0, January 2004
                      http://www.apache.org/licenses/
