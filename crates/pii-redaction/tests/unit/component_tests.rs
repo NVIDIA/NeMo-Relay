@@ -53,6 +53,7 @@ fn reset_runtime() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
+    register_pii_redaction_component().unwrap();
 }
 
 fn setup_isolated_thread() {

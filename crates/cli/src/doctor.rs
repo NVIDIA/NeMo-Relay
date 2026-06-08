@@ -19,6 +19,7 @@ use nemo_relay::codec::pricing::{PricingCatalog, PricingConfig, PricingSourceCon
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -602,6 +603,14 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     if let Err(error) = register_adaptive_component() {
         checks.push(Check {
             name: "Adaptive plugin",
+            status: Status::Fail,
+            details: format!("registration failed: {error}"),
+        });
+        return checks;
+    }
+    if let Err(error) = register_pii_redaction_component() {
+        checks.push(Check {
+            name: "PII redaction plugin",
             status: Status::Fail,
             details: format!("registration failed: {error}"),
         });

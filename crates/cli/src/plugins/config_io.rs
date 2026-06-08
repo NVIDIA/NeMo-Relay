@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use console::style;
 use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use serde_json::{Map, Value};
 
 use crate::config::{
@@ -118,6 +119,9 @@ pub(super) fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
 pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
     register_adaptive_component().map_err(|error| {
         CliError::Config(format!("adaptive plugin registration failed: {error}"))
+    })?;
+    register_pii_redaction_component().map_err(|error| {
+        CliError::Config(format!("PII redaction plugin registration failed: {error}"))
     })?;
     let report = validate_plugin_config(config);
     if report.has_errors() {

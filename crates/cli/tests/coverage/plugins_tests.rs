@@ -11,6 +11,7 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 };
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay_pii_redaction::component::PiiRedactionConfig;
 
 fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
     json!({

@@ -3,8 +3,8 @@
 
 use serde_json::{Map, Value as Json};
 
-use crate::codec::request::{ContentPart, MessageContent};
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
+use nemo_relay::codec::request::{ContentPart, MessageContent};
+use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
 
 #[derive(Clone, Copy)]
 pub(crate) enum BuiltinCodecName {

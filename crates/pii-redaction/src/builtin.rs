@@ -9,13 +9,13 @@ use serde::de::DeserializeOwned;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
-use crate::api::llm::LlmRequest;
-use crate::api::runtime::{LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn};
-use crate::codec::anthropic::AnthropicMessagesCodec;
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
-use crate::plugin::{PluginError, Result as PluginResult};
+use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::runtime::{LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn};
+use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
 use super::component::BuiltinBackendConfig;
 use super::detectors::BuiltinDetector;

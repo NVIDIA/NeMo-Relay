@@ -19,6 +19,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 nemo-relay = { workspace = true, features = ["atof-streaming", "otel", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay-pii-redaction.workspace = true
 chrono = "0.4"
 libc = "0.2"
 serde_json = "1"

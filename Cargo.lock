@@ -1371,7 +1371,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_canonicalizer",
- "sha2",
+ "sha2 0.11.0",
  "tdigest",
  "thiserror 2.0.18",
  "tokio",
@@ -1395,6 +1395,7 @@ dependencies = [
  "http-body-util",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "opentelemetry",
  "opentelemetry_sdk",
  "reqwest",
@@ -1421,6 +1422,7 @@ dependencies = [
  "libc",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -1437,11 +1439,26 @@ dependencies = [
  "napi-derive",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nemo-relay-pii-redaction"
+version = "0.4.0"
+dependencies = [
+ "futures",
+ "nemo-relay",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]
@@ -1451,6 +1468,7 @@ dependencies = [
  "chrono",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -1469,6 +1487,7 @@ dependencies = [
  "js-sys",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
@@ -2445,6 +2464,17 @@ name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
 
 [[package]]
 name = "sha2"

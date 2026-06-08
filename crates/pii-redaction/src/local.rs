@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
+use nemo_relay::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
 
 use super::component::PiiRedactionConfig;
 

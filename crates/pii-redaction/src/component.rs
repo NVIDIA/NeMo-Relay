@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::plugin::{
+use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
     register_plugin,
@@ -174,7 +174,7 @@ pub struct LocalBackendConfig {
     pub max_latency_ms: Option<u64>,
 }
 
-crate::editor_config! {
+nemo_relay::editor_config! {
     impl PiiRedactionConfig {
         mode => {
             label: "mode",
@@ -215,7 +215,7 @@ crate::editor_config! {
     }
 }
 
-crate::editor_config! {
+nemo_relay::editor_config! {
     impl BuiltinBackendConfig {
         action => {
             label: "action",
@@ -252,7 +252,7 @@ crate::editor_config! {
     }
 }
 
-crate::editor_config! {
+nemo_relay::editor_config! {
     impl LocalBackendConfig {
         backend => { label: "backend", kind: String, optional: true },
         model_id => { label: "model_id", kind: String, optional: true },
@@ -826,5 +826,5 @@ fn default_priority() -> i32 {
 }
 
 #[cfg(test)]
-#[path = "../../../tests/unit/plugins/pii_redaction/component_tests.rs"]
+#[path = "../tests/unit/component_tests.rs"]
 mod tests;

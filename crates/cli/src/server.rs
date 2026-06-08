@@ -9,6 +9,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use reqwest::Client;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -156,6 +157,9 @@ impl PluginActivation {
         };
         register_adaptive_component().map_err(|error| {
             CliError::Config(format!("adaptive plugin registration failed: {error}"))
+        })?;
+        register_pii_redaction_component().map_err(|error| {
+            CliError::Config(format!("PII redaction plugin registration failed: {error}"))
         })?;
         let plugin_config: PluginConfig = serde_json::from_value(config)
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
