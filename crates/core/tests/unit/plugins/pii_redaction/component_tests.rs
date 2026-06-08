@@ -697,6 +697,626 @@ fn builtin_mask_with_api_key_detector_preserves_prefix_and_last_four_by_default(
 }
 
 #[test]
+fn builtin_mask_with_detector_uses_explicit_prefix_suffix_over_defaults() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "unmasked_prefix": 2,
+            "unmasked_suffix": 2,
+            "target_paths": ["/contact"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-detector-explicit-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "contact": "alice@example.com",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "contact": "al*************om",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-detector-explicit-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_ip_address_detector_preserves_last_octet_by_default() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "ip_address",
+            "target_paths": ["/ip"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-ip-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "ip": "192.168.10.42",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "ip": "***.***.***.42",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-ip-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_url_detector_preserves_scheme_and_host_by_default() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "url",
+            "target_paths": ["/url"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-url-default-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "url": "https://example.com/path?q=1",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "url": "https://example.com/*",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-url-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_hash_with_detector_hashes_only_matching_substrings() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "hash",
+            "detector": "email",
+            "target_paths": ["/message"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-detector-hash-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "message": "Email alice@example.com please",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "message": format!(
+                "Email {} please",
+                hex_sha256("alice@example.com")
+            ),
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-detector-hash-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_short_detector_match_leaves_value_unchanged() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "target_paths": ["/contact"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-short-detector-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "contact": "a@example.com",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "contact": "a@example.com",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-short-detector-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_empty_target_paths_sanitizes_all_matching_string_leaves() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-empty-target-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "primary": "alice@example.com",
+                "nested": {
+                    "secondary": "bob@example.com",
+                    "note": "no pii here"
+                },
+                "items": ["carol@example.com", "safe text"]
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "primary": "a****@example.com",
+            "nested": {
+                "secondary": "b**@example.com",
+                "note": "no pii here"
+            },
+            "items": ["c****@example.com", "safe text"]
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-empty-target-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_malformed_ip_or_url_detector_input_leaves_value_unchanged() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "ip_address",
+            "target_paths": ["/ip", "/url"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-malformed-detector-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "ip": "not-an-ip",
+                "url": "mailto:alice@example.com",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "ip": "not-an-ip",
+            "url": "mailto:alice@example.com",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-malformed-detector-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_mask_with_detector_sanitizes_llm_response_from_normalized_message_path() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "target_paths": ["/message"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-detector-llm-response-events");
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let _ = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
+            })
+            .func(noop_openai_chat_exec_fn(json!({
+                "id": "chatcmpl-123",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Reach me at alice@example.com"},
+                        "finish_reason": "stop"
+                    }
+                ]
+            })))
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(
+        captured_events[1].output().unwrap()["choices"][0]["message"]["content"],
+        json!("Reach me at a****@example.com")
+    );
+    assert_eq!(
+        captured_events[1]
+            .annotated_response()
+            .and_then(|response| response.response_text()),
+        Some("Reach me at a****@example.com")
+    );
+
+    deregister_subscriber("pii-redaction-detector-llm-response-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_hash_with_detector_hashes_multiple_matches_in_one_string() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "hash",
+            "detector": "email",
+            "target_paths": ["/message"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-multi-detector-hash-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "message": "alice@example.com and bob@example.com",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "message": format!(
+                "{} and {}",
+                hex_sha256("alice@example.com"),
+                hex_sha256("bob@example.com")
+            ),
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-multi-detector-hash-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_empty_target_paths_handles_arrays_and_multiple_detector_types() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "url"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-array-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "items": [
+                    "https://example.com/a",
+                    "safe text",
+                    {"nested": "http://nvidia.com/private/path"},
+                    42
+                ],
+                "keep": "mailto:alice@example.com"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "items": [
+                "https://example.com/*",
+                "safe text",
+                {"nested": "http://nvidia.com/*"},
+                42
+            ],
+            "keep": "mailto:alice@example.com"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-array-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_detector_sanitizes_tool_output_payloads() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": false,
+        "tool_output": true,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "target_paths": ["/result/contact"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-tool-output-mask-events");
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("lookup")
+            .args(json!({"query": "alice"}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .result(json!({
+                "result": {
+                    "contact": "alice@example.com",
+                    "public": "ok"
+                }
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert_eq!(
+        captured_events[1].output(),
+        Some(&json!({
+            "result": {
+                "contact": "a****@example.com",
+                "public": "ok"
+            }
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-tool-output-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_phone_detector_ignores_non_matching_digit_shapes() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "phone",
+            "target_paths": ["/value"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-phone-false-positive-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "value": "Order 12345 is ready",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "value": "Order 12345 is ready",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-phone-false-positive-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_shape() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
