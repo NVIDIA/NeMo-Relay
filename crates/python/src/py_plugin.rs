@@ -29,7 +29,8 @@ use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, list_plugin_kinds, register_plugin, validate_plugin_config,
+    initialize_plugins, list_plugin_kinds, register_plugin, rollback_registrations,
+    validate_plugin_config,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -158,6 +159,34 @@ fn new_py_plugin_context(
             namespace_prefix,
         },
     )
+}
+
+pub(crate) fn invoke_python_plugin_register(
+    py: Python<'_>,
+    plugin_kind: &str,
+    register_fn: &Bound<'_, PyAny>,
+    plugin_config: &Map<String, Json>,
+    namespace_prefix: String,
+) -> PyResult<Vec<PluginRegistration>> {
+    let py_ctx = new_py_plugin_context(
+        py,
+        plugin_kind,
+        Arc::new(Mutex::new(vec![])),
+        namespace_prefix,
+    )?;
+    let plugin_config_py = plugin_config_to_py(py, plugin_kind, plugin_config)?;
+    match register_fn.call1((plugin_config_py, py_ctx.clone_ref(py))) {
+        Ok(_) => {
+            let py_ctx_ref = py_ctx.bind(py).borrow();
+            py_ctx_ref.drain_registrations()
+        }
+        Err(err) => {
+            if let Ok(mut registrations) = py_ctx.bind(py).borrow().drain_registrations() {
+                rollback_registrations(&mut registrations);
+            }
+            Err(err)
+        }
+    }
 }
 
 #[pyclass(name = "PluginContext")]
@@ -695,22 +724,14 @@ impl Plugin for PyPlugin {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
             let registrations = Python::attach(|py| -> PyResult<Vec<PluginRegistration>> {
-                let py_ctx = new_py_plugin_context(
+                let register_fn = self.plugin.getattr(py, "register")?.into_bound(py);
+                invoke_python_plugin_register(
                     py,
                     &self.plugin_kind,
-                    Arc::new(Mutex::new(vec![])),
+                    &register_fn,
+                    &plugin_config,
                     namespace_prefix,
-                )?;
-                let plugin_config_py = json_to_py(py, &Json::Object(plugin_config.clone()))?;
-                self.plugin.call_method1(
-                    py,
-                    "register",
-                    (plugin_config_py, py_ctx.clone_ref(py)),
-                )?;
-                {
-                    let py_ctx_ref = py_ctx.bind(py).borrow();
-                    py_ctx_ref.drain_registrations()
-                }
+                )
             })
             .map_err(|err| PluginError::RegistrationFailed(err.to_string()))?;
 

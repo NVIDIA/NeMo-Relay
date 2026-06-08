@@ -18,12 +18,22 @@ Plugins prevent repeated registration code for policies, request transforms,
 exporters, and related runtime components. They give shared behavior a stable
 kind name, a structured config document, and a clear activation lifecycle.
 
+NeMo Relay also ships built-in plugin components for shared runtime behavior.
+For example, the `pricing` component installs model-pricing sources that
+response codecs can use to annotate managed LLM responses with cost estimates.
+Applications, eval harnesses, custom agents, and framework integrations can
+activate that component through the same plugin APIs they use for custom
+plugins; the `nemo-relay` CLI is only one host that can load plugin
+configuration from files.
+
 ## Start Here When
 
 Use these signals to decide whether this documentation path matches your current task.
 
 - Ship policy bundles across applications
 - Install observability exporters consistently
+- Install pricing sources for cost estimates across applications, harnesses, or
+  agent integrations
 - Package framework-agnostic request transforms
 - Validate operator-supplied config before runtime behavior changes
 
@@ -39,7 +49,6 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Register Plugin Behavior](/build-plugins/register-behavior) shows how to initialize config and install subscribers or middleware through `PluginContext`.
 - [Design Plugin Configuration](/build-plugins/advanced-configuration) covers validation rules, advanced configuration patterns, rollout controls, and `PluginContext` usage.
 - [NeMo Guardrails Plugin](/nemo-guardrails-plugin/about) documents the built-in first-party `nemo_guardrails` component.
-- [NeMo Guardrails Example Plugin](/build-plugins/nemoguardrails) shows the older external Python example plugin that applies NeMo Guardrails checks around NeMo Relay LLM and tool calls.
 - [Code Examples](/build-plugins/code-examples) provides patterns for dynamic header injection, subscriber-oriented export, multi-surface bundles, and framework-facing plugins.
 
 Start by deciding which runtime surfaces the plugin owns: middleware,

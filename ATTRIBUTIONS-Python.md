@@ -2910,7 +2910,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## langchain (1.3.2)
+## langchain (1.3.4)
 
 ### Licenses
 License: `MIT`
@@ -2970,7 +2970,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langchain-core (1.4.0)
+## langchain-core (1.4.1)
 
 ### Licenses
 License: `MIT`
@@ -3010,7 +3010,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langchain-nvidia-ai-endpoints (1.4.0)
+## langchain-nvidia-ai-endpoints (1.4.1)
 
 ### Licenses
 License: `MIT`
@@ -3070,7 +3070,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph (1.2.2)
+## langgraph (1.2.4)
 
 ### Licenses
 License: `MIT`
@@ -3160,7 +3160,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph-sdk (0.3.14)
+## langgraph-sdk (0.4.2)
 
 ### Licenses
 License: `MIT`
@@ -6583,7 +6583,7 @@ for any purpose and without fee is hereby granted. The author
 disclaims all warranties with regard to this software.
 ```
 
-## websockets (16.0)
+## websockets (15.0.1)
 
 ### Licenses
 License: `BSD-3-Clause`

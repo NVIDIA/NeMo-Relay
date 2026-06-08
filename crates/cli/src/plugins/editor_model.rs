@@ -33,9 +33,9 @@ pub(super) struct ComponentEditorState<T> {
 
 #[derive(Debug)]
 pub(super) enum EditableComponent {
-    Observability(ComponentEditorState<ObservabilityConfig>),
-    Adaptive(ComponentEditorState<AdaptiveConfig>),
-    NemoGuardrails(ComponentEditorState<NeMoGuardrailsConfig>),
+    Observability(Box<ComponentEditorState<ObservabilityConfig>>),
+    Adaptive(Box<ComponentEditorState<AdaptiveConfig>>),
+    NemoGuardrails(Box<ComponentEditorState<NeMoGuardrailsConfig>>),
 }
 
 impl EditableComponent {
@@ -148,9 +148,9 @@ pub(super) fn editable_components(
     config: &PluginConfig,
 ) -> Result<Vec<EditableComponent>, CliError> {
     Ok(vec![
-        EditableComponent::Observability(component_observability_state(config)?),
-        EditableComponent::Adaptive(component_adaptive_state(config)?),
-        EditableComponent::NemoGuardrails(component_nemo_guardrails_state(config)?),
+        EditableComponent::Observability(Box::new(component_observability_state(config)?)),
+        EditableComponent::Adaptive(Box::new(component_adaptive_state(config)?)),
+        EditableComponent::NemoGuardrails(Box::new(component_nemo_guardrails_state(config)?)),
     ])
 }
 

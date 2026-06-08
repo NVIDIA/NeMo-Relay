@@ -62,8 +62,8 @@ the local file write is replaced by uploads to every configured backend;
 `output_directory` is ignored.
 
 Each storage entry is tagged with a `type` discriminator so additional
-backends can be added without breaking existing configs. Today, S3-compatible
-object storage is supported.
+backends can be added without breaking existing configs. S3-compatible object
+storage and HTTP endpoints are supported.
 
 ### S3-compatible storage
 
@@ -78,11 +78,47 @@ bucket = "nemo-relay-traces"
 key_prefix = "openshell/"
 ```
 
+### HTTP endpoint storage
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[[components.config.atif.storage]]
+type = "http"
+endpoint = "https://observability.example.com/atif"
+timeout_millis = 3000
+
+[components.config.atif.storage.headers]
+x-team = "agent-platform"
+
+[components.config.atif.storage.header_env]
+authorization = "NEMO_RELAY_ATIF_HTTP_AUTH"
+```
+
+The HTTP backend sends one `POST` per completed trajectory. The request body is
+the rendered ATIF JSON file with `content-type: application/json`. NeMo Relay
+also sets `x-nemo-relay-atif-filename` and
+`x-nemo-relay-atif-session-id` headers so receivers can keep the same object
+identity that local files and S3 uploads use.
+
+HTTP `2xx` responses are treated as success. Any non-`2xx` response or
+transport error records the endpoint as unhealthy and skips it for later
+trajectories. Other configured destinations continue to receive writes.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | required | Destination `http://` or `https://` URL. |
+| `headers` | `{}` | Static request headers. |
+| `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
+
 ### Multiple destinations
 
 Add additional `[[components.config.atif.storage]]` tables to fan out the same
 trajectory to every destination — for example, an in-cluster MinIO target and a
-remote AWS target:
+remote HTTP endpoint:
 
 ```toml
 [components.config.atif]
@@ -95,11 +131,8 @@ bucket = "nemo-relay-traces"
 key_prefix = "openshell/"
 
 [[components.config.atif.storage]]
-type = "s3"
-bucket = "team-archive"
-key_prefix = "openshell/"
-endpoint_url = "http://localhost:9000"
-allow_http = true
+type = "http"
+endpoint = "https://observability.example.com/atif"
 ```
 
 #### Connection fields

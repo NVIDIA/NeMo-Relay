@@ -44,7 +44,7 @@ typedef void (*NemoRelayFreeFn)(void* user_data);
 // Core API
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
-extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 
 // Tool lifecycle
@@ -228,6 +228,7 @@ extern void nemo_relay_atif_exporter_free(void*);
 
 // ATOF JSONL exporter
 extern int32_t nemo_relay_atof_exporter_create(const char*, const char*, const char*, void**);
+extern int32_t nemo_relay_atof_exporter_create_from_json(const char*, void**);
 extern int32_t nemo_relay_atof_exporter_register(const void*, const char*);
 extern int32_t nemo_relay_atof_exporter_deregister(const char*);
 extern int32_t nemo_relay_atof_exporter_force_flush(const void*);
@@ -322,6 +323,17 @@ var (
 	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
 		if config.Mode == "" {
 			config.Mode = AtofExporterModeAppend
+		}
+		if len(config.Endpoints) > 0 {
+			payload, err := json.Marshal(config)
+			if err != nil {
+				return nil, err
+			}
+			cConfig := C.CString(string(payload))
+			defer C.free(unsafe.Pointer(cConfig))
+			var ptr unsafe.Pointer
+			status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
+			return checkedValue(int32(status), &AtofExporter{ptr: ptr})
 		}
 
 		var cOutputDirectory *C.char
@@ -446,18 +458,29 @@ func WithScopeTimestamp(timestamp time.Time) ScopeOption {
 
 type scopeEndOptions struct {
 	output    *C.char
+	metadata  *C.char
 	timestamp *C.int64_t
 }
 
 // ScopeEndOption is a functional option that configures optional parameters for
-// [PopScope]. Available options include [WithOutput] and
-// [WithScopeEndTimestamp].
+// [PopScope]. Available options include [WithOutput],
+// [WithScopeEndMetadata], and [WithScopeEndTimestamp].
 type ScopeEndOption func(*scopeEndOptions)
 
 // WithOutput attaches an arbitrary JSON semantic output payload to the scope end event.
 func WithOutput(output json.RawMessage) ScopeEndOption {
 	return func(o *scopeEndOptions) {
 		o.output = C.CString(string(output))
+	}
+}
+
+// WithScopeEndMetadata attaches an arbitrary JSON metadata payload to the
+// scope End event. When the scope handle already has metadata, object keys in
+// this payload overwrite matching existing keys and preserve non-conflicting
+// keys.
+func WithScopeEndMetadata(metadata json.RawMessage) ScopeEndOption {
+	return func(o *scopeEndOptions) {
+		o.metadata = C.CString(string(metadata))
 	}
 }
 
@@ -526,8 +549,9 @@ func PushScope(name string, scopeType ScopeType, opts ...ScopeOption) (*ScopeHan
 // PopScope removes the given scope from the scope stack and emits an End event
 // to all registered subscribers. The handle must have been returned by a
 // previous call to [PushScope]. Popping scopes out of stack order returns an
-// error. Optional end payloads can be attached via [WithOutput], and an
-// explicit event timestamp can be supplied with [WithScopeEndTimestamp].
+// error. Optional end payloads can be attached via [WithOutput] and
+// [WithScopeEndMetadata], and an explicit event timestamp can be supplied with
+// [WithScopeEndTimestamp].
 func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	o := &scopeEndOptions{}
 	for _, opt := range opts {
@@ -536,10 +560,13 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 	if o.output != nil {
 		defer C.free(unsafe.Pointer(o.output))
 	}
+	if o.metadata != nil {
+		defer C.free(unsafe.Pointer(o.metadata))
+	}
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
-	return checkStatus(C.nemo_relay_pop_scope(handle.ptr, o.output, o.timestamp))
+	return checkStatus(C.nemo_relay_pop_scope(handle.ptr, o.output, o.metadata, o.timestamp))
 }
 
 // ---------------------------------------------------------------------------
@@ -1613,9 +1640,30 @@ const (
 
 // AtofExporterConfig configures the filesystem-backed ATOF JSONL exporter.
 type AtofExporterConfig struct {
-	OutputDirectory string
-	Mode            AtofExporterMode
-	Filename        string
+	OutputDirectory string               `json:"output_directory,omitempty"`
+	Mode            AtofExporterMode     `json:"mode,omitempty"`
+	Filename        string               `json:"filename,omitempty"`
+	Endpoints       []AtofEndpointConfig `json:"endpoints,omitempty"`
+}
+
+// AtofEndpointTransport controls how an ATOF streaming endpoint receives events.
+type AtofEndpointTransport string
+
+const (
+	// AtofEndpointTransportHTTPPost sends each event as one HTTP POST JSONL record.
+	AtofEndpointTransportHTTPPost AtofEndpointTransport = "http_post"
+	// AtofEndpointTransportWebsocket sends each event as one WebSocket JSON text message.
+	AtofEndpointTransportWebsocket AtofEndpointTransport = "websocket"
+	// AtofEndpointTransportNDJSON sends events over one long-lived HTTP NDJSON upload.
+	AtofEndpointTransportNDJSON AtofEndpointTransport = "ndjson"
+)
+
+// AtofEndpointConfig configures one streaming destination for raw ATOF events.
+type AtofEndpointConfig struct {
+	URL           string                `json:"url"`
+	Transport     AtofEndpointTransport `json:"transport,omitempty"`
+	Headers       map[string]string     `json:"headers,omitempty"`
+	TimeoutMillis uint64                `json:"timeout_millis,omitempty"`
 }
 
 // NewAtofExporterConfig returns a config initialized with native defaults.

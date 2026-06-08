@@ -26,6 +26,14 @@ The bundle forwards `SessionStart`, `SessionEnd`, `SubagentStart`,
 `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop`
 provide private LLM correlation hints for gateway requests.
 
+Claude Code observability is turn-oriented. A multi-turn session can produce one
+root `claude-code-turn` span or ATIF trajectory per user turn. That is expected
+when each turn has a real prompt input and assistant output. Known startup
+probes, uncorrelatable late stop hooks, and other lifecycle-only noise are
+excluded from exported user traces so they do not appear as synthetic `null`,
+`user: test`, or `idle_timeout` turns. Startup probes are still logged by the
+gateway as internal pre-turn probe bypasses for debugging.
+
 ## Transparent Setup
 
 Build or install the gateway binary so `nemo-relay` is on `PATH`.
@@ -125,3 +133,22 @@ If LLM spans are present but attached to the top-level agent instead of a
 subagent, include `x-nemo-relay-subagent-id` on gateway requests or share
 `conversation_id`, `generation_id`, or `request_id` values between hook payloads
 and provider requests.
+
+Relay records correlation diagnostics on exported spans instead of guessing
+ownership. Inspect `llm_correlation_status`, `llm_correlation_source`, and
+`llm_correlation_subagent_id` for LLM routing, and
+`tool_correlation_status`, `tool_correlation_source`, and
+`tool_correlation_subagent_id` for tool routing. Fallback statuses such as
+`agent_fallback` and `ambiguous_fallback` mean Relay kept the span under the
+active turn because the hook and gateway payloads did not prove a subagent
+owner.
+
+Late `SubagentStop` hooks with no matching `SubagentStart` are diagnostic-only.
+When there is no active turn, Relay logs the missing subagent and suppresses the
+hook from ATOF, OpenInference, and ATIF so it cannot create a null turn. When an
+unknown subagent end arrives during an active turn, Relay may emit a
+`subagent_end_without_start` mark under that turn.
+
+Hook events are only available when Claude Code loads this plugin. A standalone
+gateway observes Anthropic LLM traffic, but it cannot recover missing prompt,
+tool, compaction, notification, or subagent hooks.

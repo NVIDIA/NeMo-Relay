@@ -13,9 +13,18 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::response::{AnnotatedLlmResponse, Usage};
+use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::request::{
+    AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
+    ToolDefinition,
+};
+use crate::codec::response::{
+    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
+    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use opentelemetry::trace::Status;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
@@ -24,6 +33,14 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
 
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
@@ -52,6 +69,140 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
             )
         })
         .collect()
+}
+
+fn assert_attr(attributes: &HashMap<String, String>, key: &str, value: &str) {
+    assert_eq!(attributes.get(key).map(String::as_str), Some(value));
+}
+
+fn assert_attr_contains(attributes: &HashMap<String, String>, key: &str, expected: &str) {
+    let value = attributes
+        .get(key)
+        .unwrap_or_else(|| panic!("missing attribute {key}"));
+    assert!(
+        value.contains(expected),
+        "attribute {key} value {value:?} did not contain {expected:?}"
+    );
+}
+
+fn assert_no_attr_contains(attributes: &HashMap<String, String>, expected: &str) {
+    assert!(
+        !attributes
+            .iter()
+            .any(|(key, value)| key.contains(expected) || value.contains(expected)),
+        "attribute map unexpectedly contained {expected:?}"
+    );
+}
+
+fn empty_annotated_request() -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        messages: Vec::new(),
+        model: None,
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn empty_annotated_response() -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        id: None,
+        model: None,
+        message: None,
+        tool_calls: None,
+        finish_reason: None,
+        usage: None,
+        api_specific: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn install_test_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        messages: vec![
+            Message::System {
+                content: MessageContent::Text("Use concise answers.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Search docs.".to_string()),
+                name: None,
+            },
+        ],
+        model: Some("gpt-4o".to_string()),
+        params: Some(GenerationParams {
+            temperature: Some(0.2),
+            max_tokens: Some(128),
+            top_p: None,
+            stop: None,
+        }),
+        tools: Some(vec![ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "search_docs".to_string(),
+                description: Some("Search the docs corpus.".to_string()),
+                parameters: Some(json!({
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}}
+                })),
+            },
+        }]),
+        ..empty_annotated_request()
+    }
+}
+
+fn sample_openinference_annotated_response() -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("I will search docs.".to_string())),
+        tool_calls: Some(vec![ResponseToolCall {
+            id: "call-search-docs".to_string(),
+            name: "search_docs".to_string(),
+            arguments: json!({"query": "docs"}),
+        }]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..empty_annotated_response()
+    }
 }
 
 fn make_start_event(
@@ -518,6 +669,257 @@ fn records_span_start_mark_and_end() {
 }
 
 #[test]
+fn openclaw_model_timing_marks_attach_to_parent_spans() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "openclaw.session",
+        ScopeType::Agent,
+        Some(json!({"sessionId": "session-1"})),
+    ));
+    processor.process(&make_mark_event(
+        Some(root_uuid),
+        "openclaw.model_call_timing_ambiguous",
+        Some(json!({
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "candidateCount": 2
+        })),
+    ));
+    processor.process(&make_mark_event(
+        Some(root_uuid),
+        "openclaw.model_call_timing_unpaired",
+        Some(json!({
+            "runId": "run-1",
+            "callId": "call-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "durationMs": 42,
+            "outcome": "completed"
+        })),
+    ));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "openclaw.session",
+        ScopeType::Agent,
+        Some(json!({"status": "closed"})),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.name.as_ref(), "openclaw.session");
+    assert_eq!(span.events.events.len(), 2);
+    assert_eq!(
+        span.events.events[0].name.as_ref(),
+        "openclaw.model_call_timing_ambiguous"
+    );
+    assert_eq!(
+        span.events.events[1].name.as_ref(),
+        "openclaw.model_call_timing_unpaired"
+    );
+
+    let ambiguous_attributes = attr_map(&span.events.events[0].attributes);
+    assert_eq!(
+        ambiguous_attributes.get("nemo_relay.mark.parent_uuid"),
+        Some(&root_uuid.to_string())
+    );
+    let ambiguous_data: serde_json::Value = serde_json::from_str(
+        ambiguous_attributes
+            .get("nemo_relay.mark.data_json")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        ambiguous_data,
+        json!({
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "candidateCount": 2
+        })
+    );
+    assert!(!ambiguous_attributes.contains_key("nemo_relay.mark.metadata_json"));
+
+    let unpaired_attributes = attr_map(&span.events.events[1].attributes);
+    assert_eq!(
+        unpaired_attributes.get("nemo_relay.mark.parent_uuid"),
+        Some(&root_uuid.to_string())
+    );
+    let unpaired_data: serde_json::Value = serde_json::from_str(
+        unpaired_attributes
+            .get("nemo_relay.mark.data_json")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        unpaired_data,
+        json!({
+            "runId": "run-1",
+            "callId": "call-1",
+            "provider": "openai",
+            "model": "gpt-4",
+            "durationMs": 42,
+            "outcome": "completed"
+        })
+    );
+    assert!(!unpaired_attributes.contains_key("nemo_relay.mark.metadata_json"));
+}
+
+#[test]
+fn openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_usage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "messages": [],
+                "imagesCount": 1,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "assistant_texts_count": 1,
+            "usage": {
+                "cost_usd": 0.001
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.process(&make_start_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "prompt": "visible prompt",
+                "messages": [{"role": "user", "content": "visible prompt"}],
+                "imagesCount": 0,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "visible answer",
+            "usage": {
+                "prompt_tokens": 42
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+
+    let stripped_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.cost.total") == Some(&"0.001".to_string())
+        })
+        .expect("missing stripped OpenClaw fallback span");
+    let stripped_attributes = attr_map(&stripped_span.attributes);
+    assert_eq!(
+        stripped_attributes.get("input.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_input = stripped_attributes
+        .get("input.value")
+        .expect("missing stripped input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(stripped_input).unwrap();
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert!(parsed_input["headers"].is_null() || parsed_input.get("headers").is_none());
+    assert_eq!(
+        stripped_attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_output = stripped_attributes
+        .get("output.value")
+        .expect("missing stripped output.value");
+    let parsed_output: serde_json::Value = serde_json::from_str(stripped_output).unwrap();
+    assert!(parsed_output.get("content").is_none());
+    assert_eq!(parsed_output["assistant_texts_count"], json!(1));
+    assert_eq!(
+        stripped_attributes.get("llm.cost.total"),
+        Some(&"0.001".to_string())
+    );
+    assert!(!stripped_attributes.contains_key("llm.token_count.prompt"));
+    assert!(!stripped_attributes.contains_key("llm.output_messages.0.message.content"));
+    assert!(!stripped_attributes.contains_key("llm.input_messages.0.message.role"));
+    assert_no_attr_contains(&stripped_attributes, "secret-token");
+
+    let partial_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.token_count.prompt") == Some(&"42".to_string())
+        })
+        .expect("missing partial-usage OpenClaw fallback span");
+    let partial_attributes = attr_map(&partial_span.attributes);
+    assert_eq!(
+        partial_attributes.get("input.value"),
+        Some(&"user: visible prompt".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("output.value"),
+        Some(&"visible answer".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("llm.token_count.prompt"),
+        Some(&"42".to_string())
+    );
+    assert!(!partial_attributes.contains_key("llm.token_count.completion"));
+    assert!(!partial_attributes.contains_key("llm.token_count.total"));
+    assert!(!partial_attributes.contains_key("llm.cost.total"));
+}
+
+#[test]
 fn llm_input_value_omits_request_headers() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -547,14 +949,348 @@ fn llm_input_value_omits_request_headers() {
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
     let attributes = attr_map(&spans[0].attributes);
-    assert_eq!(attributes.get("input.value"), Some(&"user: hi".to_string()));
-    assert_eq!(
-        attributes.get("input.mime_type"),
-        Some(&"text/plain".to_string())
-    );
+    assert_attr(&attributes, "input.value", "user: hi");
+    assert_attr(&attributes, "input.mime_type", "text/plain");
     assert!(!attributes.contains_key("nemo_relay.start.input_json"));
     assert!(!attributes["input.value"].contains("authorization"));
     assert!(!attributes["input.value"].contains("secret-token"));
+    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    assert_no_attr_contains(&attributes, "headers");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "systemPrompt": "Use reliable sources.",
+                "prompt": "Find the answer.",
+                "messages": [
+                    {"role": "user", "content": "Find the answer."}
+                ],
+                "placeholderRequest": false,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "tool_calls": [{
+                "id": "toolu_search",
+                "name": "tavily_search",
+                "input": {"query": "answer"}
+            }],
+            "openclaw": {
+                "duration_ms": 42,
+                "assistant_tool_call_names": ["tavily_search"]
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.provider", "nvidia-inference");
+    assert_attr(&attributes, "llm.system", "Use reliable sources.");
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.content",
+        "Find the answer.",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search.",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+        "toolu_search",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+        "tavily_search",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+        "{\"query\":\"answer\"}",
+    );
+    assert!(!attributes.contains_key("llm.invocation_parameters"));
+    assert!(!attributes.contains_key("llm.finish_reason"));
+    assert_no_attr_contains(&attributes, "headers");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let parent_uuid = Uuid::now_v7();
+    let nested_child_uuid = Uuid::now_v7();
+    let fallback_child_uuid = Uuid::now_v7();
+
+    let nested_parent_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "parent-session"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "nested-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(nested_child_uuid)
+            .parent_uuid(parent_uuid)
+            .name("nested-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let nested_parent_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(parent_uuid)
+            .name("requester-agent")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .metadata(json!({
+                "source": "openclaw.session_start",
+                "hook_event_name": "session_start",
+                "session_id": "fallback-child-session",
+                "nemo_relay_scope_role": "subagent"
+            }))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let fallback_child_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(fallback_child_uuid)
+            .name("fallback-worker")
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+
+    for event in [
+        nested_parent_start,
+        nested_child_start,
+        nested_child_end,
+        nested_parent_end,
+        fallback_child_start,
+        fallback_child_end,
+    ] {
+        processor.process(&event);
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let nested_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "nested-worker")
+        .unwrap();
+    let fallback_child_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "fallback-worker")
+        .unwrap();
+    let nested_child_attributes = attr_map(&nested_child_span.attributes);
+    let fallback_child_attributes = attr_map(&fallback_child_span.attributes);
+
+    assert_eq!(
+        nested_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&parent_uuid.to_string())
+    );
+    assert_eq!(
+        fallback_child_attributes.get("nemo_relay.parent_uuid"),
+        Some(&String::new())
+    );
+}
+
+#[test]
+fn openclaw_placeholder_replay_falls_back_to_sanitized_json_input_value() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "nvidia-inference",
+                "model": "claude-sonnet-4",
+                "prompt": "",
+                "messages": [],
+                "imagesCount": 0,
+                "placeholderRequest": true,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "I will search.",
+            "assistant_texts_count": 1,
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.provider", "nvidia-inference");
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search.",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    assert!(!attributes.contains_key("llm.input_messages.0.message.content"));
+    assert_attr(&attributes, "input.mime_type", "application/json");
+
+    let input_value = attributes.get("input.value").expect("missing input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(input_value).unwrap();
+    assert!(parsed_input.get("headers").is_none());
+    assert_eq!(parsed_input["content"]["placeholderRequest"], json!(true));
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert_eq!(parsed_input["content"]["prompt"], json!(""));
+    assert_eq!(
+        parsed_input["content"]["source"],
+        json!("openclaw.llm_output")
+    );
+    assert_no_attr_contains(&attributes, "authorization");
+    assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn generic_unannotated_llm_output_does_not_emit_flattened_output_message_attrs() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "generic-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "generic-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "hello",
+            "tool_calls": [{
+                "id": "tool-call-1",
+                "name": "demo_tool",
+                "input": {"query": "hi"}
+            }]
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.output_messages.0.message.role"));
+    assert!(!attributes.contains_key("llm.output_messages.0.message.content"));
+    assert!(
+        !attributes
+            .contains_key("llm.output_messages.0.message.tool_calls.0.tool_call.function.name")
+    );
 }
 
 #[test]
@@ -1110,6 +1846,51 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
 }
 
 #[test]
+fn scope_end_metadata_sets_openinference_span_status() {
+    let cases = [
+        (
+            json!({"otel.status_code": "ERROR", "otel.status_description": "failed"}),
+            Status::error("failed".to_string()),
+        ),
+        (json!({"otel.status_code": "OK"}), Status::Ok),
+        (json!({}), Status::Unset),
+    ];
+
+    for (metadata, expected_status) in cases {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+        let scope_uuid = Uuid::now_v7();
+
+        processor.process(&make_start_event(
+            scope_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            Some(json!({"task": "summarize"})),
+        ));
+        processor.process(&Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(scope_uuid)
+                .name("agent")
+                .metadata(metadata)
+                .data(json!({"status": "done"}))
+                .build(),
+            ScopeCategory::End,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )));
+
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].status, expected_status);
+    }
+}
+
+#[test]
 fn pre_epoch_timestamps_round_trip_through_system_time() {
     let timestamp = DateTime::parse_from_rfc3339("1969-12-31T23:59:58.500000000Z")
         .unwrap()
@@ -1411,6 +2192,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
                         total_tokens: Some(150),
                         cache_read_tokens: Some(25),
                         cache_write_tokens: Some(10),
+                        cost: None,
                     }),
                     api_specific: None,
                     extra: serde_json::Map::new(),
@@ -1444,6 +2226,318 @@ fn llm_end_with_usage_emits_token_count_attributes() {
         attributes.get("llm.token_count.prompt_details.cache_write"),
         Some(&"10".to_string())
     );
+    assert!(!attributes.contains_key("llm.output_messages.0.message.role"));
+}
+
+#[test]
+fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        total_tokens: Some(1_500),
+                        cache_read_tokens: Some(200),
+                        cache_write_tokens: None,
+                        cost: None,
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "priced-model",
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "total_tokens": 1_500,
+                "prompt_tokens_details": {"cached_tokens": 200}
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_manual_component_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "unknown-model",
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "cost": {
+                    "currency": "usd",
+                    "input": 0.25,
+                    "output": 0.5,
+                    "cache_read": 0.125
+                }
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.875".to_string()));
+}
+
+#[test]
+fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: Some(0.42),
+                            currency: "USD".into(),
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.42".to_string()));
+}
+
+#[test]
+fn llm_end_with_component_only_usd_usage_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: None,
+                            currency: "usd".into(),
+                            input: Some(0.25),
+                            output: Some(0.5),
+                            cache_read: Some(0.125),
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.875".to_string()));
+}
+
+#[test]
+fn llm_end_with_non_usd_normalized_usage_cost_blocks_model_pricing_estimate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "test", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "test",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: Some(0.42),
+                            currency: "EUR".into(),
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.cost.total"));
+}
+
+#[test]
+fn llm_end_with_unknown_model_usage_omits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.cost.total"));
 }
 
 #[test]
@@ -1606,6 +2700,300 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
 }
 
 #[test]
+fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::Start,
+        uuid,
+        None,
+        "annotated-chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(sample_openinference_annotated_request()))
+                .build(),
+        ),
+    ));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "annotated-chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(sample_openinference_annotated_response()))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.system", "Use concise answers.");
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "system");
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.1.message.content",
+        "Search docs.",
+    );
+    assert_attr_contains(
+        &attributes,
+        "llm.invocation_parameters",
+        "\"temperature\":0.2",
+    );
+    assert_attr_contains(
+        &attributes,
+        "llm.tools.0.tool.json_schema",
+        "\"name\":\"search_docs\"",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "I will search docs.",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+        "call-search-docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+        "search_docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+        "{\"query\":\"docs\"}",
+    );
+    assert_attr(&attributes, "llm.finish_reason", "tool_use");
+}
+
+#[test]
+fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }],
+                "tools": [
+                    { "type": "function", "function": { "name": "search_files" } }
+                ]
+            }))
+            .metadata(metadata.clone())
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "search_files",
+                            "arguments": "{\"query\":\"needle\"}"
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost": { "total": 0.0042 }
+                },
+                "model": "qwen",
+                "finish_reason": "tool_calls"
+            }))
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"Requested tools: search_files".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.prompt"),
+        Some(&"10".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.completion"),
+        Some(&"5".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.0042".to_string())
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":true");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks_sanitized\"",
+    );
+}
+
+#[test]
+fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let start_metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+    let end_metadata = json!({
+        "provider_payload_exact": false,
+        "fidelity_source": "hermes_api_hooks"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .metadata(start_metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }))
+            .metadata(end_metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(attributes.get("output.value").unwrap()).unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            attributes.get("nemo_relay.end.output_json").unwrap(),
+        )
+        .unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":false");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks\"",
+    );
+}
+
+#[test]
 fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -1701,6 +3089,7 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
                         total_tokens: None,
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        cost: None,
                     }),
                     api_specific: None,
                     extra: serde_json::Map::new(),

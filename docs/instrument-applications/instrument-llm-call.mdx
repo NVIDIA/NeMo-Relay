@@ -32,6 +32,14 @@ Create a scope for the active request or agent run before adding LLM instrumenta
 
 The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Relay.
 
+If you want Relay to add cost estimates, initialize the built-in `pricing`
+plugin before the LLM call and attach a response codec that decodes `model` and
+token `usage` from the provider response. Provider- or framework-reported cost
+is preserved when present. Otherwise Relay estimates cost only when a configured
+pricing source matches the response model and usage fields. For catalog setup
+and embedded plugin examples, see
+[Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+
 ## Integration Pattern
 
 Follow these steps to route the provider invocation through NeMo Relay:
@@ -42,7 +50,9 @@ Follow these steps to route the provider invocation through NeMo Relay:
 4. Build an LLM request object with provider headers and content.
 5. Replace the direct provider invocation with the managed LLM execute helper.
 6. Pass the active scope handle and a stable `model_name`.
-7. Check that the provider result is unchanged and lifecycle events are emitted.
+7. Attach a response codec when subscribers or exporters need normalized
+   response usage, tool calls, or cost annotations.
+8. Check that the provider result is unchanged and lifecycle events are emitted.
 
 ## Minimal Example
 
@@ -213,6 +223,9 @@ Check both behavior and instrumentation:
 - The provider result matches what the application returned before the wrapper was added.
 - The subscriber prints an agent or request scope event.
 - The subscriber prints LLM start and LLM end events for `demo-provider`.
+- If pricing is configured, LLM end events include
+  `annotated_response.usage.cost` only when a response codec decoded model and
+  usage fields and a source matched the model.
 
 Native subscriber delivery is asynchronous. Flush subscribers before validating
 printed output. In Node.js, also wait one event-loop tick after
@@ -233,6 +246,8 @@ Before deploying to production, ensure the following checklist is completed:
 - Keep request and response payloads JSON-compatible.
 - Keep SDK clients and transport objects inside the provider callback.
 - Use codecs when middleware needs normalized provider request or response semantics.
+- Use response codecs and the `pricing` plugin when exporters need cost
+  estimates from model pricing.
 - Use sanitize guardrails before exporting prompts or model responses in production.
 
 ## Common Issues

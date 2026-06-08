@@ -110,7 +110,7 @@ unsafe fn nemo_relay_pop_scope(
     handle: *const FfiScopeHandle,
     output_json: *const c_char,
 ) -> NemoRelayStatus {
-    unsafe { api::nemo_relay_pop_scope(handle, output_json, ptr::null()) }
+    unsafe { api::nemo_relay_pop_scope(handle, output_json, ptr::null(), ptr::null()) }
 }
 
 unsafe fn nemo_relay_event(
@@ -763,4 +763,43 @@ fn atof_exporter_writes_raw_jsonl_events() {
         nemo_relay_atof_exporter_free(exporter);
         nemo_relay_scope_stack_free(stack);
     }
+}
+
+#[test]
+fn atof_exporter_create_from_json_reports_string_statuses() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let mut exporter: *mut FfiAtofExporter = ptr::null_mut();
+
+    assert_eq!(
+        unsafe { api::nemo_relay_atof_exporter_create_from_json(ptr::null(), &mut exporter) },
+        NemoRelayStatus::NullPointer
+    );
+
+    let invalid_utf8 = [0xff_u8, 0];
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_create_from_json(
+                invalid_utf8.as_ptr().cast(),
+                &mut exporter,
+            )
+        },
+        NemoRelayStatus::InvalidUtf8
+    );
+
+    let invalid_json = cstring("{");
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_create_from_json(invalid_json.as_ptr(), &mut exporter)
+        },
+        NemoRelayStatus::InvalidJson
+    );
+
+    let invalid_endpoint =
+        cstring(r#"{"endpoints":[{"url":"http://localhost/events","transport":"websocket"}]}"#);
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_atof_exporter_create_from_json(invalid_endpoint.as_ptr(), &mut exporter)
+        },
+        NemoRelayStatus::InvalidArg
+    );
 }

@@ -153,6 +153,65 @@ func TestLlmCallExecuteBasic(t *testing.T) {
 	}
 }
 
+func TestLlmCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
+	metadataByName := map[string]json.RawMessage{}
+	var mu sync.Mutex
+
+	_ = DeregisterSubscriber("go_llm_status_metadata_sub")
+	if err := RegisterSubscriber("go_llm_status_metadata_sub", func(event Event) {
+		if event.Kind() == "scope" && event.Category() == "llm" && event.ScopeCategory() == "end" {
+			mu.Lock()
+			metadataByName[event.Name()] = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf(llmRegisterFailed, err)
+	}
+	defer DeregisterSubscriber("go_llm_status_metadata_sub")
+
+	_, err := LlmCallExecute("go_llm_status_ok", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+		WithLLMMetadata(json.RawMessage(`{"caller":"go-llm","otel.status_code":"USER"}`)),
+	)
+	if err != nil {
+		t.Fatalf(llmCallExecuteFailed, err)
+	}
+
+	_, err = LlmCallExecute("go_llm_status_error", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("go llm status failure")
+		},
+		WithLLMMetadata(json.RawMessage(`{"caller":"go-llm-error"}`)),
+	)
+	if err == nil {
+		t.Fatal("expected LLM execution error")
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(llmFlushSubscribersFailed, err)
+	}
+
+	mu.Lock()
+	okMetadata := metadataByName["go_llm_status_ok"]
+	errorMetadata := metadataByName["go_llm_status_error"]
+	mu.Unlock()
+
+	assertJSONFieldString(t, okMetadata, "caller", "go-llm")
+	assertJSONFieldString(t, okMetadata, "otel.status_code", "OK")
+	assertJSONFieldString(t, errorMetadata, "caller", "go-llm-error")
+	assertJSONFieldString(t, errorMetadata, "otel.status_code", "ERROR")
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(errorMetadata, &decoded); err != nil {
+		t.Fatalf("unmarshal error metadata failed: %v; raw=%s", err, errorMetadata)
+	}
+	statusMessage, _ := decoded["otel.status_description"].(string)
+	if !strings.Contains(statusMessage, "go llm status failure") {
+		t.Fatalf("expected status message to mention callback error, got %v", decoded["otel.status_description"])
+	}
+}
+
 func TestCodecHandleConstructors(t *testing.T) {
 	if NewOpenAIChatCodec() == nil {
 		t.Fatal("expected OpenAI chat codec handle")
@@ -192,7 +251,31 @@ func TestLlmCallExecuteWithRequestAndResponseCodecs(t *testing.T) {
 	startEvent, endEvent := requireLlmScopeEvents(t, events)
 	_ = startEvent.Attributes()
 	_ = startEvent.AnnotatedRequest()
-	_ = endEvent.AnnotatedResponse()
+	var annotatedResponse map[string]any
+	if err := json.Unmarshal(endEvent.AnnotatedResponse(), &annotatedResponse); err != nil {
+		t.Fatalf("AnnotatedResponse JSON did not parse: %v", err)
+	}
+	usage, ok := annotatedResponse["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected annotated response usage, got %#v", annotatedResponse)
+	}
+	cost, ok := usage["cost"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected annotated response cost, got %#v", usage)
+	}
+	if cost["pricing_provider"] != "openai" {
+		t.Fatalf("expected openai pricing provider, got %#v", cost["pricing_provider"])
+	}
+	if cost["pricing_model"] != "gpt-4o-mini" {
+		t.Fatalf("expected gpt-4o-mini pricing model, got %#v", cost["pricing_model"])
+	}
+	total, ok := cost["total"].(float64)
+	if !ok {
+		t.Fatalf("expected numeric total, got %#v", cost["total"])
+	}
+	if diff := total - 0.0000435; diff > 1e-12 || diff < -1e-12 {
+		t.Fatalf("expected total 0.0000435, got %#v", total)
+	}
 }
 
 func llmRequestResponseCodec() CodecFunc {
@@ -246,7 +329,7 @@ func requireEncodedModelExecutor(t *testing.T) func(json.RawMessage) (json.RawMe
 		if request.Content["model"] != "encoded-model" {
 			t.Fatalf("expected encoded model in execution payload, got %#v", request.Content)
 		}
-		return json.RawMessage(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
+		return json.RawMessage(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,"prompt_tokens_details":{"cached_tokens":20},"cost":{"total":0.0000435,"source":"provider_reported","pricing_provider":"openai","pricing_model":"gpt-4o-mini"}}}`), nil
 	}
 }
 

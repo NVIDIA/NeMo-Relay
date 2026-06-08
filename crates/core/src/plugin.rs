@@ -764,7 +764,8 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let register_builtins = || {
         crate::observability::plugin_component::register_observability_component()?;
-        crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()
+        crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
+        crate::plugins::pricing::register_pricing_component()
     };
     match BUILTIN_PLUGIN_REGISTRATION.get_or_init(register_builtins) {
         Ok(()) => Ok(()),
@@ -951,6 +952,9 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
             .copied();
         *nth += 1;
         match slot {
+            Some(index) if kind == "pricing" => {
+                merge_pricing_component(&mut left_components[index], component)
+            }
             Some(index) => merge_json_value(&mut left_components[index], component),
             None => left_components.push(component),
         }
@@ -976,6 +980,35 @@ fn merge_json_value(left: &mut Json, right: Json) {
 
 fn component_kind(component: &Json) -> Option<&str> {
     component.get("kind").and_then(Json::as_str)
+}
+
+/// Like `merge_json_value`, but concatenates a `pricing` component's `config.sources`
+/// (higher-precedence first) instead of replacing them, so lower-precedence fallback sources survive.
+fn merge_pricing_component(existing: &mut Json, higher_priority: Json) {
+    let lower_priority_sources = pricing_component_sources(existing).cloned();
+    let higher_priority_sources = pricing_component_sources(&higher_priority).cloned();
+    merge_json_value(existing, higher_priority);
+
+    let Some(mut sources) = higher_priority_sources else {
+        return;
+    };
+    if let Some(lower_priority_sources) = lower_priority_sources {
+        sources.extend(lower_priority_sources);
+    }
+    set_pricing_component_sources(existing, sources);
+}
+
+fn pricing_component_sources(component: &Json) -> Option<&Vec<Json>> {
+    component
+        .get("config")
+        .and_then(|config| config.get("sources"))
+        .and_then(Json::as_array)
+}
+
+fn set_pricing_component_sources(component: &mut Json, sources: Vec<Json>) {
+    if let Some(config) = component.get_mut("config").and_then(Json::as_object_mut) {
+        config.insert("sources".into(), Json::Array(sources));
+    }
 }
 
 /// Returns the JSON Schema for the canonical plugin configuration document.

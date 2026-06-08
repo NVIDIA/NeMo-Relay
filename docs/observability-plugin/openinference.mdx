@@ -13,7 +13,11 @@ exported as OTLP trace spans with OpenInference-oriented semantics.
 OpenInference export maps model-centric payloads directly into trace
 attributes. Scope, tool, and LLM start inputs become `input.value`; end outputs
 become `output.value`; LLM usage metadata maps to token-count attributes when
-the provider response includes usage information.
+the provider response includes usage information. For LLM spans, NeMo Relay
+emits flattened request and response message attributes from typed codec
+annotations and supported replay request/response payloads. Typed codec
+annotations also provide tool schema, finish-reason, and invocation-parameter
+attributes when those fields are available.
 
 ## `plugins.toml` Example
 
@@ -69,7 +73,13 @@ OpenInference uses the same OTLP section shape as
 
 The backend should show OpenInference-oriented spans for scopes, tools, and LLM
 calls grouped by root scope. LLM usage metadata appears as token counters when
-provider responses include usage information.
+provider responses include usage information. LLM request and response
+messages, system prompts, and model-emitted tool calls are emitted as
+flattened OpenInference attributes when available from codec annotations or
+supported replay request/response payloads. Tool schemas, finish reasons,
+and invocation parameters are emitted when typed codec annotations supply
+them. Exported LLM attributes exclude request headers and other non-observable
+transport metadata.
 
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and

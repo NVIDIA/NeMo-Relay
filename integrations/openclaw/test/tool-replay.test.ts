@@ -26,7 +26,13 @@ describe('Tool replay', () => {
         result: { text: 'secret' },
         durationMs: 7,
       },
-      { runId: 'run-1', sessionId: 'session-1', toolCallId: 'tool-call-1' },
+      {
+        runId: 'run-1',
+        sessionId: 'session-1',
+        sessionKey: 'session-key-1',
+        agentId: 'agent-1',
+        toolCallId: 'tool-call-1',
+      },
     );
 
     assert.equal(nf.calls.toolCall.length, 1);
@@ -37,6 +43,16 @@ describe('Tool replay', () => {
       argKeys: ['path', 'token'],
     });
     assert.equal(nf.calls.toolCall[0]?.data, null);
+    assert.deepEqual(nf.calls.toolCall[0]?.metadata, {
+      source: 'openclaw.after_tool_call',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+      toolCallId: 'tool-call-1',
+      durationMs: 7,
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.toolCall[0]?.metadata);
     assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
       content: 'Tool read_file completed.',
       openclaw: {
@@ -49,6 +65,16 @@ describe('Tool replay', () => {
       },
     });
     assert.equal(nf.calls.toolCallEnd[0]?.data, null);
+    assert.deepEqual(nf.calls.toolCallEnd[0]?.metadata, {
+      source: 'openclaw.after_tool_call',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+      toolCallId: 'tool-call-1',
+      durationMs: 7,
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.toolCallEnd[0]?.metadata);
   });
 
   it('captures full tool payloads only when trusted config opts in', () => {
@@ -132,11 +158,27 @@ describe('Tool replay', () => {
         result: { details: { status: 'blocked', deniedReason: 'policy' } },
         durationMs: 3,
       },
-      { runId: 'run-1', sessionId: 'session-1', toolCallId: 'tool-call-1' },
+      {
+        runId: 'run-1',
+        sessionId: 'session-1',
+        sessionKey: 'session-key-1',
+        agentId: 'agent-1',
+        toolCallId: 'tool-call-1',
+      },
     );
 
     assert.equal(nf.calls.toolCall.length, 0);
     assert.ok(nf.calls.event.some((event) => event.name === 'openclaw.tool_blocked'));
+    assert.deepEqual(nf.calls.event.find((event) => event.name === 'openclaw.tool_blocked')?.metadata, {
+      source: 'openclaw.after_tool_call',
+      hook_event_name: 'after_tool_call',
+      sessionId: 'session-1',
+      sessionKey: 'session-key-1',
+      agentId: 'agent-1',
+      runId: 'run-1',
+      toolCallId: 'tool-call-1',
+    });
+    assertNoOverclaimedHookMetadata(nf.calls.event.find((event) => event.name === 'openclaw.tool_blocked')?.metadata);
   });
 
   it('runs tool guardrails even when no session key is available', async () => {
@@ -154,12 +196,12 @@ type TestNemoRelayRuntime = NemoRelayRuntimeModule & {
   calls: {
     pushScope: Array<{ name: string; scopeType: number; data: unknown }>;
     popScope: Array<{ handle: unknown; output: unknown }>;
-    event: Array<{ name: string; handle: unknown; data: unknown }>;
+    event: Array<{ name: string; handle: unknown; data: unknown; metadata: unknown }>;
     setThreadScopeStack: unknown[];
     llmCall: Array<{ name: string; request: unknown }>;
     llmCallEnd: Array<{ handle: unknown; response: unknown }>;
-    toolCall: Array<{ name: string; args: unknown; data: unknown }>;
-    toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown }>;
+    toolCall: Array<{ name: string; args: unknown; data: unknown; metadata: unknown }>;
+    toolCallEnd: Array<{ handle: unknown; result: unknown; data: unknown; metadata: unknown }>;
     toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
 };
@@ -210,27 +252,50 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       ({ id: `stack-${nextScopeId++}` }) as unknown as ReturnType<NemoRelayRuntimeModule['createScopeStack']>,
     currentScopeStack: () => previousStack as unknown as ReturnType<NemoRelayRuntimeModule['currentScopeStack']>,
     setThreadScopeStack: (stack) => calls.setThreadScopeStack.push(stack),
-    pushScope: (name, scopeType, _handle, _attributes, data) => {
+    pushScope: (...args: Parameters<NemoRelayRuntimeModule['pushScope']>) => {
+      const [name, scopeType, , , data] = args;
       const handle = { id: `scope-${nextScopeId++}` };
       calls.pushScope.push({ name, scopeType, data });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['pushScope']>;
     },
     popScope: (handle, output) => calls.popScope.push({ handle, output }),
-    event: (name, handle, data) => calls.event.push({ name, handle, data }),
-    llmCall: (name, request) => {
+    event: (...args: Parameters<NemoRelayRuntimeModule['event']>) => {
+      const [name, handle, data, metadata] = args;
+      calls.event.push({ name, handle, data, metadata });
+    },
+    llmCall: (...args: Parameters<NemoRelayRuntimeModule['llmCall']>) => {
+      const [name, request] = args;
       const handle = { id: `llm-${nextScopeId++}` };
       calls.llmCall.push({ name, request });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['llmCall']>;
     },
-    llmCallEnd: (handle, response) => calls.llmCallEnd.push({ handle, response }),
-    toolCall: (name, args, _handle, _attributes, data) => {
+    llmCallEnd: (...args: Parameters<NemoRelayRuntimeModule['llmCallEnd']>) => {
+      const [handle, response] = args;
+      calls.llmCallEnd.push({ handle, response });
+    },
+    toolCall: (...args: Parameters<NemoRelayRuntimeModule['toolCall']>) => {
+      const [name, argsValue, , , data, metadata] = args;
       const handle = { id: `tool-${nextScopeId++}` };
-      calls.toolCall.push({ name, args, data });
+      calls.toolCall.push({ name, args: argsValue, data, metadata });
       return handle as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>;
     },
-    toolCallEnd: (handle, result, data) => calls.toolCallEnd.push({ handle, result, data }),
+    toolCallEnd: (...args: Parameters<NemoRelayRuntimeModule['toolCallEnd']>) => {
+      const [handle, result, data, metadata] = args;
+      calls.toolCallEnd.push({ handle, result, data, metadata });
+    },
     toolConditionalExecution: async (name, args) => {
       calls.toolConditionalExecution.push({ name, args });
     },
   };
+}
+
+function assertNoOverclaimedHookMetadata(metadata: unknown): void {
+  assert.ok(metadata && typeof metadata === 'object');
+  const record = metadata as Record<string, unknown>;
+  assert.equal('agent_kind' in record, false);
+  assert.equal('provider_payload_exact' in record, false);
+  assert.equal('fidelity_source' in record, false);
+  assert.equal('gateway_path' in record, false);
+  assert.equal('gateway_route' in record, false);
+  assert.equal('correlation' in record, false);
 }

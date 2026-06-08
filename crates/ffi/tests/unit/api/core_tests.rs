@@ -558,6 +558,81 @@ fn test_ffi_error_paths_and_scope_stack() {
 }
 
 #[test]
+fn test_ffi_pop_scope_merges_scope_metadata() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let subscriber_name = unique_name("ffi_scope_end_metadata_subscriber");
+        let subscriber_name_c = cstring(&subscriber_name);
+        assert_eq!(
+            nemo_relay_register_subscriber(
+                subscriber_name_c.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_name = cstring("ffi_scope_end_metadata");
+        let scope_metadata = cstring(r#"{"a":1,"b":2,"c":3}"#);
+        let end_metadata = cstring(r#"{"c":3.5,"d":4}"#);
+        let invalid_end_metadata = cstring("{");
+        let mut scope = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Function,
+                ptr::null(),
+                0,
+                ptr::null(),
+                scope_metadata.as_ptr(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            api::nemo_relay_pop_scope(
+                scope,
+                ptr::null(),
+                invalid_end_metadata.as_ptr(),
+                ptr::null()
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            api::nemo_relay_pop_scope(scope, ptr::null(), end_metadata.as_ptr(), ptr::null(),),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let events = lock_unpoisoned(event_log()).clone();
+        let end_event = events
+            .iter()
+            .find(|event| {
+                event["json"]["kind"] == json!("scope")
+                    && event["json"]["name"] == json!("ffi_scope_end_metadata")
+                    && event["json"]["scope_category"] == json!("end")
+            })
+            .unwrap();
+        assert_eq!(
+            end_event["metadata"],
+            json!({"a": 1, "b": 2, "c": 3.5, "d": 4})
+        );
+
+        assert_eq!(
+            nemo_relay_deregister_subscriber(subscriber_name_c.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
 fn test_ffi_event_json_null_pointer_returns_null() {
     unsafe {
         assert!(types::nemo_relay_event_json(ptr::null::<FfiEvent>()).is_null());
@@ -868,7 +943,7 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
         );
 
         assert_eq!(
-            api::nemo_relay_pop_scope(scope, ptr::null(), &timestamps[6]),
+            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null(), &timestamps[6]),
             NemoRelayStatus::Ok
         );
 
@@ -1077,10 +1152,11 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
         assert_invalid_timestamp(api::nemo_relay_pop_scope(
             scope,
             ptr::null(),
+            ptr::null(),
             &invalid_timestamp,
         ));
         assert_eq!(
-            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null()),
+            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok
         );
 

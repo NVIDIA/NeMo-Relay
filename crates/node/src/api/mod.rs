@@ -92,6 +92,21 @@ fn parse_string_map(
     Ok(out)
 }
 
+fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "otel.status_code".to_string(),
+        Json::String(status_code.to_string()),
+    );
+    if let Some(status_message) = status_message {
+        metadata.insert(
+            "otel.status_description".to_string(),
+            Json::String(status_message),
+        );
+    }
+    Json::Object(metadata)
+}
+
 fn build_otel_config(
     options: Option<OpenTelemetryConfig>,
 ) -> napi::Result<nemo_relay::observability::otel::OpenTelemetryConfig> {
@@ -160,6 +175,29 @@ fn build_atof_config(
         };
         config = config.with_mode(mode);
     }
+    let mut endpoints = Vec::new();
+    for endpoint in options.endpoints.unwrap_or_default() {
+        let transport = endpoint
+            .transport
+            .unwrap_or_else(|| "http_post".to_string());
+        let Some(transport) =
+            nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
+        else {
+            return Err(napi::Error::from_reason(
+                "endpoint transport must be 'http_post', 'websocket', or 'ndjson'",
+            ));
+        };
+        let mut endpoint_config =
+            nemo_relay::observability::atof::AtofEndpointConfig::new(endpoint.url, transport);
+        if let Some(timeout_millis) = endpoint.timeout_millis {
+            endpoint_config = endpoint_config.with_timeout_millis(timeout_millis.into());
+        }
+        for (key, value) in parse_string_map(endpoint.headers, "endpoint.headers")? {
+            endpoint_config = endpoint_config.with_header(key, value);
+        }
+        endpoints.push(endpoint_config);
+    }
+    config = config.with_endpoints(endpoints);
 
     Ok(config)
 }
@@ -1251,15 +1289,22 @@ pub fn push_scope(
 /// Optional `output` is a semantic JSON payload exported on the scope end event.
 /// Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event.
 /// It must be a safe integer number; omit it to use the runtime default end timestamp.
+/// Optional `metadata` is a JSON metadata payload recorded on the scope end event.
 /// Throws if the handle does not match the current top scope.
 #[napi]
-pub fn pop_scope(handle: &ScopeHandle, output: Option<Json>, timestamp: Option<f64>) -> Result<()> {
+pub fn pop_scope(
+    handle: &ScopeHandle,
+    output: Option<Json>,
+    timestamp: Option<f64>,
+    metadata: Option<Json>,
+) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
     core_scope_api::pop_scope(
         core_scope_api::PopScopeParams::builder()
             .handle_uuid(&handle.inner.uuid)
             .output_opt(opt_json(output))
             .timestamp_opt(timestamp)
+            .metadata_opt(opt_json(metadata))
             .build(),
     )
     .map_err(to_napi_err)?;
@@ -1320,13 +1365,17 @@ pub fn with_scope(
     // Create a promise-aware wrapper so we handle both sync and async callbacks.
     let pa_fn = std::sync::Arc::new(
         crate::promise_call::PromiseAwareFn::new(&env, &callback).map_err(|e| {
-            // Pop scope before propagating error
+            let status_message = format!("failed to create PromiseAwareFn: {e}");
             let _ = core_scope_api::pop_scope(
                 core_scope_api::PopScopeParams::builder()
                     .handle_uuid(&scope_uuid)
+                    .metadata_opt(Some(otel_status_metadata(
+                        "ERROR",
+                        Some(status_message.clone()),
+                    )))
                     .build(),
             );
-            napi::Error::from_reason(format!("failed to create PromiseAwareFn: {e}"))
+            napi::Error::from_reason(status_message)
         })?,
     );
 
@@ -1346,10 +1395,15 @@ pub fn with_scope(
                         });
 
                     let result = pa_fn.call_with_arg0(build_handle).await;
+                    let metadata = match &result {
+                        Ok(_) => otel_status_metadata("OK", None),
+                        Err(error) => otel_status_metadata("ERROR", Some(error.to_string())),
+                    };
                     // Always pop the scope, even on error.
                     if core_scope_api::pop_scope(
                         core_scope_api::PopScopeParams::builder()
                             .handle_uuid(&scope_uuid)
+                            .metadata_opt(Some(metadata))
                             .build(),
                     )
                     .is_ok()
@@ -2990,6 +3044,22 @@ pub struct AtofExporterConfig {
     pub mode: Option<String>,
     /// Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
     pub filename: Option<String>,
+    /// Streaming endpoints that receive every raw ATOF event.
+    pub endpoints: Option<Vec<AtofEndpointConfig>>,
+}
+
+/// Mutable configuration object for one ATOF streaming endpoint.
+#[napi(object)]
+#[derive(Default)]
+pub struct AtofEndpointConfig {
+    /// Endpoint URL.
+    pub url: String,
+    /// `"http_post"` (default), `"websocket"`, or `"ndjson"`.
+    pub transport: Option<String>,
+    /// Extra endpoint headers as string key/value pairs.
+    pub headers: Option<Json>,
+    /// Per-endpoint timeout in milliseconds.
+    pub timeout_millis: Option<u32>,
 }
 
 /// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.

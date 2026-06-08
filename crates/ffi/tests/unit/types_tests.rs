@@ -569,7 +569,26 @@ fn test_annotated_event_accessors_and_codec_handles() {
         )),
         tool_calls: None,
         finish_reason: Some(nemo_relay::codec::response::FinishReason::Complete),
-        usage: None,
+        usage: Some(nemo_relay::codec::response::Usage {
+            prompt_tokens: Some(10),
+            completion_tokens: Some(5),
+            total_tokens: Some(15),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            cost: Some(nemo_relay::codec::response::CostEstimate {
+                total: Some(0.000_01),
+                currency: "USD".into(),
+                input: Some(0.000_004),
+                output: Some(0.000_006),
+                cache_read: None,
+                cache_write: None,
+                source: nemo_relay::codec::response::CostSource::ProviderReported,
+                pricing_provider: Some("ffi-provider".into()),
+                pricing_model: Some("gpt-test".into()),
+                pricing_as_of: Some("2026-06-04".into()),
+                pricing_source: Some("https://example.test/pricing".into()),
+            }),
+        }),
         api_specific: None,
         extra: serde_json::Map::from_iter([("trace".into(), json!(true))]),
     };
@@ -595,7 +614,12 @@ fn test_annotated_event_accessors_and_codec_handles() {
     let annotated_response_value: serde_json::Value =
         serde_json::from_str(&annotated_response_json).unwrap();
     assert_eq!(annotated_response_value["id"], json!("resp_123"));
+    assert!(annotated_response_value.get("model_provider").is_none());
     assert_eq!(annotated_response_value["trace"], json!(true));
+    assert_eq!(
+        annotated_response_value["usage"]["cost"]["pricing_provider"],
+        json!("ffi-provider")
+    );
     assert!(unsafe { nemo_relay_event_annotated_request(&ffi_end) }.is_null());
 
     let scope_event = FfiEvent(make_scope_event(ScopeEventFixture {

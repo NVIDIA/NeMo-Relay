@@ -171,9 +171,11 @@ The core crate also ships a built-in `nemo_guardrails` plugin component. It is
 the first-party Guardrails integration point that NeMo Relay owns through the
 shared plugin system.
 
-The current shipped user-facing lane is the remote backend. It gives NeMo Relay
-one canonical plugin kind and config shape for Guardrails-backed managed LLM
-and tool checks while broader backend parity work remains separate.
+The current shipped user-facing lanes are:
+
+- the remote backend for Guardrails-service integration
+- the Python-backed local backend for `nemoguardrails` integration through a
+  subprocess worker
 
 Detailed Guardrails plugin configuration belongs in
 [NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration).

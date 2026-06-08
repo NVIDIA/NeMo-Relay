@@ -76,6 +76,41 @@ fn tool_event(session_id: &str, event_name: &str) -> ToolEvent {
     }
 }
 
+fn hermes_llm_event(session_id: &str, task_id: &str) -> NormalizedEvent {
+    NormalizedEvent::LlmStarted(LlmEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::Hermes,
+        event_name: "pre_api_request".into(),
+        api_call_id: format!("{session_id}:{task_id}:1"),
+        provider: "custom".into(),
+        model_name: Some("qwen".into()),
+        request: json!({ "extra": { "task_id": task_id } }),
+        response: Value::Null,
+        metadata: json!({ "event_metadata": "pre_api_request" }),
+    })
+}
+
+fn hermes_tool_event(task_id: &str, session_scope: Option<&str>) -> NormalizedEvent {
+    let mut payload = json!({ "extra": { "task_id": task_id } });
+    if let Some(session_scope) = session_scope {
+        payload["extra"]["parent_session_id"] = json!(session_scope);
+    }
+
+    NormalizedEvent::ToolStarted(ToolEvent {
+        session_id: task_id.into(),
+        agent_kind: AgentKind::Hermes,
+        event_name: "pre_tool_call".into(),
+        tool_call_id: format!("{task_id}:tool-1"),
+        tool_name: "read_file".into(),
+        subagent_id: None,
+        arguments: json!({ "path": "README.md" }),
+        result: Value::Null,
+        status: None,
+        payload,
+        metadata: json!({ "event_metadata": "pre_tool_call" }),
+    })
+}
+
 fn aliases() -> HashMap<String, SessionAlias> {
     HashMap::from([(
         "child".into(),
@@ -85,6 +120,45 @@ fn aliases() -> HashMap<String, SessionAlias> {
             json!({ "alias_metadata": true }),
         ),
     )])
+}
+
+#[test]
+fn hermes_task_session_routing_is_scoped_by_parent_session() {
+    let mut state = SessionAlignmentState::default();
+
+    state.route_event(hermes_llm_event("hermes-a", "task-1"));
+    state.route_event(hermes_llm_event("hermes-b", "task-1"));
+
+    let routed_a = state.route_event(hermes_tool_event("task-1", Some("hermes-a")));
+    let NormalizedEvent::ToolStarted(routed_a) = routed_a else {
+        panic!("expected routed Hermes tool event");
+    };
+    assert_eq!(routed_a.session_id, "hermes-a");
+    assert_eq!(routed_a.metadata["hermes_task_id"], json!("task-1"));
+    assert_eq!(routed_a.metadata["hermes_session_id"], json!("hermes-a"));
+
+    let routed_b = state.route_event(hermes_tool_event("task-1", Some("hermes-b")));
+    let NormalizedEvent::ToolStarted(routed_b) = routed_b else {
+        panic!("expected routed Hermes tool event");
+    };
+    assert_eq!(routed_b.session_id, "hermes-b");
+    assert_eq!(routed_b.metadata["hermes_task_id"], json!("task-1"));
+    assert_eq!(routed_b.metadata["hermes_session_id"], json!("hermes-b"));
+}
+
+#[test]
+fn hermes_task_session_routing_leaves_ambiguous_unscoped_task_event_unchanged() {
+    let mut state = SessionAlignmentState::default();
+
+    state.route_event(hermes_llm_event("hermes-a", "task-1"));
+    state.route_event(hermes_llm_event("hermes-b", "task-1"));
+
+    let routed = state.route_event(hermes_tool_event("task-1", None));
+    let NormalizedEvent::ToolStarted(routed) = routed else {
+        panic!("expected Hermes tool event");
+    };
+    assert_eq!(routed.session_id, "task-1");
+    assert!(routed.metadata.get("hermes_session_id").is_none());
 }
 
 #[test]
