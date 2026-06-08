@@ -23,7 +23,7 @@ use crate::api::shared::{
     run_request_intercepts_with_codec, snapshot_event_subscribers,
 };
 use crate::codec::request::AnnotatedLlmRequest;
-use crate::codec::response::AnnotatedLlmResponse;
+use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
@@ -276,6 +276,7 @@ fn emit_llm_start(
     handle: &LlmHandle,
     request: &LlmRequest,
     annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    request_codec: Option<&dyn LlmCodec>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let (event, subscribers) = {
@@ -292,6 +293,15 @@ fn emit_llm_start(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
 
         let sanitized_request = state.llm_sanitize_request_chain(request.clone(), &scope_locals);
+        let annotated_request = match request_codec {
+            Some(codec)
+                if sanitized_request.headers != request.headers
+                    || sanitized_request.content != request.content =>
+            {
+                codec.decode(&sanitized_request).ok().map(Arc::new)
+            }
+            _ => annotated_request,
+        };
         let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
         let event = state.build_llm_start_event(handle, Some(input), annotated_request);
         (event, subscribers)
@@ -341,8 +351,14 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
         .timestamp_opt(params.timestamp)
         .build();
     let handle = create_llm_handle(handle_params)?;
-    emit_llm_start(&handle, params.request, params.annotated_request)?;
+    emit_llm_start(&handle, params.request, params.annotated_request, None)?;
     Ok(handle)
+}
+
+#[derive(Clone, Copy)]
+struct LlmCallEndBehavior {
+    response_codec_errors_fatal: bool,
+    attach_estimated_cost: bool,
 }
 
 /// Finish a manual LLM lifecycle span.
@@ -377,6 +393,19 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
 /// the caller-owned `response` value.
 pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
+    llm_call_end_with_behavior(
+        params,
+        LlmCallEndBehavior {
+            response_codec_errors_fatal: true,
+            attach_estimated_cost: false,
+        },
+    )
+}
+
+fn llm_call_end_with_behavior(
+    params: LlmCallEndParams<'_>,
+    behavior: LlmCallEndBehavior,
+) -> Result<()> {
     let LlmCallEndParams {
         handle,
         response,
@@ -411,7 +440,12 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
             Some(annotated_response) => Some(annotated_response),
             None => match (response_codec.as_ref(), data.as_ref()) {
                 (Some(codec), Some(response)) => match codec.decode_response(response) {
-                    Ok(decoded) => Some(Arc::new(decoded)),
+                    Ok(mut decoded) => {
+                        if behavior.attach_estimated_cost {
+                            attach_estimated_cost_for_provider(&mut decoded, Some(&handle.name));
+                        }
+                        Some(Arc::new(decoded))
+                    }
                     Err(error) => {
                         decode_error = Some(error);
                         None
@@ -420,11 +454,13 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                 _ => None,
             },
         };
+
+        let end_metadata = metadata_with_otel_status(metadata, "OK", None);
         let event = state.build_llm_end_event(
             EndLlmHandleParams::builder()
                 .handle(handle)
                 .data_opt(data)
-                .metadata_opt(metadata)
+                .metadata_opt(end_metadata)
                 .annotated_response_opt(annotated_response)
                 .timestamp_opt(timestamp)
                 .build(),
@@ -432,7 +468,9 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
         (event, subscribers)
     };
     NemoRelayContextState::emit_event(&event, &subscribers);
-    if let Some(error) = decode_error {
+    if let Some(error) = decode_error
+        && behavior.response_codec_errors_fatal
+    {
         Err(error)
     } else {
         Ok(())
@@ -554,6 +592,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         }
     }
 
+    let request_codec = codec.clone();
     let (intercepted_request, annotated_request) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
@@ -567,7 +606,12 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .model_name_opt(model_name)
             .build(),
     )?;
-    emit_llm_start(&handle, &intercepted_request, annotated_request.clone())?;
+    emit_llm_start(
+        &handle,
+        &intercepted_request,
+        annotated_request.clone(),
+        request_codec.as_deref(),
+    )?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -583,19 +627,18 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 
     match execution(intercepted_request).await {
         Ok(response) => {
-            let annotated_response = response_codec
-                .as_ref()
-                .and_then(|codec| codec.decode_response(&response).ok())
-                .map(Arc::new);
-            let end_metadata = metadata_with_otel_status(metadata, "OK", None);
-            llm_call_end(
+            llm_call_end_with_behavior(
                 LlmCallEndParams::builder()
                     .handle(&handle)
                     .response(response.clone())
                     .data_opt(data)
-                    .metadata_opt(end_metadata)
-                    .annotated_response_opt(annotated_response)
+                    .metadata_opt(metadata)
+                    .response_codec_opt(response_codec)
                     .build(),
+                LlmCallEndBehavior {
+                    response_codec_errors_fatal: false,
+                    attach_estimated_cost: true,
+                },
             )?;
             Ok(response)
         }
@@ -705,6 +748,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         }
     }
 
+    let request_codec = codec.clone();
     let (intercepted_request, annotated_request) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
@@ -718,7 +762,12 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             .model_name_opt(model_name)
             .build(),
     )?;
-    emit_llm_start(&handle, &intercepted_request, annotated_request)?;
+    emit_llm_start(
+        &handle,
+        &intercepted_request,
+        annotated_request,
+        request_codec.as_deref(),
+    )?;
 
     let execution = {
         let scope_stack = current_scope_stack();

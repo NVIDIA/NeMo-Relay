@@ -15,6 +15,7 @@ mod installer;
 mod launcher;
 mod model;
 mod plugins;
+mod pricing;
 mod server;
 mod session;
 mod setup;
@@ -24,7 +25,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::config::{Cli, CodingAgent, Command, PluginsSubcommand};
+use crate::config::{Cli, CodingAgent, Command, PluginsSubcommand, PricingSubcommand};
 
 #[tokio::main]
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
@@ -81,6 +82,15 @@ async fn run() -> Result<ExitCode, error::CliError> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::Pricing(command)) => {
+            match command.command {
+                PricingSubcommand::Validate(command) => pricing::validate(command)?,
+                PricingSubcommand::Init(command) => pricing::init(command)?,
+                PricingSubcommand::AddSource(command) => pricing::add_source(command)?,
+                PricingSubcommand::Resolve(command) => pricing::resolve(command)?,
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Some(Command::Doctor(command)) => doctor::run_doctor(command.agent, command.json).await,
         Some(Command::Agents(command)) => doctor::run_agents(command.json).await,
         Some(Command::Completions(command)) => {
@@ -126,4 +136,10 @@ async fn run() -> Result<ExitCode, error::CliError> {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod test_support {
+    pub(crate) static PLUGIN_CONFIG_TEST_LOCK: tokio::sync::Mutex<()> =
+        tokio::sync::Mutex::const_new(());
 }

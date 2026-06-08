@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use futures_util::SinkExt;
 use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
+use nemo_relay::codec::pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
@@ -30,6 +31,7 @@ use crate::config::{
 use crate::error::CliError;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
+const PRICING_PLUGIN_KIND: &str = "pricing";
 
 /// Outcome of one check inside the doctor report. The `details` field carries human-readable
 /// supplementary text; the `status` is the bottom-line signal callers (and CI) use to decide
@@ -635,6 +637,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             details: "component not configured".into(),
         });
     }
+    collect_pricing_component_checks(&mut checks, &plugin_config);
 
     checks
 }
@@ -714,6 +717,89 @@ fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
             })
         })
         .and_then(|component| component.get("config"))
+}
+
+fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &PluginConfig) {
+    let Some(component) = plugin_config
+        .components
+        .iter()
+        .find(|component| component.kind == PRICING_PLUGIN_KIND)
+    else {
+        checks.push(Check {
+            name: "Pricing",
+            status: Status::Info,
+            details: "component not configured".into(),
+        });
+        return;
+    };
+
+    if !component.enabled {
+        checks.push(Check {
+            name: "Pricing",
+            status: Status::Info,
+            details: "component disabled".into(),
+        });
+        return;
+    }
+
+    let config =
+        match serde_json::from_value::<PricingConfig>(Value::Object(component.config.clone())) {
+            Ok(config) => config,
+            Err(error) => {
+                checks.push(Check {
+                    name: "Pricing",
+                    status: Status::Fail,
+                    details: format!("invalid config: {error}"),
+                });
+                return;
+            }
+        };
+
+    if config.sources.is_empty() {
+        checks.push(Check {
+            name: "Pricing",
+            status: Status::Info,
+            details: "component configured with no sources".into(),
+        });
+        return;
+    }
+
+    for (index, source) in config.sources.iter().enumerate() {
+        checks.push(pricing_source_check(index, source));
+    }
+}
+
+fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
+    match source {
+        PricingSourceConfig::Inline { catalog } => Check {
+            name: "Pricing source",
+            status: Status::Pass,
+            details: format!("inline:{index} valid ({} entries)", catalog.entries.len()),
+        },
+        PricingSourceConfig::File { path } => match std::fs::read_to_string(path) {
+            Ok(raw) => match PricingCatalog::from_json_str(&raw) {
+                Ok(catalog) => Check {
+                    name: "Pricing source",
+                    status: Status::Pass,
+                    details: format!(
+                        "file:{} valid ({} entries)",
+                        path.display(),
+                        catalog.entries.len()
+                    ),
+                },
+                Err(error) => Check {
+                    name: "Pricing source",
+                    status: Status::Fail,
+                    details: format!("file:{} invalid catalog: {error}", path.display()),
+                },
+            },
+            Err(error) => Check {
+                name: "Pricing source",
+                status: Status::Fail,
+                details: format!("file:{} unreadable: {error}", path.display()),
+            },
+        },
+    }
 }
 
 fn section_enabled(config: &Value, section: &str) -> bool {

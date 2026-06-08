@@ -300,7 +300,7 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
                 let body = read_http_request(&mut stream);
                 request_captures.lock().unwrap().push(body);
                 stream
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                     .unwrap();
             });
         }

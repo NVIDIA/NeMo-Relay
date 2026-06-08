@@ -7,7 +7,7 @@ use super::*;
 use serde_json::json;
 
 use super::super::request::{ContentPart, MessageContent, OpenAiImageUrl};
-use super::super::response::{ApiSpecificResponse, FinishReason};
+use super::super::response::{ApiSpecificResponse, CostSource, FinishReason};
 
 // -------------------------------------------------------------------
 // Helpers
@@ -113,6 +113,38 @@ fn test_decode_response_cached_tokens() {
     let resp = codec.decode_response(&response).unwrap();
     let usage = resp.usage.unwrap();
     assert_eq!(usage.cache_read_tokens, Some(42));
+}
+
+#[test]
+fn test_decode_response_provider_reported_cost() {
+    let codec = OpenAIChatCodec;
+    let response = json!({
+        "id": "chatcmpl_cost",
+        "object": "chat.completion",
+        "model": "gpt-4o-mini",
+        "choices": [{
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "cost": {
+                "total": 0.0123,
+                "input": 0.004,
+                "output": 0.0083
+            }
+        }
+    });
+
+    let resp = codec.decode_response(&response).unwrap();
+    let cost = resp.usage.unwrap().cost.unwrap();
+
+    assert_eq!(cost.total, Some(0.0123));
+    assert_eq!(cost.input, Some(0.004));
+    assert_eq!(cost.output, Some(0.0083));
+    assert_eq!(cost.source, CostSource::ProviderReported);
 }
 
 #[test]

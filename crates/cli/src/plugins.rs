@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use crate::config::PluginsEditCommand;
 use crate::error::CliError;
 
-mod config_io;
+pub(crate) mod config_io;
 mod editor_model;
 
 use self::config_io::*;

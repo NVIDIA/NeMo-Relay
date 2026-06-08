@@ -37,7 +37,7 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::shared::metadata_with_otel_status;
-use crate::codec::response::AnnotatedLlmResponse;
+use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::Result;
 use crate::json::Json;
@@ -151,13 +151,6 @@ impl LlmStreamWrapper {
             None => Json::Null,
         };
 
-        // Decode aggregated response if response codec is present (non-fatal)
-        let annotated_response: Option<Arc<AnnotatedLlmResponse>> = self
-            .response_codec
-            .as_ref()
-            .and_then(|c| c.decode_response(&aggregated).ok())
-            .map(Arc::new);
-
         let event_snapshot = {
             let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
             let sl =
@@ -174,8 +167,24 @@ impl LlmStreamWrapper {
                     } else {
                         Some(sanitized)
                     };
-                    let event =
-                        state.end_llm_handle(&self.handle, data, metadata, annotated_response);
+                    let annotated_response: Option<Arc<AnnotatedLlmResponse>> = self
+                        .response_codec
+                        .as_ref()
+                        .and_then(|codec| {
+                            let mut decoded = codec.decode_response(data.as_ref()?).ok()?;
+                            attach_estimated_cost_for_provider(
+                                &mut decoded,
+                                Some(&self.handle.name),
+                            );
+                            Some(decoded)
+                        })
+                        .map(Arc::new);
+                    let event = state.end_llm_handle(
+                        &self.handle,
+                        data,
+                        metadata,
+                        annotated_response,
+                    );
                     Some((event, subscribers))
                 }
                 Err(_) => None,

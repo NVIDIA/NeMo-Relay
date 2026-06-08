@@ -2,17 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use axum::http::HeaderMap;
-use nemo_relay::api::event::ScopeCategory;
+use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
+use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use super::*;
 use crate::model::{LlmEvent, LlmHintEvent, SessionEvent, ToolEvent};
+use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
-static OBSERVABILITY_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const HERMES_ROUTED_TEST_SESSION_KEY: &str = "hermes_routed_test_session_id";
 
 async fn install_test_atif_plugin(output_directory: &Path) {
     let _ = clear_plugin_configuration();
@@ -36,6 +43,193 @@ async fn install_test_atif_plugin(output_directory: &Path) {
     }))
     .unwrap();
     initialize_plugins(config).await.unwrap();
+}
+
+fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExporter {
+    std::fs::create_dir_all(output_directory).unwrap();
+    AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(output_directory)
+            .with_filename(filename)
+            .with_mode(AtofExporterMode::Overwrite),
+    )
+    .unwrap()
+}
+
+fn make_openinference_test_subscriber(
+    scope: &str,
+) -> (
+    OpenInferenceSubscriber,
+    opentelemetry_sdk::trace::InMemorySpanExporter,
+) {
+    let exporter = InMemorySpanExporterBuilder::new().build();
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = OpenInferenceSubscriber::from_tracer_provider(provider, scope.to_string());
+    (subscriber, exporter)
+}
+
+fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
+    attributes
+        .iter()
+        .map(|attribute| {
+            (
+                attribute.key.as_str().to_string(),
+                attribute.value.to_string(),
+            )
+        })
+        .collect()
+}
+
+fn read_atof_events(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect()
+}
+
+fn event_session_id(event: &Event) -> Option<&str> {
+    event
+        .metadata()
+        .and_then(|metadata| metadata.get("session_id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            if event.scope_category().is_some() {
+                return None;
+            }
+            // Synthetic marks keep the original hook payload, so the payload session id is the
+            // only stable way to keep those events in the filtered test stream.
+            event.data().and_then(|data| {
+                data.get("session_id")
+                    .and_then(Value::as_str)
+                    .or_else(|| data.get("extra")?.get("session_id").and_then(Value::as_str))
+            })
+        })
+}
+
+fn tracked_sessions(session_ids: &[&str]) -> Arc<HashSet<String>> {
+    Arc::new(
+        session_ids
+            .iter()
+            .map(|session_id| (*session_id).to_string())
+            .collect(),
+    )
+}
+
+fn register_filtered_session_subscriber(
+    name: &str,
+    session_ids: Arc<HashSet<String>>,
+    subscriber: EventSubscriberFn,
+) {
+    let _ = deregister_subscriber(name);
+    register_subscriber(
+        name,
+        Arc::new(move |event| {
+            if event_session_id(event).is_some_and(|session_id| session_ids.contains(session_id)) {
+                subscriber(event);
+            }
+        }),
+    )
+    .unwrap();
+}
+
+async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
+    let outcome = crate::adapters::codex::adapt(payload, headers);
+    manager.apply_events(headers, outcome.events).await.unwrap();
+}
+
+async fn start_codex_prompt_turn(manager: &SessionManager, headers: &HeaderMap, session_id: &str) {
+    for payload in [
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "sessionStart",
+            "model": "gpt-test"
+        }),
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Inspect the repository."
+        }),
+    ] {
+        apply_codex_payload(manager, headers, payload).await;
+    }
+}
+
+async fn run_codex_responses_tool_activity(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    session_id: &str,
+) {
+    let llm = manager
+        .start_llm(
+            headers,
+            llm_start_with_responses_task(session_id, "Inspect the repository."),
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            llm,
+            json!({
+                "id": "resp_1",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "tool-call-1",
+                        "name": "Read",
+                        "arguments": "{\"file_path\":\"README.md\"}",
+                        "status": "completed"
+                    }
+                ]
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    for payload in [
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PreToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "README.md" }
+        }),
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "PostToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_output": { "content": "hello" },
+            "status": "success"
+        }),
+    ] {
+        apply_codex_payload(manager, headers, payload).await;
+    }
+}
+
+async fn stop_codex_turn(manager: &SessionManager, headers: &HeaderMap, session_id: &str) {
+    apply_codex_payload(
+        manager,
+        headers,
+        json!({
+            "session_id": session_id,
+            "hook_event_name": "Stop",
+            "response": "Done."
+        }),
+    )
+    .await;
+}
+
+fn hermes_routed_gateway_metadata(gateway_path: &str, test_session_marker: Option<&str>) -> Value {
+    let mut metadata = json!({ "gateway_path": gateway_path });
+    if let Some(marker) = test_session_marker {
+        metadata[HERMES_ROUTED_TEST_SESSION_KEY] = json!(marker);
+    }
+    metadata
 }
 
 fn read_atif_for_session(output_directory: &Path, session_id: &str) -> Value {
@@ -92,6 +286,304 @@ async fn has_pending_alignment(manager: &SessionManager, session_id: &str) -> bo
         .lock()
         .await
         .has_pending_session(session_id)
+}
+
+async fn drive_hermes_routed_provider_session(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    session_id: &str,
+    test_session_marker: Option<&str>,
+) {
+    manager
+        .apply_events(
+            headers,
+            vec![NormalizedEvent::AgentStarted(SessionEvent {
+                session_id: session_id.into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_start".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    let anthropic = manager
+        .start_llm(
+            headers,
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-sonnet-4".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("msg-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "claude-sonnet-4",
+                        "messages": [{"role": "user", "content": "Find the file."}],
+                        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: hermes_routed_gateway_metadata("/v1/messages", test_session_marker),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            anthropic,
+            json!({
+                "id": "msg_01",
+                "type": "message",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let responses = manager
+        .start_llm(
+            headers,
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "openai.responses".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("resp-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "input": "Find the weather.",
+                        "tools": [{"type": "function", "name": "get_weather"}]
+                    }),
+                },
+                streaming: false,
+                metadata: hermes_routed_gateway_metadata("/v1/responses", test_session_marker),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            responses,
+            json!({
+                "id": "resp_1",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": "I will check the weather."}]},
+                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
+                ],
+                "usage": {
+                    "input_tokens": 75,
+                    "output_tokens": 20,
+                    "total_tokens": 95,
+                    "input_tokens_details": {"cached_tokens": 10},
+                    "cost_usd": 0.005
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    let chat = manager
+        .start_llm(
+            headers,
+            LlmGatewayStart {
+                session_id: Some(session_id.into()),
+                provider: "openai.chat_completions".into(),
+                model_name: Some("gpt-4o".into()),
+                subagent_id: None,
+                conversation_id: None,
+                generation_id: None,
+                request_id: Some("chat-request".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "gpt-4o",
+                        "messages": [{"role": "user", "content": "Inspect the files."}],
+                        "tools": [{"type": "function", "function": {"name": "read"}}]
+                    }),
+                },
+                streaming: false,
+                metadata: hermes_routed_gateway_metadata(
+                    "/v1/chat/completions",
+                    test_session_marker,
+                ),
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(
+            chat,
+            json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "I will inspect.",
+                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
+                    }
+                }],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 4,
+                    "total_tokens": 7,
+                    "prompt_tokens_details": {"cached_tokens": 2},
+                    "cost_usd": 0.001
+                }
+            }),
+            json!({}),
+        )
+        .await
+        .unwrap();
+
+    manager
+        .apply_events(
+            headers,
+            vec![NormalizedEvent::AgentEnded(SessionEvent {
+                session_id: session_id.into(),
+                agent_kind: AgentKind::Hermes,
+                event_name: "on_session_finalize".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+}
+
+async fn drive_hermes_orphan_subagent_stop(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    session_id: &str,
+    subagent_id: &str,
+) {
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": session_id
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": session_id,
+            "extra": {
+                "subagent_id": subagent_id,
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": session_id
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, headers);
+        manager.apply_events(headers, outcome.events).await.unwrap();
+    }
+}
+
+async fn drive_hermes_subagent_child_session(
+    manager: &SessionManager,
+    headers: &HeaderMap,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_subagent_id: &str,
+) {
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": parent_session_id
+        }),
+        json!({
+            "hook_event_name": "subagent_start",
+            "session_id": parent_session_id,
+            "extra": {
+                "child_goal": "read plugin yaml",
+                "child_role": "leaf",
+                "child_session_id": child_session_id,
+                "child_subagent_id": child_subagent_id,
+                "parent_turn_id": "parent-turn-1",
+                "telemetry_schema_version": "hermes.observer.v1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": child_session_id
+        }),
+        json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": child_session_id,
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "request": {
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "read plugin yaml" }
+                        ]
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "post_api_request",
+            "session_id": child_session_id,
+            "extra": {
+                "task_id": "child-task",
+                "api_call_count": 1,
+                "provider": "custom",
+                "model": "qwen",
+                "response": {
+                    "assistant_message": {
+                        "role": "assistant",
+                        "content": "name: nemo_flow"
+                    },
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2
+                    }
+                }
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_end",
+            "session_id": child_session_id
+        }),
+        json!({
+            "hook_event_name": "subagent_stop",
+            "session_id": parent_session_id,
+            "extra": {
+                "child_session_id": child_session_id,
+                "child_status": "completed"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": parent_session_id
+        }),
+    ] {
+        let outcome = crate::adapters::hermes::adapt(payload, headers);
+        manager.apply_events(headers, outcome.events).await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1227,7 +1719,7 @@ async fn codex_subagent_gateway_llm_routes_to_parent_subagent() {
 
 #[tokio::test]
 async fn writes_atif_on_session_end_from_plugin_config() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1291,12 +1783,200 @@ async fn writes_atif_on_session_end_from_plugin_config() {
 }
 
 #[tokio::test]
+async fn codex_stop_snapshots_atif_without_session_end() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    start_codex_prompt_turn(&manager, &headers, "codex-atif-stop").await;
+    run_codex_responses_tool_activity(&manager, &headers, "codex-atif-stop").await;
+    assert!(
+        std::fs::read_dir(&atif_dir).unwrap().next().is_none(),
+        "Codex ATIF should wait for Stop before writing a per-turn snapshot"
+    );
+
+    stop_codex_turn(&manager, &headers, "codex-atif-stop").await;
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "codex-atif-stop");
+    assert_eq!(atif["schema_version"], json!("ATIF-v1.7"));
+    assert_eq!(atif["trajectory_id"], atif["session_id"]);
+    assert!(atif["subagent_trajectories"].is_null());
+    assert_eq!(atif["final_metrics"]["total_steps"], json!(2));
+
+    let observed = atif["extra"]["observed_events"].as_array().unwrap();
+    assert!(observed.iter().all(|event| {
+        event["metadata"]["hook_event_name"] != json!("sessionEnd")
+            && event["metadata"]["hook_event_name"] != json!("session_end")
+    }));
+    let turn_start = observed
+        .iter()
+        .find(|event| {
+            event["name"] == "codex-turn"
+                && event["category"] == "agent"
+                && event["scope_category"] == "start"
+        })
+        .expect("Codex turn start should be observed");
+    let turn_end = observed
+        .iter()
+        .find(|event| {
+            event["name"] == "codex-turn"
+                && event["category"] == "agent"
+                && event["scope_category"] == "end"
+        })
+        .expect("Codex Stop should close the turn scope");
+    assert_eq!(turn_start["uuid"], atif["session_id"]);
+    assert_eq!(turn_end["uuid"], atif["session_id"]);
+    assert_eq!(
+        turn_end["data"]["output"][0]["call_id"],
+        json!("tool-call-1")
+    );
+
+    let steps = atif["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["source"], json!("user"));
+    assert_eq!(steps[0]["message"], json!("Inspect the repository."));
+    assert_eq!(
+        steps[0]["extra"]["ancestry"]["parent_name"],
+        json!("codex-turn")
+    );
+    assert_eq!(steps[1]["source"], json!("agent"));
+    assert_eq!(steps[1]["model_name"], json!("gpt-test"));
+    assert_eq!(steps[1]["llm_call_count"], json!(1));
+    assert_eq!(
+        steps[1]["tool_calls"][0],
+        json!({
+            "tool_call_id": "tool-call-1",
+            "function_name": "Read",
+            "arguments": { "file_path": "README.md" },
+            "extra": { "status": "completed" }
+        })
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["source_call_id"],
+        json!("tool-call-1")
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["content"],
+        json!(null)
+    );
+    assert_eq!(
+        steps[1]["observation"]["results"][0]["extra"]["tool_result"],
+        json!({ "content": "hello" })
+    );
+    assert_eq!(
+        steps[1]["extra"]["tool_ancestry"][0]["parent_name"],
+        json!("codex-turn")
+    );
+    assert_eq!(
+        steps[1]["extra"]["tool_invocations"][0]["invocation_id"],
+        json!("tool-call-1")
+    );
+}
+
+#[tokio::test]
+async fn codex_openinference_spans_match_shared_contract() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-codex-openinference-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("codex-test-scope");
+    subscriber.register(subscriber_name).unwrap();
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+
+    start_codex_prompt_turn(&manager, &headers, "codex-openinference").await;
+    run_codex_responses_tool_activity(&manager, &headers, "codex-openinference").await;
+    stop_codex_turn(&manager, &headers, "codex-openinference").await;
+
+    subscriber.force_flush().unwrap();
+    assert!(subscriber.deregister(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes_by_span = spans
+        .iter()
+        .map(|span| (span.name.as_ref(), attr_map(&span.attributes)))
+        .collect::<HashMap<_, _>>();
+    let turn_attributes = attributes_by_span
+        .get("codex-turn")
+        .expect("Codex turn should export an OpenInference span");
+    let llm_attributes = attributes_by_span
+        .get("openai.responses")
+        .expect("Codex LLM call should export an OpenInference span");
+    let tool_attributes = attributes_by_span
+        .get("Read")
+        .expect("Codex tool call should export an OpenInference span");
+
+    assert_eq!(
+        turn_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("AGENT")
+    );
+    assert_eq!(
+        llm_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("LLM")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("openinference.span.kind")
+            .map(String::as_str),
+        Some("TOOL")
+    );
+    assert!(turn_attributes.contains_key("nemo_relay.uuid"));
+    assert!(llm_attributes.contains_key("nemo_relay.parent_uuid"));
+    assert!(tool_attributes.contains_key("nemo_relay.parent_uuid"));
+    let turn_metadata = serde_json::from_str::<serde_json::Value>(
+        turn_attributes
+            .get("metadata")
+            .expect("turn span should include OpenInference metadata"),
+    )
+    .unwrap();
+    assert_eq!(turn_metadata["session_id"], json!("codex-openinference"));
+    assert_eq!(
+        llm_attributes.get("llm.model_name").map(String::as_str),
+        Some("gpt-test")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("tool_call.function.name")
+            .map(String::as_str),
+        Some("Read")
+    );
+    assert_eq!(
+        tool_attributes
+            .get("tool_call.function.arguments")
+            .map(String::as_str),
+        Some("{\"file_path\":\"README.md\"}")
+    );
+    assert_eq!(
+        tool_attributes.get("tool_call.id").map(String::as_str),
+        Some("tool-call-1")
+    );
+    assert!(
+        llm_attributes
+            .values()
+            .any(|value| value.contains("Requested tools: Read"))
+    );
+    assert!(
+        attributes_by_span
+            .values()
+            .flat_map(|attributes| attributes.values())
+            .all(|value| !value.contains("sessionEnd"))
+    );
+}
+
+#[tokio::test]
 async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     // Regression test: hermes-agent and other integrations can emit terminal hooks more than once
     // per session. Without idempotency in `end_agent`, the second AgentEnded would re-open an
     // empty agent scope via `ensure_agent_started`, close it, and write an empty ATIF on top of
     // the just-written real trajectory.
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1374,7 +2054,7 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
 
 #[tokio::test]
 async fn writes_hermes_api_hook_usage_to_atif_metrics() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1446,14 +2126,90 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     assert_eq!(atif["steps"][1]["metrics"]["prompt_tokens"], json!(10));
     assert_eq!(atif["steps"][1]["metrics"]["completion_tokens"], json!(5));
     assert_eq!(atif["steps"][1]["metrics"]["cached_tokens"], json!(3));
+    assert!(atif["steps"][1]["metrics"].get("cost_usd").is_none());
     assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(10));
     assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(5));
     assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(3));
+    assert!(atif["final_metrics"].get("total_cost_usd").is_none());
+}
+
+#[tokio::test]
+async fn writes_hermes_api_hook_reported_cost_to_atif_metrics() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let config = GatewayConfig {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        openai_base_url: "http://127.0.0.1".into(),
+
+        anthropic_base_url: "http://127.0.0.1".into(),
+        metadata: None,
+        plugin_config: None,
+    };
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_start".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmStarted(LlmEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "pre_api_request".into(),
+                    api_call_id: "hermes-cost:task-1:1".into(),
+                    provider: "custom".into(),
+                    model_name: Some("qwen".into()),
+                    request: json!({ "model": "qwen" }),
+                    response: Value::Null,
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::LlmEnded(LlmEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "post_api_request".into(),
+                    api_call_id: "hermes-cost:task-1:1".into(),
+                    provider: "custom".into(),
+                    model_name: Some("qwen".into()),
+                    request: json!({}),
+                    response: json!({
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "cost_usd": 0.123
+                        }
+                    }),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "hermes-cost".into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_finalize".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    clear_plugin_configuration().unwrap();
+    let atif = read_atif_for_session(&atif_dir, "hermes-cost");
+    assert_eq!(atif["steps"][1]["metrics"]["cost_usd"], json!(0.123));
+    assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.123));
 }
 
 #[tokio::test]
 async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1564,7 +2320,7 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
 
 #[tokio::test]
 async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1686,7 +2442,7 @@ async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
 
 #[tokio::test]
 async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1776,7 +2532,7 @@ async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
 
 #[tokio::test]
 async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -1823,7 +2579,7 @@ async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory
 
 #[tokio::test]
 async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2003,7 +2759,7 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
 
 #[tokio::test]
 async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2131,7 +2887,7 @@ async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
 
 #[tokio::test]
 async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2139,30 +2895,7 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
 
-    for payload in [
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "hermes-orphan"
-        }),
-        json!({
-            "hook_event_name": "subagent_stop",
-            "session_id": "hermes-orphan",
-            "extra": {
-                "subagent_id": "worker-1",
-                "child_status": "completed"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_finalize",
-            "session_id": "hermes-orphan"
-        }),
-    ] {
-        let outcome = crate::adapters::hermes::adapt(payload, &headers);
-        manager
-            .apply_events(&headers, outcome.events)
-            .await
-            .unwrap();
-    }
+    drive_hermes_orphan_subagent_stop(&manager, &headers, "hermes-orphan", "worker-1").await;
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
@@ -2190,8 +2923,99 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
 }
 
 #[tokio::test]
+async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let tracked_sessions = tracked_sessions(&["hermes-orphan"]);
+    let temp = tempfile::tempdir().unwrap();
+    let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    let atof_name = "cli-hermes-orphan-atof-test";
+    let openinference_name = "cli-hermes-orphan-openinference-test";
+    register_filtered_session_subscriber(
+        atof_name,
+        Arc::clone(&tracked_sessions),
+        atof_exporter.subscriber(),
+    );
+
+    let (openinference_subscriber, span_exporter) =
+        make_openinference_test_subscriber("session-test-scope");
+    register_filtered_session_subscriber(
+        openinference_name,
+        Arc::clone(&tracked_sessions),
+        openinference_subscriber.subscriber(),
+    );
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    drive_hermes_orphan_subagent_stop(&manager, &headers, "hermes-orphan", "worker-1").await;
+
+    atof_exporter.force_flush().unwrap();
+    openinference_subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(atof_name).unwrap());
+    assert!(deregister_subscriber(openinference_name).unwrap());
+
+    let atof_events = read_atof_events(atof_exporter.path());
+    let turn_start = atof_events
+        .iter()
+        .find(|event| {
+            event["category"] == "agent"
+                && event["scope_category"] == "start"
+                && event["metadata"]["session_id"] == json!("hermes-orphan")
+                && event["metadata"]["nemo_relay_scope_role"] == json!("turn")
+        })
+        .expect("Hermes orphan flow should export a parent turn start event");
+    let orphan_marks = atof_events
+        .iter()
+        .filter(|event| event["name"] == json!("subagent_end_without_start"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        orphan_marks.len(),
+        1,
+        "Hermes orphan flow should export exactly one readable orphan mark: {atof_events:#?}"
+    );
+    assert_eq!(orphan_marks[0]["parent_uuid"], turn_start["uuid"]);
+
+    let spans = span_exporter.get_finished_spans().unwrap();
+    assert!(
+        spans
+            .iter()
+            .all(|span| span.name.as_ref() != "mark:subagent_end_without_start"),
+        "Correlated Hermes orphan mark should attach to the turn span instead of exporting a standalone orphan span"
+    );
+    let turn_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("AGENT")
+                && attributes.get("metadata").is_some_and(|metadata| {
+                    serde_json::from_str::<Value>(metadata)
+                        .ok()
+                        .is_some_and(|metadata| {
+                            metadata["session_id"] == json!("hermes-orphan")
+                                && metadata["nemo_relay_scope_role"] == json!("turn")
+                        })
+                })
+        })
+        .expect("Hermes orphan flow should export an OpenInference turn span");
+    let turn_attributes = attr_map(&turn_span.attributes);
+    let orphan_event = turn_span
+        .events
+        .events
+        .iter()
+        .find(|event| event.name.as_ref() == "subagent_end_without_start")
+        .expect("Hermes orphan mark should attach to the active turn span");
+    let orphan_attributes = attr_map(&orphan_event.attributes);
+    assert_eq!(
+        orphan_attributes.get("nemo_relay.mark.parent_uuid"),
+        turn_attributes.get("nemo_relay.uuid")
+    );
+}
+
+#[tokio::test]
 async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2199,88 +3023,14 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
     let manager = SessionManager::new(config);
     let headers = HeaderMap::new();
 
-    for payload in [
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "parent-session"
-        }),
-        json!({
-            "hook_event_name": "subagent_start",
-            "session_id": "parent-session",
-            "extra": {
-                "child_goal": "read plugin yaml",
-                "child_role": "leaf",
-                "child_session_id": "child-session",
-                "child_subagent_id": "sa-1",
-                "parent_turn_id": "parent-turn-1",
-                "telemetry_schema_version": "hermes.observer.v1"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "child-session"
-        }),
-        json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "child-session",
-            "extra": {
-                "task_id": "child-task",
-                "api_call_count": 1,
-                "provider": "custom",
-                "model": "qwen",
-                "request": {
-                    "body": {
-                        "model": "qwen",
-                        "messages": [
-                            { "role": "user", "content": "read plugin yaml" }
-                        ]
-                    }
-                }
-            }
-        }),
-        json!({
-            "hook_event_name": "post_api_request",
-            "session_id": "child-session",
-            "extra": {
-                "task_id": "child-task",
-                "api_call_count": 1,
-                "provider": "custom",
-                "model": "qwen",
-                "response": {
-                    "assistant_message": {
-                        "role": "assistant",
-                        "content": "name: nemo_flow"
-                    },
-                    "usage": {
-                        "prompt_tokens": 3,
-                        "completion_tokens": 2
-                    }
-                }
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_end",
-            "session_id": "child-session"
-        }),
-        json!({
-            "hook_event_name": "subagent_stop",
-            "session_id": "parent-session",
-            "extra": {
-                "child_session_id": "child-session",
-                "child_status": "completed"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_finalize",
-            "session_id": "parent-session"
-        }),
-    ] {
-        let outcome = crate::adapters::hermes::adapt(payload, &headers);
-        manager
-            .apply_events(&headers, outcome.events)
-            .await
-            .unwrap();
-    }
+    drive_hermes_subagent_child_session(
+        &manager,
+        &headers,
+        "parent-session",
+        "child-session",
+        "sa-1",
+    )
+    .await;
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "parent-session");
@@ -2309,184 +3059,131 @@ async fn hermes_subagent_child_session_embeds_non_empty_atif_trajectory() {
 }
 
 #[tokio::test]
+async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let tracked_sessions = tracked_sessions(&["parent-session", "child-session"]);
+    let temp = tempfile::tempdir().unwrap();
+    let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    let atof_name = "cli-hermes-subagent-atof-test";
+    let openinference_name = "cli-hermes-subagent-openinference-test";
+    register_filtered_session_subscriber(
+        atof_name,
+        Arc::clone(&tracked_sessions),
+        atof_exporter.subscriber(),
+    );
+
+    let (openinference_subscriber, span_exporter) =
+        make_openinference_test_subscriber("session-test-scope");
+    register_filtered_session_subscriber(
+        openinference_name,
+        Arc::clone(&tracked_sessions),
+        openinference_subscriber.subscriber(),
+    );
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    drive_hermes_subagent_child_session(
+        &manager,
+        &headers,
+        "parent-session",
+        "child-session",
+        "sa-1",
+    )
+    .await;
+
+    atof_exporter.force_flush().unwrap();
+    openinference_subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(atof_name).unwrap());
+    assert!(deregister_subscriber(openinference_name).unwrap());
+
+    let atof_events = read_atof_events(atof_exporter.path());
+    let parent_turn = atof_events
+        .iter()
+        .find(|event| {
+            event["category"] == "agent"
+                && event["scope_category"] == "start"
+                && event["metadata"]["session_id"] == json!("parent-session")
+                && event["metadata"]["nemo_relay_scope_role"] == json!("turn")
+        })
+        .expect("Hermes parent session should export a turn start event");
+    let child_subagent_events = atof_events
+        .iter()
+        .filter(|event| {
+            event["category"] == "agent"
+                && event["metadata"]["session_id"] == json!("child-session")
+                && event["metadata"]["nemo_relay_scope_role"] == json!("subagent")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_subagent_events.len(),
+        2,
+        "Hermes child session should export one subagent start/end pair: {atof_events:#?}"
+    );
+    assert!(
+        child_subagent_events
+            .iter()
+            .all(|event| event["parent_uuid"] == parent_turn["uuid"])
+    );
+
+    let spans = span_exporter.get_finished_spans().unwrap();
+    let parent_turn_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("AGENT")
+                && attributes.get("metadata").is_some_and(|metadata| {
+                    serde_json::from_str::<Value>(metadata)
+                        .ok()
+                        .is_some_and(|metadata| {
+                            metadata["session_id"] == json!("parent-session")
+                                && metadata["nemo_relay_scope_role"] == json!("turn")
+                        })
+                })
+        })
+        .expect("Hermes parent session should export an OpenInference turn span");
+    let child_subagent_spans = spans
+        .iter()
+        .filter(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("AGENT")
+                && attributes.get("metadata").is_some_and(|metadata| {
+                    serde_json::from_str::<Value>(metadata)
+                        .ok()
+                        .is_some_and(|metadata| {
+                            metadata["session_id"] == json!("child-session")
+                                && metadata["nemo_relay_scope_role"] == json!("subagent")
+                        })
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        child_subagent_spans.len(),
+        1,
+        "Hermes child session should export exactly one OpenInference subagent span"
+    );
+    let parent_attributes = attr_map(&parent_turn_span.attributes);
+    let child_attributes = attr_map(&child_subagent_spans[0].attributes);
+    assert_eq!(
+        child_attributes.get("nemo_relay.parent_uuid"),
+        parent_attributes.get("nemo_relay.uuid")
+    );
+}
+
+#[tokio::test]
 async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
     let manager = SessionManager::new(session_test_config());
     let headers = HeaderMap::new();
-
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::AgentStarted(SessionEvent {
-                session_id: "hermes-routed".into(),
-                agent_kind: AgentKind::Hermes,
-                event_name: "on_session_start".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
-
-    let anthropic = manager
-        .start_llm(
-            &headers,
-            LlmGatewayStart {
-                session_id: Some("hermes-routed".into()),
-                provider: "anthropic.messages".into(),
-                model_name: Some("claude-sonnet-4".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: Some("msg-request".into()),
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "claude-sonnet-4",
-                        "messages": [{"role": "user", "content": "Find the file."}],
-                        "tools": [{"name": "search", "input_schema": {"type": "object"}}]
-                    }),
-                },
-                streaming: false,
-                metadata: json!({ "gateway_path": "/v1/messages" }),
-            },
-        )
-        .await
-        .unwrap();
-    manager
-        .end_llm(
-            anthropic,
-            json!({
-                "id": "msg_01",
-                "type": "message",
-                "content": [
-                    {"type": "text", "text": "I will search."},
-                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
-                ],
-                "usage": {
-                    "input_tokens": 11,
-                    "output_tokens": 7,
-                    "cache_read_input_tokens": 3,
-                    "cost": {"total": 0.0042}
-                }
-            }),
-            json!({}),
-        )
-        .await
-        .unwrap();
-
-    let responses = manager
-        .start_llm(
-            &headers,
-            LlmGatewayStart {
-                session_id: Some("hermes-routed".into()),
-                provider: "openai.responses".into(),
-                model_name: Some("gpt-4o".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: Some("resp-request".into()),
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "gpt-4o",
-                        "input": "Find the weather.",
-                        "tools": [{"type": "function", "name": "get_weather"}]
-                    }),
-                },
-                streaming: false,
-                metadata: json!({ "gateway_path": "/v1/responses" }),
-            },
-        )
-        .await
-        .unwrap();
-    manager
-        .end_llm(
-            responses,
-            json!({
-                "id": "resp_1",
-                "output": [
-                    {"type": "message", "content": [{"type": "output_text", "text": "I will check the weather."}]},
-                    {"type": "function_call", "call_id": "call_weather_1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}
-                ],
-                "usage": {
-                    "input_tokens": 75,
-                    "output_tokens": 20,
-                    "total_tokens": 95,
-                    "input_tokens_details": {"cached_tokens": 10},
-                    "cost_usd": 0.005
-                }
-            }),
-            json!({}),
-        )
-        .await
-        .unwrap();
-
-    let chat = manager
-        .start_llm(
-            &headers,
-            LlmGatewayStart {
-                session_id: Some("hermes-routed".into()),
-                provider: "openai.chat_completions".into(),
-                model_name: Some("gpt-4o".into()),
-                subagent_id: None,
-                conversation_id: None,
-                generation_id: None,
-                request_id: Some("chat-request".into()),
-                request: LlmRequest {
-                    headers: Map::new(),
-                    content: json!({
-                        "model": "gpt-4o",
-                        "messages": [{"role": "user", "content": "Inspect the files."}],
-                        "tools": [{"type": "function", "function": {"name": "read"}}]
-                    }),
-                },
-                streaming: false,
-                metadata: json!({ "gateway_path": "/v1/chat/completions" }),
-            },
-        )
-        .await
-        .unwrap();
-    manager
-        .end_llm(
-            chat,
-            json!({
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": "I will inspect.",
-                        "tool_calls": [{"id": "call_read_1", "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}}]
-                    }
-                }],
-                "usage": {
-                    "prompt_tokens": 3,
-                    "completion_tokens": 4,
-                    "total_tokens": 7,
-                    "prompt_tokens_details": {"cached_tokens": 2},
-                    "cost_usd": 0.001
-                }
-            }),
-            json!({}),
-        )
-        .await
-        .unwrap();
-
-    manager
-        .apply_events(
-            &headers,
-            vec![NormalizedEvent::AgentEnded(SessionEvent {
-                session_id: "hermes-routed".into(),
-                agent_kind: AgentKind::Hermes,
-                event_name: "on_session_finalize".into(),
-                payload: json!({}),
-                metadata: json!({}),
-            })],
-        )
-        .await
-        .unwrap();
+    drive_hermes_routed_provider_session(&manager, &headers, "hermes-routed", None).await;
 
     clear_plugin_configuration().unwrap();
     let atif = read_atif_for_session(&atif_dir, "hermes-routed");
@@ -2527,8 +3224,133 @@ async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
 }
 
 #[tokio::test]
+async fn hermes_routed_provider_payloads_emit_openinference_text_usage_and_cost() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "cli-hermes-routed-openinference-test";
+    let session_id = "hermes-routed-openinference";
+    let _ = deregister_subscriber(subscriber_name);
+    let (subscriber, exporter) = make_openinference_test_subscriber("session-test-scope");
+    let openinference_subscriber = subscriber.subscriber();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            // Manual test-path LLM events do not carry the owning session id in metadata,
+            // so the routed helper tags them with a stable test marker for subscriber isolation.
+            if event
+                .metadata()
+                .and_then(|metadata| metadata.get(HERMES_ROUTED_TEST_SESSION_KEY))
+                .and_then(Value::as_str)
+                == Some(session_id)
+            {
+                openinference_subscriber(event);
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    drive_hermes_routed_provider_session(&manager, &headers, session_id, Some(session_id)).await;
+
+    subscriber.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let llm_spans: Vec<HashMap<String, String>> = spans
+        .iter()
+        .map(|span| attr_map(&span.attributes))
+        .filter(|attributes| {
+            attributes
+                .get("openinference.span.kind")
+                .map(String::as_str)
+                == Some("LLM")
+        })
+        .collect();
+    assert_eq!(llm_spans.len(), 3);
+
+    let anthropic = llm_spans
+        .iter()
+        .find(|attributes| {
+            attributes.get("output.value")
+                == Some(&"I will search.\nRequested tools: search".to_string())
+        })
+        .expect("expected Hermes-routed Anthropic OpenInference span");
+    assert_eq!(
+        anthropic.get("llm.model_name"),
+        Some(&"claude-sonnet-4".to_string())
+    );
+    assert_eq!(
+        anthropic.get("input.value"),
+        Some(&"user: Find the file.".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.prompt"),
+        Some(&"11".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.completion"),
+        Some(&"7".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"3".to_string())
+    );
+    assert_eq!(anthropic.get("llm.cost.total"), Some(&"0.0042".to_string()));
+
+    let responses = llm_spans
+        .iter()
+        .find(|attributes| {
+            attributes.get("output.value")
+                == Some(&"I will check the weather.\nRequested tools: get_weather".to_string())
+        })
+        .expect("expected Hermes-routed Responses OpenInference span");
+    assert_eq!(responses.get("llm.model_name"), Some(&"gpt-4o".to_string()));
+    assert_eq!(
+        responses.get("llm.token_count.prompt"),
+        Some(&"75".to_string())
+    );
+    assert_eq!(
+        responses.get("llm.token_count.completion"),
+        Some(&"20".to_string())
+    );
+    assert_eq!(
+        responses.get("llm.token_count.total"),
+        Some(&"95".to_string())
+    );
+    assert_eq!(
+        responses.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"10".to_string())
+    );
+    assert_eq!(responses.get("llm.cost.total"), Some(&"0.005".to_string()));
+
+    let chat = llm_spans
+        .iter()
+        .find(|attributes| {
+            attributes.get("output.value")
+                == Some(&"I will inspect.\nRequested tools: read".to_string())
+        })
+        .expect("expected Hermes-routed chat completions OpenInference span");
+    assert_eq!(chat.get("llm.model_name"), Some(&"gpt-4o".to_string()));
+    assert_eq!(
+        chat.get("input.value"),
+        Some(&"user: Inspect the files.".to_string())
+    );
+    assert_eq!(chat.get("llm.token_count.prompt"), Some(&"3".to_string()));
+    assert_eq!(
+        chat.get("llm.token_count.completion"),
+        Some(&"4".to_string())
+    );
+    assert_eq!(chat.get("llm.token_count.total"), Some(&"7".to_string()));
+    assert_eq!(
+        chat.get("llm.token_count.prompt_details.cache_read"),
+        Some(&"2".to_string())
+    );
+    assert_eq!(chat.get("llm.cost.total"), Some(&"0.001".to_string()));
+}
+
+#[tokio::test]
 async fn empty_hook_marks_do_not_create_empty_atif_steps() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;
@@ -2968,7 +3790,7 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
 
 #[tokio::test]
 async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn() {
-    let _guard = OBSERVABILITY_PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
     install_test_atif_plugin(&atif_dir).await;

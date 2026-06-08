@@ -1328,6 +1328,26 @@ fn atif_storage_unknown_backend_type_is_rejected() {
 }
 
 #[test]
+fn disabled_atif_storage_config_does_not_report_feature_disabled() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": false,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "s3", "bucket": "configured-but-disabled"}]
+        }
+    })));
+
+    assert!(
+        !report.diagnostics.iter().any(|diag| {
+            diag.code == "observability.feature_disabled"
+                && diag.field.as_deref() == Some("storage")
+        }),
+        "disabled ATIF storage should not report feature-disabled diagnostics: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn atif_storage_empty_bucket_is_rejected() {
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {

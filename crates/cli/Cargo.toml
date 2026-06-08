@@ -50,5 +50,7 @@ toml_edit = "0.23"
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

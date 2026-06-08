@@ -11,8 +11,47 @@ use crate::api::event::{
 use crate::api::llm::LlmAttributes;
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
+use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::response::{
+    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use serde_json::json;
 use std::collections::HashSet;
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
+fn install_test_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
 
 #[derive(Debug, Clone, Copy)]
 enum EventType {
@@ -678,17 +717,21 @@ fn test_exporter_llm_lifecycle() {
 
 #[test]
 fn test_extract_metrics_supports_provider_usage_payloads() {
-    let openai_metrics = extract_metrics(&json!({
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 20,
-            "total_tokens": 30,
-            "cost_usd": 0.001,
-            "prompt_tokens_details": {
-                "cached_tokens": 4
+    let openai_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "cost_usd": 0.001,
+                "prompt_tokens_details": {
+                    "cached_tokens": 4
+                }
             }
-        }
-    }))
+        }),
+        None,
+        None,
+    )
     .unwrap();
     assert_eq!(openai_metrics.prompt_tokens, Some(10));
     assert_eq!(openai_metrics.completion_tokens, Some(20));
@@ -699,17 +742,21 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     );
     assert_eq!(openai_metrics.cost_usd, Some(0.001));
 
-    let responses_metrics = extract_metrics(&json!({
-        "usage": {
-            "input_tokens": 75,
-            "output_tokens": 20,
-            "total_tokens": 95,
-            "input_tokens_details": {
-                "cached_tokens": 10
-            },
-            "cost_usd": 0.005
-        }
-    }))
+    let responses_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "input_tokens": 75,
+                "output_tokens": 20,
+                "total_tokens": 95,
+                "input_tokens_details": {
+                    "cached_tokens": 10
+                },
+                "cost_usd": 0.005
+            }
+        }),
+        None,
+        None,
+    )
     .unwrap();
     assert_eq!(responses_metrics.prompt_tokens, Some(75));
     assert_eq!(responses_metrics.completion_tokens, Some(20));
@@ -720,20 +767,216 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
     );
     assert_eq!(responses_metrics.cost_usd, Some(0.005));
 
-    let anthropic_metrics = extract_metrics(&json!({
-        "usage": {
-            "input_tokens": 11,
-            "output_tokens": 22,
-            "cache_read_input_tokens": 3,
-            "cache_creation_input_tokens": 5,
-            "cost": { "total": 0.0042 }
-        }
-    }))
+    let anthropic_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "input_tokens": 11,
+                "output_tokens": 22,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 5,
+                "cost": { "total": 0.0042, "currency": "USD" }
+            }
+        }),
+        None,
+        None,
+    )
     .unwrap();
     assert_eq!(anthropic_metrics.prompt_tokens, Some(11));
     assert_eq!(anthropic_metrics.completion_tokens, Some(22));
     assert_eq!(anthropic_metrics.cached_tokens, Some(8));
     assert_eq!(anthropic_metrics.cost_usd, Some(0.0042));
+
+    let non_usd_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "input_tokens": 11,
+                "output_tokens": 22,
+                "cost": { "total": 0.0042, "currency": "EUR" }
+            }
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(non_usd_metrics.cost_usd, None);
+}
+
+#[test]
+fn test_reported_cost_object_blocks_model_pricing_estimation() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let non_usd_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "total": 0.42,
+                    "currency": "EUR"
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(non_usd_metrics.cost_usd, None);
+
+    let missing_total_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "currency": "USD"
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(missing_total_metrics.cost_usd, None);
+
+    let legacy_missing_currency_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "total": 0.42
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(legacy_missing_currency_metrics.cost_usd, Some(0.42));
+
+    let component_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "currency": "usd",
+                    "input": 0.25,
+                    "output": 0.5,
+                    "cache_read": 0.125
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(component_metrics.cost_usd, Some(0.875));
+}
+
+#[test]
+fn test_exporter_derives_llm_cost_from_model_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("gpt-4o-mini")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "prompt_tokens_details": {"cached_tokens": 200}
+            }
+        }))
+        .model_name("priced-model")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+    assert_eq!(metrics.cost_usd, Some(0.000_435));
+    assert_eq!(
+        trajectory.final_metrics.as_ref().unwrap().total_cost_usd,
+        Some(0.000_435)
+    );
+}
+
+#[test]
+fn test_exporter_uses_normalized_usage_cost_before_model_pricing() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("unknown-model")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "cost": {
+                    "total": 0.42,
+                    "source": "provider_reported",
+                    "pricing_model": "external-model",
+                    "pricing_as_of": "2026-06-04"
+                }
+            }
+        }))
+        .model_name("unknown-model")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+    assert_eq!(metrics.cost_usd, Some(0.42));
+    assert_eq!(
+        trajectory.final_metrics.as_ref().unwrap().total_cost_usd,
+        Some(0.42)
+    );
+}
+
+#[test]
+fn test_exporter_omits_cost_for_unknown_model_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500
+            }
+        }),
+        None,
+        Some("unknown-model"),
+    )
+    .unwrap();
+
+    assert_eq!(metrics.cost_usd, None);
 }
 
 #[test]
@@ -3935,13 +4178,14 @@ fn test_metrics_extra_captures_unknown_token_usage_keys() {
     let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
     assert_eq!(metrics.prompt_tokens, Some(20));
     assert_eq!(metrics.completion_tokens, Some(10));
+    assert_eq!(metrics.cached_tokens, Some(5));
     // Unknown keys land in extra
     let extra = metrics.extra.as_ref().unwrap();
     assert_eq!(extra["reasoning_tokens"], json!(150));
-    assert_eq!(extra["cache_creation_input_tokens"], json!(5));
     // Known keys do not appear in extra
     assert!(extra.get("prompt_tokens").is_none());
     assert!(extra.get("completion_tokens").is_none());
+    assert!(extra.get("cache_creation_input_tokens").is_none());
 }
 
 #[test]

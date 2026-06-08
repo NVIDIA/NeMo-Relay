@@ -40,13 +40,26 @@ struct CapturedHttpRequest {
 struct TestHttpServer {
     base_url: String,
     received: std::sync::Arc<std::sync::Mutex<Vec<CapturedHttpRequest>>>,
-    handle: std::thread::JoinHandle<()>,
+    stop_tx: Option<std::sync::mpsc::Sender<()>>,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 const RUN_ENV: &str = "NEMO_RELAY_RUN_S3_TESTS";
 const BUCKET_ENV: &str = "NEMO_RELAY_S3_TEST_BUCKET";
 const KEY_PREFIX_ENV: &str = "NEMO_RELAY_S3_TEST_KEY_PREFIX";
+const HTTP_SERVER_HARD_TIMEOUT: Duration = Duration::from_secs(10);
 static PLUGIN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+impl TestHttpServer {
+    fn stop(&mut self) {
+        if let Some(stop_tx) = self.stop_tx.take() {
+            let _ = stop_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("HTTP server thread should finish");
+        }
+    }
+}
 
 fn env_value_is_truthy(value: Option<&str>) -> bool {
     matches!(
@@ -243,13 +256,22 @@ fn start_http_server(
         .into_iter()
         .map(|(path, status)| (path.to_string(), status))
         .collect::<std::collections::HashMap<_, _>>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let received = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let thread_received = std::sync::Arc::clone(&received);
     let handle = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while thread_received.lock().unwrap().len() < expected_requests
-            && std::time::Instant::now() < deadline
-        {
+        let deadline = std::time::Instant::now() + HTTP_SERVER_HARD_TIMEOUT;
+        loop {
+            if thread_received.lock().unwrap().len() >= expected_requests {
+                break;
+            }
+            match stop_rx.try_recv() {
+                Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     stream.set_nonblocking(false).expect("set stream blocking");
@@ -269,7 +291,8 @@ fn start_http_server(
     TestHttpServer {
         base_url,
         received,
-        handle,
+        stop_tx: Some(stop_tx),
+        handle: Some(handle),
     }
 }
 
@@ -391,7 +414,7 @@ fn atif_storage_uploads_trajectory_to_s3() {
 fn atif_storage_posts_trajectory_to_http_endpoints() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
     reset_runtime();
-    let server = start_http_server(2, vec![("/primary", 204), ("/secondary", 204)]);
+    let mut server = start_http_server(2, vec![("/primary", 204), ("/secondary", 204)]);
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
         std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
@@ -417,10 +440,7 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
     flush_subscribers().expect("HTTP upload subscriber should flush");
 
     clear_plugin_configuration().expect("plugin teardown should succeed after HTTP uploads");
-    server
-        .handle
-        .join()
-        .expect("HTTP server thread should finish");
+    server.stop();
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");
@@ -475,7 +495,7 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
 fn atif_storage_http_non_2xx_marks_sink_unhealthy() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
     reset_runtime();
-    let server = start_http_server(2, vec![("/fail", 500)]);
+    let mut server = start_http_server(2, vec![("/fail", 500)]);
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
         std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
@@ -507,10 +527,7 @@ fn atif_storage_http_non_2xx_marks_sink_unhealthy() {
         .expect("pop second agent scope");
     flush_subscribers().expect("HTTP upload subscriber should flush after failure");
 
-    server
-        .handle
-        .join()
-        .expect("HTTP server thread should finish");
+    server.stop();
     {
         let requests = server.received.lock().unwrap();
         assert_eq!(requests.len(), 1);
