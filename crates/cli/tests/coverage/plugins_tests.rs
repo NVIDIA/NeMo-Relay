@@ -240,6 +240,13 @@ fn typed_editor_model_contains_pii_redaction_options() {
 
     let builtin = schema.field("builtin").unwrap().schema().unwrap();
     assert_eq!(builtin.field("action").unwrap().kind, EditorFieldKind::Enum);
+    assert!(
+        builtin
+            .field("action")
+            .unwrap()
+            .enum_values
+            .contains(&"redact")
+    );
     assert_eq!(
         builtin.field("target_paths").unwrap().kind,
         EditorFieldKind::Json

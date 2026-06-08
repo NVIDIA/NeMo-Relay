@@ -11,4 +11,8 @@ pub(crate) fn test_mutex() -> &'static Mutex<()> {
     crate::shared_runtime::runtime_owner_test_mutex()
 }
 
+pub(crate) mod builtin;
 pub mod component;
+pub(crate) mod detectors;
+pub(crate) mod local;
+pub(crate) mod overlay;

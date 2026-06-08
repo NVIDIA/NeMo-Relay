@@ -20,6 +20,21 @@ field names stay `snake_case` in every binding and in `plugins.toml`.
 
 </Note>
 
+## Relation to Raw Middleware
+
+This plugin uses the same sanitize-guardrail middleware family documented in
+[Middleware](/about-nemo-relay/concepts/middleware).
+
+The difference is the layer of abstraction:
+
+- raw middleware asks you to register sanitize callbacks directly in code
+- `pii_redaction` gives you a first-party, config-driven privacy contract on
+  top of those same runtime hooks
+
+Choose `pii_redaction` when you want a reusable built-in policy surface.
+Choose raw middleware when you need bespoke callback logic that does not fit
+the plugin contract.
+
 ## Component Shape
 
 The top-level PII redaction object contains:
@@ -49,7 +64,7 @@ At least one managed redaction surface must be enabled.
 | Managed LLM `output` | Supported | Extension point only in this PR |
 | Managed `tool_input` | Supported | Extension point only in this PR |
 | Managed `tool_output` | Supported | Extension point only in this PR |
-| Built-in actions | `remove`, `regex_replace`, `hash`, `mask` | N/A |
+| Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the built-in core plugin | Runtimes that install a local backend provider |
 
@@ -58,14 +73,18 @@ At least one managed redaction surface must be enabled.
 Use `builtin` mode when NeMo Relay should sanitize emitted observability
 payloads with a deterministic first-party backend.
 
+This is the recommended mode when the privacy behavior is common enough to be
+described declaratively with built-in actions, detector presets, exact target
+paths, and supported codecs.
+
 ### Requirements
 
 To use `mode = "builtin"`:
 
 - `builtin` settings are required.
 - `codec` is required when `input` or `output` is enabled.
-- `builtin.action` must be `remove`, `regex_replace`, `hash`, or `mask`.
-- `builtin.pattern` or `builtin.detector` is required when `builtin.action = "regex_replace"`.
+- `builtin.action` must be `remove`, `redact`, `regex_replace`, `hash`, or `mask`.
+- `builtin.pattern` or `builtin.detector` is required when `builtin.action = "regex_replace"` or `builtin.action = "redact"`.
 
 ### `plugins.toml` Example
 
@@ -133,17 +152,20 @@ The editor preserves unknown fields when it rewrites an existing
 `pii_redaction` component, so future or runtime-specific settings are not
 discarded by the interactive edit flow.
 
+If you find yourself needing callback code instead of editor/config fields, it
+is a sign that raw middleware may be the better fit for that specific policy.
+
 ## Builtin Settings
 
 The `builtin` section contains:
 
 | Field | Purpose |
 |---|---|
-| `action` | Sanitization action. Current values are `remove`, `regex_replace`, `hash`, and `mask`. |
+| `action` | Sanitization action. Current values are `remove`, `redact`, `regex_replace`, `hash`, and `mask`. |
 | `target_paths` | Exact JSON-pointer paths to sanitize. Empty means every matching string leaf. |
-| `pattern` | Regex pattern used when `action = "regex_replace"`. |
+| `pattern` | Regex pattern used when `action = "regex_replace"` or `action = "redact"`. |
 | `detector` | Optional built-in matcher preset. Current values are `email`, `phone`, `api_key`, `ip_address`, `ipv6`, `url`, `uuid`, `bearer_token`, `jwt`, `credit_card`, `aws_access_key_id`, `aws_secret_access_key`, `gcp_api_key`, and `azure_storage_account_key`. |
-| `replacement` | Replacement text used when `action = "regex_replace"`. Defaults to `[REDACTED]`. |
+| `replacement` | Replacement text used when `action = "regex_replace"` or `action = "redact"`. Defaults to `[REDACTED]`. |
 | `mask_char` | Masking token used when `action = "mask"`. Defaults to `*`. |
 | `unmasked_prefix` | Leading character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
 | `unmasked_suffix` | Trailing character count to keep when `action = "mask"`. Defaults to `0`, unless a detector-specific masking preset is active. |
@@ -167,6 +189,20 @@ replaces matches with the configured `replacement`.
 
 If you set `detector` instead of `pattern`, the built-in backend uses the
 detector's stock matcher regex.
+
+### `redact`
+
+`redact` is the deterministic whole-match replacement lane.
+
+It uses the same `pattern` or `detector` matcher flow as `regex_replace`, but
+defaults the replacement token to `[REDACTED]` and is intended for cases where
+you do not want to preserve any matched secret characters.
+
+Use `redact` when you want:
+
+- credential-style secrets fully replaced
+- a consistent redaction token across detectors
+- clearer policy intent than a custom `regex_replace`
 
 ### `hash`
 
@@ -220,6 +256,24 @@ The plugin uses different payload boundaries for tools and LLMs:
 The current implementation also preserves provider-shaped response-path
 compatibility for the supported codecs, but normalized LLM paths are the
 recommended contract for new configuration.
+
+## Choosing Between This Plugin and Middleware
+
+Use this plugin when:
+
+- the privacy behavior should be reusable across applications
+- config-driven enablement matters more than hand-written callbacks
+- you want built-in detectors and action semantics
+- you want a documented first-party NeMo Relay privacy surface
+
+Use raw middleware when:
+
+- the policy depends on application-specific runtime state
+- the sanitization logic is too custom for the plugin contract
+- you need to prototype or experiment before standardizing behavior
+
+The runtime effect is still sanitize-guardrail middleware in both cases. The
+plugin simply gives you a standardized policy layer on top.
 
 ## Detector Presets
 

@@ -5,7 +5,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
 
-use super::PiiRedactionConfig;
+use super::component::PiiRedactionConfig;
 
 type LocalBackendProvider = Arc<
     dyn Fn(PiiRedactionConfig, &mut PluginRegistrationContext) -> PluginResult<()> + Send + Sync,

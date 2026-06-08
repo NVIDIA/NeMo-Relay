@@ -438,6 +438,71 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
 }
 
 #[test]
+fn builtin_redact_replaces_matching_tool_payload_substrings_with_default_token() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "tool_input": true,
+        "tool_output": true,
+        "input": false,
+        "output": false,
+        "builtin": {
+            "action": "redact",
+            "detector": "bearer_token",
+            "target_paths": []
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-redact-tool-events");
+    let secret = "Bearer sk-demo-secret-123456";
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("redact_tool")
+            .args(json!({
+                "auth": secret,
+                "message": format!("primary auth={secret}")
+            }))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .result(json!({
+                "result": secret,
+                "nested": {"token": secret}
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(
+        captured_events[0].input().unwrap()["auth"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(
+        captured_events[0].input().unwrap()["message"],
+        json!("primary auth=[REDACTED]")
+    );
+    assert_eq!(
+        captured_events[1].output().unwrap()["result"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(
+        captured_events[1].output().unwrap()["nested"]["token"],
+        json!("[REDACTED]")
+    );
+
+    deregister_subscriber("pii-redaction-redact-tool-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_mask_preserves_configured_prefix_and_suffix() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1812,6 +1877,71 @@ async fn builtin_backend_sanitizes_openai_chat_response_from_normalized_message_
     );
 
     deregister_subscriber("pii-redaction-openai-chat-normalized-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_redact_sanitizes_openai_chat_response_from_detector_path() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "redact",
+            "detector": "email",
+            "target_paths": ["/message"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-openai-chat-redact-response");
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OpenAIChatCodec);
+
+    let _ = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}),
+            })
+            .func(noop_openai_chat_exec_fn(json!({
+                "id": "chatcmpl-redact-123",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "alice@example.com"},
+                        "finish_reason": "stop"
+                    }
+                ]
+            })))
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(
+        captured_events[1].output().unwrap()["choices"][0]["message"]["content"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(
+        captured_events[1]
+            .annotated_response()
+            .and_then(|response| response.response_text()),
+        Some("[REDACTED]")
+    );
+
+    deregister_subscriber("pii-redaction-openai-chat-redact-response").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

@@ -3,7 +3,7 @@
 
 use crate::plugin::PluginError;
 
-use super::mask_text;
+use super::builtin::mask_text;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum BuiltinDetector {
