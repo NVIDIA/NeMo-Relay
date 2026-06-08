@@ -51,21 +51,21 @@ pub(crate) fn metadata_with_otel_status(
 
     // In the OTel spec, the status description should only be set if the status code is ERROR.
     // https://opentelemetry.io/docs/specs/otel/trace/api/#set-status
-    if status_code == "ERROR" {
-        if let Some(status_message) = status_message {
-            status.insert(
-                "otel.status_description".to_string(),
-                Json::String(status_message),
-            );
-        }
+    if status_code == "ERROR"
+        && let Some(status_message) = status_message
+    {
+        status.insert(
+            "otel.status_description".to_string(),
+            Json::String(status_message),
+        );
     }
     let mut metadata = merge_json(metadata, Some(Json::Object(status)));
 
     // Explicitly remove any existing otel.status_description if the status code is not ERROR.
-    if status_code != "ERROR" {
-        if let Some(Json::Object(metadata)) = metadata.as_mut() {
-            metadata.remove("otel.status_description");
-        }
+    if status_code != "ERROR"
+        && let Some(Json::Object(metadata)) = metadata.as_mut()
+    {
+        metadata.remove("otel.status_description");
     }
     metadata
 }
