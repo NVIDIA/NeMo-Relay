@@ -245,19 +245,25 @@ fn mask_api_key(text: &str, mask_char: &str) -> String {
 }
 
 fn mask_ip_address(text: &str, mask_char: &str) -> String {
-    let mut octets = text.split('.').collect::<Vec<_>>();
+    let mut octets = text
+        .split('.')
+        .map(std::borrow::ToOwned::to_owned)
+        .collect::<Vec<_>>();
     if octets.len() != 4 {
         return mask_text(text, mask_char, 0, 0);
     }
 
     for octet in octets.iter_mut().take(3) {
-        *octet = "***";
+        *octet = mask_char.repeat(3);
     }
     octets.join(".")
 }
 
 fn mask_ipv6(text: &str, mask_char: &str) -> String {
-    let mut segments = text.split(':').collect::<Vec<_>>();
+    let mut segments = text
+        .split(':')
+        .map(std::borrow::ToOwned::to_owned)
+        .collect::<Vec<_>>();
     if segments.len() < 3 {
         return mask_text(text, mask_char, 0, 0);
     }
@@ -265,7 +271,7 @@ fn mask_ipv6(text: &str, mask_char: &str) -> String {
     let visible_tail_start = segments.len().saturating_sub(1);
     for segment in segments.iter_mut().take(visible_tail_start) {
         if !segment.is_empty() {
-            *segment = "****";
+            *segment = mask_char.repeat(4);
         }
     }
     segments.join(":")

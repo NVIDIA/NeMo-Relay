@@ -7,7 +7,8 @@ use nemo_relay::plugin::{PluginError, PluginRegistrationContext, Result as Plugi
 
 use super::component::PiiRedactionConfig;
 
-type LocalBackendProvider = Arc<
+#[doc(hidden)]
+pub type LocalBackendProvider = Arc<
     dyn Fn(PiiRedactionConfig, &mut PluginRegistrationContext) -> PluginResult<()> + Send + Sync,
 >;
 

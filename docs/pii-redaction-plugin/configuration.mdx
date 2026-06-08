@@ -66,9 +66,9 @@ At least one managed redaction surface must be enabled.
 | Managed `tool_output` | Supported | Extension point only in this PR |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
-| Runtime availability | Any runtime that includes the built-in core plugin | Runtimes that install a local backend provider |
+| Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
 
-## Builtin Mode
+## Built-In Mode
 
 Use `builtin` mode when NeMo Relay should sanitize emitted observability
 payloads with a deterministic first-party backend.
@@ -155,7 +155,7 @@ discarded by the interactive edit flow.
 If you find yourself needing callback code instead of editor/config fields, it
 is a sign that raw middleware may be the better fit for that specific policy.
 
-## Builtin Settings
+## Built-In Settings
 
 The `builtin` section contains:
 

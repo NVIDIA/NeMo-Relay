@@ -815,6 +815,84 @@ fn editor_save_preserves_unknown_nemo_guardrails_fields_and_sections() {
 }
 
 #[test]
+fn editor_save_preserves_unknown_pii_redaction_fields_and_prunes_version() {
+    let mut config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: "pii_redaction".to_string(),
+            enabled: true,
+            config: json!({
+                "version": 1,
+                "future_top_level": "preserve",
+                "mode": "builtin",
+                "codec": "openai_chat",
+                "builtin": {
+                    "action": "mask",
+                    "detector": "email",
+                    "target_paths": ["/message"],
+                    "future_builtin": "preserve"
+                },
+                "local": {
+                    "future_local": "preserve"
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    let mut pii_redaction = component_pii_redaction_state(&config).unwrap();
+    let schema = PiiRedactionConfig::editor_schema();
+    let builtin = schema.field("builtin").unwrap();
+
+    set_struct_field(&mut pii_redaction.config, "mode", json!("builtin")).unwrap();
+    set_struct_field(&mut pii_redaction.config, "codec", json!("openai_chat")).unwrap();
+    set_section_field(
+        &mut pii_redaction.config,
+        builtin,
+        "action",
+        json!("redact"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut pii_redaction.config,
+        builtin,
+        "detector",
+        json!("bearer_token"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut pii_redaction.config,
+        builtin,
+        "replacement",
+        json!("[REDACTED]"),
+    )
+    .unwrap();
+
+    pii_redaction.set_enabled(false);
+    store_pii_redaction_state(&mut config, &pii_redaction).unwrap();
+
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == "pii_redaction")
+        .unwrap();
+    assert!(!component.enabled);
+    assert!(!component.config.contains_key("version"));
+    assert_eq!(
+        component.config.get("future_top_level"),
+        Some(&json!("preserve"))
+    );
+    let builtin = component.config["builtin"].as_object().unwrap();
+    assert_eq!(builtin.get("action"), Some(&json!("redact")));
+    assert_eq!(builtin.get("detector"), Some(&json!("bearer_token")));
+    assert_eq!(builtin.get("future_builtin"), Some(&json!("preserve")));
+    let local = component.config["local"].as_object().unwrap();
+    assert_eq!(local.get("future_local"), Some(&json!("preserve")));
+}
+
+#[test]
 fn adaptive_config_field_reset_handles_optional_and_default_fields() {
     let mut adaptive = AdaptiveConfig {
         agent_id: Some("planner".into()),

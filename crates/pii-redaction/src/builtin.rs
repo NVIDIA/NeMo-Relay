@@ -135,6 +135,12 @@ impl CompiledBuiltinBackend {
         value: Json,
         path_segments: &mut Vec<String>,
     ) -> Option<Json> {
+        if self.matches_current_preorder_path(path_segments)
+            && matches!(self.action, BuiltinAction::Remove)
+        {
+            return None;
+        }
+
         match value {
             Json::String(text) => {
                 if self.matches_current_preorder_path(path_segments) {
@@ -168,15 +174,7 @@ impl CompiledBuiltinBackend {
                     })
                     .collect(),
             )),
-            other => {
-                if self.matches_current_preorder_path(path_segments)
-                    && matches!(self.action, BuiltinAction::Remove)
-                {
-                    None
-                } else {
-                    Some(other)
-                }
-            }
+            other => Some(other),
         }
     }
 

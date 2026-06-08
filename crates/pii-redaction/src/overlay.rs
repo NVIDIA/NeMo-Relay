@@ -126,6 +126,8 @@ fn overlay_openai_chat_tool_calls(
         return;
     };
 
+    raw_calls.truncate(tool_calls.len());
+
     for (raw_call, sanitized_call) in raw_calls.iter_mut().zip(tool_calls.iter()) {
         let Some(raw_call) = raw_call.as_object_mut() else {
             continue;
@@ -144,26 +146,27 @@ fn overlay_openai_chat_tool_calls(
 }
 
 fn overlay_openai_responses_tool_calls(
-    items: &mut [Json],
+    items: &mut Vec<Json>,
     tool_calls: Option<&[ResponseToolCall]>,
 ) {
     let Some(tool_calls) = tool_calls else {
+        items.retain(|item| item.get("type").and_then(Json::as_str) != Some("function_call"));
         return;
     };
 
     let mut sanitized_calls = tool_calls.iter();
-    for item in items {
+    items.retain_mut(|item| {
         let Some(item_type) = item.get("type").and_then(Json::as_str) else {
-            continue;
+            return true;
         };
         if item_type != "function_call" {
-            continue;
+            return true;
         }
         let Some(raw_call) = item.as_object_mut() else {
-            continue;
+            return true;
         };
         let Some(sanitized_call) = sanitized_calls.next() else {
-            break;
+            return false;
         };
         set_optional_string_field(raw_call, "call_id", Some(sanitized_call.id.as_str()));
         set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
@@ -172,32 +175,35 @@ fn overlay_openai_responses_tool_calls(
             "arguments",
             Some(json_string(&sanitized_call.arguments).as_str()),
         );
-    }
+        true
+    });
 }
 
-fn overlay_anthropic_tool_calls(blocks: &mut [Json], tool_calls: Option<&[ResponseToolCall]>) {
+fn overlay_anthropic_tool_calls(blocks: &mut Vec<Json>, tool_calls: Option<&[ResponseToolCall]>) {
     let Some(tool_calls) = tool_calls else {
+        blocks.retain(|block| block.get("type").and_then(Json::as_str) != Some("tool_use"));
         return;
     };
 
     let mut sanitized_calls = tool_calls.iter();
-    for block in blocks {
+    blocks.retain_mut(|block| {
         let Some(block_type) = block.get("type").and_then(Json::as_str) else {
-            continue;
+            return true;
         };
         if block_type != "tool_use" {
-            continue;
+            return true;
         }
         let Some(raw_call) = block.as_object_mut() else {
-            continue;
+            return true;
         };
         let Some(sanitized_call) = sanitized_calls.next() else {
-            break;
+            return false;
         };
         set_optional_string_field(raw_call, "id", Some(sanitized_call.id.as_str()));
         set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
         raw_call.insert("input".into(), sanitized_call.arguments.clone());
-    }
+        true
+    });
 }
 
 fn overlay_output_text_blocks(items: &mut [Json], message_text: Option<String>) {
@@ -320,5 +326,74 @@ fn anthropic_stop_reason(reason: &FinishReason) -> &str {
         FinishReason::ToolUse => "tool_use",
         FinishReason::ContentFilter => "refusal",
         FinishReason::Unknown(other) => other.as_str(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn tool_call(id: &str, name: &str, arguments: Json) -> ResponseToolCall {
+        ResponseToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments,
+        }
+    }
+
+    #[test]
+    fn openai_chat_overlay_truncates_extra_raw_tool_calls() {
+        let mut message = json!({
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "one", "arguments": "{\"secret\":\"raw-1\"}"}},
+                {"id": "call_2", "function": {"name": "two", "arguments": "{\"secret\":\"raw-2\"}"}}
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        overlay_openai_chat_tool_calls(
+            &mut message,
+            Some(&[tool_call("call_1", "one", json!({"secret": "[REDACTED]"}))]),
+        );
+
+        let calls = message["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0]["function"]["arguments"],
+            json!("{\"secret\":\"[REDACTED]\"}")
+        );
+    }
+
+    #[test]
+    fn openai_responses_overlay_removes_extra_function_calls() {
+        let mut items = vec![
+            json!({"type": "message", "content": [{"type": "output_text", "text": "ok"}]}),
+            json!({"type": "function_call", "call_id": "call_1", "name": "one", "arguments": "{\"secret\":\"raw-1\"}"}),
+            json!({"type": "function_call", "call_id": "call_2", "name": "two", "arguments": "{\"secret\":\"raw-2\"}"}),
+        ];
+
+        overlay_openai_responses_tool_calls(
+            &mut items,
+            Some(&[tool_call("call_1", "one", json!({"secret": "[REDACTED]"}))]),
+        );
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1]["type"], json!("function_call"));
+        assert_eq!(items[1]["arguments"], json!("{\"secret\":\"[REDACTED]\"}"));
+    }
+
+    #[test]
+    fn anthropic_overlay_removes_tool_use_blocks_when_no_sanitized_calls_exist() {
+        let mut blocks = vec![
+            json!({"type": "text", "text": "hello"}),
+            json!({"type": "tool_use", "id": "call_1", "name": "one", "input": {"secret": "raw-1"}}),
+        ];
+
+        overlay_anthropic_tool_calls(&mut blocks, None);
+
+        assert_eq!(blocks, vec![json!({"type": "text", "text": "hello"})]);
     }
 }

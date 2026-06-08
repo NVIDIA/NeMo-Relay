@@ -439,6 +439,54 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
 }
 
 #[test]
+fn builtin_remove_deletes_targeted_object_and_array_container_fields() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove",
+            "target_paths": ["/nested", "/items"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-remove-container-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("search")
+            .args(json!({
+                "nested": {
+                    "keep": "yes",
+                    "remove_me": "gone"
+                },
+                "items": ["a", "b", "c"],
+                "public": "ok"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "public": "ok"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-remove-container-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_redact_replaces_matching_tool_payload_substrings_with_default_token() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1021,11 +1069,12 @@ fn builtin_mask_with_credit_card_detector_preserves_last_four_digits() {
     .unwrap();
 
     let events = capture_events("pii-redaction-credit-card-default-mask-events");
+    let credit_card = ["4111", "1111", "1111", "1234"].join(" ");
     let _handle = tool_call(
         ToolCallParams::builder()
             .name("notify")
             .args(json!({
-                "card": "4111 1111 1111 1234",
+                "card": credit_card,
                 "keep": "unchanged"
             }))
             .build(),
@@ -1043,6 +1092,49 @@ fn builtin_mask_with_credit_card_detector_preserves_last_four_digits() {
     );
 
     deregister_subscriber("pii-redaction-credit-card-default-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_mask_with_ip_detector_honors_custom_mask_char() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "ip_address",
+            "mask_char": "#",
+            "target_paths": ["/ip"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-ip-custom-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "ip": "10.20.30.40"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input().unwrap()["ip"],
+        json!("###.###.###.40")
+    );
+
+    deregister_subscriber("pii-redaction-ip-custom-mask-events").unwrap();
     clear_plugin_configuration().unwrap();
 }
 
