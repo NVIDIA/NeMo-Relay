@@ -182,7 +182,7 @@ test('WebAssembly withScope records OK status metadata', async () => {
       ),
     );
     assert.equal(endEvent.metadata['otel.status_code'], 'OK');
-    assert.equal(Object.hasOwn(endEvent.metadata, 'otel.status_message'), false);
+    assert.equal(Object.hasOwn(endEvent.metadata, 'otel.status_description'), false);
   } finally {
     wasm.deregisterSubscriber(subscriberName);
     stack.free();
@@ -213,7 +213,7 @@ test('WebAssembly withScope records ERROR status metadata on rejection', async (
       ),
     );
     assert.equal(endEvent.metadata['otel.status_code'], 'ERROR');
-    assert.match(endEvent.metadata['otel.status_message'], /wasm scope failure/);
+    assert.match(endEvent.metadata['otel.status_description'], /wasm scope failure/);
   } finally {
     wasm.deregisterSubscriber(subscriberName);
     stack.free();

@@ -191,7 +191,7 @@ func TestWithScopeRecordsErrorStatusMetadataOnPanic(t *testing.T) {
 	if got := metadataStringField(t, metadata, "otel.status_code"); got != "ERROR" {
 		t.Fatalf("expected otel.status_code=ERROR, got %q", got)
 	}
-	if got := metadataStringField(t, metadata, "otel.status_message"); !strings.Contains(got, "scope status failure") {
+	if got := metadataStringField(t, metadata, "otel.status_description"); !strings.Contains(got, "scope status failure") {
 		t.Fatalf("expected status message to mention panic, got %q", got)
 	}
 }

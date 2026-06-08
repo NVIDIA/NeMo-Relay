@@ -206,9 +206,9 @@ func TestLlmCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
 	if err := json.Unmarshal(errorMetadata, &decoded); err != nil {
 		t.Fatalf("unmarshal error metadata failed: %v; raw=%s", err, errorMetadata)
 	}
-	statusMessage, _ := decoded["otel.status_message"].(string)
+	statusMessage, _ := decoded["otel.status_description"].(string)
 	if !strings.Contains(statusMessage, "go llm status failure") {
-		t.Fatalf("expected status message to mention callback error, got %v", decoded["otel.status_message"])
+		t.Fatalf("expected status message to mention callback error, got %v", decoded["otel.status_description"])
 	}
 }
 

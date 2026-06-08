@@ -133,7 +133,7 @@ class TestScopeLifecycle:
         mock_nemo_relay.scope.pop.assert_called_once_with(
             handle,
             output={"error": "RuntimeError('boom')"},
-            metadata={"otel.status_code": "ERROR", "otel.status_message": "boom"},
+            metadata={"otel.status_code": "ERROR", "otel.status_description": "boom"},
         )
         assert run_id not in handler._scope_handles
 

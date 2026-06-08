@@ -79,7 +79,7 @@ fn otel_status_metadata(status_code: &'static str, status_message: Option<String
     );
     if let Some(status_message) = status_message {
         metadata.insert(
-            "otel.status_message".to_string(),
+            "otel.status_description".to_string(),
             Json::String(status_message),
         );
     }

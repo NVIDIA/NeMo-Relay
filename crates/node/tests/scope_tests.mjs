@@ -216,7 +216,7 @@ describe('withScope', () => {
       assert.ok(end, 'expected scope end event');
       assert.equal(end.metadata.caller, 'node');
       assert.equal(end.metadata['otel.status_code'], 'OK');
-      assert.equal(Object.hasOwn(end.metadata, 'otel.status_message'), false);
+      assert.equal(Object.hasOwn(end.metadata, 'otel.status_description'), false);
     } finally {
       deregisterSubscriber('node_with_scope_ok_status_sub');
     }
@@ -267,7 +267,7 @@ describe('withScope', () => {
       );
       assert.ok(end, 'expected scope end event');
       assert.equal(end.metadata['otel.status_code'], 'ERROR');
-      assert.match(end.metadata['otel.status_message'], /node status failure/);
+      assert.match(end.metadata['otel.status_description'], /node status failure/);
     } finally {
       deregisterSubscriber('node_with_scope_error_status_sub');
     }
@@ -333,14 +333,14 @@ describe('Events', () => {
 
 describe('Subscribers', () => {
   it('register and deregister', () => {
-    registerSubscriber('node_sub_1', () => {});
+    registerSubscriber('node_sub_1', () => { });
     const removed = deregisterSubscriber('node_sub_1');
     assert.equal(removed, true);
   });
 
   it('duplicate subscriber fails', () => {
-    registerSubscriber('node_dup_sub', () => {});
-    assert.throws(() => registerSubscriber('node_dup_sub', () => {}));
+    registerSubscriber('node_dup_sub', () => { });
+    assert.throws(() => registerSubscriber('node_dup_sub', () => { }));
     deregisterSubscriber('node_dup_sub');
   });
 

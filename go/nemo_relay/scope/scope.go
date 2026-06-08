@@ -31,7 +31,7 @@ import (
 func statusMetadata(statusCode, statusMessage string) nemo_relay.ScopeEndOption {
 	metadata := map[string]string{"otel.status_code": statusCode}
 	if statusMessage != "" {
-		metadata["otel.status_message"] = statusMessage
+		metadata["otel.status_description"] = statusMessage
 	}
 	raw, _ := json.Marshal(metadata)
 	return nemo_relay.WithScopeEndMetadata(raw)

@@ -85,13 +85,13 @@ fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
     let success_metadata = metadata_for("tool-ok");
     assert_eq!(success_metadata["caller"], json!("tool-ok"));
     assert_eq!(success_metadata["otel.status_code"], json!("OK"));
-    assert!(success_metadata.get("otel.status_message").is_none());
+    assert!(success_metadata.get("otel.status_description").is_none());
 
     let error_metadata = metadata_for("tool-error");
     assert_eq!(error_metadata["caller"], json!("tool-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
     assert!(
-        error_metadata["otel.status_message"]
+        error_metadata["otel.status_description"]
             .as_str()
             .unwrap()
             .contains("tool boom")

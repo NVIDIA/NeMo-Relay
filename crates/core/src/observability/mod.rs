@@ -38,7 +38,7 @@ where
         "OK" => opentelemetry::trace::Status::Ok,
         "ERROR" => opentelemetry::trace::Status::error(
             metadata
-                .get("otel.status_message")
+                .get("otel.status_description")
                 .and_then(crate::json::Json::as_str)
                 .unwrap_or_default()
                 .to_string(),

@@ -240,7 +240,7 @@ describe('LLM execute', () => {
       assert.ok(errorEnd, 'expected failed llm end event');
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_message'], /llm status failure/);
+      assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
     } finally {
       deregisterSubscriber('node_llm_status_metadata_sub');
     }
@@ -729,7 +729,7 @@ describe('LLM intercepts', () => {
       null,
     );
 
-    for (;;) {
+    for (; ;) {
       const chunk = await stream.next();
       if (chunk === null) {
         break;
@@ -769,7 +769,7 @@ describe('LLM intercepts', () => {
       null,
     );
 
-    for (;;) {
+    for (; ;) {
       const chunk = await stream.next();
       if (chunk === null) {
         break;

@@ -95,7 +95,7 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         self._pop_scope(
             run_id,
             output={"error": repr(error)},
-            metadata={"otel.status_code": "ERROR", "otel.status_message": str(error)},
+            metadata={"otel.status_code": "ERROR", "otel.status_description": str(error)},
         )
 
     def _pop_scope(

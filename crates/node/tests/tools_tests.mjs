@@ -327,7 +327,7 @@ describe('Tool execute', () => {
       assert.ok(errorEnd, 'expected failed tool end event');
       assert.equal(errorEnd.metadata.caller, 'node-tool-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_message'], /tool status failure/);
+      assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
     } finally {
       deregisterSubscriber('node_tool_status_metadata_sub');
     }

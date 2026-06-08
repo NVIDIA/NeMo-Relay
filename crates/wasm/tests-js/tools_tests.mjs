@@ -222,7 +222,7 @@ test('WebAssembly toolCallExecute adds OTEL status metadata to end events', asyn
     assert.equal(okEvent.metadata['otel.status_code'], 'OK');
     assert.equal(errorEvent.metadata.caller, 'wasm-tool-error');
     assert.equal(errorEvent.metadata['otel.status_code'], 'ERROR');
-    assert.match(errorEvent.metadata['otel.status_message'], /wasm tool failure/);
+    assert.match(errorEvent.metadata['otel.status_description'], /wasm tool failure/);
   } finally {
     wasm.deregisterSubscriber(subscriberName);
     stack.free();

@@ -50,7 +50,7 @@ pub(crate) fn metadata_with_otel_status(
     );
     if let Some(status_message) = status_message {
         status.insert(
-            "otel.status_message".to_string(),
+            "otel.status_description".to_string(),
             Json::String(status_message),
         );
     }

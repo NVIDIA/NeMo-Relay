@@ -378,7 +378,7 @@ test('WebAssembly llmCallExecute adds OTEL status metadata to end events', async
     assert.equal(okEvent.metadata['otel.status_code'], 'OK');
     assert.equal(errorEvent.metadata.caller, 'wasm-llm-error');
     assert.equal(errorEvent.metadata['otel.status_code'], 'ERROR');
-    assert.match(errorEvent.metadata['otel.status_message'], /wasm llm failure/);
+    assert.match(errorEvent.metadata['otel.status_description'], /wasm llm failure/);
   } finally {
     wasm.deregisterSubscriber(subscriberName);
     stack.free();

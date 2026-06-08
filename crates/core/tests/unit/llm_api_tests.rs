@@ -97,13 +97,13 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
     let success_metadata = metadata_for("llm-ok");
     assert_eq!(success_metadata["caller"], json!("llm-ok"));
     assert_eq!(success_metadata["otel.status_code"], json!("OK"));
-    assert!(success_metadata.get("otel.status_message").is_none());
+    assert!(success_metadata.get("otel.status_description").is_none());
 
     let error_metadata = metadata_for("llm-error");
     assert_eq!(error_metadata["caller"], json!("llm-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
     assert!(
-        error_metadata["otel.status_message"]
+        error_metadata["otel.status_description"]
             .as_str()
             .unwrap()
             .contains("llm boom")
@@ -167,7 +167,7 @@ fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
         .unwrap_or_else(|| panic!("missing stream end event metadata"));
     assert_eq!(success_metadata["caller"], json!("llm-stream-ok"));
     assert_eq!(success_metadata["otel.status_code"], json!("OK"));
-    assert!(success_metadata.get("otel.status_message").is_none());
+    assert!(success_metadata.get("otel.status_description").is_none());
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
     );
     assert_eq!(upstream_error_metadata["otel.status_code"], json!("ERROR"));
     assert!(
-        upstream_error_metadata["otel.status_message"]
+        upstream_error_metadata["otel.status_description"]
             .as_str()
             .unwrap()
             .contains("stream boom")
@@ -273,7 +273,7 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
     );
     assert_eq!(collector_error_metadata["otel.status_code"], json!("ERROR"));
     assert!(
-        collector_error_metadata["otel.status_message"]
+        collector_error_metadata["otel.status_description"]
             .as_str()
             .unwrap()
             .contains("collector boom")

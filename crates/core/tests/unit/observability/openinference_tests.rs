@@ -1810,7 +1810,7 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
 fn scope_end_metadata_sets_openinference_span_status() {
     let cases = [
         (
-            json!({"otel.status_code": "ERROR", "otel.status_message": "failed"}),
+            json!({"otel.status_code": "ERROR", "otel.status_description": "failed"}),
             Status::error("failed".to_string()),
         ),
         (json!({"otel.status_code": "OK"}), Status::Ok),
