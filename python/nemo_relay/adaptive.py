@@ -9,10 +9,11 @@ plugins remain separate top-level components managed through ``nemo_relay.plugin
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Literal, Protocol, TypedDict, cast
+from dataclasses import dataclass, field
+from typing import Literal, TypedDict, cast
 
-from nemo_relay import Json, JsonObject, UnsupportedBehavior
+from nemo_relay import JsonObject, UnsupportedBehavior
+from nemo_relay._config_normalize import normalize, normalize_object
 from nemo_relay._native import AdaptiveRuntime as AdaptiveRuntime
 from nemo_relay._native import build_cache_telemetry_event as _build_cache_telemetry_event
 from nemo_relay._native import set_latency_sensitivity as _set_latency_sensitivity
@@ -36,30 +37,6 @@ class ConfigReport(TypedDict):
     """Validation report for adaptive configuration."""
 
     diagnostics: list[ConfigDiagnostic]
-
-
-class _SupportsToDict(Protocol):
-    def to_dict(self) -> JsonObject: ...
-
-
-def _normalize(value: object) -> Json:
-    if hasattr(value, "to_dict"):
-        return cast(_SupportsToDict, value).to_dict()
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field_info.name: _normalize(field_value)
-            for field_info in fields(value)
-            if (field_value := getattr(value, field_info.name)) is not None
-        }
-    if isinstance(value, list):
-        return [_normalize(item) for item in value]
-    if isinstance(value, dict):
-        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
-    return cast(Json, value)
-
-
-def _normalize_object(value: object) -> JsonObject:
-    return cast(JsonObject, _normalize(value))
 
 
 @dataclass(slots=True)
@@ -109,7 +86,7 @@ class BackendSpec:
 
     def to_dict(self) -> JsonObject:
         """Serialize this backend spec to the canonical JSON object shape."""
-        return {"kind": self.kind, "config": _normalize_object(self.config)}
+        return {"kind": self.kind, "config": cast(JsonObject, normalize_object(self.config))}
 
 
 @dataclass(slots=True)
@@ -125,7 +102,7 @@ class StateConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this state config to the canonical JSON object shape."""
-        return {"backend": _normalize_object(self.backend)}
+        return {"backend": cast(JsonObject, normalize_object(self.backend))}
 
 
 @dataclass(slots=True)
@@ -142,11 +119,14 @@ class TelemetryConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this telemetry config to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "subscriber_name": self.subscriber_name,
                 "learners": self.learners,
             }
+            ),
         )
 
 
@@ -168,13 +148,16 @@ class AdaptiveHintsConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this adaptive-hints config to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "priority": self.priority,
                 "break_chain": self.break_chain,
                 "inject_header": self.inject_header,
                 "inject_body_path": self.inject_body_path,
             }
+            ),
         )
 
 
@@ -194,7 +177,7 @@ class ToolParallelismConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this tool-parallelism config to the canonical JSON object shape."""
-        return _normalize_object({"priority": self.priority, "mode": self.mode})
+        return cast(JsonObject, normalize_object({"priority": self.priority, "mode": self.mode}))
 
 
 @dataclass(slots=True)
@@ -214,12 +197,15 @@ class AcgStabilityThresholds:
 
     def to_dict(self) -> JsonObject:
         """Serialize these ACG stability thresholds to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "stable_threshold": self.stable_threshold,
                 "semi_stable_threshold": self.semi_stable_threshold,
                 "min_observations_for_full_confidence": self.min_observations_for_full_confidence,
             }
+            ),
         )
 
 
@@ -241,13 +227,16 @@ class AcgConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this ACG config to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "provider": self.provider,
                 "observation_window": self.observation_window,
                 "priority": self.priority,
-                "stability_thresholds": _normalize(self.stability_thresholds),
+                "stability_thresholds": normalize(self.stability_thresholds),
             }
+            ),
         )
 
 
@@ -284,11 +273,11 @@ class AdaptiveConfig:
         return {
             "version": self.version,
             "agent_id": self.agent_id,
-            "state": _normalize(self.state),
-            "telemetry": _normalize(self.telemetry),
-            "adaptive_hints": _normalize(self.adaptive_hints),
-            "tool_parallelism": _normalize(self.tool_parallelism),
-            "acg": _normalize(self.acg),
+            "state": normalize(self.state),
+            "telemetry": normalize(self.telemetry),
+            "adaptive_hints": normalize(self.adaptive_hints),
+            "tool_parallelism": normalize(self.tool_parallelism),
+            "acg": normalize(self.acg),
             "policy": self.policy.to_dict(),
         }
 
@@ -316,13 +305,13 @@ class ComponentSpec:
         return {
             "kind": ADAPTIVE_PLUGIN_KIND,
             "enabled": self.enabled,
-            "config": _normalize_object(self.config),
+            "config": cast(JsonObject, normalize_object(self.config)),
         }
 
 
 def validate_config(config: AdaptiveConfig | JsonObject) -> ConfigReport:
     """Validate an adaptive config document without constructing a runtime."""
-    return cast(ConfigReport, _validate_adaptive_config(_normalize_object(config)))
+    return cast(ConfigReport, _validate_adaptive_config(cast(JsonObject, normalize_object(config))))
 
 
 def build_cache_telemetry_event(

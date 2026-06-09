@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Literal, Protocol, TypedDict, cast
+from dataclasses import dataclass, field
+from typing import Literal, TypedDict, cast
 
-from nemo_relay import Json, JsonObject, UnsupportedBehavior
+from nemo_relay import JsonObject, UnsupportedBehavior
+from nemo_relay._config_normalize import normalize_object
 from nemo_relay import plugin as plugin_module
 
 
@@ -29,30 +30,6 @@ class ConfigReport(TypedDict):
     """Validation report for PII redaction configuration."""
 
     diagnostics: list[ConfigDiagnostic]
-
-
-class _SupportsToDict(Protocol):
-    def to_dict(self) -> JsonObject: ...
-
-
-def _normalize(value: object) -> Json:
-    if hasattr(value, "to_dict"):
-        return cast(_SupportsToDict, value).to_dict()
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            field_info.name: _normalize(field_value)
-            for field_info in fields(value)
-            if (field_value := getattr(value, field_info.name)) is not None
-        }
-    if isinstance(value, list):
-        return [_normalize(item) for item in value]
-    if isinstance(value, dict):
-        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
-    return cast(Json, value)
-
-
-def _normalize_object(value: object) -> JsonObject:
-    return cast(JsonObject, _normalize(value))
 
 
 @dataclass(slots=True)
@@ -85,7 +62,9 @@ class BuiltinConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this built-in backend config to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "action": self.action,
                 "target_paths": self.target_paths,
@@ -96,6 +75,7 @@ class BuiltinConfig:
                 "unmasked_prefix": self.unmasked_prefix,
                 "unmasked_suffix": self.unmasked_suffix,
             }
+            ),
         )
 
 
@@ -111,7 +91,9 @@ class LocalModelConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this local-model config to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "backend": self.backend,
                 "model_id": self.model_id,
@@ -119,6 +101,7 @@ class LocalModelConfig:
                 "allow_network": self.allow_network,
                 "max_latency_ms": self.max_latency_ms,
             }
+            ),
         )
 
 
@@ -140,7 +123,9 @@ class PiiRedactionConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this PII redaction config to the canonical JSON object shape."""
-        return _normalize_object(
+        return cast(
+            JsonObject,
+            normalize_object(
             {
                 "version": self.version,
                 "mode": self.mode,
@@ -154,6 +139,7 @@ class PiiRedactionConfig:
                 "local": self.local,
                 "policy": self.policy,
             }
+            ),
         )
 
 
@@ -172,7 +158,7 @@ class ComponentSpec:
         return {
             "kind": PII_REDACTION_PLUGIN_KIND,
             "enabled": self.enabled,
-            "config": _normalize_object(self.config),
+            "config": cast(JsonObject, normalize_object(self.config)),
         }
 
 
