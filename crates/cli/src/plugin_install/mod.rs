@@ -46,7 +46,6 @@ pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
         force: command.force,
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
-        json: false,
     };
     run_for_hosts(
         command.host,
@@ -65,7 +64,6 @@ pub(crate) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
         force: false,
         dry_run: command.dry_run,
         skip_doctor: true,
-        json: false,
     };
     run_for_hosts(
         command.host,
@@ -87,7 +85,6 @@ pub(crate) fn doctor(
         force: false,
         dry_run: false,
         skip_doctor: true,
-        json,
     };
     if json {
         return doctor_json(host, &options);
@@ -312,15 +309,6 @@ fn doctor_host(
     validate_relay_plugin_shim(&relay, options, runner)?;
     let state = read_state(host, &options.install_dir)
         .ok_or_else(|| format!("no installed {} plugin state found", host_label(host)))?;
-    if options.json {
-        print_json(&with_schema(doctor_host_json_value(
-            host,
-            options,
-            runner,
-            setup_runner,
-        )?))?;
-        return Ok(());
-    }
     println!("nemo-relay: {}", relay.display());
     println!("host: {}", host_arg(host));
     println!("marketplace: {}", state.marketplace_root.display());

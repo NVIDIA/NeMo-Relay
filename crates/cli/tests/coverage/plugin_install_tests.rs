@@ -143,7 +143,6 @@ fn options(dir: &Path) -> PluginInstallOptions {
         force: false,
         dry_run: false,
         skip_doctor: true,
-        json: false,
     }
 }
 
@@ -769,18 +768,17 @@ fn doctor_json_uses_quiet_plugin_report() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
-    let options = PluginInstallOptions {
-        json: true,
-        ..options(dir.path())
-    };
+    let options = options(dir.path());
     write_installed_state(PluginHost::Codex, dir.path());
 
-    doctor_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+    let report =
+        doctor_host_json_value(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
 
     assert_eq!(
         setup_runner.calls(),
         vec![format!("doctor-json codex {DEFAULT_GATEWAY_URL}")]
     );
+    assert_eq!(report["host"], json!("codex"));
 }
 
 #[test]

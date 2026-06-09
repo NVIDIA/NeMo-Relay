@@ -20,7 +20,6 @@ pub(super) struct PluginInstallOptions {
     pub(super) force: bool,
     pub(super) dry_run: bool,
     pub(super) skip_doctor: bool,
-    pub(super) json: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
