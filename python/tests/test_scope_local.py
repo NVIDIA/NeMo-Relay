@@ -96,6 +96,7 @@ class TestScopeLocalGuardrail:
             scope_local.register_tool_sanitize_response(handle, "sl_resp_sanitizer", 1, response_sanitizer)
             scope_local.register_subscriber(handle, "sl_resp_sub", lambda e: events.append(e))
             result = await tools.execute("resp_tool", {}, my_tool)
+        subscribers.flush()
 
         # Sanitize guardrails are observability-only: they do NOT modify the
         # result flowing through the execution pipeline.
@@ -129,6 +130,7 @@ class TestScopeLocalAutoCleanup:
             scope_local.register_tool_sanitize_request(handle, "sl_cleanup_guard", 1, sanitizer)
             scope_local.register_subscriber(handle, "sl_cleanup_sub", lambda e: events_inside.append(e))
             await tools.execute("tool_inside", {"x": 1}, my_tool)
+        subscribers.flush()
 
         # Verify the sanitizer ran inside the scope (visible in event input).
         start_inside = _scope_event(events_inside, "tool_inside", "tool", "start")
@@ -139,7 +141,10 @@ class TestScopeLocalAutoCleanup:
         events_outside = []
         subscribers.register("sl_cleanup_outer_sub", lambda e: events_outside.append(e))
         await tools.execute("tool_outside", {"x": 2}, my_tool)
-        subscribers.deregister("sl_cleanup_outer_sub")
+        try:
+            subscribers.flush()
+        finally:
+            subscribers.deregister("sl_cleanup_outer_sub")
 
         start_outside = _scope_event(events_outside, "tool_outside", "tool", "start")
         assert "sanitized" not in _event_data_object(start_outside)
@@ -301,6 +306,7 @@ class TestScopeLocalSubscriber:
             events_before = len(events)
             tool_handle = tools.call("dereg_tool", {})
             tools.call_end(tool_handle, {})
+        subscribers.flush()
 
         # No new events should have been appended after deregistration
         assert len(events) == events_before
@@ -428,11 +434,13 @@ class TestScopeLocalIsolation:
             scope_local.register_tool_request(handle_a, "sl_iso_int", 1, False, intercept_fn)
             scope_local.register_subscriber(handle_a, "sl_iso_sub_a", lambda e: events_a.append(e))
             result_a = await tools.execute("iso_tool_a", {"val": 1}, my_tool)
+        subscribers.flush()
 
         # Scope B: only a subscriber, no intercept
         with scope.scope("iso_scope_b", ScopeType.Agent) as handle_b:
             scope_local.register_subscriber(handle_b, "sl_iso_sub_b", lambda e: events_b.append(e))
             result_b = await tools.execute("iso_tool_b", {"val": 2}, my_tool)
+        subscribers.flush()
 
         # Scope A should have had the intercept applied
         assert result_a["intercepted"] is True
@@ -540,6 +548,7 @@ class TestScopeLocalDeregistration:
             scope_local.register_tool_sanitize_request(handle, "sl_dereg_guard", 1, sanitizer)
             scope_local.register_subscriber(handle, "sl_dereg_sub", lambda e: events.append(e))
             await tools.execute("dereg_tool_1", {"a": 1}, my_tool)
+            subscribers.flush()
 
             # Verify the sanitizer ran (visible in event input).
             start_before = _scope_event(events, "dereg_tool_1", "tool", "start")
@@ -551,6 +560,7 @@ class TestScopeLocalDeregistration:
 
             events.clear()
             await tools.execute("dereg_tool_2", {"a": 2}, my_tool)
+        subscribers.flush()
 
         # After deregistration, the sanitizer should no longer appear in events.
         start_after = _scope_event(events, "dereg_tool_2", "tool", "start")
@@ -625,6 +635,7 @@ class TestScopeLocalLlmBehavior:
             scope_local.register_subscriber(handle, "sl_llm_sanitize_sub", lambda event: events.append(event))
             scope_local.register_llm_sanitize_request(handle, "sl_llm_sanitize", 1, sanitize_request)
             result = await llm.execute("sl_llm_sanitize_call", request, lambda req: {"model": req.content["model"]})
+        subscribers.flush()
 
         assert result == {"model": "scope-local"}
         start = _scope_event(events, "sl_llm_sanitize_call", "llm", "start")
