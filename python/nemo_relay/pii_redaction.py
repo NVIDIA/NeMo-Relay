@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Literal, TypedDict, cast
+from dataclasses import dataclass, field, fields, is_dataclass
+from typing import Literal, Protocol, TypedDict, cast
 
-from nemo_relay import JsonObject, UnsupportedBehavior
-from nemo_relay._config_normalize import normalize_object
+from nemo_relay import Json, JsonObject, UnsupportedBehavior
 from nemo_relay import plugin as plugin_module
 
 
@@ -30,6 +29,30 @@ class ConfigReport(TypedDict):
     """Validation report for PII redaction configuration."""
 
     diagnostics: list[ConfigDiagnostic]
+
+
+class _SupportsToDict(Protocol):
+    def to_dict(self) -> JsonObject: ...
+
+
+def _normalize(value: object) -> Json:
+    if hasattr(value, "to_dict"):
+        return cast(_SupportsToDict, value).to_dict()
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field_info.name: _normalize(field_value)
+            for field_info in fields(value)
+            if (field_value := getattr(value, field_info.name)) is not None
+        }
+    if isinstance(value, list):
+        return [_normalize(item) for item in value]
+    if isinstance(value, dict):
+        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
+    return cast(Json, value)
+
+
+def _normalize_object(value: object) -> JsonObject:
+    return cast(JsonObject, _normalize(value))
 
 
 @dataclass(slots=True)
@@ -62,21 +85,16 @@ class BuiltinConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this built-in backend config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
-            {
-                "action": self.action,
-                "target_paths": self.target_paths,
-                "pattern": self.pattern,
-                "detector": self.detector,
-                "replacement": self.replacement,
-                "mask_char": self.mask_char,
-                "unmasked_prefix": self.unmasked_prefix,
-                "unmasked_suffix": self.unmasked_suffix,
-            }
-            ),
-        )
+        return _normalize_object({
+            "action": self.action,
+            "target_paths": self.target_paths,
+            "pattern": self.pattern,
+            "detector": self.detector,
+            "replacement": self.replacement,
+            "mask_char": self.mask_char,
+            "unmasked_prefix": self.unmasked_prefix,
+            "unmasked_suffix": self.unmasked_suffix,
+        })
 
 
 @dataclass(slots=True)
@@ -91,18 +109,13 @@ class LocalModelConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this local-model config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
-            {
-                "backend": self.backend,
-                "model_id": self.model_id,
-                "detector_profile": self.detector_profile,
-                "allow_network": self.allow_network,
-                "max_latency_ms": self.max_latency_ms,
-            }
-            ),
-        )
+        return _normalize_object({
+            "backend": self.backend,
+            "model_id": self.model_id,
+            "detector_profile": self.detector_profile,
+            "allow_network": self.allow_network,
+            "max_latency_ms": self.max_latency_ms,
+        })
 
 
 @dataclass(slots=True)
@@ -123,24 +136,19 @@ class PiiRedactionConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this PII redaction config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
-            {
-                "version": self.version,
-                "mode": self.mode,
-                "input": self.input,
-                "output": self.output,
-                "tool_input": self.tool_input,
-                "tool_output": self.tool_output,
-                "priority": self.priority,
-                "codec": self.codec,
-                "builtin": self.builtin,
-                "local": self.local,
-                "policy": self.policy,
-            }
-            ),
-        )
+        return _normalize_object({
+            "version": self.version,
+            "mode": self.mode,
+            "input": self.input,
+            "output": self.output,
+            "tool_input": self.tool_input,
+            "tool_output": self.tool_output,
+            "priority": self.priority,
+            "codec": self.codec,
+            "builtin": self.builtin,
+            "local": self.local,
+            "policy": self.policy,
+        })
 
 
 PII_REDACTION_PLUGIN_KIND = "pii_redaction"
@@ -158,7 +166,7 @@ class ComponentSpec:
         return {
             "kind": PII_REDACTION_PLUGIN_KIND,
             "enabled": self.enabled,
-            "config": cast(JsonObject, normalize_object(self.config)),
+            "config": _normalize_object(self.config),
         }
 
 

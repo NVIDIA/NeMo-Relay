@@ -5,11 +5,34 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Literal, cast
+from dataclasses import dataclass, field, fields, is_dataclass
+from typing import Literal, Protocol, cast
 
-from nemo_relay import JsonObject, UnsupportedBehavior
-from nemo_relay._config_normalize import normalize_object
+from nemo_relay import Json, JsonObject, UnsupportedBehavior
+
+
+class _SupportsToDict(Protocol):
+    def to_dict(self) -> JsonObject: ...
+
+
+def _normalize(value: object) -> Json:
+    if hasattr(value, "to_dict"):
+        return cast(_SupportsToDict, value).to_dict()
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field_info.name: _normalize(field_value)
+            for field_info in fields(value)
+            if (field_value := getattr(value, field_info.name)) is not None
+        }
+    if isinstance(value, list):
+        return [_normalize(item) for item in value]
+    if isinstance(value, dict):
+        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
+    return cast(Json, value)
+
+
+def _normalize_object(value: object) -> JsonObject:
+    return cast(JsonObject, _normalize(value))
 
 
 @dataclass(slots=True)
@@ -40,16 +63,13 @@ class AtofEndpointConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF endpoint config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
+        return _normalize_object(
             {
                 "url": self.url,
                 "transport": self.transport,
                 "headers": self.headers,
                 "timeout_millis": self.timeout_millis,
             }
-            ),
         )
 
 
@@ -65,9 +85,7 @@ class AtofConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
+        return _normalize_object(
             {
                 "enabled": self.enabled,
                 "output_directory": self.output_directory,
@@ -75,7 +93,6 @@ class AtofConfig:
                 "mode": self.mode,
                 "endpoints": self.endpoints,
             }
-            ),
         )
 
 
@@ -101,9 +118,7 @@ class S3StorageConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this S3 storage config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
+        return _normalize_object(
             {
                 "type": "s3",
                 "bucket": self.bucket,
@@ -115,7 +130,6 @@ class S3StorageConfig:
                 "endpoint_url": self.endpoint_url,
                 "allow_http": self.allow_http,
             }
-            ),
         )
 
 
@@ -130,9 +144,7 @@ class HttpStorageConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this HTTP storage config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
+        return _normalize_object(
             {
                 "type": "http",
                 "endpoint": self.endpoint,
@@ -140,7 +152,6 @@ class HttpStorageConfig:
                 "header_env": self.header_env,
                 "timeout_millis": self.timeout_millis,
             }
-            ),
         )
 
 
@@ -173,7 +184,7 @@ class AtifConfig:
         }
         if value["agent_version"] is None:
             value.pop("agent_version")
-        return cast(JsonObject, normalize_object(value))
+        return _normalize_object(value)
 
 
 @dataclass(slots=True)
@@ -193,9 +204,7 @@ class OtlpConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this OTLP config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
+        return _normalize_object(
             {
                 "enabled": self.enabled,
                 "transport": self.transport,
@@ -208,7 +217,6 @@ class OtlpConfig:
                 "instrumentation_scope": self.instrumentation_scope,
                 "timeout_millis": self.timeout_millis,
             }
-            ),
         )
 
 
@@ -225,9 +233,7 @@ class ObservabilityConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
-        return cast(
-            JsonObject,
-            normalize_object(
+        return _normalize_object(
             {
                 "version": self.version,
                 "atof": self.atof,
@@ -236,7 +242,6 @@ class ObservabilityConfig:
                 "openinference": self.openinference,
                 "policy": self.policy,
             }
-            ),
         )
 
 
@@ -255,7 +260,7 @@ class ComponentSpec:
         return {
             "kind": OBSERVABILITY_PLUGIN_KIND,
             "enabled": self.enabled,
-            "config": cast(JsonObject, normalize_object(self.config)),
+            "config": _normalize_object(self.config),
         }
 
 

@@ -11,10 +11,11 @@ per component by the runtime, so end users do not provide instance ids.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, TypedDict, cast
 
 from nemo_relay import (
+    Json,
     JsonObject,
     LlmConditionalExecutionGuardrail,
     LlmExecutionIntercept,
@@ -29,7 +30,6 @@ from nemo_relay import (
     UnsupportedBehavior,
     subscribers,
 )
-from nemo_relay._config_normalize import normalize, normalize_object
 from nemo_relay._native import (
     active_plugin_report as _active_plugin_report,
 )
@@ -180,6 +180,30 @@ class Plugin(Protocol):
         ...
 
 
+class _SupportsToDict(Protocol):
+    def to_dict(self) -> JsonObject: ...
+
+
+def _normalize(value: object) -> Json:
+    if hasattr(value, "to_dict"):
+        return cast(_SupportsToDict, value).to_dict()
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field_info.name: _normalize(field_value)
+            for field_info in fields(value)
+            if (field_value := getattr(value, field_info.name)) is not None
+        }
+    if isinstance(value, list):
+        return [_normalize(item) for item in value]
+    if isinstance(value, dict):
+        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
+    return cast(Json, value)
+
+
+def _normalize_object(value: object) -> JsonObject:
+    return cast(JsonObject, _normalize(value))
+
+
 @dataclass(slots=True)
 class ConfigPolicy:
     """Policy for unsupported plugin configuration.
@@ -231,7 +255,7 @@ class ComponentSpec:
         return {
             "kind": self.kind,
             "enabled": self.enabled,
-            "config": cast(JsonObject, normalize_object(self.config)),
+            "config": _normalize_object(self.config),
         }
 
 
@@ -257,7 +281,7 @@ class PluginConfig:
         """Serialize this config to the canonical JSON document shape."""
         return {
             "version": self.version,
-            "components": [normalize(component) for component in self.components],
+            "components": [_normalize(component) for component in self.components],
             "policy": self.policy.to_dict(),
         }
 
@@ -275,7 +299,7 @@ def validate(config: PluginConfig | JsonObject) -> ConfigReport:
         Validation checks plugin-level compatibility, unknown component kinds,
         multiplicity rules, and per-plugin validation logic.
     """
-    return cast(ConfigReport, _validate_plugin_config(cast(JsonObject, normalize_object(config))))
+    return cast(ConfigReport, _validate_plugin_config(_normalize_object(config)))
 
 
 async def initialize(config: PluginConfig | JsonObject) -> ConfigReport:
@@ -292,7 +316,7 @@ async def initialize(config: PluginConfig | JsonObject) -> ConfigReport:
         registration is rolled back on failure, and the previous configuration
         is restored when possible.
     """
-    return cast(ConfigReport, await _initialize_plugins(cast(JsonObject, normalize_object(config))))
+    return cast(ConfigReport, await _initialize_plugins(_normalize_object(config)))
 
 
 def clear() -> None:
