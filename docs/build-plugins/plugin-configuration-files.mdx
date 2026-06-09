@@ -70,7 +70,7 @@ The gateway reads only files named `plugins.toml`.
 
 ## Discovery
 
-The gateway resolves plugin configuration from two kinds of input: file/CLI
+The gateway resolves plugin configuration using two kinds of input: file/CLI
 sources and an optional code-driven layer.
 
 File/CLI configuration comes from one of three mutually exclusive source classes:
@@ -206,13 +206,22 @@ Tables inside component config merge recursively.
 
 ## Configuration Layering
 
-A direct integration that calls `plugin.initialize(...)` (any binding) resolves the
-discovered `plugins.toml` layering as a base, then layers the code-driven config on
-top (the code-driven config wins). Precedence differs slightly from the file-vs-file
-rule above: a code-driven config is a typed document, so `version`, `policy`, and a
-declared component's `enabled` take the code value (their defaults included), while
-omitted component kinds and `config` keys are inherited from the files. On targets
-without a filesystem (such as wasm), no files are found and the base is empty.
+Plugin settings can come from two places, and they combine: the `plugins.toml`
+files are read and merged into a starting point, then settings passed in code to
+`plugin.initialize(...)` are applied on top and win on conflicts.
+
+Files and code differ in what happens to a setting you leave out. In a **file**,
+an omitted setting is simply absent, so a value from a lower-priority file shows
+through. In **code**, the config is a structured object whose fields always hold
+a value — their defaults if you didn't set one — so `version`, `policy`, and a
+declared component's `enabled` always take the code value, even when it's just
+the default. The components you list and the keys inside each component's
+`config` still merge with the files, so anything you don't set in code is
+inherited.
+
+If the program runs without a filesystem — for example a WebAssembly (wasm)
+build — there are no files to read, so the starting point is empty and only the
+code settings apply.
 
 ## Explicit Defaults And Overrides
 
