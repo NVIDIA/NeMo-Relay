@@ -316,7 +316,7 @@ pub(crate) fn mask_text(
 ) -> String {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
-    if len <= unmasked_prefix + unmasked_suffix {
+    if len <= unmasked_prefix.saturating_add(unmasked_suffix) {
         return text.to_string();
     }
 

@@ -1048,6 +1048,12 @@ fn builtin_mask_with_ipv6_detector_supports_compressed_addresses() {
 }
 
 #[test]
+fn mask_text_handles_extreme_unmasked_bounds_without_overflow() {
+    let masked = mask_text("secret", "*", usize::MAX, 4);
+    assert_eq!(masked, "secret");
+}
+
+#[test]
 fn builtin_mask_with_bearer_token_detector_preserves_scheme_and_last_four() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
