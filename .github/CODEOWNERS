@@ -4,9 +4,9 @@
 # Default ownership for repository files.
 * @nvidia/nat-developers
 
-# Lockfiles and attribution files require dependency approver review.
-Cargo.lock @nvidia/nat-dep-approvers
-uv.lock @nvidia/nat-dep-approvers
-package-lock.json @nvidia/nat-dep-approvers
-
+# Attribution files require dependency approver review due to change in version(s)
 ATTRIBUTIONS-*.md @nvidia/nat-dep-approvers
+
+# Documentation changes must go to technical writers
+docs/ @lvojtku
+fern/ @lvojtku
