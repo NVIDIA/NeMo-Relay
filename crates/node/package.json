@@ -44,6 +44,10 @@
     "./observability": {
       "types": "./observability.d.ts",
       "default": "./observability.js"
+    },
+    "./pii_redaction": {
+      "types": "./pii_redaction.d.ts",
+      "default": "./pii_redaction.js"
     }
   },
   "engines": {

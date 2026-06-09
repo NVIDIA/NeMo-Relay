@@ -17,6 +17,7 @@ test('WebAssembly generated package exposes the expected package metadata', () =
   assert.equal(packageJson.exports['./typed'].default, './typed.js');
   assert.equal(packageJson.exports['./plugin'].default, './plugin.js');
   assert.equal(packageJson.exports['./adaptive'].default, './adaptive.js');
+  assert.equal(packageJson.exports['./pii_redaction'].default, './pii_redaction.js');
   assert.equal(packageJson.exports['./typed.js'].default, './typed.js');
   assert.equal(typeof wasm.ScopeType.Agent, 'number');
   assert.equal(wasm.ScopeType.Agent, 0);
@@ -32,6 +33,8 @@ test('WebAssembly generated package includes the expected wrapper files', () => 
     'plugin.d.ts',
     'adaptive.js',
     'adaptive.d.ts',
+    'pii_redaction.js',
+    'pii_redaction.d.ts',
   ];
 
   for (const fileName of expectedFiles) {

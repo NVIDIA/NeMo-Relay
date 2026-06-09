@@ -16,6 +16,7 @@ The main entry points are:
 - ``nemo_relay.plugin`` for global plugin configuration and custom plugin registration
 - ``nemo_relay.adaptive`` for adaptive component configuration helpers
 - ``nemo_relay.observability`` for observability component configuration helpers
+- ``nemo_relay.pii_redaction`` for PII redaction component configuration helpers
 
 Top-level exports also include:
 
@@ -190,6 +191,7 @@ from nemo_relay import (  # noqa: E402
     intercepts,
     llm,
     observability,
+    pii_redaction,
     plugin,
     scope,
     scope_local,
