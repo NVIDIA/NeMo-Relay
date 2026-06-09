@@ -180,7 +180,7 @@ pub(super) fn uninstall_codex_config(
         {
             providers.remove("nemo-relay-openai");
         }
-        if !preserve_hooks {
+        if provider_is_managed && !preserve_hooks {
             remove_table_item_if_bool(&mut doc, "features", "hooks", true);
         }
     }

@@ -11,6 +11,8 @@ mod state;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use serde_json::{Value, json};
+
 use crate::config::{InstallCommand, PluginHost, UninstallCommand};
 use crate::error::CliError;
 
@@ -21,8 +23,8 @@ use host::{
 };
 use marketplace::write_plugin_marketplace;
 use setup::{
-    PluginSetupRunner, RealPluginSetupRunner, run_plugin_doctor, run_plugin_setup,
-    run_plugin_uninstall,
+    PluginSetupRunner, RealPluginSetupRunner, run_plugin_doctor, run_plugin_doctor_json,
+    run_plugin_setup, run_plugin_uninstall,
 };
 use state::{
     CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, PluginInstallOptions,
@@ -44,6 +46,7 @@ pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
         force: command.force,
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
+        json: false,
     };
     run_for_hosts(
         command.host,
@@ -62,6 +65,7 @@ pub(crate) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
         force: false,
         dry_run: command.dry_run,
         skip_doctor: true,
+        json: false,
     };
     run_for_hosts(
         command.host,
@@ -74,7 +78,7 @@ pub(crate) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
 pub(crate) fn doctor(
     host: PluginHost,
     install_dir: Option<PathBuf>,
-    _json: bool,
+    json: bool,
 ) -> Result<ExitCode, CliError> {
     let options = PluginInstallOptions {
         install_dir: install_dir
@@ -83,7 +87,11 @@ pub(crate) fn doctor(
         force: false,
         dry_run: false,
         skip_doctor: true,
+        json,
     };
+    if json {
+        return doctor_json(host, &options);
+    }
     run_for_hosts(
         host,
         HostSelectionMode::InstalledState,
@@ -128,6 +136,35 @@ where
     Ok(ExitCode::SUCCESS)
 }
 
+fn doctor_json(host: PluginHost, options: &PluginInstallOptions) -> Result<ExitCode, CliError> {
+    let runner = RealCommandRunner;
+    let setup_runner = RealPluginSetupRunner;
+    let hosts = select_hosts(host, HostSelectionMode::InstalledState, options, &runner)?;
+    if hosts.is_empty() {
+        return Err(CliError::Install(match host {
+            PluginHost::All => "no installed Claude Code or Codex plugin state was found".into(),
+            _ => "no supported plugin host selected".into(),
+        }));
+    }
+    let reports = hosts
+        .into_iter()
+        .map(|host| doctor_host_json_value(host, options, &runner, &setup_runner))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CliError::Install)?;
+    if matches!(host, PluginHost::All) {
+        print_json(&json!({
+            "schema_version": 1,
+            "plugins": reports
+        }))
+    } else {
+        print_json(&with_schema(
+            reports.into_iter().next().expect("hosts is not empty"),
+        ))
+    }
+    .map_err(CliError::Install)?;
+    Ok(ExitCode::SUCCESS)
+}
+
 fn select_hosts(
     host: PluginHost,
     mode: HostSelectionMode,
@@ -169,7 +206,15 @@ fn install_host(
         force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
     }
     write_plugin_marketplace(host, &layout, options)?;
-    write_state(&layout, options)?;
+    if let Err(error) = write_state(&layout, options) {
+        if let Err(cleanup_error) = remove_path(&layout.marketplace_root, options) {
+            return Err(format!(
+                "{error}; additionally failed to remove generated marketplace {}: {cleanup_error}",
+                layout.marketplace_root.display()
+            ));
+        }
+        return Err(error);
+    }
     let mut registration = HostRegistrationProgress::default();
     let mut setup_attempted = false;
     let result = (|| {
@@ -235,8 +280,11 @@ fn uninstall_host_with_setup_override(
             plugin_setup_installed: true,
         }
     });
-    let relay = require_relay(options, runner)?;
-    validate_relay_plugin_shim(&relay, options, runner)?;
+    if let Err(error) = require_relay(options, runner)
+        .and_then(|relay| validate_relay_plugin_shim(&relay, options, runner))
+    {
+        eprintln!("warning: skipping nemo-relay validation during uninstall: {error}");
+    }
     let mut state = state;
     if force_plugin_setup_uninstall && !state.plugin_setup_installed {
         state.plugin_setup_installed = true;
@@ -264,11 +312,40 @@ fn doctor_host(
     validate_relay_plugin_shim(&relay, options, runner)?;
     let state = read_state(host, &options.install_dir)
         .ok_or_else(|| format!("no installed {} plugin state found", host_label(host)))?;
+    if options.json {
+        print_json(&with_schema(doctor_host_json_value(
+            host,
+            options,
+            runner,
+            setup_runner,
+        )?))?;
+        return Ok(());
+    }
     println!("nemo-relay: {}", relay.display());
     println!("host: {}", host_arg(host));
     println!("marketplace: {}", state.marketplace_root.display());
     println!("plugin: {}", state.plugin_root.display());
     run_plugin_doctor(host, options, setup_runner)
+}
+
+fn doctor_host_json_value(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<Value, String> {
+    let relay = require_relay(options, runner)?;
+    validate_relay_plugin_shim(&relay, options, runner)?;
+    let state = read_state(host, &options.install_dir)
+        .ok_or_else(|| format!("no installed {} plugin state found", host_label(host)))?;
+    let plugin = run_plugin_doctor_json(host, setup_runner)?;
+    Ok(json!({
+        "host": host_arg(host),
+        "nemo_relay": relay,
+        "marketplace": state.marketplace_root,
+        "plugin": state.plugin_root,
+        "checks": plugin
+    }))
 }
 
 fn force_cleanup_existing_install(
@@ -368,6 +445,19 @@ fn host_cli(host: PluginHost) -> &'static str {
         PluginHost::ClaudeCode => "claude",
         PluginHost::All => unreachable!("all is expanded before host CLI resolution"),
     }
+}
+
+fn print_json(value: &Value) -> Result<(), String> {
+    let rendered = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
+    println!("{rendered}");
+    Ok(())
+}
+
+fn with_schema(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("schema_version".into(), json!(1));
+    }
+    value
 }
 
 #[cfg(test)]

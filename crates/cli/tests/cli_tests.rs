@@ -379,16 +379,20 @@ fn cli_doctor_plugin_help_accepts_plugin_flag() {
 }
 
 #[test]
-fn cli_doctor_plugin_rejects_json_until_plugin_json_is_supported() {
+fn cli_doctor_plugin_accepts_json_flag() {
+    let temp = tempfile::tempdir().unwrap();
     let output = Command::new(gateway_bin())
-        .args(["doctor", "--plugin", "codex", "--json"])
+        .args(["doctor", "--plugin", "codex", "--json", "--install-dir"])
+        .arg(temp.path())
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--json"), "stderr was:\n{stderr}");
-    assert!(stderr.contains("--plugin"), "stderr was:\n{stderr}");
+    assert!(
+        !stderr.contains("cannot be used with"),
+        "stderr was:\n{stderr}"
+    );
 }
 
 #[test]

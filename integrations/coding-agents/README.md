@@ -22,8 +22,9 @@ environment variables, or shared TOML config.
 
 ## Packages
 
-- `claude-code/` is a Claude Code plugin package. It installs hook entries
-  targeting `POST /hooks/claude-code` through `nemo-relay` on `PATH`.
+- `claude-code/` is a Claude Code plugin package. The
+  `nemo-relay install claude-code` command installs hook entries targeting
+  `POST /hooks/claude-code` through `nemo-relay` on `PATH`.
 - `codex/` is a Codex plugin package. `nemo-relay install codex` creates the
   marketplace, installs the plugin, enables `features.hooks = true`, and
   configures a local `nemo-relay-openai` provider alias. Codex plugin delivery

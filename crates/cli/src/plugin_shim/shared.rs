@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use reqwest::Url;
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table};
 
@@ -25,7 +26,7 @@ pub(super) fn ensure_sidecar(agent: CodingAgent, url: &str) {
     }
     let runtime = runtime_dir();
     let _ = fs::create_dir_all(&runtime);
-    let lock = runtime.join(format!("{}-sidecar.lock", agent.as_arg()));
+    let lock = runtime.join(format!("{}-sidecar.lock", sidecar_lock_name(url)));
     let mut acquired = false;
     for _ in 0..40 {
         match fs::create_dir(&lock) {
@@ -514,12 +515,71 @@ pub(super) fn current_exe() -> Result<PathBuf, String> {
 }
 
 pub(super) fn runtime_dir() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
-        .or_else(|| env::var_os("TMPDIR"))
-        .or_else(|| env::var_os("TEMP"))
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir)
+    runtime_dir_for(
+        env::var_os("XDG_RUNTIME_DIR"),
+        env::var_os("TMPDIR"),
+        env::var_os("TEMP"),
+        env::temp_dir(),
+        env::var_os("USER"),
+        env::var_os("USERNAME"),
+    )
+}
+
+pub(super) fn runtime_dir_for(
+    xdg_runtime_dir: Option<std::ffi::OsString>,
+    tmpdir: Option<std::ffi::OsString>,
+    temp: Option<std::ffi::OsString>,
+    temp_dir: PathBuf,
+    user: Option<std::ffi::OsString>,
+    username: Option<std::ffi::OsString>,
+) -> PathBuf {
+    if let Some(base) = xdg_runtime_dir.or(tmpdir).or(temp) {
+        return PathBuf::from(base).join("nemo-relay-plugin");
+    }
+    temp_dir
+        .join(runtime_user_segment(user, username))
         .join("nemo-relay-plugin")
+}
+
+pub(super) fn sidecar_lock_name(url: &str) -> String {
+    let raw = Url::parse(url)
+        .ok()
+        .and_then(|parsed| {
+            let host = parsed.host_str()?;
+            let port = parsed.port_or_known_default()?;
+            Some(format!("{host}-{port}"))
+        })
+        .unwrap_or_else(|| url.to_string());
+    sanitize_filesystem_segment(&raw)
+}
+
+fn runtime_user_segment(
+    user: Option<std::ffi::OsString>,
+    username: Option<std::ffi::OsString>,
+) -> String {
+    let raw = user
+        .or(username)
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_else(|| "unknown-user".into());
+    sanitize_filesystem_segment(&raw)
+}
+
+fn sanitize_filesystem_segment(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "unknown".into()
+    } else {
+        sanitized
+    }
 }
 
 pub(super) fn plugin_idle_timeout() -> String {

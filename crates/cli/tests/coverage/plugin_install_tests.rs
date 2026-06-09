@@ -112,6 +112,18 @@ impl PluginSetupRunner for MockSetupRunner {
     fn doctor(&self, host: PluginHost, gateway_url: &str) -> Result<(), String> {
         self.record(format!("doctor {} {gateway_url}", host_arg(host)))
     }
+
+    fn doctor_json(
+        &self,
+        host: PluginHost,
+        gateway_url: &str,
+    ) -> Result<serde_json::Value, String> {
+        self.record(format!("doctor-json {} {gateway_url}", host_arg(host)))?;
+        Ok(json!({
+            "ok": true,
+            "checks": {}
+        }))
+    }
 }
 
 impl MockSetupRunner {
@@ -131,6 +143,7 @@ fn options(dir: &Path) -> PluginInstallOptions {
         force: false,
         dry_run: false,
         skip_doctor: true,
+        json: false,
     }
 }
 
@@ -576,6 +589,31 @@ fn plugin_registration_failure_rolls_back_marketplace_without_plugin_removal() {
 }
 
 #[test]
+fn state_write_failure_removes_generated_marketplace() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner::default();
+    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    std::fs::create_dir_all(&layout.state_path).unwrap();
+
+    let error = install_host(
+        PluginHost::Codex,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("failed to write"));
+    assert!(!layout.marketplace_root.exists());
+    assert!(layout.state_path.exists());
+    assert!(runner.commands().is_empty());
+    assert!(setup_runner.calls().is_empty());
+}
+
+#[test]
 fn retry_after_partial_registration_rollback_does_not_restore_uninstalled_setup() {
     let dir = tempdir().unwrap();
     let mut runner = MockRunner::default()
@@ -695,6 +733,53 @@ fn uninstall_uses_installed_state_and_removes_marketplace() {
             .calls()
             .iter()
             .any(|call| call == &format!("uninstall codex {DEFAULT_GATEWAY_URL}"))
+    );
+}
+
+#[test]
+fn uninstall_continues_when_relay_is_missing() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner::default();
+    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+
+    uninstall_host(
+        PluginHost::Codex,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
+
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+    assert!(
+        setup_runner
+            .calls()
+            .iter()
+            .any(|call| call == &format!("uninstall codex {DEFAULT_GATEWAY_URL}"))
+    );
+}
+
+#[test]
+fn doctor_json_uses_quiet_plugin_report() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner::default();
+    let options = PluginInstallOptions {
+        json: true,
+        ..options(dir.path())
+    };
+    write_installed_state(PluginHost::Codex, dir.path());
+
+    doctor_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+
+    assert_eq!(
+        setup_runner.calls(),
+        vec![format!("doctor-json codex {DEFAULT_GATEWAY_URL}")]
     );
 }
 

@@ -20,6 +20,7 @@ pub(super) struct PluginInstallOptions {
     pub(super) force: bool,
     pub(super) dry_run: bool,
     pub(super) skip_doctor: bool,
+    pub(super) json: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -156,7 +157,10 @@ pub(super) fn write_state(
             host_marketplace_removed: false,
             plugin_setup_installed: false,
         },
-        layout.state_path.parent().unwrap_or_else(|| Path::new(".")),
+        layout
+            .state_path
+            .parent()
+            .expect("state_path should have a parent directory"),
         options,
     )
 }

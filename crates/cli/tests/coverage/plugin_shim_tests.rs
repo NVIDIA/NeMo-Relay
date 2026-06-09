@@ -536,6 +536,27 @@ supports_websockets = false
 }
 
 #[test]
+fn codex_uninstall_without_backup_preserves_user_hooks_when_provider_is_not_managed() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+model_provider = "openai"
+
+[features]
+hooks = true
+"#,
+    )
+    .unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let updated = fs::read_to_string(&path).unwrap();
+
+    assert!(updated.contains("hooks = true"));
+}
+
+#[test]
 fn codex_uninstall_preserves_hooks_feature_when_user_hooks_remain() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
@@ -764,7 +785,7 @@ fn claude_restore_with_backup_preserves_user_changed_provider_url() {
         json_env_string(&updated, "ANTHROPIC_BASE_URL"),
         Some("http://127.0.0.1:49999")
     );
-    assert!(!backup_path(&settings).exists());
+    assert!(backup_path(&settings).exists());
 }
 
 #[test]
@@ -823,6 +844,55 @@ fn stale_lock_is_repaired_after_grace_period_even_when_pid_file_exists() {
 
     assert!(repair_stale_lock_after(&lock, Duration::ZERO));
     assert!(!lock.exists());
+}
+
+#[test]
+fn sidecar_lock_name_uses_gateway_host_and_port() {
+    assert_eq!(
+        sidecar_lock_name("http://127.0.0.1:47632/hooks"),
+        "127.0.0.1-47632"
+    );
+    assert_eq!(sidecar_lock_name("http://localhost"), "localhost-80");
+    assert_eq!(
+        sidecar_lock_name("not a url/with spaces"),
+        "not_a_url_with_spaces"
+    );
+}
+
+#[test]
+fn runtime_dir_fallback_is_user_scoped() {
+    let runtime = runtime_dir_for(
+        None,
+        None,
+        None,
+        std::path::PathBuf::from("/tmp"),
+        Some("alice/example".into()),
+        None,
+    );
+
+    assert_eq!(
+        runtime,
+        std::path::PathBuf::from("/tmp")
+            .join("alice_example")
+            .join("nemo-relay-plugin")
+    );
+}
+
+#[test]
+fn runtime_dir_prefers_explicit_runtime_base_without_user_segment() {
+    let runtime = runtime_dir_for(
+        Some("/run/user/1000".into()),
+        None,
+        None,
+        std::path::PathBuf::from("/tmp"),
+        Some("alice".into()),
+        None,
+    );
+
+    assert_eq!(
+        runtime,
+        std::path::PathBuf::from("/run/user/1000").join("nemo-relay-plugin")
+    );
 }
 
 #[test]

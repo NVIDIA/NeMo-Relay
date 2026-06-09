@@ -66,7 +66,6 @@ pub(super) fn claude_provider(
                     backup.display()
                 );
             } else {
-                remove_backup(&path)?;
                 println!(
                     "current Claude provider routing is not managed by Relay; left {} unchanged",
                     path.display()

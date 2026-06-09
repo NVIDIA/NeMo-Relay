@@ -117,7 +117,7 @@ pub(crate) struct DoctorCommand {
     pub(crate) install_dir: Option<PathBuf>,
     /// Emit machine-readable JSON instead of the formatted human report. Versioned via
     /// `schema_version`; stable shape for CI / evaluation harness consumption.
-    #[arg(long, conflicts_with = "plugin")]
+    #[arg(long)]
     pub(crate) json: bool,
 }
 

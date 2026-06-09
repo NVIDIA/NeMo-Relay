@@ -5,6 +5,7 @@
 
 use crate::config::{CodingAgent, PluginHost};
 use crate::plugin_shim;
+use serde_json::Value;
 
 use super::DEFAULT_GATEWAY_URL;
 use super::state::PluginInstallOptions;
@@ -45,6 +46,13 @@ pub(super) fn run_plugin_doctor(
     setup_runner.doctor(host, DEFAULT_GATEWAY_URL)
 }
 
+pub(super) fn run_plugin_doctor_json(
+    host: PluginHost,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<Value, String> {
+    setup_runner.doctor_json(host, DEFAULT_GATEWAY_URL)
+}
+
 pub(super) fn setup_action_description(host: PluginHost, action: &str) -> String {
     match (host, action) {
         (PluginHost::Codex, "configure") => {
@@ -70,6 +78,7 @@ pub(super) trait PluginSetupRunner {
     fn setup(&self, host: PluginHost, gateway_url: &str) -> Result<(), String>;
     fn uninstall(&self, host: PluginHost, gateway_url: &str) -> Result<(), String>;
     fn doctor(&self, host: PluginHost, gateway_url: &str) -> Result<(), String>;
+    fn doctor_json(&self, host: PluginHost, gateway_url: &str) -> Result<Value, String>;
 }
 
 pub(super) struct RealPluginSetupRunner;
@@ -96,6 +105,16 @@ impl PluginSetupRunner for RealPluginSetupRunner {
             PluginHost::Codex => plugin_shim::doctor_plugin(CodingAgent::Codex, gateway_url),
             PluginHost::ClaudeCode => {
                 plugin_shim::doctor_plugin(CodingAgent::ClaudeCode, gateway_url)
+            }
+            PluginHost::All => unreachable!("all is expanded before plugin doctor"),
+        }
+    }
+
+    fn doctor_json(&self, host: PluginHost, gateway_url: &str) -> Result<Value, String> {
+        match host {
+            PluginHost::Codex => plugin_shim::doctor_plugin_json(CodingAgent::Codex, gateway_url),
+            PluginHost::ClaudeCode => {
+                plugin_shim::doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url)
             }
             PluginHost::All => unreachable!("all is expanded before plugin doctor"),
         }

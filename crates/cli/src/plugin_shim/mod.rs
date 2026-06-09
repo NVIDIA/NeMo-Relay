@@ -14,6 +14,8 @@ use std::env;
 use std::io::{Read, Write};
 use std::process::{Command, ExitCode};
 
+use serde_json::{Value, json};
+
 use claude::{claude_provider, claude_settings_base_url};
 use codex::{codex_hooks_installed, codex_provider_installed, install_codex, uninstall_codex};
 use command::{
@@ -143,6 +145,52 @@ pub(crate) fn doctor_plugin(agent: CodingAgent, gateway_url: &str) -> Result<(),
     } else {
         Err(format!("{} plugin doctor checks failed", agent.as_arg()))
     }
+}
+
+pub(crate) fn doctor_plugin_json(agent: CodingAgent, gateway_url: &str) -> Result<Value, String> {
+    let plugin_binary = current_exe().ok().is_some_and(|path| path.exists());
+    let sidecar_running = healthz(gateway_url);
+    let (checks, ok) = match agent {
+        CodingAgent::ClaudeCode => {
+            let provider = claude_settings_base_url().as_deref() == Some(gateway_url);
+            (
+                json!({
+                    "plugin_binary": plugin_binary,
+                    "sidecar_running": sidecar_running,
+                    "claude_provider_routing": provider
+                }),
+                plugin_binary && provider,
+            )
+        }
+        CodingAgent::Codex => {
+            let provider = codex_provider_installed(gateway_url);
+            let hooks = codex_hooks_installed(gateway_url)?;
+            (
+                json!({
+                    "plugin_binary": plugin_binary,
+                    "sidecar_running": sidecar_running,
+                    "codex_provider_alias": provider,
+                    "codex_hooks": hooks
+                }),
+                plugin_binary && provider && hooks,
+            )
+        }
+        other => {
+            return Err(format!(
+                "plugin doctor supports claude and codex, got {}",
+                other.as_arg()
+            ));
+        }
+    };
+    Ok(json!({
+        "ok": ok,
+        "sidecar_health": if sidecar_running {
+            "running"
+        } else {
+            "not_running_lazy_start"
+        },
+        "checks": checks
+    }))
 }
 
 fn doctor_ok(agent: CodingAgent, gateway_url: &str) -> Result<bool, String> {
