@@ -293,6 +293,10 @@ Structured secrets:
 - `jwt`
 - `credit_card`
 
+  `bearer_token` is heuristic rather than vendor-specific. It can still match
+  benign bearer-style values, so prefer a narrower detector when you know the
+  credential family.
+
 Cloud credentials:
 - `aws_access_key_id`
 - `aws_secret_access_key`

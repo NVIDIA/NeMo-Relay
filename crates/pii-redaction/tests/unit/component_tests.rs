@@ -1048,6 +1048,53 @@ fn builtin_mask_with_bearer_token_detector_preserves_scheme_and_last_four() {
 }
 
 #[test]
+fn builtin_bearer_token_detector_ignores_short_benign_values() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "redact",
+            "detector": "bearer_token",
+            "target_paths": ["/auth"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-bearer-short-benign-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "auth": "Bearer token",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "auth": "Bearer token",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-bearer-short-benign-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_mask_with_credit_card_detector_preserves_last_four_digits() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1261,6 +1308,38 @@ fn builtin_mask_with_cloud_key_detectors_preserves_expected_segments() {
         Some(&json!({"key": mask_text(&gcp_key, "*", 6, 4)}))
     );
     deregister_subscriber("pii-redaction-gcp-key-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+
+    reset_runtime();
+    setup_isolated_thread();
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "azure_storage_account_key",
+            "target_paths": ["/key"]
+        }
+    }))))
+    .unwrap();
+    let events = capture_events("pii-redaction-azure-storage-key-mask-events");
+    let azure_key = format!("{}==", "A".repeat(86));
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({"key": azure_key}))
+            .build(),
+    )
+    .unwrap();
+    assert_eq!(
+        captured_events_snapshot(&events)[0].input(),
+        Some(&json!({"key": mask_text(&azure_key, "*", 0, 4)}))
+    );
+    deregister_subscriber("pii-redaction-azure-storage-key-mask-events").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

@@ -85,7 +85,7 @@ const BUILTIN_DETECTOR_SPECS: &[BuiltinDetectorSpec] = &[
         detector: BuiltinDetector::BearerToken,
         name: "bearer_token",
         category: BuiltinDetectorCategory::StructuredSecret,
-        regex_pattern: r"(?i)\bBearer\s+[A-Za-z0-9._~+/\-]+=*\b",
+        regex_pattern: r"(?i)\bBearer\s+[A-Za-z0-9._~+/\-]{12,}={0,2}\b",
     },
     BuiltinDetectorSpec {
         detector: BuiltinDetector::Jwt,
@@ -121,7 +121,7 @@ const BUILTIN_DETECTOR_SPECS: &[BuiltinDetectorSpec] = &[
         detector: BuiltinDetector::AzureStorageAccountKey,
         name: "azure_storage_account_key",
         category: BuiltinDetectorCategory::CloudCredential,
-        regex_pattern: r"\b[A-Za-z0-9+/]{86}==\b",
+        regex_pattern: r"\b[A-Za-z0-9+/]{86}==",
     },
 ];
 
