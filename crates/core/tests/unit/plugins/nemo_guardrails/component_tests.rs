@@ -361,6 +361,8 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
         "headers",
         "timeout_millis",
         "python_module",
+        "python_executable",
+        "python_path",
         "context",
         "thread_id",
         "state",
@@ -761,7 +763,7 @@ fn invalid_shapes_and_values_are_reported() {
         "config_yaml": "",
         "colang_content": "",
         "codec": "openai_chat",
-        "local": {"python_module": ""}
+        "local": {"python_module": "", "python_executable": "", "python_path": ""}
     })));
     assert!(local_empty_fields.has_errors());
     assert!(
@@ -788,6 +790,34 @@ fn invalid_shapes_and_values_are_reported() {
             .iter()
             .any(|diag| diag.field.as_deref() == Some("local.python_module"))
     );
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("local.python_executable"))
+    );
+    assert!(
+        local_empty_fields
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("local.python_path"))
+    );
+
+    let local_request_defaults = validate_plugin_config(&plugin_config(json!({
+        "mode": "local",
+        "codec": "openai_chat",
+        "config_path": "./rails",
+        "request_defaults": {
+            "context": {"tenant": "demo"}
+        }
+    })));
+    assert!(local_request_defaults.has_errors());
+    assert!(local_request_defaults.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("request_defaults")
+            && diag
+                .message
+                .contains("local mode does not currently support request_defaults")
+    }));
 
     let invalid_request_defaults = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
@@ -957,28 +987,6 @@ fn unknown_fields_follow_policy() {
     })));
     assert!(!ignored.has_errors());
     assert!(ignored.diagnostics.is_empty());
-}
-
-#[test]
-fn enabled_local_initialization_fails_fast_until_backend_exists() {
-    let _guard = crate::plugins::nemo_guardrails::test_mutex()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner());
-    reset_runtime();
-
-    let error = futures::executor::block_on(initialize_plugins(plugin_config(json!({
-        "mode": "local",
-        "codec": "openai_chat",
-        "config_path": "./rails"
-    }))))
-    .unwrap_err();
-
-    match error {
-        crate::plugin::PluginError::RegistrationFailed(message) => {
-            assert!(message.contains("local backend"));
-        }
-        other => panic!("unexpected error: {other}"),
-    }
 }
 
 #[test]

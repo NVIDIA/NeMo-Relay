@@ -4,6 +4,9 @@
 package scope_test
 
 import (
+	"encoding/json"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
@@ -15,6 +18,54 @@ const (
 	getHandleFailed      = "GetHandle: %v"
 	expectedNonNilHandle = "expected non-nil handle"
 )
+
+func metadataStringField(t *testing.T, raw json.RawMessage, field string) string {
+	t.Helper()
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal metadata failed: %v; raw=%s", err, raw)
+	}
+	value, ok := decoded[field]
+	if !ok {
+		t.Fatalf("expected metadata field %q, got %v", field, decoded)
+	}
+	text, ok := value.(string)
+	if !ok {
+		t.Fatalf("expected metadata field %q to be string, got %T", field, value)
+	}
+	return text
+}
+
+func captureScopeEndMetadata(t *testing.T, subscriberName, scopeName string, fn func()) json.RawMessage {
+	t.Helper()
+
+	var captured json.RawMessage
+	var mu sync.Mutex
+	_ = nemo_relay.DeregisterSubscriber(subscriberName)
+	if err := nemo_relay.RegisterSubscriber(subscriberName, func(event nemo_relay.Event) {
+		if event.Kind() == "scope" && event.ScopeCategory() == "end" && event.Name() == scopeName {
+			mu.Lock()
+			captured = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer nemo_relay.DeregisterSubscriber(subscriberName)
+
+	fn()
+
+	if err := nemo_relay.FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if captured == nil {
+		t.Fatalf("expected end metadata for scope %q", scopeName)
+	}
+	return captured
+}
 
 // ============================================================================
 // WithScope
@@ -80,6 +131,17 @@ func TestWithScopeDeferCleanup(t *testing.T) {
 	}
 }
 
+func TestWithScopeRecordsOKStatusMetadata(t *testing.T) {
+	metadata := captureScopeEndMetadata(t, "go_scope_with_status_ok_sub", "with_scope_ok_status", func() {
+		cleanup := scope.WithScope("with_scope_ok_status", nemo_relay.ScopeTypeFunction)
+		cleanup()
+	})
+
+	if got := metadataStringField(t, metadata, "otel.status_code"); got != "OK" {
+		t.Fatalf("expected otel.status_code=OK, got %q", got)
+	}
+}
+
 func TestWithScopeCleanupOnPanic(t *testing.T) {
 	before, err := nemo_relay.GetHandle()
 	if err != nil {
@@ -110,6 +172,27 @@ func TestWithScopeCleanupOnPanic(t *testing.T) {
 	}
 	if after.UUID() != before.UUID() {
 		t.Fatalf("scope not popped after panic")
+	}
+}
+
+func TestWithScopeRecordsErrorStatusMetadataOnPanic(t *testing.T) {
+	metadata := captureScopeEndMetadata(t, "go_scope_with_status_error_sub", "with_scope_error_status", func() {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			defer scope.WithScope("with_scope_error_status", nemo_relay.ScopeTypeTool)()
+			panic("scope status failure")
+		}()
+	})
+
+	if got := metadataStringField(t, metadata, "otel.status_code"); got != "ERROR" {
+		t.Fatalf("expected otel.status_code=ERROR, got %q", got)
+	}
+	if got := metadataStringField(t, metadata, "otel.status_description"); !strings.Contains(got, "scope status failure") {
+		t.Fatalf("expected status message to mention panic, got %q", got)
 	}
 }
 

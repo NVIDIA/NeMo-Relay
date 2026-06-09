@@ -1,0 +1,281 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Unit tests for LLM API lifecycle behavior.
+
+use std::sync::{Arc, Mutex};
+
+use serde_json::json;
+use tokio_stream::StreamExt;
+
+use super::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_stream_call_execute,
+};
+use crate::api::event::ScopeCategory;
+use crate::api::runtime::LlmJsonStream;
+use crate::api::runtime::{NemoRelayContextState, global_context};
+use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use crate::error::FlowError;
+use crate::json::Json;
+
+fn reset_global() {
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    let context = global_context();
+    *context.write().unwrap() = NemoRelayContextState::new();
+}
+
+fn request() -> LlmRequest {
+    LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"messages": [], "model": "demo"}),
+    }
+}
+
+#[test]
+fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
+    reset_global();
+
+    let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
+    let subscriber_events = captured_events.clone();
+    register_subscriber(
+        "llm-status-metadata",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                subscriber_events
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), event.metadata().cloned()));
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let response = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("llm-ok")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async { Ok(json!({"ok": true})) })
+                }))
+                .metadata(json!({"caller": "llm-ok", "otel.status_code": "USER"}))
+                .build(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response, json!({"ok": true}));
+
+        let error = llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("llm-error")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async { Err(FlowError::Internal("llm boom".to_string())) })
+                }))
+                .metadata(json!({"caller": "llm-error"}))
+                .build(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("llm boom"));
+    });
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("llm-status-metadata").unwrap());
+
+    let events = captured_events.lock().unwrap();
+    let metadata_for = |name: &str| {
+        events
+            .iter()
+            .find(|event| event.0 == name)
+            .and_then(|event| event.1.as_ref())
+            .unwrap_or_else(|| panic!("missing end event metadata for {name}"))
+    };
+
+    let success_metadata = metadata_for("llm-ok");
+    assert_eq!(success_metadata["caller"], json!("llm-ok"));
+    assert_eq!(success_metadata["otel.status_code"], json!("OK"));
+    assert!(success_metadata.get("otel.status_description").is_none());
+
+    let error_metadata = metadata_for("llm-error");
+    assert_eq!(error_metadata["caller"], json!("llm-error"));
+    assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        error_metadata["otel.status_description"]
+            .as_str()
+            .unwrap()
+            .contains("llm boom")
+    );
+}
+
+#[test]
+fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
+    reset_global();
+
+    let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
+    let subscriber_events = captured_events.clone();
+    register_subscriber(
+        "llm-stream-status-metadata",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                subscriber_events
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), event.metadata().cloned()));
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("llm-stream-ok")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(
+                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
+                                as LlmJsonStream,
+                        )
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| json!({"ok": true})))
+                .metadata(json!({"caller": "llm-stream-ok", "otel.status_code": "USER"}))
+                .build(),
+        )
+        .await
+        .unwrap();
+
+        while let Some(chunk) = stream.next().await {
+            chunk.unwrap();
+        }
+    });
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("llm-stream-status-metadata").unwrap());
+
+    let events = captured_events.lock().unwrap();
+    let success_metadata = events
+        .iter()
+        .find(|event| event.0 == "llm-stream-ok")
+        .and_then(|event| event.1.as_ref())
+        .unwrap_or_else(|| panic!("missing stream end event metadata"));
+    assert_eq!(success_metadata["caller"], json!("llm-stream-ok"));
+    assert_eq!(success_metadata["otel.status_code"], json!("OK"));
+    assert!(success_metadata.get("otel.status_description").is_none());
+}
+
+#[test]
+fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
+    reset_global();
+
+    let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
+    let subscriber_events = captured_events.clone();
+    register_subscriber(
+        "llm-stream-error-status-metadata",
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End) {
+                subscriber_events
+                    .lock()
+                    .unwrap()
+                    .push((event.name().to_string(), event.metadata().cloned()));
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let mut upstream_error_stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("llm-stream-upstream-error")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
+                            "stream boom".to_string(),
+                        ))])) as LlmJsonStream)
+                    })
+                }))
+                .collector(Box::new(|_chunk| Ok(())))
+                .finalizer(Box::new(|| json!({"partial": true})))
+                .metadata(
+                    json!({"caller": "llm-stream-upstream-error", "otel.status_code": "USER"}),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+        let upstream_error = upstream_error_stream.next().await.unwrap().unwrap_err();
+        assert!(upstream_error.to_string().contains("stream boom"));
+
+        let mut collector_error_stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("llm-stream-collector-error")
+                .request(request())
+                .func(Arc::new(|_request| {
+                    Box::pin(async {
+                        Ok(
+                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
+                                as LlmJsonStream,
+                        )
+                    })
+                }))
+                .collector(Box::new(|_chunk| {
+                    Err(FlowError::Internal("collector boom".to_string()))
+                }))
+                .finalizer(Box::new(|| json!({"partial": true})))
+                .metadata(
+                    json!({"caller": "llm-stream-collector-error", "otel.status_code": "USER"}),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+        let collector_error = collector_error_stream.next().await.unwrap().unwrap_err();
+        assert!(collector_error.to_string().contains("collector boom"));
+    });
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("llm-stream-error-status-metadata").unwrap());
+
+    let events = captured_events.lock().unwrap();
+    let metadata_for = |name: &str| {
+        events
+            .iter()
+            .find(|event| event.0 == name)
+            .and_then(|event| event.1.as_ref())
+            .unwrap_or_else(|| panic!("missing stream end event metadata for {name}"))
+    };
+
+    let upstream_error_metadata = metadata_for("llm-stream-upstream-error");
+    assert_eq!(
+        upstream_error_metadata["caller"],
+        json!("llm-stream-upstream-error")
+    );
+    assert_eq!(upstream_error_metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        upstream_error_metadata["otel.status_description"]
+            .as_str()
+            .unwrap()
+            .contains("stream boom")
+    );
+
+    let collector_error_metadata = metadata_for("llm-stream-collector-error");
+    assert_eq!(
+        collector_error_metadata["caller"],
+        json!("llm-stream-collector-error")
+    );
+    assert_eq!(collector_error_metadata["otel.status_code"], json!("ERROR"));
+    assert!(
+        collector_error_metadata["otel.status_description"]
+            .as_str()
+            .unwrap()
+            .contains("collector boom")
+    );
+}

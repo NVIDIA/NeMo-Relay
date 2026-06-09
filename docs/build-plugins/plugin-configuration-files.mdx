@@ -188,6 +188,12 @@ across files. A higher-precedence component with the same `kind` merges into the
 lower-precedence component. A component with a different `kind` is added to the
 effective configuration.
 
+The `pricing` component has one additional merge rule: when both lower- and
+higher-precedence files define `components.config.sources`, the
+higher-precedence sources are placed before lower-precedence sources instead of
+replacing them. This lets a user or project file override one model while still
+falling back to fleet-managed pricing from `/etc/nemo-relay/plugins.toml`.
+
 Declare each `kind` at most once inside one `plugins.toml` file. Duplicate
 component kinds in the same file fail before merge. Duplicate singleton
 components that reach plugin validation also fail validation.
@@ -241,9 +247,11 @@ Common validation failures include:
   Format (ATIF) filename template that does not contain `{session_id}`.
 
 Use `nemo-relay doctor` to inspect the resolved gateway configuration and plugin
-diagnostics. For Observability, doctor also reports enabled exporter sections and
-checks writable file exporter directories or reachable OTLP endpoints when those
-settings are present.
+diagnostics. For Observability, doctor also reports enabled exporter sections,
+checks writable file exporter directories, probes configured ATOF streaming
+endpoints, and checks reachable OTLP endpoints when those settings are present.
+For Pricing, doctor validates enabled file and inline sources and fails when a
+source is unreadable or the catalog schema is invalid.
 
 ## Relationship To `config.toml`
 

@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::json::Json;
 
+pub use super::pricing::{
+    CacheReadAccounting, ModelPricing, PricingCatalog, PricingCatalogError, PricingConfig,
+    PricingResolver, PricingSource, PricingSourceConfig, PricingUnit, PromptCachePricing,
+    TokenPricingRates, active_pricing_resolver, attach_estimated_cost,
+    attach_estimated_cost_for_provider, estimate_cost, estimate_cost_for_provider,
+    estimate_cost_with_catalog, estimate_cost_with_provider, infer_model_provider,
+    pricing_for_model, pricing_for_provider, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
+};
 use super::request::MessageContent;
 
 // ---------------------------------------------------------------------------
@@ -68,7 +77,7 @@ pub struct AnnotatedLlmResponse {
 /// All fields are `Option<u64>` because not every provider supplies every
 /// field. For example, cache token counts are only available from providers
 /// that support prompt caching.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Usage {
     /// Tokens consumed by the prompt/input.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,6 +94,182 @@ pub struct Usage {
     /// Tokens written to prompt cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
+    /// Optional cost reported by provider data or estimated from Relay pricing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<CostEstimate>,
+}
+
+/// Source of a normalized cost value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostSource {
+    /// Cost was estimated by applying Relay's model pricing table to usage.
+    ModelPricing,
+    /// Cost was reported directly by a provider or framework payload.
+    ProviderReported,
+}
+
+/// Normalized LLM response cost.
+///
+/// Provider-reported cost is preserved as-is. Model-pricing estimates include
+/// source and as-of metadata so downstream systems can audit stale pricing
+/// tables without losing a usable estimate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CostEstimate {
+    /// Total cost in `currency`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    /// ISO 4217 currency code for the cost fields.
+    #[serde(default = "default_cost_currency")]
+    pub currency: String,
+    /// Uncached prompt/input token cost in `currency`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<f64>,
+    /// Completion/output token cost in `currency`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<f64>,
+    /// Prompt cache read cost in `currency`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<f64>,
+    /// Prompt cache write cost in `currency`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<f64>,
+    /// Origin of this cost value.
+    pub source: CostSource,
+    /// Provider associated with the cost or pricing estimate, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_provider: Option<String>,
+    /// Model ID associated with the cost or pricing estimate, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_model: Option<String>,
+    /// Date the pricing value was last verified, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_as_of: Option<String>,
+    /// Source URL or label for the pricing value, if known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing_source: Option<String>,
+}
+
+impl CostEstimate {
+    /// Returns the explicit total, or the sum of component costs when no total was supplied.
+    #[must_use]
+    pub fn total_or_component_sum(&self) -> Option<f64> {
+        self.total.or_else(|| {
+            let (has_component, total) =
+                [self.input, self.output, self.cache_read, self.cache_write]
+                    .into_iter()
+                    .flatten()
+                    .fold((false, 0.0), |(_, total), value| (true, total + value));
+            has_component.then_some(total)
+        })
+    }
+
+    /// Returns the total only when it is denominated in the requested currency.
+    #[must_use]
+    pub fn total_for_currency(&self, currency: &str) -> Option<f64> {
+        self.currency
+            .eq_ignore_ascii_case(currency)
+            .then_some(self.total)
+            .flatten()
+    }
+
+    /// Returns the explicit or component-derived total in the requested currency.
+    #[must_use]
+    pub fn total_or_component_sum_for_currency(&self, currency: &str) -> Option<f64> {
+        self.currency
+            .eq_ignore_ascii_case(currency)
+            .then(|| self.total_or_component_sum())
+            .flatten()
+    }
+}
+
+/// Provider/framework cost object accepted by built-in response codecs.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct RawUsageCost {
+    /// Normalized total cost in the supplied currency.
+    pub total: Option<f64>,
+    /// Uncached prompt/input token cost in the supplied currency.
+    pub input: Option<f64>,
+    /// Completion/output token cost in the supplied currency.
+    pub output: Option<f64>,
+    /// Prompt cache read cost in the supplied currency.
+    pub cache_read: Option<f64>,
+    /// Prompt cache write cost in the supplied currency.
+    pub cache_write: Option<f64>,
+    /// Optional currency override from provider data.
+    pub currency: Option<String>,
+    /// Optional provider provenance.
+    pub pricing_provider: Option<String>,
+    /// Optional model provenance.
+    pub pricing_model: Option<String>,
+    /// Optional as-of provenance.
+    pub pricing_as_of: Option<String>,
+    /// Optional source provenance.
+    pub pricing_source: Option<String>,
+}
+
+pub(crate) fn provider_reported_cost(
+    provider_total_cost: Option<f64>,
+    cost: Option<RawUsageCost>,
+) -> Option<CostEstimate> {
+    let cost = cost.unwrap_or_default();
+    let provider_total_uses_default_currency = provider_total_cost.is_some();
+    let nested_currency_is_default = cost
+        .currency
+        .as_deref()
+        .is_none_or(|currency| currency.eq_ignore_ascii_case("USD"));
+    let keep_component_costs = !provider_total_uses_default_currency || nested_currency_is_default;
+    let input = keep_component_costs.then_some(cost.input).flatten();
+    let output = keep_component_costs.then_some(cost.output).flatten();
+    let cache_read = keep_component_costs.then_some(cost.cache_read).flatten();
+    let cache_write = keep_component_costs.then_some(cost.cache_write).flatten();
+    let has_currency_native_amount = cost.total.is_some()
+        || cost.input.is_some()
+        || cost.output.is_some()
+        || cost.cache_read.is_some()
+        || cost.cache_write.is_some();
+    let component_total = [input, output, cache_read, cache_write]
+        .into_iter()
+        .flatten()
+        .sum();
+    let has_component_cost =
+        input.is_some() || output.is_some() || cache_read.is_some() || cache_write.is_some();
+    let total = provider_total_cost
+        .or(cost.total)
+        .or_else(|| has_component_cost.then_some(component_total));
+
+    if total.is_none()
+        && input.is_none()
+        && output.is_none()
+        && cache_read.is_none()
+        && cache_write.is_none()
+    {
+        return None;
+    }
+
+    Some(CostEstimate {
+        total,
+        currency: if provider_total_uses_default_currency {
+            default_cost_currency()
+        } else if has_currency_native_amount {
+            cost.currency.unwrap_or_else(default_cost_currency)
+        } else {
+            default_cost_currency()
+        },
+        input,
+        output,
+        cache_read,
+        cache_write,
+        source: CostSource::ProviderReported,
+        pricing_provider: cost.pricing_provider,
+        pricing_model: cost.pricing_model,
+        pricing_as_of: cost.pricing_as_of,
+        pricing_source: cost.pricing_source,
+    })
+}
+
+fn default_cost_currency() -> String {
+    "USD".into()
 }
 
 // ---------------------------------------------------------------------------

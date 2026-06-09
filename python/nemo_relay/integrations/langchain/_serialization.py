@@ -315,7 +315,7 @@ def _prepare_lc_payloads(payload: Any) -> Any:
         prepared = {}
         for key, value in payload.items():
             prepared[key] = _prepare_lc_payloads(value)
-    elif isinstance(payload, list | tuple):
+    elif isinstance(payload, list | tuple | set):
         prepared = []
         for value in payload:
             prepared.append(_prepare_lc_payloads(value))

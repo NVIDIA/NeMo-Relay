@@ -20,6 +20,10 @@ pkg-fmt = "bin"
 [lints]
 workspace = true
 
+[features]
+default = ["atof-streaming"]
+atof-streaming = ["nemo-relay/atof-streaming"]
+
 [dependencies]
 nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
@@ -40,10 +44,13 @@ serde_json = "1"
 serde_yaml = "0.9"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 toml = "0.9"
 toml_edit = "0.23"
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

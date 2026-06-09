@@ -13,13 +13,18 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
+use crate::codec::pricing::pricing_test_mutex;
 use crate::codec::request::{
     AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
     ToolDefinition,
 };
-use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
+use crate::codec::response::{
+    AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
+    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+};
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use opentelemetry::trace::Status;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,6 +33,14 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
+
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
 
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
@@ -116,6 +129,33 @@ fn empty_annotated_response() -> AnnotatedLlmResponse {
         api_specific: None,
         extra: serde_json::Map::new(),
     }
+}
+
+fn install_test_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
 fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
@@ -735,6 +775,148 @@ fn openclaw_model_timing_marks_attach_to_parent_spans() {
         })
     );
     assert!(!unpaired_attributes.contains_key("nemo_relay.mark.metadata_json"));
+}
+
+#[test]
+fn openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_usage() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let stripped_uuid = Uuid::now_v7();
+    let partial_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {"authorization": "Bearer secret-token"},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "messages": [],
+                "imagesCount": 1,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        stripped_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "assistant_texts_count": 1,
+            "usage": {
+                "cost_usd": 0.001
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.process(&make_start_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {
+                "provider": "openai",
+                "model": "gpt-4",
+                "prompt": "visible prompt",
+                "messages": [{"role": "user", "content": "visible prompt"}],
+                "imagesCount": 0,
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        partial_uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "content": "visible answer",
+            "usage": {
+                "prompt_tokens": 42
+            },
+            "openclaw": {
+                "assistant_tool_call_names": []
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+
+    let stripped_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.cost.total") == Some(&"0.001".to_string())
+        })
+        .expect("missing stripped OpenClaw fallback span");
+    let stripped_attributes = attr_map(&stripped_span.attributes);
+    assert_eq!(
+        stripped_attributes.get("input.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_input = stripped_attributes
+        .get("input.value")
+        .expect("missing stripped input.value");
+    let parsed_input: serde_json::Value = serde_json::from_str(stripped_input).unwrap();
+    assert_eq!(parsed_input["content"]["messages"], json!([]));
+    assert!(parsed_input["headers"].is_null() || parsed_input.get("headers").is_none());
+    assert_eq!(
+        stripped_attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    let stripped_output = stripped_attributes
+        .get("output.value")
+        .expect("missing stripped output.value");
+    let parsed_output: serde_json::Value = serde_json::from_str(stripped_output).unwrap();
+    assert!(parsed_output.get("content").is_none());
+    assert_eq!(parsed_output["assistant_texts_count"], json!(1));
+    assert_eq!(
+        stripped_attributes.get("llm.cost.total"),
+        Some(&"0.001".to_string())
+    );
+    assert!(!stripped_attributes.contains_key("llm.token_count.prompt"));
+    assert!(!stripped_attributes.contains_key("llm.output_messages.0.message.content"));
+    assert!(!stripped_attributes.contains_key("llm.input_messages.0.message.role"));
+    assert_no_attr_contains(&stripped_attributes, "secret-token");
+
+    let partial_span = spans
+        .iter()
+        .find(|span| {
+            let attributes = attr_map(&span.attributes);
+            attributes.get("llm.token_count.prompt") == Some(&"42".to_string())
+        })
+        .expect("missing partial-usage OpenClaw fallback span");
+    let partial_attributes = attr_map(&partial_span.attributes);
+    assert_eq!(
+        partial_attributes.get("input.value"),
+        Some(&"user: visible prompt".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("output.value"),
+        Some(&"visible answer".to_string())
+    );
+    assert_eq!(
+        partial_attributes.get("llm.token_count.prompt"),
+        Some(&"42".to_string())
+    );
+    assert!(!partial_attributes.contains_key("llm.token_count.completion"));
+    assert!(!partial_attributes.contains_key("llm.token_count.total"));
+    assert!(!partial_attributes.contains_key("llm.cost.total"));
 }
 
 #[test]
@@ -1664,6 +1846,51 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
 }
 
 #[test]
+fn scope_end_metadata_sets_openinference_span_status() {
+    let cases = [
+        (
+            json!({"otel.status_code": "ERROR", "otel.status_description": "failed"}),
+            Status::error("failed".to_string()),
+        ),
+        (json!({"otel.status_code": "OK"}), Status::Ok),
+        (json!({}), Status::Unset),
+    ];
+
+    for (metadata, expected_status) in cases {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+        let scope_uuid = Uuid::now_v7();
+
+        processor.process(&make_start_event(
+            scope_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            Some(json!({"task": "summarize"})),
+        ));
+        processor.process(&Event::Scope(ScopeEvent::new(
+            BaseEvent::builder()
+                .uuid(scope_uuid)
+                .name("agent")
+                .metadata(metadata)
+                .data(json!({"status": "done"}))
+                .build(),
+            ScopeCategory::End,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )));
+
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].status, expected_status);
+    }
+}
+
+#[test]
 fn pre_epoch_timestamps_round_trip_through_system_time() {
     let timestamp = DateTime::parse_from_rfc3339("1969-12-31T23:59:58.500000000Z")
         .unwrap()
@@ -1965,6 +2192,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
                         total_tokens: Some(150),
                         cache_read_tokens: Some(25),
                         cache_write_tokens: Some(10),
+                        cost: None,
                     }),
                     api_specific: None,
                     extra: serde_json::Map::new(),
@@ -1999,6 +2227,317 @@ fn llm_end_with_usage_emits_token_count_attributes() {
         Some(&"10".to_string())
     );
     assert!(!attributes.contains_key("llm.output_messages.0.message.role"));
+}
+
+#[test]
+fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        total_tokens: Some(1_500),
+                        cache_read_tokens: Some(200),
+                        cache_write_tokens: None,
+                        cost: None,
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "priced-model",
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "total_tokens": 1_500,
+                "prompt_tokens_details": {"cached_tokens": 200}
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_manual_component_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "unknown-model",
+            "usage": {
+                "prompt_tokens": 1_000,
+                "completion_tokens": 500,
+                "cost": {
+                    "currency": "usd",
+                    "input": 0.25,
+                    "output": 0.5,
+                    "cache_read": 0.125
+                }
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.875".to_string()));
+}
+
+#[test]
+fn llm_end_with_normalized_usage_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: Some(0.42),
+                            currency: "USD".into(),
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.42".to_string()));
+}
+
+#[test]
+fn llm_end_with_component_only_usd_usage_cost_emits_cost_attribute() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: None,
+                            currency: "usd".into(),
+                            input: Some(0.25),
+                            output: Some(0.5),
+                            cache_read: Some(0.125),
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(attributes.get("llm.cost.total"), Some(&"0.875".to_string()));
+}
+
+#[test]
+fn llm_end_with_non_usd_normalized_usage_cost_blocks_model_pricing_estimate() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "test", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "test",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        cost: Some(CostEstimate {
+                            total: Some(0.42),
+                            currency: "EUR".into(),
+                            input: None,
+                            output: None,
+                            cache_read: None,
+                            cache_write: None,
+                            source: CostSource::ProviderReported,
+                            pricing_provider: Some("external".to_string()),
+                            pricing_model: Some("external-model".to_string()),
+                            pricing_as_of: Some("2026-06-04".to_string()),
+                            pricing_source: None,
+                        }),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.cost.total"));
+}
+
+#[test]
+fn llm_end_with_unknown_model_usage_omits_derived_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "chat", ScopeType::Llm, None));
+    processor.process(&make_scope_event_with_profile(
+        ScopeCategory::End,
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"message": "hello"})),
+        Some(
+            CategoryProfile::builder()
+                .model_name("unknown-model")
+                .annotated_response(Arc::new(AnnotatedLlmResponse {
+                    usage: Some(Usage {
+                        prompt_tokens: Some(1_000),
+                        completion_tokens: Some(500),
+                        ..Usage::default()
+                    }),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("llm.cost.total"));
 }
 
 #[test]
@@ -2345,6 +2884,116 @@ fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
 }
 
 #[test]
+fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+    let start_metadata = json!({
+        "provider_payload_exact": true,
+        "fidelity_source": "hermes_api_hooks_sanitized"
+    });
+    let end_metadata = json!({
+        "provider_payload_exact": false,
+        "fidelity_source": "hermes_api_hooks"
+    });
+
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "model": "qwen",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .metadata(start_metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+    processor.process(&Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("custom")
+            .data(json!({
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }))
+            .metadata(end_metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(CategoryProfile::builder().model_name("qwen").build()),
+    )));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"LLM".to_string())
+    );
+    assert_eq!(attributes.get("llm.model_name"), Some(&"qwen".to_string()));
+    assert_eq!(
+        attributes.get("input.value"),
+        Some(&"user: hello".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(attributes.get("output.value").unwrap()).unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            attributes.get("nemo_relay.end.output_json").unwrap(),
+        )
+        .unwrap(),
+        json!({
+            "status_code": 502,
+            "retry_count": 1,
+            "max_retries": 2,
+            "retryable": true,
+            "reason": "upstream",
+            "error": {
+                "type": "BadGateway",
+                "message": "gateway upstream error"
+            }
+        })
+    );
+    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":false");
+    assert_attr_contains(
+        &attributes,
+        "metadata",
+        "\"fidelity_source\":\"hermes_api_hooks\"",
+    );
+}
+
+#[test]
 fn llm_end_with_inconsistent_manual_usage_omits_invalid_total_tokens() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -2440,6 +3089,7 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
                         total_tokens: None,
                         cache_read_tokens: None,
                         cache_write_tokens: None,
+                        cost: None,
                     }),
                     api_specific: None,
                     extra: serde_json::Map::new(),

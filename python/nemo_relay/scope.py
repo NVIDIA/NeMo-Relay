@@ -147,12 +147,15 @@ def push(
     )
 
 
-def pop(handle: ScopeHandle, *, output: Json | None = None, timestamp: datetime | None = None) -> None:
+def pop(
+    handle: ScopeHandle, *, output: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None
+) -> None:
     """Pop a scope previously returned by ``push()`` or ``scope()``.
 
     Args:
         handle: Scope handle to close.
         output: Optional JSON payload exported as the semantic scope output.
+        metadata: Optional JSON metadata to append to the metadata set when the scope was created.
         timestamp: Optional timezone-aware ``datetime`` recorded on the scope
             end event. When omitted, the runtime default end timestamp is used.
 
@@ -166,7 +169,7 @@ def pop(handle: ScopeHandle, *, output: Json | None = None, timestamp: datetime 
         strings and naive datetimes are rejected.
     """
     _ensure_scope_stack()
-    _native_pop_scope(handle, output=output, timestamp=timestamp)
+    _native_pop_scope(handle, output=output, metadata=metadata, timestamp=timestamp)
 
 
 def event(
@@ -215,6 +218,8 @@ def scope(
 ) -> Iterator[ScopeHandle]:
     """Create a scope for the duration of a ``with`` block.
 
+    OTEL status codes will be automatically recorded in the scope's metadata.
+
     Args:
         name: Human-readable name for the new scope.
         scope_type: Semantic scope type, such as ``ScopeType.Agent`` or
@@ -256,6 +261,8 @@ def scope(
     """
     _ensure_scope_stack()
     pushed_handle = None
+    status_code = "UNSET"
+    status_message = None
     try:
         pushed_handle = _native_push_scope(
             name,
@@ -268,9 +275,17 @@ def scope(
             timestamp=timestamp,
         )
         yield pushed_handle
+        status_code = "OK"
+    except Exception as e:
+        status_code = "ERROR"
+        status_message = str(e)
+        raise
     finally:
         if pushed_handle is not None:
-            _native_pop_scope(pushed_handle, timestamp=end_timestamp)
+            metadata = {"otel.status_code": status_code}
+            if status_message is not None:
+                metadata["otel.status_description"] = status_message
+            _native_pop_scope(pushed_handle, metadata=metadata, timestamp=end_timestamp)
 
 
 __all__ = ["event", "get_handle", "pop", "push", "scope"]

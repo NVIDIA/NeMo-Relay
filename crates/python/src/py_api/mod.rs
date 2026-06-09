@@ -252,27 +252,32 @@ fn push_scope(
 /// Args:
 ///     handle: The current top-of-stack scope handle returned by ``push``.
 ///     output: Optional JSON-serializable semantic output payload for the scope end event.
+///     metadata: Optional JSON-serializable metadata to append to the metadata set when the scope was created.
 ///     timestamp: Optional timezone-aware ``datetime.datetime`` for the emitted end event.
 ///         When omitted, the runtime default end timestamp is used.
 ///
 /// Raises:
 ///     RuntimeError: If the scope is not the current top scope or is not found
 ///         on the stack.
+///     ValueError: If ``output`` or ``metadata`` cannot be converted to JSON-compatible data.
 ///     TypeError: If ``timestamp`` is not a ``datetime.datetime``.
 ///     ValueError: If ``timestamp`` is a naive datetime.
 #[pyfunction]
-#[pyo3(signature = (handle: "ScopeHandle", output: "object | None"=None, timestamp: "datetime.datetime | None"=None) -> "None", text_signature = "(handle: ScopeHandle, output: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+#[pyo3(signature = (handle: "ScopeHandle", output: "object | None"=None, metadata: "object | None"=None, timestamp: "datetime.datetime | None"=None) -> "None", text_signature = "(handle: ScopeHandle, output: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn pop_scope(
     handle: &PyScopeHandle,
     output: Option<&Bound<'_, PyAny>>,
+    metadata: Option<&Bound<'_, PyAny>>,
     timestamp: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let output = opt_py_to_json(output)?;
+    let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
     core_scope_api::pop_scope(
         core_scope_api::PopScopeParams::builder()
             .handle_uuid(&handle.inner.uuid)
             .output_opt(output)
+            .metadata_opt(metadata)
             .timestamp_opt(timestamp)
             .build(),
     )
@@ -465,6 +470,8 @@ fn tool_call_end(
 ///     attributes: Optional ``ToolAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
+///         End events receive ``otel.status_code = "OK"`` on success, or
+///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
 /// Returns:
 ///     An awaitable that resolves to the tool result after execution
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
@@ -675,6 +682,8 @@ fn llm_call_end(
 ///     attributes: Optional ``LlmAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
+///         End events receive ``otel.status_code = "OK"`` on success, or
+///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
 ///     model_name: Optional normalized model name recorded in emitted LLM events.
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data

@@ -18,4 +18,4 @@ pub mod subscriber;
 /// Tool lifecycle helpers and managed execution entry points.
 pub mod tool;
 
-mod shared;
+pub(crate) mod shared;

@@ -74,6 +74,17 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 		}
 	}
 
+	handle, err := PushScope("invalid_scope_end_metadata", ScopeTypeAgent)
+	if err != nil {
+		t.Fatalf("PushScope failed: %v", err)
+	}
+	if err := PopScope(handle, WithScopeEndMetadata(json.RawMessage("{"))); err == nil {
+		t.Fatal("expected PopScope to fail on invalid end metadata JSON")
+	}
+	if err := PopScope(handle); err != nil {
+		t.Fatalf("cleanup PopScope failed: %v", err)
+	}
+
 	if _, err := ToolCall("invalid_tool_json", json.RawMessage("{")); err == nil {
 		t.Fatal("expected ToolCall to fail on invalid JSON args")
 	}

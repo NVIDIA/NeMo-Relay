@@ -277,6 +277,6 @@ fn scope_stack_and_lifecycle_wrappers_round_trip_natively() {
     )
     .unwrap();
 
-    pop_scope(&child, JsValue::NULL, None).unwrap();
+    pop_scope(&child, JsValue::NULL, None, JsValue::NULL).unwrap();
     assert_eq!(get_handle().unwrap().name(), "root");
 }

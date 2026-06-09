@@ -18,7 +18,7 @@ crate-type = ["cdylib"]
 test = false
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["otel", "openinference"] }
+nemo-relay = { workspace = true, features = ["atof-streaming", "otel", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 chrono = "0.4"
 napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }

@@ -32,6 +32,7 @@ const {
   deregisterLlmStreamExecutionIntercept,
   registerSubscriber,
   deregisterSubscriber,
+  flushSubscribers,
   ScopeType,
 } = lib;
 
@@ -40,6 +41,13 @@ const LLM_ATTR_STREAMING = 0b10;
 
 function rejectWith(value) {
   return Promise.reject(value);
+}
+
+async function flushSubscriberCallbacks() {
+  flushSubscribers();
+  for (let i = 0; i < 10; i += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 function makeNative() {
@@ -171,6 +179,71 @@ describe('LLM execute', () => {
       null,
     );
     assert.equal(result, null);
+  });
+
+  it('execute records OTEL status metadata on end events', async () => {
+    const events = [];
+    registerSubscriber('node_llm_status_metadata_sub', (e) => events.push(e));
+    try {
+      const result = await llmCallExecute(
+        'exec_status_ok_llm',
+        makeNative(),
+        () => ({
+          response: 'ok',
+        }),
+        null,
+        null,
+        null,
+        {
+          caller: 'node-llm',
+        },
+        null,
+      );
+      assert.deepEqual(result, {
+        response: 'ok',
+      });
+
+      await assert.rejects(
+        () =>
+          llmCallExecuteAsync(
+            'exec_status_error_llm',
+            makeNative(),
+            async () => {
+              throw new Error('llm status failure');
+            },
+            null,
+            null,
+            null,
+            {
+              caller: 'node-llm-error',
+            },
+            null,
+          ),
+        /llm status failure/,
+      );
+
+      await flushSubscriberCallbacks();
+      const okEnd = events.find(
+        (e) =>
+          e.name === 'exec_status_ok_llm' && e.kind === 'scope' && e.category === 'llm' && e.scope_category === 'end',
+      );
+      const errorEnd = events.find(
+        (e) =>
+          e.name === 'exec_status_error_llm' &&
+          e.kind === 'scope' &&
+          e.category === 'llm' &&
+          e.scope_category === 'end',
+      );
+      assert.ok(okEnd, 'expected successful llm end event');
+      assert.equal(okEnd.metadata.caller, 'node-llm');
+      assert.equal(okEnd.metadata['otel.status_code'], 'OK');
+      assert.ok(errorEnd, 'expected failed llm end event');
+      assert.equal(errorEnd.metadata.caller, 'node-llm-error');
+      assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
+      assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
+    } finally {
+      deregisterSubscriber('node_llm_status_metadata_sub');
+    }
   });
 
   it('async execute awaits Promise-returning callbacks', async () => {
@@ -656,7 +729,7 @@ describe('LLM intercepts', () => {
       null,
     );
 
-    for (;;) {
+    for (; ;) {
       const chunk = await stream.next();
       if (chunk === null) {
         break;
@@ -696,7 +769,7 @@ describe('LLM intercepts', () => {
       null,
     );
 
-    for (;;) {
+    for (; ;) {
       const chunk = await stream.next();
       if (chunk === null) {
         break;

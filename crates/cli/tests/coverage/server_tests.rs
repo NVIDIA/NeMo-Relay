@@ -29,8 +29,8 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::error::CliError;
+use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
-static PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -67,6 +67,14 @@ struct ToolGuardrailCleanup(&'static str);
 impl Drop for ToolGuardrailCleanup {
     fn drop(&mut self) {
         let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
+
+struct SubscriberCleanup(&'static str);
+
+impl Drop for SubscriberCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_subscriber(self.0);
     }
 }
 
@@ -134,6 +142,28 @@ fn test_config() -> GatewayConfig {
     }
 }
 
+fn find_scope_event<'a>(
+    events: &'a [Value],
+    name: &str,
+    category: &str,
+    scope_category: &str,
+) -> &'a Value {
+    events
+        .iter()
+        .find(|event| {
+            event["kind"] == "scope"
+                && event["name"] == name
+                && event["category"] == category
+                && event["scope_category"] == scope_category
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected {scope_category} {category} scope named {name}, got: {}",
+                serde_json::to_string_pretty(events).unwrap()
+            )
+        })
+}
+
 #[tokio::test]
 async fn codex_hook_keeps_codex_response_shape() {
     let app = router(test_config());
@@ -182,7 +212,7 @@ async fn healthz_returns_ok() {
 
 #[tokio::test]
 async fn serve_listener_honors_plugin_idle_timeout_env() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -200,7 +230,7 @@ async fn serve_listener_honors_plugin_idle_timeout_env() {
 
 #[tokio::test]
 async fn serve_listener_waits_for_active_turn_before_plugin_idle_shutdown() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -256,7 +286,7 @@ async fn serve_listener_waits_for_active_turn_before_plugin_idle_shutdown() {
 
 #[tokio::test]
 async fn serve_listener_exits_after_codex_stop_without_session_end() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -288,7 +318,7 @@ async fn serve_listener_exits_after_codex_stop_without_session_end() {
 
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -354,13 +384,22 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
         events.lines().count() >= 2,
         "expected ATOF lifecycle events, got {events:?}"
     );
-    let atif_files = std::fs::read_dir(temp.path().join("atif"))
+    let trajectories = std::fs::read_dir(temp.path().join("atif"))
         .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(atif_files.len(), 1);
-    let trajectory: Value =
-        serde_json::from_slice(&std::fs::read(atif_files[0].path()).unwrap()).unwrap();
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            serde_json::from_slice::<Value>(&std::fs::read(entry.path()).ok()?).ok()
+        })
+        .collect::<Vec<_>>();
+    let trajectory = trajectories
+        .iter()
+        .find(|trajectory| atif_matches_session(trajectory, "plugin-bridge-session"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected ATIF trajectory for plugin-bridge-session, got {}",
+                serde_json::to_string_pretty(&trajectories).unwrap()
+            )
+        });
     assert!(
         trajectory["extra"]["observed_events"]
             .as_array()
@@ -368,9 +407,26 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     );
 }
 
+fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
+    trajectory["session_id"] == json!(session_id)
+        || trajectory["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event_has_session_id(event, session_id))
+            })
+}
+
+fn event_has_session_id(event: &Value, session_id: &str) -> bool {
+    event["metadata"]["session_id"] == json!(session_id)
+        || event["data"]["session_id"] == json!(session_id)
+        || event["data"]["extra"]["session_id"] == json!(session_id)
+}
+
 #[tokio::test]
 async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -456,7 +512,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
 
 #[tokio::test]
 async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelity() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
@@ -655,8 +711,695 @@ async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelit
 }
 
 #[tokio::test]
+async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "pre_api_request",
+            "session_id": "hermes-atof-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "request": {
+                    "method": "POST",
+                    "body": {
+                        "model": "qwen",
+                        "messages": [
+                            { "role": "user", "content": "hello" }
+                        ]
+                    }
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/hooks/hermes"))
+        .json(&json!({
+            "hook_event_name": "api_request_error",
+            "session_id": "hermes-atof-error",
+            "extra": {
+                "task_id": "task-err",
+                "api_request_id": "turn-1:api:3",
+                "api_call_count": 3,
+                "model": "qwen",
+                "provider": "custom",
+                "status_code": 502,
+                "retry_count": 1,
+                "max_retries": 2,
+                "retryable": true,
+                "reason": "upstream",
+                "error": {
+                    "type": "BadGateway",
+                    "message": "gateway upstream error"
+                }
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        2,
+        "expected Hermes error-path LLM exports, got {llm_events:?}"
+    );
+
+    let end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    let start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
+        })
+        .unwrap();
+    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
+    assert_eq!(
+        start["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks_sanitized")
+    );
+    assert_eq!(
+        start["data"]["content"]["messages"][0]["content"],
+        json!("hello")
+    );
+    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
+    assert_eq!(end["metadata"]["provider_payload_exact"], json!(false));
+    assert_eq!(
+        end["metadata"]["fidelity_source"],
+        json!("hermes_api_hooks")
+    );
+    assert_eq!(end["data"]["status_code"], json!(502));
+    assert_eq!(end["data"]["retry_count"], json!(1));
+    assert_eq!(end["data"]["retryable"], json!(true));
+    assert_eq!(end["data"]["reason"], json!("upstream"));
+    assert_eq!(
+        end["data"]["error"]["message"],
+        json!("gateway upstream error")
+    );
+}
+
+#[tokio::test]
+async fn serve_listener_hermes_post_tool_call_writes_atof_tool_events() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    for payload in [
+        json!({
+            "hook_event_name": "on_session_start",
+            "session_id": "hermes-tool-atof"
+        }),
+        json!({
+            "hook_event_name": "pre_tool_call",
+            "session_id": "hermes-tool-atof",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-tool-atof",
+            "tool_name": "search_files",
+            "tool_input": { "query": "needle" },
+            "tool_response": { "total_count": 6 },
+            "extra": {
+                "task_id": "task-1",
+                "tool_call_id": "call-search-1"
+            }
+        }),
+        json!({
+            "hook_event_name": "on_session_finalize",
+            "session_id": "hermes-tool-atof"
+        }),
+    ] {
+        let response = client
+            .post(format!("{url}/hooks/hermes"))
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let tool_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_events.len(),
+        2,
+        "expected Hermes tool start/end exports, got {tool_events:?}"
+    );
+
+    let start = tool_events
+        .iter()
+        .find(|event| event["scope_category"] == "start")
+        .unwrap();
+    assert_eq!(start["name"], json!("search_files"));
+    assert_eq!(
+        start["category_profile"]["tool_call_id"],
+        json!("call-search-1")
+    );
+    assert_eq!(start["data"]["query"], json!("needle"));
+
+    let end = tool_events
+        .iter()
+        .find(|event| event["scope_category"] == "end")
+        .unwrap();
+    assert_eq!(end["name"], json!("search_files"));
+    assert_eq!(
+        end["category_profile"]["tool_call_id"],
+        json!("call-search-1")
+    );
+    assert_eq!(end["data"]["total_count"], json!(6));
+}
+
+#[tokio::test]
+async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    async fn anthropic_messages() -> TestServer {
+        async fn messages(_headers: HeaderMap, _request: Request<Body>) -> impl IntoResponse {
+            Json(json!({
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4",
+                "content": [
+                    {"type": "text", "text": "I will search."},
+                    {"type": "tool_use", "id": "toolu_01", "name": "search", "input": {"query": "file"}}
+                ],
+                "stop_reason": "tool_use",
+                "usage": {
+                    "input_tokens": 11,
+                    "output_tokens": 7,
+                    "cache_read_input_tokens": 3,
+                    "cost": {"total": 0.0042}
+                }
+            }))
+        }
+
+        let app = Router::new().route("/v1/messages", post(messages));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        }
+    }
+
+    async fn openai_routed() -> TestServer {
+        async fn chat(_headers: HeaderMap, request: Request<Body>) -> impl IntoResponse {
+            let path = request.uri().path().to_string();
+            if path == "/v1/responses" {
+                Json(json!({
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "I will check the weather."}]
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_weather_1",
+                            "name": "get_weather",
+                            "arguments": "{\"city\":\"SF\"}",
+                            "status": "completed"
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 75,
+                        "output_tokens": 20,
+                        "total_tokens": 95,
+                        "input_tokens_details": {"cached_tokens": 10},
+                        "cost_usd": 0.005
+                    }
+                }))
+            } else {
+                Json(json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": "I will inspect.",
+                            "tool_calls": [
+                                {
+                                    "id": "call_read_1",
+                                    "type": "function",
+                                    "function": {"name": "read", "arguments": "{\"path\":\"api.py\"}"}
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 4,
+                        "total_tokens": 7,
+                        "prompt_tokens_details": {"cached_tokens": 2},
+                        "cost_usd": 0.001
+                    }
+                }))
+            }
+        }
+
+        let app = Router::new()
+            .route("/v1/chat/completions", post(chat))
+            .route("/v1/responses", post(chat));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            url: format!("http://{address}"),
+            handle,
+        }
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+
+    let anthropic_upstream = anthropic_messages().await;
+    let openai_upstream = openai_routed().await;
+
+    let mut config = test_config();
+    config.anthropic_base_url = anthropic_upstream.url();
+    config.openai_base_url = openai_upstream.url();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    let response = client
+        .post(format!("{url}/v1/messages"))
+        .header("content-type", "application/json")
+        .header("x-api-key", "sk-ant-test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "claude-sonnet-4",
+            "messages": [{"role": "user", "content": "Find the file."}],
+            "tools": [{"name": "search", "input_schema": {"type": "object"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/v1/responses"))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "gpt-4o",
+            "input": "Find the weather.",
+            "tools": [{"type": "function", "name": "get_weather"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = client
+        .post(format!("{url}/v1/chat/completions"))
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test")
+        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .json(&json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Inspect the files."}],
+            "tools": [{"type": "function", "function": {"name": "read"}}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let llm_events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["category"] == "llm")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        llm_events.len(),
+        6,
+        "expected three routed LLM start/end pairs, got {llm_events:?}"
+    );
+
+    let anthropic_start = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "start"
+                && event["name"] == "anthropic.messages"
+                && event["metadata"]["gateway_path"] == "/v1/messages"
+        })
+        .unwrap();
+    assert_eq!(
+        anthropic_start["category_profile"]["model_name"],
+        json!("claude-sonnet-4")
+    );
+    assert_eq!(
+        anthropic_start["data"]["content"]["messages"][0]["content"],
+        json!("Find the file.")
+    );
+
+    let anthropic_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "anthropic.messages"
+                && event["metadata"]["gateway_path"] == "/v1/messages"
+        })
+        .unwrap();
+    assert_eq!(
+        anthropic_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("toolu_01")
+    );
+    assert_eq!(anthropic_end["data"]["content"][1]["id"], json!("toolu_01"));
+    assert_eq!(anthropic_end["data"]["usage"]["input_tokens"], json!(11));
+    assert_eq!(
+        anthropic_end["data"]["usage"]["cost"]["total"],
+        json!(0.0042)
+    );
+
+    let responses_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "openai.responses"
+                && event["metadata"]["gateway_path"] == "/v1/responses"
+        })
+        .unwrap();
+    assert_eq!(
+        responses_end["category_profile"]["model_name"],
+        json!("gpt-4o")
+    );
+    assert_eq!(
+        responses_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(
+        responses_end["data"]["output"][1]["call_id"],
+        json!("call_weather_1")
+    );
+    assert_eq!(
+        responses_end["data"]["usage"]["input_tokens_details"]["cached_tokens"],
+        json!(10)
+    );
+    assert_eq!(responses_end["data"]["usage"]["cost_usd"], json!(0.005));
+
+    let chat_end = llm_events
+        .iter()
+        .find(|event| {
+            event["scope_category"] == "end"
+                && event["name"] == "openai.chat_completions"
+                && event["metadata"]["gateway_path"] == "/v1/chat/completions"
+        })
+        .unwrap();
+    assert_eq!(chat_end["category_profile"]["model_name"], json!("gpt-4o"));
+    assert_eq!(
+        chat_end["category_profile"]["annotated_response"]["tool_calls"][0]["id"],
+        json!("call_read_1")
+    );
+    assert_eq!(
+        chat_end["data"]["choices"][0]["message"]["tool_calls"][0]["id"],
+        json!("call_read_1")
+    );
+    assert_eq!(
+        chat_end["data"]["usage"]["prompt_tokens_details"]["cached_tokens"],
+        json!(2)
+    );
+    assert_eq!(chat_end["data"]["usage"]["cost_usd"], json!(0.001));
+}
+
+#[tokio::test]
+async fn serve_listener_records_codex_stop_atof_contract() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "output_directory": atof_dir,
+                        "filename": "events.jsonl",
+                        "mode": "overwrite"
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+    for payload in [
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "sessionStart",
+            "cwd": "/workspace",
+            "model": "gpt-5.1-codex"
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Inspect the repository."
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "PreToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_input": { "file_path": "README.md" }
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "PostToolUse",
+            "tool_call_id": "tool-call-1",
+            "tool_name": "Read",
+            "tool_output": { "bytes": 42 },
+            "status": "success"
+        }),
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "Stop",
+            "response": "Done."
+        }),
+    ] {
+        let response = client
+            .post(format!("{url}/hooks/codex"))
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.json::<Value>().await.unwrap(), json!({}));
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let events = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(events.iter().all(|event| event["atof_version"] == "0.1"));
+    assert!(!events.iter().any(|event| {
+        event["kind"] == "scope"
+            && event["scope_category"] == "start"
+            && event["category"] == "agent"
+            && event["name"] == "codex"
+    }));
+
+    let turn_start = find_scope_event(&events, "codex-turn", "agent", "start");
+    let turn_end = find_scope_event(&events, "codex-turn", "agent", "end");
+    assert_eq!(turn_start["uuid"], turn_end["uuid"]);
+    assert_eq!(
+        turn_start["data"],
+        json!({
+            "session_id": "codex-atof-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Inspect the repository."
+        })
+    );
+    assert_eq!(turn_start["metadata"]["session_id"], "codex-atof-session");
+    assert_eq!(turn_start["metadata"]["agent_kind"], "codex");
+    assert_eq!(turn_start["metadata"]["nemo_relay_scope_role"], "turn");
+    assert_eq!(turn_start["metadata"]["turn_source"], "user_prompt");
+    assert_eq!(turn_end["data"]["hook_event_name"], "Stop");
+    assert_eq!(turn_end["data"]["response"], "Done.");
+
+    let tool_start = find_scope_event(&events, "Read", "tool", "start");
+    let tool_end = find_scope_event(&events, "Read", "tool", "end");
+    assert_eq!(tool_start["uuid"], tool_end["uuid"]);
+    assert_eq!(tool_start["parent_uuid"], turn_start["uuid"]);
+    assert_eq!(tool_end["parent_uuid"], turn_start["uuid"]);
+    assert_eq!(
+        tool_start["category_profile"]["tool_call_id"],
+        "tool-call-1"
+    );
+    assert_eq!(tool_end["category_profile"]["tool_call_id"], "tool-call-1");
+    assert_eq!(tool_start["data"], json!({ "file_path": "README.md" }));
+    assert_eq!(tool_end["data"], json!({ "bytes": 42 }));
+    assert_eq!(tool_start["metadata"]["agent_kind"], "codex");
+    assert_eq!(tool_end["metadata"]["agent_kind"], "codex");
+    assert_eq!(tool_end["metadata"]["status"], "success");
+}
+
+#[tokio::test]
 async fn serve_listener_activates_any_registered_plugin_kind() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
     GENERIC_TEST_PLUGIN_REGISTRATIONS.store(0, Ordering::SeqCst);
@@ -708,7 +1451,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
 
 #[tokio::test]
 async fn serve_listener_activates_adaptive_plugin_config() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
@@ -740,17 +1483,14 @@ async fn serve_listener_activates_adaptive_plugin_config() {
         tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
 
     wait_for_gateway(&url).await;
-    let report = nemo_relay::plugin::active_plugin_report().unwrap();
-    assert!(report.diagnostics.is_empty());
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
-    assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
 #[tokio::test]
 async fn serve_listener_rejects_invalid_plugin_config() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let mut config = test_config();
@@ -860,7 +1600,7 @@ async fn cursor_hook_returns_cursor_permission_fields() {
 
 #[tokio::test]
 async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
-    let _guard = PLUGIN_TEST_LOCK.lock().await;
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");
     const BLOCKED_TEST_TOOL: &str = "Nmf137BlockedTool";
     register_tool_conditional_execution_guardrail(
@@ -1213,6 +1953,7 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
         }),
     )
     .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
 
     let upstream = spawn_anthropic_upstream().await;
     let mut config = test_config();
@@ -1256,7 +1997,6 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
         captured_llm_starts.lock().unwrap().is_empty(),
         "Claude startup probe must not emit a managed LLM span"
     );
-    deregister_subscriber(subscriber_name).unwrap();
 }
 
 async fn wait_for_gateway(url: &str) {

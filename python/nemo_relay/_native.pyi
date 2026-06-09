@@ -730,12 +730,35 @@ class AtofExporterMode:
     Append: ClassVar[AtofExporterMode]
     Overwrite: ClassVar[AtofExporterMode]
 
+class AtofEndpointConfig:
+    """Streaming destination for raw ATOF events."""
+
+    url: str
+    transport: str
+    headers: dict[str, str]
+    timeout_millis: int
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        transport: str = "http_post",
+        headers: dict[str, str] | None = None,
+        timeout_millis: int = 3000,
+    ) -> None:
+        """Create an ATOF streaming endpoint config.
+
+        ``headers=None`` is converted to an empty dict; the instance field is
+        always non-optional.
+        """
+
 class AtofExporterConfig:
     """Mutable configuration for the filesystem-backed ATOF JSONL exporter."""
 
     output_directory: str
     mode: AtofExporterMode
     filename: str
+    endpoints: list[AtofEndpointConfig]
 
     def __init__(self) -> None:
         """Create an ATOF exporter config with native defaults."""
@@ -1161,6 +1184,7 @@ def push_scope(
 def pop_scope(
     handle: ScopeHandle,
     output: Optional[_Json] = None,
+    metadata: Optional[_Json] = None,
     timestamp: datetime | None = None,
 ) -> None:
     """Pop a scope and emit its end event.
@@ -1168,6 +1192,7 @@ def pop_scope(
     Args:
         handle: Handle returned by ``push_scope``.
         output: Optional semantic output payload recorded on the end event.
+        metadata: Optional JSON metadata recorded on the end event.
         timestamp: Optional timezone-aware datetime recorded on the end event.
             When omitted, the runtime default end timestamp is used.
 
@@ -1176,8 +1201,8 @@ def pop_scope(
 
     Exceptional flow:
         Raises native runtime errors if ``handle`` is not the current scope or
-        if ``output`` cannot be converted to JSON-compatible data. Raises for
-        invalid timestamp types or naive datetimes.
+        if ``output`` or ``metadata`` cannot be converted to JSON-compatible data.
+        Raises for invalid timestamp types or naive datetimes.
     """
     ...
 
