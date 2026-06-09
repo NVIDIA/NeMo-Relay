@@ -67,7 +67,7 @@ const BUILTIN_DETECTOR_SPECS: &[BuiltinDetectorSpec] = &[
         detector: BuiltinDetector::Ipv6,
         name: "ipv6",
         category: BuiltinDetectorCategory::CommonPii,
-        regex_pattern: r"\b(?:[A-Fa-f0-9]{1,4}:){2,7}[A-Fa-f0-9]{1,4}\b",
+        regex_pattern: r"(?:([A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}|([A-Fa-f0-9]{1,4}:){1,7}:|([A-Fa-f0-9]{1,4}:){1,6}:[A-Fa-f0-9]{1,4}|([A-Fa-f0-9]{1,4}:){1,5}(?::[A-Fa-f0-9]{1,4}){1,2}|([A-Fa-f0-9]{1,4}:){1,4}(?::[A-Fa-f0-9]{1,4}){1,3}|([A-Fa-f0-9]{1,4}:){1,3}(?::[A-Fa-f0-9]{1,4}){1,4}|([A-Fa-f0-9]{1,4}:){1,2}(?::[A-Fa-f0-9]{1,4}){1,5}|[A-Fa-f0-9]{1,4}:(?:(?::[A-Fa-f0-9]{1,4}){1,6})|:(?:(?::[A-Fa-f0-9]{1,4}){1,7}|:))",
     },
     BuiltinDetectorSpec {
         detector: BuiltinDetector::Url,

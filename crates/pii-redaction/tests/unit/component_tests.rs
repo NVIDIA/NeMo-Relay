@@ -1001,6 +1001,53 @@ fn builtin_mask_with_ipv6_detector_preserves_last_segment_by_default() {
 }
 
 #[test]
+fn builtin_mask_with_ipv6_detector_supports_compressed_addresses() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "ipv6",
+            "target_paths": ["/ip"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-ipv6-compressed-mask-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("notify")
+            .args(json!({
+                "ip": "2001:db8::1",
+                "keep": "unchanged"
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "ip": "****:****::1",
+            "keep": "unchanged"
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-ipv6-compressed-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_mask_with_bearer_token_detector_preserves_scheme_and_last_four() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
