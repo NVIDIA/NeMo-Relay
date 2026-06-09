@@ -11,7 +11,7 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 };
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
-use nemo_relay_pii_redaction::component::PiiRedactionConfig;
+use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
 
 fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
     json!({
@@ -818,7 +818,7 @@ fn editor_save_preserves_unknown_nemo_guardrails_fields_and_sections() {
 fn editor_save_preserves_unknown_pii_redaction_fields_and_prunes_version() {
     let mut config = PluginConfig {
         components: vec![PluginComponentSpec {
-            kind: "pii_redaction".to_string(),
+            kind: PII_REDACTION_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
                 "version": 1,
@@ -876,7 +876,7 @@ fn editor_save_preserves_unknown_pii_redaction_fields_and_prunes_version() {
     let component = config
         .components
         .iter()
-        .find(|component| component.kind == "pii_redaction")
+        .find(|component| component.kind == PII_REDACTION_PLUGIN_KIND)
         .unwrap();
     assert!(!component.enabled);
     assert!(!component.config.contains_key("version"));
