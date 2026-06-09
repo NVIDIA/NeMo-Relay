@@ -439,6 +439,58 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
 }
 
 #[test]
+fn builtin_remove_with_empty_target_paths_only_removes_string_leaves() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_input": true,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-remove-empty-targets-events");
+    let _handle = tool_call(
+        ToolCallParams::builder()
+            .name("search")
+            .args(json!({
+                "secret": "abc",
+                "nested": {
+                    "keep": "yes",
+                    "count": 3
+                },
+                "items": ["a", "b", 9],
+                "public": true
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "nested": {
+                "count": 3
+            },
+            "items": [null, null, 9],
+            "public": true
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-remove-empty-targets-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_remove_deletes_targeted_object_and_array_container_fields() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
