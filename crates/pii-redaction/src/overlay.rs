@@ -130,11 +130,13 @@ fn overlay_openai_chat_tool_calls(
 
     for (raw_call, sanitized_call) in raw_calls.iter_mut().zip(tool_calls.iter()) {
         let Some(raw_call) = raw_call.as_object_mut() else {
-            continue;
+            message.remove("tool_calls");
+            return;
         };
         set_optional_string_field(raw_call, "id", Some(sanitized_call.id.as_str()));
         let Some(function) = raw_call.get_mut("function").and_then(Json::as_object_mut) else {
-            continue;
+            message.remove("tool_calls");
+            return;
         };
         set_optional_string_field(function, "name", Some(sanitized_call.name.as_str()));
         set_optional_string_field(
@@ -163,7 +165,7 @@ fn overlay_openai_responses_tool_calls(
             return true;
         }
         let Some(raw_call) = item.as_object_mut() else {
-            return true;
+            return false;
         };
         let Some(sanitized_call) = sanitized_calls.next() else {
             return false;
@@ -194,7 +196,7 @@ fn overlay_anthropic_tool_calls(blocks: &mut Vec<Json>, tool_calls: Option<&[Res
             return true;
         }
         let Some(raw_call) = block.as_object_mut() else {
-            return true;
+            return false;
         };
         let Some(sanitized_call) = sanitized_calls.next() else {
             return false;
@@ -365,6 +367,25 @@ mod tests {
             calls[0]["function"]["arguments"],
             json!("{\"secret\":\"[REDACTED]\"}")
         );
+    }
+
+    #[test]
+    fn openai_chat_overlay_removes_tool_calls_when_typed_entry_has_wrong_shape() {
+        let mut message = json!({
+            "tool_calls": [
+                {"id": "call_1", "arguments": "{\"secret\":\"raw-1\"}"}
+            ]
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        overlay_openai_chat_tool_calls(
+            &mut message,
+            Some(&[tool_call("call_1", "one", json!({"secret": "[REDACTED]"}))]),
+        );
+
+        assert!(!message.contains_key("tool_calls"));
     }
 
     #[test]
