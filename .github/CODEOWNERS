@@ -8,5 +8,5 @@
 ATTRIBUTIONS-*.md @nvidia/nat-dep-approvers
 
 # Documentation changes must go to technical writers
-docs/*.mdx @lvojtku
-fern/* @lvojtku
+docs/ @lvojtku
+fern/ @lvojtku
