@@ -8,19 +8,16 @@ SPDX-License-Identifier: Apache-2.0
 Use this page to choose the right Hermes integration path from the NeMo Relay
 repository.
 
-Most users should not patch Hermes from `third_party/hermes-agent`. Use one of
-the supported runtime paths instead:
+Most users should not patch Hermes from `third_party/hermes-agent`. Use the
+table below to pick the runtime path that matches your goal.
 
-- NeMo Relay CLI wrapper: use `nemo-relay hermes` when NeMo Relay should manage
-  the local gateway lifetime for a Hermes process. See
-  [docs/nemo-relay-cli/hermes.mdx](../docs/nemo-relay-cli/hermes.mdx).
-- Upstream Hermes plugin: use Hermes' bundled `observability/nemo_relay` plugin
-  when Hermes itself should load the plugin and emit NeMo Relay observability.
-  Observe-only plugin builds keep Hermes in control of LLM and tool execution.
-- Adaptive execution: use only with a Hermes build that includes adaptive
-  middleware support and a NeMo Relay runtime that exposes managed LLM and tool
-  execution boundaries. Verify the Hermes release tag before treating this as a
-  released capability.
+| Path | Use When | Documentation |
+|:--|:--|:--|
+| NeMo Relay CLI wrapper | You want NeMo Relay to manage the local gateway lifetime for a Hermes process. Start with `nemo-relay hermes`. | [docs/nemo-relay-cli/hermes.mdx](../docs/nemo-relay-cli/hermes.mdx) |
+| Standalone gateway and manual hook setup | You want to run the NeMo Relay gateway yourself and point Hermes hooks or provider traffic at it. | [docs/nemo-relay-cli/hermes.mdx](../docs/nemo-relay-cli/hermes.mdx) |
+| Upstream Hermes plugin | You want Hermes itself to load the bundled `observability/nemo_relay` plugin and emit NeMo Relay observability. Observe-only plugin builds keep Hermes in control of LLM and tool execution. | [Hermes NeMo Relay plugin README](https://github.com/NousResearch/hermes-agent/blob/main/plugins/observability/nemo_relay/README.md) |
+| Adaptive execution | You have a Hermes build with adaptive middleware support and a NeMo Relay runtime that exposes `llm.execute(...)` and `tools.execute(...)`. Verify the Hermes release tag before treating this as released behavior. | [Hermes NeMo Relay plugin README](https://github.com/NousResearch/hermes-agent/blob/main/plugins/observability/nemo_relay/README.md) |
+| Legacy patch | You are maintaining or validating the pinned patch in this repository. | [patches/hermes-agent/notes.md](../patches/hermes-agent/notes.md) |
 
 ## Patch Maintenance Path
 
