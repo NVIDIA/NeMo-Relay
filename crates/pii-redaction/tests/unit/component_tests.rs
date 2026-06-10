@@ -162,6 +162,30 @@ fn validate_allows_documented_policy_unknown_component_field() {
 }
 
 #[test]
+fn validate_rejects_unsupported_config_version() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "version": 2,
+        "mode": "builtin",
+        "tool_input": true,
+        "input": false,
+        "output": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "remove"
+        }
+    })));
+
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("version")
+            && diag.code == "pii_redaction.unsupported_config_version"
+            && diag.message.contains("version 2 is unsupported")
+    }));
+}
+
+#[test]
 fn validate_rejects_local_section_outside_local_mode() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();

@@ -10,6 +10,7 @@ from nemo_relay.pii_redaction import (
     PII_REDACTION_PLUGIN_KIND,
     BuiltinConfig,
     ComponentSpec,
+    ConfigPolicy,
     LocalModelConfig,
     PiiRedactionConfig,
     validate_config,
@@ -21,6 +22,11 @@ class TestPiiRedactionConfigHelpers:
         assert BuiltinConfig().to_dict() == {
             "action": "remove",
             "target_paths": [],
+        }
+        assert ConfigPolicy().to_dict() == {
+            "unknown_component": "warn",
+            "unknown_field": "warn",
+            "unsupported_value": "error",
         }
         assert LocalModelConfig().to_dict() == {}
 

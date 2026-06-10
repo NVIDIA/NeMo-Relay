@@ -18,7 +18,7 @@ test('WebAssembly pii_redaction wrappers expose helper defaults', () => {
     priority: 100,
   });
   assert.deepEqual(piiRedaction.builtinConfig(), {
-    action: 'redact',
+    action: 'remove',
   });
   assert.deepEqual(piiRedaction.localModelConfig(), {});
 });
@@ -43,7 +43,7 @@ test('WebAssembly pii_redaction wrappers build component specs and validate bad 
       tool_output: true,
       priority: 100,
       builtin: {
-        action: 'redact',
+        action: 'remove',
         detector: 'email',
       },
     },

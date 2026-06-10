@@ -20,7 +20,7 @@ describe('pii_redaction plugin helpers', () => {
       tool_output: true,
       priority: 100,
     });
-    assert.deepEqual(piiRedaction.builtinConfig(), { action: 'redact' });
+    assert.deepEqual(piiRedaction.builtinConfig(), { action: 'remove' });
     assert.deepEqual(piiRedaction.localModelConfig(), {});
 
     const component = piiRedaction.ComponentSpec({

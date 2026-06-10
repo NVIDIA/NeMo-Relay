@@ -462,6 +462,7 @@ fn validate_pii_redaction_plugin_config(
             "max_latency_ms",
         ],
     );
+    validate_version(&mut diagnostics, &config.policy, config.version);
     validate_mode(&mut diagnostics, &config.policy, &config);
     validate_surface_selection(&mut diagnostics, &config.policy, &config);
     validate_codec_requirements(&mut diagnostics, &config.policy, &config);
@@ -661,6 +662,19 @@ fn validate_builtin_action_requirements(
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("builtin.mask_char".to_string()),
             "builtin.mask_char must not be empty when builtin.action = 'mask'".to_string(),
+        );
+    }
+}
+
+fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {
+    if version != default_pii_redaction_config_version() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_config_version",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("version".to_string()),
+            format!("PII redaction config version {version} is unsupported"),
         );
     }
 }

@@ -32,7 +32,7 @@ function defaultConfig() {
  */
 function builtinConfig(config = {}) {
   return {
-    action: 'redact',
+    action: 'remove',
     ...config,
   };
 }

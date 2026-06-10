@@ -59,12 +59,14 @@ def _normalize_object(value: object) -> JsonObject:
 class ConfigPolicy:
     """Policy for unsupported PII redaction configuration."""
 
+    unknown_component: UnsupportedBehavior = "warn"
     unknown_field: UnsupportedBehavior = "warn"
     unsupported_value: UnsupportedBehavior = "error"
 
     def to_dict(self) -> JsonObject:
         """Serialize this policy to the canonical JSON object shape."""
         return {
+            "unknown_component": self.unknown_component,
             "unknown_field": self.unknown_field,
             "unsupported_value": self.unsupported_value,
         }

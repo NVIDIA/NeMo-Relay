@@ -30,7 +30,7 @@ export function defaultConfig() {
  */
 export function builtinConfig(config = {}) {
   return {
-    action: 'redact',
+    action: 'remove',
     ...config,
   };
 }

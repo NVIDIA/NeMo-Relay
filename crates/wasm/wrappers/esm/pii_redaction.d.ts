@@ -6,6 +6,7 @@ import type { ConfigDiagnostic, ConfigReport } from './plugin.js';
 export { ConfigDiagnostic, ConfigReport };
 
 export interface ConfigPolicy {
+  unknown_component?: 'ignore' | 'warn' | 'error' | string;
   unknown_field?: 'ignore' | 'warn' | 'error' | string;
   unsupported_value?: 'ignore' | 'warn' | 'error' | string;
 }
