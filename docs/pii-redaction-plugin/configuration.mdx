@@ -45,8 +45,8 @@ The top-level PII redaction object contains:
 | `mode` | Backend mode. Current values are `builtin` and `local_model`. |
 | `input` | Enables managed LLM request sanitization. |
 | `output` | Enables managed LLM response sanitization. |
-| `tool_input` | Enables managed tool-argument sanitization before execution. |
-| `tool_output` | Enables managed tool-result sanitization after execution. |
+| `tool_input` | Enables sanitization of emitted tool-request observability payloads. |
+| `tool_output` | Enables sanitization of emitted tool-response observability payloads. |
 | `priority` | Guardrail priority. Lower values run earlier. |
 | `codec` | Managed LLM provider codec. Required when `input` or `output` is enabled. |
 | `builtin` | Built-in backend settings used when `mode = "builtin"`. |
