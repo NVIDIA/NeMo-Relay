@@ -59,7 +59,7 @@ nemo-relay run \
 
 ## Persistent Plugin Install
 
-Use persistent plugin installation when Codex should start normally and load
+Install the persistent plugin for Codex. It should start normally and load
 NeMo Relay from its plugin marketplace:
 
 ```bash
@@ -72,14 +72,19 @@ The installer creates a local marketplace, installs
 existing `nemo-relay` binary on `PATH` but does not install a plugin-local Relay
 binary.
 
-Codex plugin mode uses hook-supervised lazy startup only. It does not install a
+Codex plugin mode uses hook-supervised on-demand startup only. It does not install a
 wrapper, user-level daemon, launch agent, system user service, scheduled
 task, login item, or persistent supervisor.
 
-Check or remove the installed plugin with:
+To check for the installed plugin, enter:
 
 ```bash
 nemo-relay doctor --plugin codex
+```
+
+To remove the plugin, enter:
+
+```bash
 nemo-relay uninstall codex
 ```
 

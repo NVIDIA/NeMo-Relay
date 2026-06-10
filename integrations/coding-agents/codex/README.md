@@ -34,8 +34,8 @@ With `codex-cli >= 0.129.0`, the minimum supported installed hooks are
 The hook template also documents events used by newer or broader host hook
 surfaces, including `SessionEnd`, `PostToolUseFailure`, `SubagentStart`,
 `SubagentStop`, and `Notification`. Relay forwards any delivered supported hook
-as scope, tool, mark, or private LLM correlation events, but v1 does not depend
-on Codex exposing those broader events.
+as scope, tool, mark, or private LLM correlation events, but the v1 plugin
+manifest does not depend on Codex exposing those broader events.
 
 Transparent setup injects these hooks with CLI config overrides. Plugin setup
 does not install hooks from the package template directly. It writes
@@ -43,7 +43,7 @@ does not install hooks from the package template directly. It writes
 `nemo-relay-openai` provider alias, and merges hook shim entries into
 `.codex/hooks.json`.
 
-Codex plugin mode uses hook-supervised lazy startup only. It does not install a
+Codex plugin mode uses hook-supervised on-demand startup only. It does not install a
 user-level daemon, launchd agent, systemd user service, scheduled task, login
 item, wrapper, or persistent supervisor. The sidecar starts only when a Codex
 hook invokes `nemo-relay plugin-shim hook codex`.
@@ -175,7 +175,7 @@ nemo-relay install codex
 `nemo-relay install codex` writes a local Codex marketplace, registers
 `nemo-relay-plugin`, enables Codex hooks, and configures the
 `nemo-relay-openai` provider alias. Codex sidecar lifecycle remains
-hook-supervised lazy startup only; the installer does not create a wrapper or
+hook-supervised on-demand startup only; the installer does not create a wrapper or
 daemon.
 
 The install command requires `nemo-relay` to be available on `PATH`. It does not

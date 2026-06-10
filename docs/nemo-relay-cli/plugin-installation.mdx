@@ -77,7 +77,7 @@ For Codex, install registers the local Codex marketplace, installs
 entries, and configures the `nemo-relay-openai` provider alias at
 `http://127.0.0.1:47632`.
 
-Codex plugin mode is hook-supervised lazy startup only. It does not install a
+Codex plugin mode is hook-supervised on-demand startup only. It does not install a
 Codex wrapper, user-level daemon, launch agent, system user service,
 scheduled task, login item, or persistent supervisor. The sidecar starts when an
 installed Codex hook runs, reuses an already healthy sidecar when one exists,
