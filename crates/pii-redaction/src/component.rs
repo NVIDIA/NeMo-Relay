@@ -7,12 +7,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use regex::Regex;
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
     register_plugin,
 };
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
@@ -617,17 +617,17 @@ fn validate_builtin_action_requirements(
         );
     }
 
-    if let Some(pattern) = builtin.pattern.as_deref() {
-        if let Err(err) = Regex::new(pattern) {
-            push_policy_diag(
-                diagnostics,
-                policy.unsupported_value,
-                "pii_redaction.unsupported_value",
-                Some(PII_REDACTION_PLUGIN_KIND.to_string()),
-                Some("builtin.pattern".to_string()),
-                format!("invalid builtin matcher regex '{pattern}': {err}"),
-            );
-        }
+    if let Some(pattern) = builtin.pattern.as_deref()
+        && let Err(err) = Regex::new(pattern)
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "pii_redaction.unsupported_value",
+            Some(PII_REDACTION_PLUGIN_KIND.to_string()),
+            Some("builtin.pattern".to_string()),
+            format!("invalid builtin matcher regex '{pattern}': {err}"),
+        );
     }
 
     if builtin

@@ -436,10 +436,7 @@ mod tests {
 
         overlay_output_text_blocks(&mut items, Some("line one\nline two".to_string()));
 
-        assert_eq!(
-            items[0]["content"][0]["text"],
-            json!("line one\nline two")
-        );
+        assert_eq!(items[0]["content"][0]["text"], json!("line one\nline two"));
     }
 
     #[test]
