@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use nemo_relay::plugin::{PluginError, load_plugin_config_files};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -755,18 +755,8 @@ fn implicit_plugin_config_paths(
     cwd: Option<&std::path::Path>,
     user_config_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
-    // Ordered from lowest to highest precedence. User-level plugin config intentionally loads last
-    // so an operator can override project-local plugin defaults without editing the checkout.
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)];
-    if let Some(cwd) = cwd
-        && let Some(project) = find_project_plugin_config(cwd)
-    {
-        paths.push(project);
-    }
-    if let Some(user) = user_config_dir {
-        paths.push(user.join(PLUGINS_TOML));
-    }
-    paths
+    // The search-path logic lives in core; the gateway shares it so discovery stays identical.
+    nemo_relay::plugin::default_plugin_config_paths(cwd, user_config_dir)
 }
 
 // Walks upward from the current directory and returns the nearest project-local gateway config.
@@ -781,15 +771,9 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-// Walks upward from the current directory and returns the nearest project-local plugin config.
+// The project-walk lives in core; the gateway shares it so discovery stays identical.
 fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
-    for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-relay").join(PLUGINS_TOML);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
+    nemo_relay::plugin::nearest_project_plugin_config(start)
 }
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
@@ -815,15 +799,10 @@ fn user_config_path() -> Option<PathBuf> {
     user_config_dir().map(|dir| dir.join("config.toml"))
 }
 
-/// Resolves the nemo-relay user config DIRECTORY (without trailing filename) using the same XDG
-/// rules as `user_config_path`. Exposed so wizard/doctor code paths that write to or display
-/// the global location stay in sync with the loader — without this, hard-coded
-/// `$HOME/.config/nemo-relay` references silently ignore `$XDG_CONFIG_HOME`.
+/// Resolves the nemo-relay user config DIRECTORY (without trailing filename). Delegates to core's
+/// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(base).join("nemo-relay"));
-    }
-    home_dir().map(|home| home.join(".config/nemo-relay"))
+    nemo_relay::plugin::user_config_dir()
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -880,31 +859,12 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let mut merged = toml::Value::Table(toml::map::Map::new());
-    let mut sources = Vec::new();
-    for path in paths {
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path)?;
-            let parsed = raw
-                .parse::<toml::Table>()
-                .map(toml::Value::Table)
-                .map_err(|error| {
-                    CliError::Config(format!(
-                        "invalid plugin TOML in {}: {error}",
-                        path.display()
-                    ))
-                })?;
-            validate_plugin_toml_component_kinds(&path, &parsed)?;
-            merge_plugin_toml(&mut merged, parsed);
-            sources.push(path);
-        }
-    }
-    if sources.is_empty() {
-        return Ok(None);
-    }
-    let value = serde_json::to_value(merged)
-        .map_err(|error| CliError::Config(format!("invalid plugin TOML shape: {error}")))?;
-    Ok(Some(PluginTomlConfig { value, sources }))
+    // Delegate read/parse/merge to the shared core primitive (file precedence unchanged).
+    let resolved = load_plugin_config_files(paths).map_err(|err| match err {
+        PluginError::InvalidConfig(message) => CliError::Config(message),
+        other => CliError::Config(other.to_string()),
+    })?;
+    Ok(resolved.map(|(value, sources)| PluginTomlConfig { value, sources }))
 }
 
 fn apply_plugin_toml_config(
@@ -995,120 +955,6 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
-// Plugin TOML uses normal recursive TOML merging except for the top-level components array. Each
-// component is keyed by `kind`, so project/user plugins.toml files can add distinct plugin kinds or
-// override one plugin kind without restating every other component.
-fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
-    match (left, right) {
-        (toml::Value::Table(left), toml::Value::Table(right)) => {
-            for (key, value) in right {
-                match (key.as_str(), left.get_mut(&key)) {
-                    ("components", Some(existing)) => merge_plugin_components(existing, value),
-                    (_, Some(existing)) => merge_toml(existing, value),
-                    _ => {
-                        left.insert(key, value);
-                    }
-                }
-            }
-        }
-        (left, right) => *left = right,
-    }
-}
-
-fn merge_plugin_components(left: &mut toml::Value, right: toml::Value) {
-    let toml::Value::Array(left_components) = left else {
-        *left = right;
-        return;
-    };
-    let toml::Value::Array(right_components) = right else {
-        *left = right;
-        return;
-    };
-
-    for component in right_components {
-        let Some(kind) = component_kind(&component).map(str::to_owned) else {
-            left_components.push(component);
-            continue;
-        };
-        if let Some(existing) = left_components
-            .iter_mut()
-            .find(|candidate| component_kind(candidate) == Some(kind.as_str()))
-        {
-            if kind == "pricing" {
-                merge_pricing_component(existing, component);
-            } else {
-                merge_toml(existing, component);
-            }
-        } else {
-            left_components.push(component);
-        }
-    }
-}
-
-fn merge_pricing_component(existing: &mut toml::Value, higher_priority: toml::Value) {
-    let lower_priority_sources = pricing_component_sources(existing).cloned();
-    let higher_priority_sources = pricing_component_sources(&higher_priority).cloned();
-    merge_toml(existing, higher_priority);
-
-    let Some(mut sources) = higher_priority_sources else {
-        return;
-    };
-    if let Some(lower_priority_sources) = lower_priority_sources {
-        sources.extend(lower_priority_sources);
-    }
-    set_pricing_component_sources(existing, sources);
-}
-
-fn pricing_component_sources(component: &toml::Value) -> Option<&Vec<toml::Value>> {
-    component
-        .get("config")
-        .and_then(|config| config.get("sources"))
-        .and_then(toml::Value::as_array)
-}
-
-fn set_pricing_component_sources(component: &mut toml::Value, sources: Vec<toml::Value>) {
-    if let Some(config) = component
-        .get_mut("config")
-        .and_then(toml::Value::as_table_mut)
-    {
-        config.insert("sources".into(), toml::Value::Array(sources));
-    }
-}
-
-fn component_kind(component: &toml::Value) -> Option<&str> {
-    component
-        .as_table()
-        .and_then(|table| table.get("kind"))
-        .and_then(toml::Value::as_str)
-}
-
-fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Result<(), CliError> {
-    let Some(components) = value.get("components").and_then(toml::Value::as_array) else {
-        return Ok(());
-    };
-    let mut seen = HashSet::new();
-    let mut duplicates = Vec::new();
-    for component in components {
-        let Some(kind) = component_kind(component) else {
-            continue;
-        };
-        if !seen.insert(kind.to_string()) {
-            duplicates.push(kind.to_string());
-        }
-    }
-    duplicates.sort();
-    duplicates.dedup();
-    if duplicates.is_empty() {
-        Ok(())
-    } else {
-        Err(CliError::Config(format!(
-            "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
-            path.display(),
-            duplicates.join(", ")
-        )))
-    }
-}
-
 fn has_config_toml_plugin_config(value: &toml::Value) -> bool {
     value
         .get("plugins")
@@ -1147,14 +993,6 @@ fn format_paths(paths: &[PathBuf]) -> String {
 fn parse_json_option(name: &str, value: &str) -> Result<Value, CliError> {
     serde_json::from_str::<Value>(value)
         .map_err(|error| CliError::Config(format!("invalid {name}: {error}")))
-}
-
-// Resolves a cross-platform home directory from environment only. The gateway avoids extra OS
-// lookups here so tests can control install/config locations by setting env variables.
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
 }
 
 /// Reads a non-empty UTF-8 header value as an owned string.

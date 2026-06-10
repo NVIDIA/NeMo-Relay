@@ -20,7 +20,7 @@ from langchain_core.messages import (
 )
 from langgraph.types import Command, Send
 
-from nemo_relay import AnnotatedLLMRequest, LLMRequest
+from nemo_relay import AnnotatedLLMRequest, AnnotatedLLMResponse, LLMRequest
 from nemo_relay.codecs import LlmCodec
 
 if TYPE_CHECKING:
@@ -31,6 +31,15 @@ _LANGCHAIN_MODELED_REQUEST_KEYS = {"messages", "model", "tool_choice", "tools"}
 _LC_TO_RELAY_MESSAGE_ROLE = {
     "human": "user",
     "ai": "assistant",
+}
+_FINISH_REASON_MAP = {
+    "stop": "complete",
+    "end_turn": "complete",
+    "tool_calls": "tool_use",
+    "tool_use": "tool_use",
+    "max_tokens": "length",
+    "length": "length",
+    "content_filter": "content_filter",
 }
 
 
@@ -194,6 +203,11 @@ class LangChainCodec(LlmCodec):
             payload["tool_choice"] = annotated.tool_choice
         return LLMRequest(dict(original.headers), payload)
 
+    def decode_response(self, response: Any) -> AnnotatedLLMResponse:
+        """Decode a serialized LangChain ``ModelResponse`` for observability."""
+        payload = _model_response_payload_from_json(response)
+        return _model_response_to_annotated(payload)
+
 
 def split_system_message(messages: list[BaseMessage]) -> tuple[SystemMessage | None, list[BaseMessage]]:
     """Split a leading system message into LangChain agent ``ModelRequest`` shape."""
@@ -268,6 +282,17 @@ def _model_response_payload(response: ModelResponse[Any], codec: Any) -> dict[st
     return payload
 
 
+def _model_response_payload_from_json(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or LANGCHAIN_MODEL_RESPONSE_KEY not in payload:
+        raise TypeError("expected serialized LangChain ModelResponse payload")
+
+    response_payload = payload[LANGCHAIN_MODEL_RESPONSE_KEY]
+    if not isinstance(response_payload, dict):
+        raise TypeError("expected serialized LangChain ModelResponse object")
+
+    return response_payload
+
+
 def _model_response_from_payload(payload: Any, codec: Any) -> ModelResponse[Any] | None:
     if not isinstance(payload, dict):
         return None
@@ -290,6 +315,104 @@ def model_response_to_json(response: ModelResponse[Any], codec: Any) -> Any:
     return {
         LANGCHAIN_MODEL_RESPONSE_KEY: _model_response_payload(response, codec),
     }
+
+
+def _message_content_text(message: BaseMessage) -> str | None:
+    content = message.content
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text", item.get("content"))
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts) if parts else None
+    return str(content)
+
+
+def _message_finish_reason(message: BaseMessage) -> str | dict[str, str] | None:
+    metadata = getattr(message, "response_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    for key in ("finish_reason", "stop_reason"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            return _FINISH_REASON_MAP.get(value, {"unknown": value})
+    return None
+
+
+def _message_usage(message: BaseMessage) -> dict[str, Any] | None:
+    usage = getattr(message, "usage_metadata", None)
+    if not isinstance(usage, dict):
+        return None
+
+    mapped: dict[str, Any] = {}
+    for source, target in (
+        ("input_tokens", "prompt_tokens"),
+        ("output_tokens", "completion_tokens"),
+        ("total_tokens", "total_tokens"),
+    ):
+        value = usage.get(source)
+        if isinstance(value, int):
+            mapped[target] = value
+
+    return mapped or None
+
+
+def _message_model(message: BaseMessage) -> str | None:
+    metadata = getattr(message, "response_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    for key in ("model_name", "model", "model_id"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _message_response_tool_calls(message: BaseMessage) -> list[dict[str, Any]] | None:
+    if not isinstance(message, AIMessage):
+        return None
+    tool_calls = getattr(message, "tool_calls", [])
+    if not tool_calls:
+        return None
+
+    return [
+        {
+            "id": str(tool_call.get("id") or ""),
+            "name": str(tool_call["name"]),
+            "arguments": tool_call.get("args") or {},
+        }
+        for tool_call in tool_calls
+    ]
+
+
+def _model_response_to_annotated(payload: dict[str, Any]) -> AnnotatedLLMResponse:
+    raw_messages = payload.get("messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        raise TypeError("expected serialized LangChain ModelResponse messages")
+
+    messages = messages_from_dict(raw_messages)
+    message = next((item for item in reversed(messages) if isinstance(item, AIMessage)), messages[-1])
+    extra = {}
+    if "structured_response" in payload:
+        extra["structured_response"] = payload["structured_response"]
+
+    return AnnotatedLLMResponse(
+        id=getattr(message, "id", None),
+        model=_message_model(message),
+        message=_message_content_text(message),
+        tool_calls=_message_response_tool_calls(message),
+        finish_reason=_message_finish_reason(message),
+        usage=_message_usage(message),
+        extra=extra or None,
+    )
 
 
 def model_response_from_json(payload: Any, codec: Any) -> ModelResponse[Any]:

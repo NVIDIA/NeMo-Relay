@@ -133,7 +133,10 @@ class TestToolsAsync:
         with pytest.raises(RuntimeError, match="boom"):
             await tools.execute("failing_tool", {"x": 1}, failing)
 
-        subscribers.deregister("py_tool_exec_failure_sub")
+        try:
+            subscribers.flush()
+        finally:
+            subscribers.deregister("py_tool_exec_failure_sub")
 
         assert [e.kind for e in events] == ["scope", "scope"]
         assert all(isinstance(event, ScopeEvent) for event in events)

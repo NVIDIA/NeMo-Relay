@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use reqwest::Client;
 use serde_json::Value;
@@ -203,9 +203,10 @@ impl PluginActivation {
         register_adaptive_component().map_err(|error| {
             CliError::Config(format!("adaptive plugin registration failed: {error}"))
         })?;
+        // Gateway already resolved its config; activate exactly (no re-discovery).
         let plugin_config: PluginConfig = serde_json::from_value(config)
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
-        initialize_plugins(plugin_config)
+        initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
         Ok(Self { active: true })

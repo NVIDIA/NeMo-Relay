@@ -122,6 +122,54 @@ class TestBuiltinCodecDecodeEncode:
 
 
 class TestBuiltinCodecDecodeResponse:
+    def test_annotated_response_constructable_for_custom_codecs(self):
+        """AnnotatedLLMResponse() lets Python response codecs return normalized responses."""
+        annotated = AnnotatedLLMResponse(
+            id="langchain-response-1",
+            model="mock-model",
+            message="I will search docs.",
+            tool_calls=[
+                {
+                    "id": "call-search-docs",
+                    "name": "search_docs",
+                    "arguments": {"query": "Deep Agents"},
+                }
+            ],
+            finish_reason="tool_use",
+            usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            api_specific={"api": "custom", "api_name": "provider", "data": {"id": "raw"}},
+            extra={"framework": "langchain"},
+        )
+
+        assert annotated.id == "langchain-response-1"
+        assert annotated.model == "mock-model"
+        assert annotated.response_text() == "I will search docs."
+        assert annotated.tool_calls == [
+            {
+                "id": "call-search-docs",
+                "name": "search_docs",
+                "arguments": {"query": "Deep Agents"},
+            }
+        ]
+        assert annotated.finish_reason == "tool_use"
+        assert annotated.usage == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+        assert annotated.api_specific == {"api": "custom", "api_name": "provider", "data": {"id": "raw"}}
+        assert annotated.extra == {"framework": "langchain"}
+
+    def test_annotated_response_exposes_unknown_finish_reason(self):
+        """Unknown native finish reasons are still visible to Python callers."""
+        annotated = AnnotatedLLMResponse(
+            message="done",
+            finish_reason="provider_custom_stop",
+        )
+        annotated_from_native_shape = AnnotatedLLMResponse(
+            message="done",
+            finish_reason={"unknown": "provider_custom_stop"},
+        )
+
+        assert annotated.finish_reason == "provider_custom_stop"
+        assert annotated_from_native_shape.finish_reason == "provider_custom_stop"
+
     def test_openai_chat_decode_response(self):
         """OpenAIChatCodec.decode_response() returns AnnotatedLLMResponse."""
         codec = OpenAIChatCodec()
@@ -386,6 +434,7 @@ class TestResponseCodecObjectParam:
                 mock_llm,
                 response_codec=codec,
             )
+            subscribers.flush()
 
             # Find LLMEnd event
             end_events = [
@@ -418,6 +467,7 @@ class TestResponseCodecObjectParam:
                 return {"result": "ok"}
 
             await llm.execute("test-llm", request, mock_llm)
+            subscribers.flush()
 
             end_events = [
                 e for e in captured_events if e.kind == "scope" and e.category == "llm" and e.scope_category == "end"
