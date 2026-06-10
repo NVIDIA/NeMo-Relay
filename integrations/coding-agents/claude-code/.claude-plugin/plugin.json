@@ -1,7 +1,7 @@
 {
-  "name": "nemo-relay-claude-code-observability",
-  "version": "0.1.0",
-  "description": "Claude Code hooks that forward canonical lifecycle payloads to nemo-relay-sidecar.",
+  "name": "nemo-relay-plugin",
+  "version": "0.4.0",
+  "description": "Claude Code hooks that forward canonical lifecycle payloads to nemo-relay.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",
     "url": "https://github.com/NVIDIA/NeMo-Relay"
@@ -14,6 +14,5 @@
     "claude-code",
     "hooks",
     "observability"
-  ],
-  "hooks": "../hooks/hooks.json"
+  ]
 }

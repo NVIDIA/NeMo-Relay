@@ -19,8 +19,8 @@ use nemo_relay::codec::request::{
     AnnotatedLlmRequest as AnnotatedLLMRequest, Message, MessageContent,
 };
 use nemo_relay::codec::response::{
-    AnnotatedLlmResponse as AnnotatedLLMResponse, ApiSpecificResponse, FinishReason,
-    ResponseToolCall, Usage,
+    AnnotatedLlmResponse as AnnotatedLLMResponse, ApiSpecificResponse, CostEstimate, CostSource,
+    FinishReason, ResponseToolCall, Usage,
 };
 use pyo3::types::{PyDict, PyList, PyModule};
 use serde_json::json;
@@ -617,6 +617,7 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
                 total_tokens: Some(3),
                 cache_read_tokens: None,
                 cache_write_tokens: None,
+                cost: None,
             }),
             api_specific: Some(ApiSpecificResponse::Custom {
                 api_name: "custom".into(),
@@ -1198,6 +1199,19 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                     total_tokens: Some(5),
                     cache_read_tokens: Some(1),
                     cache_write_tokens: None,
+                    cost: Some(CostEstimate {
+                        total: Some(0.000_001),
+                        currency: "USD".into(),
+                        input: Some(0.000_000_2),
+                        output: Some(0.000_000_8),
+                        cache_read: None,
+                        cache_write: None,
+                        source: CostSource::ProviderReported,
+                        pricing_provider: Some("test-provider".into()),
+                        pricing_model: Some("demo-model".into()),
+                        pricing_as_of: Some("2026-06-04".into()),
+                        pricing_source: Some("https://example.test/pricing".into()),
+                    }),
                 }),
                 api_specific: Some(ApiSpecificResponse::Custom {
                     api_name: "custom".into(),
@@ -1220,6 +1234,10 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         assert_eq!(
             py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["total_tokens"],
             json!(5)
+        );
+        assert_eq!(
+            py_to_json(response.usage(py).unwrap().bind(py)).unwrap()["cost"]["pricing_provider"],
+            json!("test-provider")
         );
         assert_eq!(
             py_to_json(response.api_specific(py).unwrap().bind(py)).unwrap()["api_name"],
@@ -1454,6 +1472,7 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     total_tokens: Some(5),
                     cache_read_tokens: Some(1),
                     cache_write_tokens: None,
+                    cost: None,
                 }),
                 api_specific: Some(ApiSpecificResponse::Custom {
                     api_name: "custom".into(),

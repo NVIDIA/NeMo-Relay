@@ -764,7 +764,8 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let register_builtins = || {
         crate::observability::plugin_component::register_observability_component()?;
-        crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()
+        crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
+        crate::plugins::pricing::register_pricing_component()
     };
     match BUILTIN_PLUGIN_REGISTRATION.get_or_init(register_builtins) {
         Ok(()) => Ok(()),
@@ -899,6 +900,117 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     report
 }
 
+/// Layers `right` (higher precedence) onto `left` in place.
+///
+/// Objects merge recursively and arrays/scalars are replaced by `right`, except the
+/// top-level `components` array, whose entries pair by `kind` in order of appearance so
+/// multi-instance kinds are not collapsed. Internal helper shared by plugin
+/// initialization and `plugins.toml` discovery.
+fn layer_config(left: &mut Json, right: Json) {
+    match (left, right) {
+        (Json::Object(left), Json::Object(right)) => {
+            for (key, value) in right {
+                match (key.as_str(), left.get_mut(&key)) {
+                    ("components", Some(existing)) => merge_plugin_components(existing, value),
+                    (_, Some(existing)) => merge_json_value(existing, value),
+                    (_, _) => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+/// Merges `right` components into `left` by `kind`, pairing repeated kinds positionally.
+fn merge_plugin_components(left: &mut Json, right: Json) {
+    let Json::Array(left_components) = left else {
+        *left = right;
+        return;
+    };
+    let Json::Array(right_components) = right else {
+        *left = right;
+        return;
+    };
+    let mut base_slots: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, component) in left_components.iter().enumerate() {
+        if let Some(kind) = component_kind(component) {
+            base_slots.entry(kind.to_string()).or_default().push(index);
+        }
+    }
+    let mut consumed: HashMap<String, usize> = HashMap::new();
+    for component in right_components {
+        let Some(kind) = component_kind(&component).map(str::to_owned) else {
+            left_components.push(component);
+            continue;
+        };
+        let nth = consumed.entry(kind.clone()).or_insert(0);
+        let slot = base_slots
+            .get(&kind)
+            .and_then(|slots| slots.get(*nth))
+            .copied();
+        *nth += 1;
+        match slot {
+            Some(index) if kind == "pricing" => {
+                merge_pricing_component(&mut left_components[index], component)
+            }
+            Some(index) => merge_json_value(&mut left_components[index], component),
+            None => left_components.push(component),
+        }
+    }
+}
+
+/// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.
+fn merge_json_value(left: &mut Json, right: Json) {
+    match (left, right) {
+        (Json::Object(left), Json::Object(right)) => {
+            for (key, value) in right {
+                match left.get_mut(&key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        left.insert(key, value);
+                    }
+                }
+            }
+        }
+        (left, right) => *left = right,
+    }
+}
+
+fn component_kind(component: &Json) -> Option<&str> {
+    component.get("kind").and_then(Json::as_str)
+}
+
+/// Like `merge_json_value`, but concatenates a `pricing` component's `config.sources`
+/// (higher-precedence first) instead of replacing them, so lower-precedence fallback sources survive.
+fn merge_pricing_component(existing: &mut Json, higher_priority: Json) {
+    let lower_priority_sources = pricing_component_sources(existing).cloned();
+    let higher_priority_sources = pricing_component_sources(&higher_priority).cloned();
+    merge_json_value(existing, higher_priority);
+
+    let Some(mut sources) = higher_priority_sources else {
+        return;
+    };
+    if let Some(lower_priority_sources) = lower_priority_sources {
+        sources.extend(lower_priority_sources);
+    }
+    set_pricing_component_sources(existing, sources);
+}
+
+fn pricing_component_sources(component: &Json) -> Option<&Vec<Json>> {
+    component
+        .get("config")
+        .and_then(|config| config.get("sources"))
+        .and_then(Json::as_array)
+}
+
+fn set_pricing_component_sources(component: &mut Json, sources: Vec<Json>) {
+    if let Some(config) = component.get_mut("config").and_then(Json::as_object_mut) {
+        config.insert("sources".into(), Json::Array(sources));
+    }
+}
+
 /// Returns the JSON Schema for the canonical plugin configuration document.
 #[cfg(feature = "schema")]
 pub fn plugin_config_schema() -> Json {
@@ -926,7 +1038,8 @@ pub fn plugin_config_schema() -> Json {
 /// # Notes
 /// Initialization is replace-with-rollback: the previous active configuration
 /// is removed before the new configuration is activated.
-pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
+#[doc(hidden)]
+pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
     let report = validate_plugin_config(&config);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
@@ -966,6 +1079,123 @@ pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
         store_active_plugin_configuration(config, report.clone(), registrations)?;
         Ok(report)
     }
+}
+
+/// Validates and activates `config` layered on top of the discovered
+/// `plugins.toml` configuration, so a direct integration sees the same file
+/// layering as the gateway. `config` wins on conflicts; as a typed document its
+/// default `version`/`policy`/`enabled` override the file, while `config` bodies
+/// merge field-by-field. Delegates to [`initialize_plugins_exact`].
+pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
+    let mut base = resolve_default_file_plugin_config()?;
+    layer_config(&mut base, serde_json::to_value(config)?);
+    let config: PluginConfig = serde_json::from_value(base)?;
+    initialize_plugins_exact(config).await
+}
+
+/// Resolves the default `plugins.toml` layering into one JSON document, or an
+/// empty object when no plugin file exists.
+fn resolve_default_file_plugin_config() -> Result<Json> {
+    let paths =
+        default_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir());
+    Ok(load_plugin_config_files(paths)?
+        .map(|(value, _sources)| value)
+        .unwrap_or_else(|| Json::Object(Map::new())))
+}
+
+use std::path::{Path, PathBuf};
+
+/// Reads, parses, and merges the `plugins.toml` files at `paths` (lowest
+/// precedence first) into one JSON document with its source paths, or `None`
+/// when none exist. Internal: `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let mut merged = Json::Object(Map::new());
+    let mut sources = Vec::new();
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&path).map_err(|err| {
+            PluginError::InvalidConfig(format!("failed to read {}: {err}", path.display()))
+        })?;
+        let parsed = raw.parse::<toml::Table>().map_err(|err| {
+            PluginError::InvalidConfig(format!("invalid plugin TOML in {}: {err}", path.display()))
+        })?;
+        let document = serde_json::to_value(parsed)?;
+        validate_unique_component_kinds(&path, &document)?;
+        layer_config(&mut merged, document);
+        sources.push(path);
+    }
+    Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Rejects a single file that declares the same component `kind` more than once.
+fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
+    let Some(components) = document.get("components").and_then(Json::as_array) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for component in components {
+        if let Some(kind) = component_kind(component)
+            && !seen.insert(kind)
+        {
+            duplicates.push(kind.to_string());
+        }
+    }
+    if duplicates.is_empty() {
+        return Ok(());
+    }
+    duplicates.sort();
+    duplicates.dedup();
+    Err(PluginError::InvalidConfig(format!(
+        "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
+        path.display(),
+        duplicates.join(", ")
+    )))
+}
+
+/// Default `plugins.toml` search path (lowest precedence first): system, nearest
+/// project file, then user file — mirroring the gateway's discovery. `pub` only
+/// for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn default_plugin_config_paths(cwd: Option<&Path>, user_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/etc/nemo-relay/plugins.toml")];
+    if let Some(cwd) = cwd
+        && let Some(project) = nearest_project_plugin_config(cwd)
+    {
+        paths.push(project);
+    }
+    if let Some(dir) = user_dir {
+        paths.push(dir.join("plugins.toml"));
+    }
+    paths
+}
+
+/// Walks upward from `start` for the nearest `.nemo-relay/plugins.toml`. `pub`
+/// only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .map(|ancestor| ancestor.join(".nemo-relay").join("plugins.toml"))
+        .find(|path| path.exists())
+}
+
+/// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then
+/// `HOME`/`USERPROFILE`. `pub` only for cross-crate reuse by the gateway.
+#[doc(hidden)]
+pub fn user_config_dir() -> Option<PathBuf> {
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(base).join("nemo-relay"));
+    }
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".config/nemo-relay"))
 }
 
 /// Deregisters and clears all configured plugin components.

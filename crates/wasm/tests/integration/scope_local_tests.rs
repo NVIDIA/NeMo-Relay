@@ -49,7 +49,7 @@ fn push_scope(
 }
 
 fn pop_scope(handle: &ScopeHandle) -> Result<(), JsValue> {
-    nemo_relay_wasm::api::pop_scope(handle, JsValue::NULL, None)
+    nemo_relay_wasm::api::pop_scope(handle, JsValue::NULL, None, JsValue::NULL)
 }
 
 async fn tool_call_execute(

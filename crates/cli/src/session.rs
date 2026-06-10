@@ -104,6 +104,7 @@ struct Session {
     session_metadata: Value,
     agent_scope: Option<ScopeHandle>,
     turn_scope: Option<ScopeHandle>,
+    gateway_request_turn_open: bool,
     turn_index: u64,
     last_turn_llm_output: Option<Value>,
     subagents: HashMap<String, ScopeHandle>,
@@ -439,6 +440,19 @@ impl SessionManager {
         {
             sessions.remove(session_id);
         }
+    }
+
+    /// Returns true while any session still owns active observable work.
+    ///
+    /// Codex plugin sessions can emit `SessionStart` without a matching `SessionEnd`, so metadata-only
+    /// sessions must not keep the hook-supervised sidecar alive forever. Open scopes and in-flight
+    /// tool, LLM, or gateway work still block plugin idle shutdown.
+    pub(crate) async fn has_open_sessions(&self) -> bool {
+        self.inner
+            .lock()
+            .await
+            .values()
+            .any(Session::blocks_plugin_idle_shutdown)
     }
 
     /// Legacy manual-lifecycle close paired with [`Self::start_llm`]. Production gateway traffic
@@ -845,6 +859,7 @@ impl Session {
             session_metadata: Value::Null,
             agent_scope: None,
             turn_scope: None,
+            gateway_request_turn_open: false,
             turn_index: 0,
             last_turn_llm_output: None,
             subagents: HashMap::new(),
@@ -879,6 +894,17 @@ impl Session {
             && self.subagent_stack.is_empty()
             && self.llms.is_empty()
             && self.tools.is_empty()
+    }
+
+    fn blocks_plugin_idle_shutdown(&self) -> bool {
+        self.agent_scope.is_some()
+            || self.turn_scope.is_some()
+            || !self.subagents.is_empty()
+            || !self.subagent_stacks.is_empty()
+            || !self.subagent_stack.is_empty()
+            || !self.llms.is_empty()
+            || !self.tools.is_empty()
+            || self.active_gateway_calls > 0
     }
 
     fn touch_activity(&mut self) {
@@ -938,7 +964,7 @@ impl Session {
         let stack = self.scope_stack.clone();
         TASK_SCOPE_STACK
             .scope(stack.clone(), async move {
-                self.ensure_turn_started(Value::Null)?;
+                self.ensure_turn_started_for_gateway(&start)?;
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
                     attributes |= LlmAttributes::STREAMING;
@@ -996,7 +1022,7 @@ impl Session {
             .scope(stack.clone(), async {
                 let policy = self.gateway_management_policy(&start);
                 if !policy.bypasses_managed_pipeline() {
-                    self.ensure_turn_started(Value::Null)?;
+                    self.ensure_turn_started_for_gateway(&start)?;
                 }
                 let mut attributes = LlmAttributes::empty();
                 if start.streaming {
@@ -1087,6 +1113,10 @@ impl Session {
             return self.mark("prompt_submitted", event);
         }
         if self.turn_scope.is_some() {
+            if self.gateway_request_turn_open {
+                self.gateway_request_turn_open = false;
+                return self.mark("prompt_submitted", event);
+            }
             self.close_turn_for_reason("superseded_by_next_turn")
                 .await?;
         }
@@ -1101,6 +1131,20 @@ impl Session {
             return Ok(());
         }
         self.open_turn(event_metadata, Value::Null, "implicit")
+    }
+
+    fn ensure_turn_started_for_gateway(&mut self, start: &LlmGatewayStart) -> Result<(), CliError> {
+        if self.turn_scope.is_some() {
+            return Ok(());
+        }
+        if let Some(input) =
+            alignment::gateway_turn_input(self.agent_kind, &start.provider, &start.request)
+        {
+            self.open_turn(start.metadata.clone(), input, "gateway_request")?;
+            self.gateway_request_turn_open = true;
+            return Ok(());
+        }
+        self.open_turn(Value::Null, Value::Null, "implicit")
     }
 
     fn gateway_management_policy(&self, start: &LlmGatewayStart) -> GatewayManagementPolicy {
@@ -1142,6 +1186,7 @@ impl Session {
                 .build(),
         )?;
         self.turn_scope = Some(scope);
+        self.gateway_request_turn_open = false;
         self.last_turn_llm_output = None;
         Ok(())
     }
@@ -1303,6 +1348,7 @@ impl Session {
         let Some(scope) = self.turn_scope.take() else {
             return Ok(());
         };
+        self.gateway_request_turn_open = false;
         pop_scope(
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)

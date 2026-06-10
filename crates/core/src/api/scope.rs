@@ -180,6 +180,9 @@ pub struct EndScopeHandleParams<'a> {
     /// Optional JSON payload exported as the semantic scope output.
     #[builder(default)]
     pub data: Option<Json>,
+    /// Optional metadata to be appended to the metadata set when the scope was created.
+    #[builder(default)]
+    pub metadata: Option<Json>,
     /// Optional timestamp recorded on the emitted end event. When omitted, the
     /// runtime records the current UTC time, or one microsecond after the
     /// handle start time if the current time is not later.
@@ -196,6 +199,9 @@ pub struct PopScopeParams<'a> {
     /// Optional JSON payload exported as the semantic scope output.
     #[builder(default)]
     pub output: Option<Json>,
+    /// Optional JSON payload metadata to be appended to the metadata set when the scope was created.
+    #[builder(default)]
+    pub metadata: Option<Json>,
     /// Optional timestamp recorded on the emitted end event. When omitted, the
     /// runtime records the current UTC time, or one microsecond after the
     /// handle start time if the current time is not later.
@@ -347,6 +353,7 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
                 .handle(&scope)
                 .data_opt(params.output)
                 .timestamp_opt(params.timestamp)
+                .metadata_opt(params.metadata)
                 .build(),
         );
         (scope, event, subscribers)

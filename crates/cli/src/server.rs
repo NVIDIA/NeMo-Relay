@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use reqwest::Client;
 use serde_json::Value;
@@ -29,6 +30,7 @@ pub(crate) struct AppState {
     pub(crate) config: GatewayConfig,
     pub(crate) http: Client,
     pub(crate) sessions: SessionManager,
+    pub(crate) last_activity: Arc<Mutex<Instant>>,
 }
 
 /// Binds the configured address and serves until the process is stopped.
@@ -69,16 +71,26 @@ pub(crate) async fn serve_listener(
     let plugin_activation = PluginActivation::initialize(config.plugin_config.clone()).await?;
     let state = AppState::new(config);
     let sessions = state.sessions.clone();
+    let last_activity = state.last_activity.clone();
     let app = router_with_state(state);
-    let serve_result = match shutdown {
-        Some(receiver) => {
+    let idle_shutdown = (shutdown.is_none())
+        .then(plugin_idle_timeout)
+        .flatten()
+        .map(|timeout| idle_shutdown_future(last_activity, sessions.clone(), timeout));
+    let serve_result = match (shutdown, idle_shutdown) {
+        (Some(receiver), _) => {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = receiver.await;
                 })
                 .await
         }
-        None => axum::serve(listener, app).await,
+        (None, Some(idle)) => {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(idle)
+                .await
+        }
+        (None, None) => axum::serve(listener, app).await,
     };
     let close_result = sessions.close_all("gateway_shutdown").await;
     let clear_result = plugin_activation.clear();
@@ -119,6 +131,13 @@ impl AppState {
             config,
             http,
             sessions,
+            last_activity: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    pub(crate) fn touch(&self) {
+        if let Ok(mut last_activity) = self.last_activity.lock() {
+            *last_activity = Instant::now();
         }
     }
 }
@@ -141,8 +160,35 @@ fn router_with_state(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn healthz() -> Json<Value> {
+async fn healthz(State(state): State<AppState>) -> Json<Value> {
+    state.touch();
     Json(serde_json::json!({ "status": "ok" }))
+}
+
+fn plugin_idle_timeout() -> Option<Duration> {
+    let raw = std::env::var("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS").ok()?;
+    let seconds = raw.parse::<u64>().ok()?;
+    (seconds > 0).then(|| Duration::from_secs(seconds))
+}
+
+async fn idle_shutdown_future(
+    last_activity: Arc<Mutex<Instant>>,
+    sessions: SessionManager,
+    timeout: Duration,
+) {
+    let tick = timeout
+        .min(Duration::from_secs(5))
+        .max(Duration::from_secs(1));
+    loop {
+        tokio::time::sleep(tick).await;
+        let elapsed = last_activity
+            .lock()
+            .map(|last_activity| last_activity.elapsed())
+            .unwrap_or(timeout);
+        if elapsed >= timeout && !sessions.has_open_sessions().await {
+            break;
+        }
+    }
 }
 
 struct PluginActivation {
@@ -157,9 +203,10 @@ impl PluginActivation {
         register_adaptive_component().map_err(|error| {
             CliError::Config(format!("adaptive plugin registration failed: {error}"))
         })?;
+        // Gateway already resolved its config; activate exactly (no re-discovery).
         let plugin_config: PluginConfig = serde_json::from_value(config)
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
-        initialize_plugins(plugin_config)
+        initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
         Ok(Self { active: true })
@@ -191,6 +238,7 @@ async fn codex_hook(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, CliError> {
+    state.touch();
     let outcome = codex::adapt(payload, &headers);
     state
         .sessions
@@ -206,6 +254,7 @@ async fn claude_code_hook(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, CliError> {
+    state.touch();
     let outcome = claude_code::adapt(payload, &headers);
     state
         .sessions
@@ -221,6 +270,7 @@ async fn cursor_hook(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, CliError> {
+    state.touch();
     let outcome = cursor::adapt(payload, &headers);
     state
         .sessions
@@ -236,6 +286,7 @@ async fn hermes_hook(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, CliError> {
+    state.touch();
     let outcome = hermes::adapt(payload, &headers);
     state
         .sessions

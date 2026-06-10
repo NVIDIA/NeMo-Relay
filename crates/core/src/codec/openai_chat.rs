@@ -14,7 +14,8 @@ use crate::json::Json;
 
 use super::request::{AnnotatedLlmRequest, GenerationParams, Message, ToolChoice, ToolDefinition};
 use super::response::{
-    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, ResponseToolCall, Usage,
+    AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
+    estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
 };
 use super::traits::{LlmCodec, LlmResponseCodec};
 
@@ -72,6 +73,9 @@ struct RawChatUsage {
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
     prompt_tokens_details: Option<RawPromptTokensDetails>,
+    #[serde(rename = "cost_usd")]
+    provider_cost: Option<f64>,
+    cost: Option<RawUsageCost>,
 }
 
 #[derive(Deserialize)]
@@ -169,12 +173,23 @@ impl LlmResponseCodec for OpenAIChatCodec {
             .map(map_chat_finish_reason);
 
         // Map usage.
-        let usage = raw.usage.map(|u| Usage {
-            prompt_tokens: u.prompt_tokens,
-            completion_tokens: u.completion_tokens,
-            total_tokens: u.total_tokens,
-            cache_read_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
-            cache_write_tokens: None,
+        let model_for_pricing = raw.model.as_deref();
+        let model_provider = infer_model_provider("openai", model_for_pricing);
+        let usage = raw.usage.map(|u| {
+            let mut usage = Usage {
+                prompt_tokens: u.prompt_tokens,
+                completion_tokens: u.completion_tokens,
+                total_tokens: u.total_tokens,
+                cache_read_tokens: u.prompt_tokens_details.and_then(|d| d.cached_tokens),
+                cache_write_tokens: None,
+                cost: provider_reported_cost(u.provider_cost, u.cost),
+            };
+            if usage.cost.is_none() {
+                usage.cost = model_for_pricing.and_then(|model| {
+                    estimate_cost_for_provider(model_provider.as_deref(), model, &usage)
+                });
+            }
+            usage
         });
 
         // Build API-specific fields.

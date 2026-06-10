@@ -1,16 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use nemo_relay::plugin::{PluginError, load_plugin_config_files};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::CliError;
+use crate::plugin_shim::PluginShimCommand;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "nemo-relay")]
@@ -79,6 +80,12 @@ pub(crate) enum Command {
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
     Plugins(PluginsCommand),
+    /// Install coding-agent plugins from the local nemo-relay CLI.
+    Install(InstallCommand),
+    /// Uninstall coding-agent plugins installed by `nemo-relay install`.
+    Uninstall(UninstallCommand),
+    /// Validate and configure model pricing catalogs.
+    Pricing(PricingCommand),
     /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
@@ -90,6 +97,9 @@ pub(crate) enum Command {
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
     #[command(hide = true)]
     HookForward(HookForwardCommand),
+    /// Internal: plugin-local hook and sidecar supervisor. Not typed by humans.
+    #[command(hide = true)]
+    PluginShim(PluginShimCommand),
 }
 
 /// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
@@ -99,10 +109,40 @@ pub(crate) struct DoctorCommand {
     /// Limit readiness checks to one supported agent.
     #[arg(value_enum)]
     pub(crate) agent: Option<CodingAgent>,
+    /// Diagnose an installed coding-agent plugin instead of the normal relay config.
+    #[arg(long, value_enum)]
+    pub(crate) plugin: Option<PluginHost>,
+    /// Plugin install state directory. Defaults to the platform data directory.
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
     /// Emit machine-readable JSON instead of the formatted human report. Versioned via
     /// `schema_version`; stable shape for CI / evaluation harness consumption.
     #[arg(long)]
     pub(crate) json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct InstallCommand {
+    #[arg(value_enum)]
+    pub(crate) host: PluginHost,
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) force: bool,
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    #[arg(long)]
+    pub(crate) skip_doctor: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct UninstallCommand {
+    #[arg(value_enum)]
+    pub(crate) host: PluginHost,
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 /// Args for `nemo-relay agents`. Shares the `--json` shape with `nemo-relay doctor`'s
@@ -158,8 +198,95 @@ pub(crate) struct PluginsCommand {
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
-    /// Interactively create or edit the Observability plugin in `plugins.toml`.
+    /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
     Edit(PluginsEditCommand),
+}
+
+/// Args for `nemo-relay pricing`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingCommand {
+    #[command(subcommand)]
+    pub(crate) command: PricingSubcommand,
+}
+
+/// Pricing catalog and resolver subcommands.
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum PricingSubcommand {
+    /// Validate a pricing catalog JSON file.
+    Validate(PricingValidateCommand),
+    /// Initialize the pricing plugin component in `plugins.toml`.
+    Init(PricingInitCommand),
+    /// Add a pricing catalog file source to `plugins.toml`.
+    AddSource(PricingAddSourceCommand),
+    /// Resolve which pricing entry matches a model and optional usage.
+    Resolve(PricingResolveCommand),
+}
+
+/// Common target-scope flags for pricing config mutations.
+#[derive(Debug, Clone, Default, Args)]
+#[command(group(
+    ArgGroup::new("pricing_scope")
+        .args(["user", "project", "global"])
+        .multiple(false)
+))]
+pub(crate) struct PricingScopeArgs {
+    /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
+    #[arg(long)]
+    pub(crate) user: bool,
+    /// Edit the nearest project config at `.nemo-relay/plugins.toml`.
+    #[arg(long)]
+    pub(crate) project: bool,
+    /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
+    #[arg(long)]
+    pub(crate) global: bool,
+}
+
+/// Args for `nemo-relay pricing validate`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingValidateCommand {
+    /// Path to a Relay pricing catalog JSON file.
+    pub(crate) path: PathBuf,
+}
+
+/// Args for `nemo-relay pricing init`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingInitCommand {
+    #[command(flatten)]
+    pub(crate) scope: PricingScopeArgs,
+}
+
+/// Args for `nemo-relay pricing add-source`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingAddSourceCommand {
+    #[command(flatten)]
+    pub(crate) scope: PricingScopeArgs,
+    /// Path to a Relay pricing catalog JSON file.
+    pub(crate) path: PathBuf,
+    /// Append as a lower-priority source instead of prepending as the highest-priority override.
+    #[arg(long)]
+    pub(crate) append: bool,
+}
+
+/// Args for `nemo-relay pricing resolve`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PricingResolveCommand {
+    /// Model ID or routed model name to look up.
+    pub(crate) model: String,
+    /// Optional provider or route, such as `openai`, `anthropic`, or `azure/openai`.
+    #[arg(long)]
+    pub(crate) provider: Option<String>,
+    /// Prompt/input token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) prompt_tokens: Option<u64>,
+    /// Completion/output token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) completion_tokens: Option<u64>,
+    /// Prompt-cache read token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) cache_read_tokens: Option<u64>,
+    /// Prompt-cache write token count to use for an estimate.
+    #[arg(long)]
+    pub(crate) cache_write_tokens: Option<u64>,
 }
 
 /// Args for `nemo-relay plugins edit`.
@@ -287,6 +414,15 @@ pub(crate) enum CodingAgent {
     Codex,
     Cursor,
     Hermes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(crate) enum PluginHost {
+    Codex,
+    #[value(name = "claude-code", alias = "claude")]
+    ClaudeCode,
+    All,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -619,18 +755,8 @@ fn implicit_plugin_config_paths(
     cwd: Option<&std::path::Path>,
     user_config_dir: Option<PathBuf>,
 ) -> Vec<PathBuf> {
-    // Ordered from lowest to highest precedence. User-level plugin config intentionally loads last
-    // so an operator can override project-local plugin defaults without editing the checkout.
-    let mut paths = vec![PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)];
-    if let Some(cwd) = cwd
-        && let Some(project) = find_project_plugin_config(cwd)
-    {
-        paths.push(project);
-    }
-    if let Some(user) = user_config_dir {
-        paths.push(user.join(PLUGINS_TOML));
-    }
-    paths
+    // The search-path logic lives in core; the gateway shares it so discovery stays identical.
+    nemo_relay::plugin::default_plugin_config_paths(cwd, user_config_dir)
 }
 
 // Walks upward from the current directory and returns the nearest project-local gateway config.
@@ -645,15 +771,9 @@ fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-// Walks upward from the current directory and returns the nearest project-local plugin config.
+// The project-walk lives in core; the gateway shares it so discovery stays identical.
 fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
-    for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-relay").join(PLUGINS_TOML);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
+    nemo_relay::plugin::nearest_project_plugin_config(start)
 }
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
@@ -679,15 +799,10 @@ fn user_config_path() -> Option<PathBuf> {
     user_config_dir().map(|dir| dir.join("config.toml"))
 }
 
-/// Resolves the nemo-relay user config DIRECTORY (without trailing filename) using the same XDG
-/// rules as `user_config_path`. Exposed so wizard/doctor code paths that write to or display
-/// the global location stay in sync with the loader — without this, hard-coded
-/// `$HOME/.config/nemo-relay` references silently ignore `$XDG_CONFIG_HOME`.
+/// Resolves the nemo-relay user config DIRECTORY (without trailing filename). Delegates to core's
+/// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
-    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(base).join("nemo-relay"));
-    }
-    home_dir().map(|home| home.join(".config/nemo-relay"))
+    nemo_relay::plugin::user_config_dir()
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -744,31 +859,12 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let mut merged = toml::Value::Table(toml::map::Map::new());
-    let mut sources = Vec::new();
-    for path in paths {
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path)?;
-            let parsed = raw
-                .parse::<toml::Table>()
-                .map(toml::Value::Table)
-                .map_err(|error| {
-                    CliError::Config(format!(
-                        "invalid plugin TOML in {}: {error}",
-                        path.display()
-                    ))
-                })?;
-            validate_plugin_toml_component_kinds(&path, &parsed)?;
-            merge_plugin_toml(&mut merged, parsed);
-            sources.push(path);
-        }
-    }
-    if sources.is_empty() {
-        return Ok(None);
-    }
-    let value = serde_json::to_value(merged)
-        .map_err(|error| CliError::Config(format!("invalid plugin TOML shape: {error}")))?;
-    Ok(Some(PluginTomlConfig { value, sources }))
+    // Delegate read/parse/merge to the shared core primitive (file precedence unchanged).
+    let resolved = load_plugin_config_files(paths).map_err(|err| match err {
+        PluginError::InvalidConfig(message) => CliError::Config(message),
+        other => CliError::Config(other.to_string()),
+    })?;
+    Ok(resolved.map(|(value, sources)| PluginTomlConfig { value, sources }))
 }
 
 fn apply_plugin_toml_config(
@@ -859,86 +955,6 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
-// Plugin TOML uses normal recursive TOML merging except for the top-level components array. Each
-// component is keyed by `kind`, so project/user plugins.toml files can add distinct plugin kinds or
-// override one plugin kind without restating every other component.
-fn merge_plugin_toml(left: &mut toml::Value, right: toml::Value) {
-    match (left, right) {
-        (toml::Value::Table(left), toml::Value::Table(right)) => {
-            for (key, value) in right {
-                match (key.as_str(), left.get_mut(&key)) {
-                    ("components", Some(existing)) => merge_plugin_components(existing, value),
-                    (_, Some(existing)) => merge_toml(existing, value),
-                    _ => {
-                        left.insert(key, value);
-                    }
-                }
-            }
-        }
-        (left, right) => *left = right,
-    }
-}
-
-fn merge_plugin_components(left: &mut toml::Value, right: toml::Value) {
-    let toml::Value::Array(left_components) = left else {
-        *left = right;
-        return;
-    };
-    let toml::Value::Array(right_components) = right else {
-        *left = right;
-        return;
-    };
-
-    for component in right_components {
-        let Some(kind) = component_kind(&component).map(str::to_owned) else {
-            left_components.push(component);
-            continue;
-        };
-        if let Some(existing) = left_components
-            .iter_mut()
-            .find(|candidate| component_kind(candidate) == Some(kind.as_str()))
-        {
-            merge_toml(existing, component);
-        } else {
-            left_components.push(component);
-        }
-    }
-}
-
-fn component_kind(component: &toml::Value) -> Option<&str> {
-    component
-        .as_table()
-        .and_then(|table| table.get("kind"))
-        .and_then(toml::Value::as_str)
-}
-
-fn validate_plugin_toml_component_kinds(path: &Path, value: &toml::Value) -> Result<(), CliError> {
-    let Some(components) = value.get("components").and_then(toml::Value::as_array) else {
-        return Ok(());
-    };
-    let mut seen = HashSet::new();
-    let mut duplicates = Vec::new();
-    for component in components {
-        let Some(kind) = component_kind(component) else {
-            continue;
-        };
-        if !seen.insert(kind.to_string()) {
-            duplicates.push(kind.to_string());
-        }
-    }
-    duplicates.sort();
-    duplicates.dedup();
-    if duplicates.is_empty() {
-        Ok(())
-    } else {
-        Err(CliError::Config(format!(
-            "duplicate plugin component kind in {}: {}; declare each kind once per plugins.toml",
-            path.display(),
-            duplicates.join(", ")
-        )))
-    }
-}
-
 fn has_config_toml_plugin_config(value: &toml::Value) -> bool {
     value
         .get("plugins")
@@ -977,14 +993,6 @@ fn format_paths(paths: &[PathBuf]) -> String {
 fn parse_json_option(name: &str, value: &str) -> Result<Value, CliError> {
     serde_json::from_str::<Value>(value)
         .map_err(|error| CliError::Config(format!("invalid {name}: {error}")))
-}
-
-// Resolves a cross-platform home directory from environment only. The gateway avoids extra OS
-// lookups here so tests can control install/config locations by setting env variables.
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
 }
 
 /// Reads a non-empty UTF-8 header value as an owned string.

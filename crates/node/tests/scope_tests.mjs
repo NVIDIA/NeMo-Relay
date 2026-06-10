@@ -97,6 +97,24 @@ describe('Scope operations', () => {
       popScope(scope);
     }
   });
+
+  it('popScope merges end metadata over scope metadata', async () => {
+    const events = [];
+    registerSubscriber('node_scope_pop_metadata_sub', (e) => events.push(e));
+    try {
+      const scope = pushScope('pop_metadata_scope', ScopeType.Agent, null, null, null, { a: 1, b: 2, c: 3 });
+      popScope(scope, null, null, { c: 3.5, d: 4 });
+      await flushSubscriberCallbacks();
+
+      const end = events.find(
+        (e) => e.name === 'pop_metadata_scope' && e.kind === 'scope' && e.scope_category === 'end',
+      );
+      assert.ok(end, 'expected scope end event');
+      assert.deepEqual(end.metadata, { a: 1, b: 2, c: 3.5, d: 4 });
+    } finally {
+      deregisterSubscriber('node_scope_pop_metadata_sub');
+    }
+  });
 });
 
 // ===========================================================================
@@ -183,6 +201,27 @@ describe('withScope', () => {
     });
   });
 
+  it('records OK status metadata on successful auto-pop', async () => {
+    const events = [];
+    registerSubscriber('node_with_scope_ok_status_sub', (e) => events.push(e));
+    try {
+      await withScope('with_scope_ok_status', ScopeType.Function, () => ({ ok: true }), null, null, null, {
+        caller: 'node',
+      });
+      await flushSubscriberCallbacks();
+
+      const end = events.find(
+        (e) => e.name === 'with_scope_ok_status' && e.kind === 'scope' && e.scope_category === 'end',
+      );
+      assert.ok(end, 'expected scope end event');
+      assert.equal(end.metadata.caller, 'node');
+      assert.equal(end.metadata['otel.status_code'], 'OK');
+      assert.equal(Object.hasOwn(end.metadata, 'otel.status_description'), false);
+    } finally {
+      deregisterSubscriber('node_with_scope_ok_status_sub');
+    }
+  });
+
   it('pops scope on synchronous throw', async () => {
     const before = getHandle();
     await assert.rejects(
@@ -208,6 +247,30 @@ describe('withScope', () => {
     );
     const after = getHandle();
     assert.equal(after.uuid, before.uuid, 'scope should be popped after rejection');
+  });
+
+  it('records ERROR status metadata on failed auto-pop', async () => {
+    const events = [];
+    registerSubscriber('node_with_scope_error_status_sub', (e) => events.push(e));
+    try {
+      await assert.rejects(
+        () =>
+          withScope('with_scope_error_status', ScopeType.Tool, async () => {
+            throw new Error('node status failure');
+          }),
+        /node status failure/,
+      );
+      await flushSubscriberCallbacks();
+
+      const end = events.find(
+        (e) => e.name === 'with_scope_error_status' && e.kind === 'scope' && e.scope_category === 'end',
+      );
+      assert.ok(end, 'expected scope end event');
+      assert.equal(end.metadata['otel.status_code'], 'ERROR');
+      assert.match(end.metadata['otel.status_description'], /node status failure/);
+    } finally {
+      deregisterSubscriber('node_with_scope_error_status_sub');
+    }
   });
 
   it('surfaces primitive rejection values as unknown error and still pops the scope', async () => {
@@ -270,14 +333,14 @@ describe('Events', () => {
 
 describe('Subscribers', () => {
   it('register and deregister', () => {
-    registerSubscriber('node_sub_1', () => {});
+    registerSubscriber('node_sub_1', () => { });
     const removed = deregisterSubscriber('node_sub_1');
     assert.equal(removed, true);
   });
 
   it('duplicate subscriber fails', () => {
-    registerSubscriber('node_dup_sub', () => {});
-    assert.throws(() => registerSubscriber('node_dup_sub', () => {}));
+    registerSubscriber('node_dup_sub', () => { });
+    assert.throws(() => registerSubscriber('node_dup_sub', () => { }));
     deregisterSubscriber('node_dup_sub');
   });
 

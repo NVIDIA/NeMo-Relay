@@ -777,6 +777,91 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
     assert!(endpoint.details.contains("must be ws or wss"));
 }
 
+#[tokio::test]
+async fn collect_observability_validates_pricing_file_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("pricing.json");
+    std::fs::write(
+        &catalog,
+        serde_json::json!({
+            "version": 1,
+            "entries": [{
+                "provider": "openai",
+                "model_id": "gpt-test",
+                "currency": "USD",
+                "unit": "per_token",
+                "rates": {
+                    "input_per_million": 1.0,
+                    "output_per_million": 2.0
+                },
+                "prompt_cache": {
+                    "read_accounting": "separate"
+                },
+                "pricing_as_of": "2026-06-06",
+                "pricing_source": "test"
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [{
+                "kind": "pricing",
+                "config": {
+                    "sources": [{
+                        "type": "file",
+                        "path": catalog
+                    }]
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let pricing = checks
+        .iter()
+        .find(|check| check.name == "Pricing source")
+        .expect("pricing source check");
+    assert_eq!(pricing.status, Status::Pass);
+    assert!(pricing.details.contains("valid (1 entries)"));
+}
+
+#[tokio::test]
+async fn collect_observability_fails_for_missing_pricing_file_source() {
+    let missing = tempfile::tempdir()
+        .unwrap()
+        .path()
+        .join("missing-pricing.json");
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [{
+                "kind": "pricing",
+                "config": {
+                    "sources": [{
+                        "type": "file",
+                        "path": missing
+                    }]
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let pricing = checks
+        .iter()
+        .find(|check| check.name == "Pricing source")
+        .expect("pricing source check");
+    assert_eq!(pricing.status, Status::Fail);
+    assert!(pricing.details.contains("unreadable"));
+}
+
 #[test]
 fn format_agents_human_lists_supported_and_separates_detected() {
     let agents = vec![

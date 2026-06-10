@@ -98,7 +98,7 @@ unsafe fn nemo_relay_pop_scope(
     handle: *const FfiScopeHandle,
     output_json: *const c_char,
 ) -> NemoRelayStatus {
-    unsafe { api::nemo_relay_pop_scope(handle, output_json, ptr::null()) }
+    unsafe { api::nemo_relay_pop_scope(handle, output_json, ptr::null(), ptr::null()) }
 }
 
 unsafe fn nemo_relay_event(

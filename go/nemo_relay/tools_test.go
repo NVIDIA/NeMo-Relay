@@ -159,6 +159,65 @@ func TestToolCallExecuteWithAttributes(t *testing.T) {
 	}
 }
 
+func TestToolCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
+	metadataByName := map[string]json.RawMessage{}
+	var mu sync.Mutex
+
+	_ = DeregisterSubscriber("go_tool_status_metadata_sub")
+	if err := RegisterSubscriber("go_tool_status_metadata_sub", func(event Event) {
+		if event.Kind() == "scope" && event.Category() == "tool" && event.ScopeCategory() == "end" {
+			mu.Lock()
+			metadataByName[event.Name()] = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf(registerFailed, err)
+	}
+	defer DeregisterSubscriber("go_tool_status_metadata_sub")
+
+	_, err := ToolCallExecute("go_tool_status_ok", json.RawMessage(`{"x":1}`),
+		func(args json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{"ok":true}`), nil
+		},
+		WithToolMetadata(json.RawMessage(`{"caller":"go-tool","otel.status_code":"USER"}`)),
+	)
+	if err != nil {
+		t.Fatalf(toolCallExecuteFailed, err)
+	}
+
+	_, err = ToolCallExecute("go_tool_status_error", json.RawMessage(`{"x":2}`),
+		func(args json.RawMessage) (json.RawMessage, error) {
+			return nil, errors.New("go tool status failure")
+		},
+		WithToolMetadata(json.RawMessage(`{"caller":"go-tool-error"}`)),
+	)
+	if err == nil {
+		t.Fatal("expected tool execution error")
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(toolFlushSubscribersFailed, err)
+	}
+
+	mu.Lock()
+	okMetadata := metadataByName["go_tool_status_ok"]
+	errorMetadata := metadataByName["go_tool_status_error"]
+	mu.Unlock()
+
+	assertJSONFieldString(t, okMetadata, "caller", "go-tool")
+	assertJSONFieldString(t, okMetadata, "otel.status_code", "OK")
+	assertJSONFieldString(t, errorMetadata, "caller", "go-tool-error")
+	assertJSONFieldString(t, errorMetadata, "otel.status_code", "ERROR")
+
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(errorMetadata, &decoded); err != nil {
+		t.Fatalf("unmarshal error metadata failed: %v; raw=%s", err, errorMetadata)
+	}
+	statusMessage, _ := decoded["otel.status_description"].(string)
+	if !strings.Contains(statusMessage, "go tool status failure") {
+		t.Fatalf("expected status message to mention callback error, got %v", decoded["otel.status_description"])
+	}
+}
+
 // ============================================================================
 // Tool guardrails
 // ============================================================================

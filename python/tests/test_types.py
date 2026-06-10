@@ -371,7 +371,7 @@ class TestConcreteEvents:
         assert llm_start.category_profile == {"model_name": "event-model"}
         assert llm_end.uuid == llm_start.uuid
         assert llm_end.data == {"message": "hello"}
-        assert llm_end.metadata == {"llm_meta": True, "llm_end": True}
+        assert llm_end.metadata == {"llm_meta": True, "llm_end": True, "otel.status_code": "OK"}
 
         assert mark.kind == "mark"
         assert mark.parent_uuid == parent.uuid

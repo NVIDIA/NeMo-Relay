@@ -33,6 +33,7 @@ The release pipeline publishes these package surfaces from a tag push:
 | crates.io | `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, `nemo-relay-cli` |
 | PyPI | `nemo-relay` |
 | npm | `nemo-relay-node`, `nemo-relay-openclaw`, `nemo-relay-wasm` |
+| GitHub Releases | CLI binaries and `SHA256SUMS` |
 | Fern | The documentation site |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -159,7 +160,6 @@ The helper updates:
 4. [`integrations/openclaw/package.json`](integrations/openclaw/package.json)
    and the `integrations/openclaw` entry in the root
    [`package-lock.json`](package-lock.json) to the same release version.
-
 Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)
@@ -236,6 +236,8 @@ The release pipeline then:
    - `package-openclaw` packs the npm OpenClaw plugin package.
    - `package-python` builds platform wheels.
    - `package-wasm` packs the npm WebAssembly package.
+   - The CLI release-asset job uploads each platform `nemo-relay` binary and
+     includes those binaries in `SHA256SUMS`.
 4. Publishes packages from the top-level workflow after the reusable packaging
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
@@ -249,6 +251,9 @@ The release pipeline then:
      - Stable tags publish to the npm `latest` dist-tag
      - Prerelease tags such as `0.1.0-rc.1` publish to the npm `next`
        dist-tag so they do not become the default upgrade target
+   - The GitHub Release entry remains a draft until a maintainer publishes it.
+     End-user `nemo-relay install ...` commands require the CLI binary to be
+     installed and available on `PATH`.
 
 The workflow boundary is split intentionally:
 
@@ -275,9 +280,9 @@ NVIDIA Artifactory publication for the same tag:
 npm trusted publishing has its own registry-side constraints:
 
 - Each npm package can only have one trusted publisher configured at a time.
-- Because this repository publishes `nemo-relay-node`, `nemo-relay-openclaw`, and
-  `nemo-relay-wasm`, configure trusted publishers for all three packages before
-  pushing a release tag.
+- Because this repository publishes `nemo-relay-node`, `nemo-relay-openclaw`,
+  and `nemo-relay-wasm`, configure trusted publishers for all three packages
+  before pushing a release tag.
 - npm trusted publishing currently supports GitHub-hosted runners, not
   self-hosted runners.
 
@@ -292,6 +297,8 @@ After the tag pipeline succeeds, publish or finalize the GitHub Release entry
 for that tag.
 
 - Keep complete release notes in GitHub Releases.
+- Publish the draft release before announcing `nemo-relay install` commands for
+  the new version.
 - Do not copy those notes into `CHANGELOG.md` or duplicate the full release
   history in the docs site.
 - If you use GitHub-generated notes, review them before publishing. The

@@ -139,22 +139,26 @@ pub unsafe extern "C" fn nemo_relay_push_scope(
 /// - `handle`: The current top-of-stack scope handle to pop.
 /// - `output_json`: Optional null-terminated JSON string exported as semantic
 ///   scope output on the end event, or null.
+/// - `metadata_json`: Optional null-terminated JSON metadata string recorded
+///   on the end event, or null. Incoming metadata is merged over metadata
+///   stored on the scope handle.
 /// - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the end
 ///   event, or null to use the runtime default end timestamp.
 ///
 /// # Errors
-/// Returns `InvalidJson` for invalid output JSON, `InvalidArg` when
+/// Returns `InvalidJson` for invalid output or metadata JSON, `InvalidArg` when
 /// `timestamp_unix_micros` is outside the supported timestamp range, or an
 /// error status when `handle` is not the current top scope.
 ///
 /// # Safety
-/// `handle` must be a valid, non-null `FfiScopeHandle` pointer. `output_json` and
-/// `timestamp_unix_micros` may be null; when non-null, optional pointers must
-/// be valid for reads for the duration of the call.
+/// `handle` must be a valid, non-null `FfiScopeHandle` pointer. Optional
+/// pointer arguments may be null; when non-null, they must be valid for reads
+/// for the duration of the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_pop_scope(
     handle: *const FfiScopeHandle,
     output_json: *const c_char,
+    metadata_json: *const c_char,
     timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus {
     clear_last_error();
@@ -166,6 +170,10 @@ pub unsafe extern "C" fn nemo_relay_pop_scope(
         Some(v) => v,
         None => return NemoRelayStatus::InvalidJson,
     };
+    let metadata = match c_str_to_opt_json(metadata_json) {
+        Some(v) => v,
+        None => return NemoRelayStatus::InvalidJson,
+    };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
         None => return NemoRelayStatus::InvalidArg,
@@ -174,6 +182,7 @@ pub unsafe extern "C" fn nemo_relay_pop_scope(
         core_scope_api::PopScopeParams::builder()
             .handle_uuid(&unsafe { &*handle }.0.uuid)
             .output_opt(output)
+            .metadata_opt(metadata)
             .timestamp_opt(timestamp)
             .build(),
     ) {

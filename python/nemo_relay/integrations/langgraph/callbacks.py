@@ -17,26 +17,10 @@ from nemo_relay.integrations.langchain.callbacks import NemoRelayCallbackHandler
 _logger = logging.getLogger(__name__)
 
 
-def _json_safe(value: Any) -> nemo_relay.Json:
-    """Return a conservative JSON-compatible representation for mark payloads."""
-    try:
-        value = _prepare_lc_payloads(value)
-    except Exception:
-        pass
-
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list | tuple | set):
-        return [_json_safe(item) for item in value]
-    return repr(value)
-
-
 def _interrupt_to_payload(interrupt: Any) -> dict[str, nemo_relay.Json]:
     return {
-        "id": _json_safe(getattr(interrupt, "id", None)),
-        "value": _json_safe(getattr(interrupt, "value", interrupt)),
+        "id": _prepare_lc_payloads(getattr(interrupt, "id", None)),
+        "value": _prepare_lc_payloads(getattr(interrupt, "value", interrupt)),
     }
 
 
@@ -81,7 +65,7 @@ class NemoRelayCallbackHandler(LangChainNemoRelayCallbackHandler, GraphCallbackH
         try:
             nemo_relay.scope.event(
                 name,
-                data=_json_safe(data),
+                data=_prepare_lc_payloads(data),
                 metadata={"integration": "langgraph"},
             )
         except Exception:

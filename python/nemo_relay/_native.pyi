@@ -492,6 +492,37 @@ class AnnotatedLLMResponse:
         provider-specific fields consistently.
     """
 
+    def __init__(
+        self,
+        id: Optional[str] = None,
+        model: Optional[str] = None,
+        message: Optional[_JsonValue] = None,
+        tool_calls: Optional[Sequence[Mapping[str, _JsonValue]]] = None,
+        finish_reason: Optional[str | Mapping[str, _JsonValue]] = None,
+        usage: Optional[Mapping[str, _JsonValue]] = None,
+        api_specific: Optional[Mapping[str, _JsonValue]] = None,
+        extra: Optional[Mapping[str, _JsonValue]] = None,
+    ) -> None:
+        """Create a normalized LLM response view.
+
+        Args:
+            id: Optional provider response identifier.
+            model: Optional model that served the response.
+            message: Optional normalized assistant response content.
+            tool_calls: Optional normalized response tool-call payloads.
+            finish_reason: Optional normalized finish reason.
+            usage: Optional normalized usage accounting.
+            api_specific: Optional API-specific response fields.
+            extra: Optional additional response fields.
+
+        Returns:
+            ``None``.
+
+        Exceptional flow:
+            Raises conversion errors when JSON-like inputs cannot be converted
+            to the native normalized representation.
+        """
+        ...
     @property
     def id(self) -> Optional[str]:
         """Return the provider response identifier, if present."""
@@ -1184,6 +1215,7 @@ def push_scope(
 def pop_scope(
     handle: ScopeHandle,
     output: Optional[_Json] = None,
+    metadata: Optional[_Json] = None,
     timestamp: datetime | None = None,
 ) -> None:
     """Pop a scope and emit its end event.
@@ -1191,6 +1223,7 @@ def pop_scope(
     Args:
         handle: Handle returned by ``push_scope``.
         output: Optional semantic output payload recorded on the end event.
+        metadata: Optional JSON metadata recorded on the end event.
         timestamp: Optional timezone-aware datetime recorded on the end event.
             When omitted, the runtime default end timestamp is used.
 
@@ -1199,8 +1232,8 @@ def pop_scope(
 
     Exceptional flow:
         Raises native runtime errors if ``handle`` is not the current scope or
-        if ``output`` cannot be converted to JSON-compatible data. Raises for
-        invalid timestamp types or naive datetimes.
+        if ``output`` or ``metadata`` cannot be converted to JSON-compatible data.
+        Raises for invalid timestamp types or naive datetimes.
     """
     ...
 

@@ -662,6 +662,41 @@ func TestScopeWithDataAndMetadata(t *testing.T) {
 	}
 }
 
+func TestPopScopeWithEndMetadataMergesWithScopeMetadata(t *testing.T) {
+	var capturedMeta json.RawMessage
+	var mu sync.Mutex
+
+	_ = DeregisterSubscriber("go_scope_end_metadata_sub")
+	if err := RegisterSubscriber("go_scope_end_metadata_sub", func(event Event) {
+		if event.Kind() == "scope" && event.ScopeCategory() == "end" && event.Name() == "end_metadata_scope" {
+			mu.Lock()
+			capturedMeta = append(json.RawMessage(nil), event.Metadata()...)
+			mu.Unlock()
+		}
+	}); err != nil {
+		t.Fatalf(registerSubscriberFailed, err)
+	}
+	defer DeregisterSubscriber("go_scope_end_metadata_sub")
+
+	handle, err := PushScope("end_metadata_scope", ScopeTypeAgent,
+		WithMetadata(json.RawMessage(`{"a":1,"b":2,"c":3}`)),
+	)
+	if err != nil {
+		t.Fatalf(pushScopeFailed, err)
+	}
+	if err := PopScope(handle, WithScopeEndMetadata(json.RawMessage(`{"c":3.5,"d":4}`))); err != nil {
+		t.Fatalf("PopScope failed: %v", err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(flushSubscribersFailed, err)
+	}
+
+	assertJSONFieldNumber(t, capturedMeta, "a", 1)
+	assertJSONFieldNumber(t, capturedMeta, "b", 2)
+	assertJSONFieldNumber(t, capturedMeta, "c", 3.5)
+	assertJSONFieldNumber(t, capturedMeta, "d", 4)
+}
+
 func TestScopeEventWithDataAndMetadata(t *testing.T) {
 	var capturedData, capturedMeta json.RawMessage
 	var mu sync.Mutex

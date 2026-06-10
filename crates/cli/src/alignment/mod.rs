@@ -569,6 +569,20 @@ pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
         .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
 }
 
+// Builds a non-null turn input when a direct gateway request arrives before the prompt hook. This
+// is intentionally limited to Claude-owned Anthropic Messages requests because Claude installed
+// mode is the path where the provider request can race the `UserPromptSubmit` hook.
+pub(crate) fn gateway_turn_input(
+    agent_kind: AgentKind,
+    provider: &str,
+    request: &LlmRequest,
+) -> Option<Value> {
+    if agent_kind != AgentKind::ClaudeCode || provider != "anthropic.messages" {
+        return None;
+    }
+    request_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+}
+
 // Detects tool results that imply a subagent completed. Claude Code reports this through the
 // `Agent` tool today; keeping the check here avoids leaking that tool shape into session teardown.
 pub(crate) fn completed_subagent_from_tool(event: &ToolEvent) -> Option<String> {

@@ -29,6 +29,7 @@ const {
   deregisterToolExecutionIntercept,
   registerSubscriber,
   deregisterSubscriber,
+  flushSubscribers,
   ScopeType,
 } = lib;
 
@@ -36,6 +37,21 @@ const TOOL_ATTR_LOCAL = 0b01;
 
 function rejectWithPrimitive(value) {
   return Promise.reject(value);
+}
+
+async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
+  flushSubscribers();
+  // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
+  // subscriber callbacks are queued onto Node's event loop through N-API
+  // ThreadsafeFunction. Yield event-loop turns until the observed JS-side
+  // callback state is ready, with a timeout to avoid hanging the test forever.
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('timed out waiting for subscriber callbacks');
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 // ===========================================================================
@@ -235,6 +251,86 @@ describe('Tool execute', () => {
     assert.deepEqual(result, {
       ok: true,
     });
+  });
+
+  it('execute records OTEL status metadata on end events', async () => {
+    const events = [];
+    registerSubscriber('node_tool_status_metadata_sub', (e) => events.push(e));
+    try {
+      const result = await toolCallExecute(
+        'exec_status_ok_tool',
+        {
+          x: 1,
+        },
+        (args) => ({
+          result: args.x + 1,
+        }),
+        null,
+        null,
+        null,
+        {
+          caller: 'node-tool',
+        },
+      );
+      assert.deepEqual(result, {
+        result: 2,
+      });
+
+      await assert.rejects(
+        () =>
+          toolCallExecuteAsync(
+            'exec_status_error_tool',
+            {},
+            async () => {
+              throw new Error('tool status failure');
+            },
+            null,
+            null,
+            null,
+            {
+              caller: 'node-tool-error',
+            },
+          ),
+        /tool status failure/,
+      );
+
+      await waitForSubscriberCallbacks(() =>
+        events.some(
+          (e) =>
+            e.name === 'exec_status_ok_tool' &&
+            e.kind === 'scope' &&
+            e.category === 'tool' &&
+            e.scope_category === 'end',
+        ) &&
+        events.some(
+          (e) =>
+            e.name === 'exec_status_error_tool' &&
+            e.kind === 'scope' &&
+            e.category === 'tool' &&
+            e.scope_category === 'end',
+        ),
+      );
+      const okEnd = events.find(
+        (e) =>
+          e.name === 'exec_status_ok_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
+      );
+      const errorEnd = events.find(
+        (e) =>
+          e.name === 'exec_status_error_tool' &&
+          e.kind === 'scope' &&
+          e.category === 'tool' &&
+          e.scope_category === 'end',
+      );
+      assert.ok(okEnd, 'expected successful tool end event');
+      assert.equal(okEnd.metadata.caller, 'node-tool');
+      assert.equal(okEnd.metadata['otel.status_code'], 'OK');
+      assert.ok(errorEnd, 'expected failed tool end event');
+      assert.equal(errorEnd.metadata.caller, 'node-tool-error');
+      assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
+      assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
+    } finally {
+      deregisterSubscriber('node_tool_status_metadata_sub');
+    }
   });
 
   it('async execute awaits Promise-returning callbacks', async () => {
