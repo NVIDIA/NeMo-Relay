@@ -766,7 +766,7 @@ fn validate_policy_fields(
         policy,
         plugin_config,
         "policy",
-        &["unknown_field", "unsupported_value"],
+        &["unknown_component", "unknown_field", "unsupported_value"],
     );
 }
 

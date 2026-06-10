@@ -135,6 +135,33 @@ fn validate_rejects_config_with_no_enabled_surfaces() {
 }
 
 #[test]
+fn validate_allows_documented_policy_unknown_component_field() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "tool_input": true,
+        "tool_output": false,
+        "input": false,
+        "output": false,
+        "builtin": {
+            "action": "remove"
+        },
+        "policy": {
+            "unknown_component": "warn",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
+        }
+    })));
+
+    assert!(!report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("policy.unknown_component")
+            && diag.code == "pii_redaction.unknown_field"
+    }));
+}
+
+#[test]
 fn validate_rejects_local_section_outside_local_mode() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
