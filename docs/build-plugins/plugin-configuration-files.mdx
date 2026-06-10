@@ -70,10 +70,10 @@ The gateway reads only files named `plugins.toml`.
 
 ## Discovery
 
-The gateway resolves plugin configuration using two kinds of input: file/CLI
+The gateway resolves plugin configuration using two kinds of input: file and CLI
 sources and an optional code-driven layer.
 
-File/CLI configuration comes from one of three mutually exclusive source classes:
+File and CLI configuration comes from one of three mutually exclusive source classes:
 
 | Source | Use case |
 |---|---|
@@ -81,7 +81,7 @@ File/CLI configuration comes from one of three mutually exclusive source classes
 | `[plugins].config` in `config.toml` | Inline gateway config for small or generated setups. |
 | `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation. |
 
-Use only one file/CLI source class for a given gateway run. The gateway fails
+Use only one file and CLI source class for a given gateway run. The gateway fails
 clearly if file-based plugin config and `--plugin-config` are both present, or if
 `plugins.toml` and `[plugins].config` are both present.
 
@@ -191,7 +191,7 @@ across files. A higher-precedence component with the same `kind` merges into the
 lower-precedence component. A component with a different `kind` is added to the
 effective configuration.
 
-The `pricing` component has one additional merge rule: when both lower- and
+The `pricing` component has one additional merge rule: when both lower and
 higher-precedence layers define `components.config.sources`, the
 higher-precedence sources are placed before lower-precedence sources instead of
 replacing them. This lets a user or project file override one model while still
@@ -206,22 +206,31 @@ Tables inside component config merge recursively.
 
 ## Configuration Layering
 
-Plugin settings can come from two places, and they combine: the `plugins.toml`
-files are read and merged into a starting point, then settings passed in code to
-`plugin.initialize(...)` are applied on top and win on conflicts.
+Plugin settings can come from files and the code. The files are the 
+configuration base layer and the code sits on top of it. If there is a 
+conflict the code will always take precedence over the files. The layering 
+process is as follows:
 
-Files and code differ in what happens to a setting you leave out. In a **file**,
-an omitted setting is simply absent, so a value from a lower-priority file shows
-through. In **code**, the config is a structured object whose fields always hold
-a value — their defaults if you didn't set one — so `version`, `policy`, and a
-declared component's `enabled` always take the code value, even when it's just
-the default. The components you list and the keys inside each component's
-`config` still merge with the files, so anything you don't set in code is
-inherited.
+1. Discover and merge the `plugins.toml` files from lowest to highest precedence
+   (system → project → user), using the file-vs-file rules above.
+2. Layer the config object you pass to `initialize` over that merged base. Any
+   setting it specifies overrides the file value, and the result is the
+   effective config that gets validated and activated.
 
-If the program runs without a filesystem — for example a WebAssembly (wasm)
-build — there are no files to read, so the starting point is empty and only the
-code settings apply.
+
+Files and code differ only in how they treat a setting you **omit**:
+| You omit | In a file | In code |
+|---|---|---|
+| `version`, `policy`, or the `enabled` flag of a component you declare | Inherited from a lower-precedence file | **Always taken from code** — its default if you did not set it |
+| A whole component kind, or a key inside a component's `config` | Inherited from a lower-precedence file | Inherited from the file layer |
+
+In other words, a file's gaps are filled by the layers beneath it, but code's
+typed fields are never gaps — they always carry a value, so they always win.
+Only the open-ended parts of your code config (which components you include, and
+the keys within each component's `config`) merge with the files.
+
+Without a filesystem — for example, a WebAssembly (wasm) build — no files are
+read, so the base is empty and only your `initialize` config applies.
 
 ## Explicit Defaults And Overrides
 
