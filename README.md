@@ -164,7 +164,7 @@ Below is our support matrix for agent harnesses.
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. |
 | Codex | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. Missing some necessary hooks for full feature parity. |
-| Hermes Agent | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Hook and gateway observability are available. Managed execution depends on a compatible Hermes build and NeMo Relay runtime. |
+| Hermes Agent | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. |
 | Cursor | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. Not feature-rich, missing hooks under `cursor-agent` |
 
 ## Third-Party Integrations
