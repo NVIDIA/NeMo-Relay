@@ -1377,6 +1377,32 @@ fn validate_config_accepts_local_tool_only_nemo_guardrails_component() {
 }
 
 #[test]
+fn validate_config_accepts_pii_redaction_component() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: PII_REDACTION_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "mode": "builtin",
+                "codec": "openai_chat",
+                "input": true,
+                "output": true,
+                "builtin": {
+                    "action": "redact",
+                    "detector": "email"
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
 fn validate_config_rejects_local_nemo_guardrails_request_defaults() {
     let config = PluginConfig {
         components: vec![PluginComponentSpec {

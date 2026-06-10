@@ -694,6 +694,48 @@ async fn collect_observability_registers_adaptive_before_validation() {
 }
 
 #[tokio::test]
+async fn collect_observability_registers_pii_redaction_before_validation() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": { "version": 1 }
+                },
+                {
+                    "kind": "pii_redaction",
+                    "enabled": false,
+                    "config": {
+                        "version": 1,
+                        "mode": "builtin",
+                        "policy": {
+                            "unknown_component": "warn",
+                            "unknown_field": "warn",
+                            "unsupported_value": "error"
+                        },
+                        "builtin": {
+                            "action": "remove"
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    assert!(
+        !checks.iter().any(|check| check
+            .details
+            .contains("plugin component kind 'pii_redaction' is unsupported")),
+        "doctor should register pii_redaction before plugin validation: {checks:?}"
+    );
+}
+
+#[tokio::test]
 async fn collect_observability_probes_atof_streaming_endpoint() {
     let (url, body, server_thread) = start_doctor_http_capture_server();
     let gateway = GatewayConfig {
