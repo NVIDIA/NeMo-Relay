@@ -109,6 +109,8 @@ dependencies:
   - 'uv.lock'
 
 docs:
+  - '.agents/plugins/marketplace.json'
+  - '.claude-plugin/marketplace.json'
   - 'CONTRIBUTING.md'
   - 'README.md'
   - 'docs/**'
@@ -129,6 +131,8 @@ docs:
   - 'scripts/docs/**'
 
 rust:
+  - '.agents/plugins/marketplace.json'
+  - '.claude-plugin/marketplace.json'
   - 'Cargo.lock'
   - 'Cargo.toml'
   - 'crates/**/Cargo.toml'

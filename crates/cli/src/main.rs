@@ -14,6 +14,8 @@ mod gateway;
 mod installer;
 mod launcher;
 mod model;
+mod plugin_install;
+mod plugin_shim;
 mod plugins;
 mod pricing;
 mod server;
@@ -55,6 +57,9 @@ async fn run() -> Result<ExitCode, error::CliError> {
             installer::hook_forward(command).await?;
             Ok(ExitCode::SUCCESS)
         }
+        Some(Command::PluginShim(command)) => plugin_shim::run(command),
+        Some(Command::Install(command)) => plugin_install::install(command),
+        Some(Command::Uninstall(command)) => plugin_install::uninstall(command),
         Some(Command::Run(command)) => launcher::run(command, Some(&cli.server)).await,
         Some(Command::Claude(command)) => {
             launcher::easy_path(CodingAgent::ClaudeCode, command, Some(&cli.server)).await
@@ -91,7 +96,13 @@ async fn run() -> Result<ExitCode, error::CliError> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Some(Command::Doctor(command)) => doctor::run_doctor(command.agent, command.json).await,
+        Some(Command::Doctor(command)) => {
+            if let Some(plugin) = command.plugin {
+                plugin_install::doctor(plugin, command.install_dir, command.json)
+            } else {
+                doctor::run_doctor(command.agent, command.json).await
+            }
+        }
         Some(Command::Agents(command)) => doctor::run_agents(command.json).await,
         Some(Command::Completions(command)) => {
             if command.install {

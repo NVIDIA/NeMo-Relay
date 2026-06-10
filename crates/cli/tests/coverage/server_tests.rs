@@ -35,6 +35,33 @@ const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
 static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
+struct EnvVarGuard {
+    key: &'static str,
+    old: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let old = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, old }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(old) = self.old.take() {
+                std::env::set_var(self.key, old);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
 struct ToolGuardrailCleanup(&'static str);
 
 impl Drop for ToolGuardrailCleanup {
@@ -181,6 +208,112 @@ async fn healthz_returns_ok() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({ "status": "ok" }));
+}
+
+#[tokio::test]
+async fn serve_listener_honors_plugin_idle_timeout_env() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+
+    wait_for_gateway(&url).await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop the sidecar")
+        .unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn serve_listener_waits_for_active_turn_before_plugin_idle_shutdown() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+    let client = test_http_client();
+
+    wait_for_gateway(&url).await;
+    let response = client
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "plugin-idle-open-session",
+            "hook_event_name": "sessionStart"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let response = client
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "plugin-idle-open-session",
+            "hook_event_name": "UserPromptSubmit"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert!(
+        !handle.is_finished(),
+        "plugin sidecar exited before the active turn ended"
+    );
+
+    let response = client
+        .post(format!("{url}/hooks/codex"))
+        .json(&json!({
+            "session_id": "plugin-idle-open-session",
+            "hook_event_name": "Stop"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop after Stop closes the turn")
+        .unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
+async fn serve_listener_exits_after_codex_stop_without_session_end() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+    let client = test_http_client();
+
+    wait_for_gateway(&url).await;
+    for hook_event_name in ["sessionStart", "Stop"] {
+        let response = client
+            .post(format!("{url}/hooks/codex"))
+            .json(&json!({
+                "session_id": "plugin-idle-metadata-only-session",
+                "hook_event_name": hook_event_name
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop without a Codex SessionEnd")
+        .unwrap();
+    result.unwrap();
 }
 
 #[tokio::test]
@@ -1863,6 +1996,174 @@ async fn gateway_forwards_claude_startup_probe_without_llm_observability() {
     assert!(
         captured_llm_starts.lock().unwrap().is_empty(),
         "Claude startup probe must not emit a managed LLM span"
+    );
+}
+
+#[tokio::test]
+async fn gateway_suppresses_claude_startup_probe_without_native_session_header() {
+    let subscriber_name = "server-claude-startup-probe-no-native-header-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_events = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let session_id = event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str);
+            let is_probe_llm = event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "anthropic.messages"
+                && event
+                    .input()
+                    .and_then(|input| input.get("model"))
+                    .and_then(Value::as_str)
+                    == Some("claude-opus-4-8[1m]");
+            let is_probe_turn = event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "claude-code-turn"
+                && session_id == Some("claude-probe-no-native-header");
+            if is_probe_llm || is_probe_turn {
+                captured.lock().unwrap().push(json!({
+                    "name": event.name(),
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
+    let upstream = spawn_anthropic_upstream().await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "sk-ant-test")
+                .header("x-nemo-relay-session-id", "claude-probe-no-native-header")
+                .body(Body::from(
+                    json!({
+                        "model": "claude-opus-4-8[1m]",
+                        "max_tokens": 1,
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "test"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    flush_subscribers().unwrap();
+    assert!(
+        captured_events.lock().unwrap().is_empty(),
+        "no-native-header Claude startup probe must not emit managed LLM or null-input turn events"
+    );
+}
+
+#[tokio::test]
+async fn direct_claude_gateway_request_before_prompt_hook_uses_request_turn_input() {
+    let subscriber_name = "server-claude-direct-gateway-turn-input-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_turn_starts = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let captured = captured_turn_starts.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "claude-code-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("claude-direct-installed")
+            {
+                captured.lock().unwrap().push(json!({
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
+    let upstream = spawn_anthropic_upstream().await;
+    let mut config = test_config();
+    config.anthropic_base_url = upstream.url();
+    let app = router(config);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("content-type", "application/json")
+                .header("x-api-key", "sk-ant-test")
+                .header("x-claude-code-session-id", "claude-direct-installed")
+                .body(Body::from(
+                    json!({
+                        "model": "claude-sonnet-4-5",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "inspect direct installed mode"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/claude-code")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "claude-direct-installed",
+                        "hook_event_name": "UserPromptSubmit",
+                        "prompt": "inspect direct installed mode"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    flush_subscribers().unwrap();
+    let starts = captured_turn_starts.lock().unwrap().clone();
+    assert_eq!(
+        starts.len(),
+        1,
+        "later UserPromptSubmit must not open a duplicate Claude turn: {starts:#?}"
+    );
+    assert_eq!(
+        starts[0]["input"],
+        json!({ "prompt": "inspect direct installed mode" })
+    );
+    assert_eq!(
+        starts[0]["metadata"]["turn_source"],
+        json!("gateway_request")
     );
 }
 

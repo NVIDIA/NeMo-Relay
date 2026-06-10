@@ -1,7 +1,7 @@
 ---
 title: "Claude Code"
 description: ""
-position: 3
+position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -39,6 +39,30 @@ nemo-relay run \
   --print \
   -- claude
 ```
+
+## Persistent Plugin Install
+
+Use persistent plugin installation when Claude Code should load NeMo Relay from
+its normal plugin marketplace instead of through `nemo-relay claude`:
+
+```bash
+nemo-relay install claude-code
+```
+
+The installer creates a local marketplace, installs
+`nemo-relay-plugin@nemo-relay-local` at user scope, and enables Claude Code
+provider routing through the local NeMo Relay sidecar. It uses the existing
+`nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
+
+Check or remove the installed plugin with:
+
+```bash
+nemo-relay doctor --plugin claude-code
+nemo-relay uninstall claude-code
+```
+
+See [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
+directories, rollback behavior, and source marketplace notes.
 
 ## Shared Config
 

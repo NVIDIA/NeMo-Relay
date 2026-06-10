@@ -83,7 +83,7 @@ fn startup_probe_matches_only_claude_code_preflight_shape() {
         headers: Default::default(),
         content: request.content.clone(),
     };
-    assert!(!is_startup_probe(
+    assert!(is_startup_probe(
         "anthropic.messages",
         Some("claude-sonnet-4-5"),
         &missing_claude_header

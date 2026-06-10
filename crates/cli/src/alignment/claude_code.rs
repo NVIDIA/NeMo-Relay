@@ -30,17 +30,13 @@ pub(crate) fn session_id_from_headers(headers: &HeaderMap) -> Option<String> {
 
 // Claude Code can issue a tiny pre-user startup probe through the Anthropic gateway before the
 // first UserPromptSubmit hook. Treating it as normal LLM work pollutes traces with an unparented
-// `user: test` span, so alignment classifies only this native-header plus exact-body harness probe
-// for suppression.
+// `user: test` span, so alignment classifies only this exact-body harness probe for suppression.
 pub(crate) fn is_startup_probe(
     provider: &str,
     model_name: Option<&str>,
     request: &LlmRequest,
 ) -> bool {
     if provider != "anthropic.messages" {
-        return false;
-    }
-    if !request.headers.contains_key("x-claude-code-session-id") {
         return false;
     }
     let model = model_name

@@ -93,6 +93,32 @@ shell hooks still need to be installed or otherwise approved in Hermes config.
 Use `--dry-run --print` to inspect the generated hook config, gateway
 environment, gateway URL, and final command without launching the agent.
 
+## Persistent Host Plugins
+
+Use persistent plugin installation when Claude Code or Codex should load NeMo
+Relay through the host's plugin system instead of through a wrapper command:
+
+```bash
+nemo-relay install claude-code
+nemo-relay install codex
+nemo-relay install all
+```
+
+Plugin installation writes a local marketplace, installs the generated
+`nemo-relay-plugin`, and configures the host-specific hook and provider routing
+needed for full observability. It still relies on the same local `nemo-relay`
+binary on `PATH`.
+
+Use plugin doctor and uninstall for the installed host state:
+
+```bash
+nemo-relay doctor --plugin codex
+nemo-relay uninstall codex
+```
+
+See [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
+directories, host-specific behavior, and Codex lazy sidecar constraints.
+
 ## Shared Configuration
 
 Shared TOML config is optional. The gateway loads defaults, then system config,
@@ -321,6 +347,10 @@ the gateway URL comes from `NEMO_RELAY_GATEWAY_URL` injected on every run;
 outside the wrapper (Hermes standalone, IDE-launched Claude/Codex) the hook
 command falls back to its embedded `--gateway-url`.
 
+Hooks installed by Claude Code and Codex plugins use the plugin shim path
+managed by `nemo-relay install`. That path starts or reuses the local plugin
+sidecar before forwarding the hook payload.
+
 `hook-forward` reads the canonical hook payload from standard input, sends it
 to the matching endpoint, and prints the endpoint response. It fails open by
 default so observability outages do not block the coding agent. Add
@@ -340,6 +370,7 @@ application-mode caveats.
 
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
+- [Plugin Installation](/nemo-relay-cli/plugin-installation)
 - [Cursor](/nemo-relay-cli/cursor)
 - [Hermes Agent](/nemo-relay-cli/hermes)
 
