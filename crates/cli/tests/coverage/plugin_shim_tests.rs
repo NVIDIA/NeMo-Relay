@@ -789,6 +789,55 @@ fn claude_restore_with_backup_preserves_user_changed_provider_url() {
 }
 
 #[test]
+fn claude_reinstall_refreshes_backup_after_user_owned_restore() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        serde_json::to_vec_pretty(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.anthropic.com"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    fs::write(
+        &settings,
+        serde_json::to_vec_pretty(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://custom.example"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    assert!(backup_path(&settings).exists());
+
+    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    let refreshed_backup: Value =
+        serde_json::from_str(&fs::read_to_string(backup_path(&settings)).unwrap()).unwrap();
+    assert_eq!(
+        json_env_string(&refreshed_backup, "ANTHROPIC_BASE_URL"),
+        Some("https://custom.example")
+    );
+
+    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+
+    let updated: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(
+        json_env_string(&updated, "ANTHROPIC_BASE_URL"),
+        Some("https://custom.example")
+    );
+    assert!(!backup_path(&settings).exists());
+}
+
+#[test]
 fn claude_reinstall_uses_fresh_backup_after_prior_restore() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());

@@ -27,8 +27,11 @@ pub(super) fn claude_provider(
                 return Err(format!("{} has a non-object env field", path.display()));
             }
             let backup_snapshot = snapshot_optional_file(&backup_path(&path))?;
-            if json_env_string(&settings, "ANTHROPIC_BASE_URL") != Some(gateway_url) {
-                backup_claude_settings(&path)?;
+            let managed_provider =
+                json_env_string(&settings, "ANTHROPIC_BASE_URL") == Some(gateway_url);
+            if !managed_provider && let Err(error) = backup_claude_settings(&path, true) {
+                restore_file_snapshot(&backup_snapshot)?;
+                return Err(error);
             }
             let env = settings
                 .as_object_mut()
@@ -135,12 +138,20 @@ pub(super) fn restore_json_env_value(
     Ok(())
 }
 
-pub(super) fn backup_claude_settings(path: &Path) -> Result<(), String> {
+pub(super) fn backup_claude_settings(path: &Path, replace_existing: bool) -> Result<(), String> {
     let backup_file = backup_path(path);
-    if backup_file.exists() {
+    if backup_file.exists() && !replace_existing {
         return Ok(());
     }
     if path.exists() {
+        if replace_existing && backup_file.exists() {
+            fs::remove_file(&backup_file).map_err(|error| {
+                format!(
+                    "failed to remove stale backup {}: {error}",
+                    backup_file.display()
+                )
+            })?;
+        }
         backup(path)
     } else {
         if let Some(parent) = backup_file.parent() {

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use tempfile::tempdir;
 
+use super::host::CommandOutput;
 use super::*;
 
 #[derive(Default)]
@@ -15,6 +16,8 @@ struct MockRunner {
     executables: HashMap<String, PathBuf>,
     commands: RefCell<Vec<String>>,
     quiet_commands: RefCell<Vec<String>>,
+    capture_commands: RefCell<Vec<String>>,
+    capture_outputs: HashMap<String, CommandOutput>,
     failing_suffix: Option<String>,
     failing_suffixes: Vec<String>,
     failing_quiet_suffix: Option<String>,
@@ -26,12 +29,22 @@ impl MockRunner {
         self
     }
 
+    fn with_capture_output(mut self, command: &str, stdout: impl Into<String>) -> Self {
+        self.capture_outputs
+            .insert(command.into(), CommandOutput::success(stdout.into()));
+        self
+    }
+
     fn commands(&self) -> Vec<String> {
         self.commands.borrow().clone()
     }
 
     fn quiet_commands(&self) -> Vec<String> {
         self.quiet_commands.borrow().clone()
+    }
+
+    fn capture_commands(&self) -> Vec<String> {
+        self.capture_commands.borrow().clone()
     }
 }
 
@@ -81,6 +94,23 @@ impl CommandRunner for MockRunner {
                 0
             },
         )
+    }
+
+    fn run_capture(&self, program: &Path, args: &[String]) -> Result<CommandOutput, String> {
+        let rendered = format!(
+            "{} {}",
+            program.display(),
+            args.iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        self.capture_commands.borrow_mut().push(rendered.clone());
+        Ok(self
+            .capture_outputs
+            .get(&rendered)
+            .cloned()
+            .unwrap_or_else(|| CommandOutput::success(String::new())))
     }
 }
 
@@ -766,7 +796,20 @@ fn doctor_json_uses_quiet_plugin_report() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()
         .with_executable("nemo-relay", "/bin/nemo-relay")
-        .with_executable("codex", "/bin/codex");
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list --json",
+            json!({
+                "installed": [
+                    { "pluginId": "nemo-relay-plugin@nemo-relay-local" }
+                ]
+            })
+            .to_string(),
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            "MARKETPLACE        ROOT\nnemo-relay-local  /tmp/nemo-relay-local\n",
+        );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
     write_installed_state(PluginHost::Codex, dir.path());
@@ -779,6 +822,105 @@ fn doctor_json_uses_quiet_plugin_report() {
         vec![format!("doctor-json codex {DEFAULT_GATEWAY_URL}")]
     );
     assert_eq!(report["host"], json!("codex"));
+    assert_eq!(report["ok"], json!(true));
+    assert_eq!(report["host_registration"]["ok"], json!(true));
+    assert_eq!(
+        runner.capture_commands(),
+        vec![
+            "/bin/codex plugin list --json",
+            "/bin/codex plugin marketplace list"
+        ]
+    );
+}
+
+#[test]
+fn doctor_validates_claude_host_registration_before_setup_doctor() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output(
+            "/bin/claude plugin list --json",
+            json!([
+                { "id": "nemo-relay-plugin@nemo-relay-local" }
+            ])
+            .to_string(),
+        )
+        .with_capture_output(
+            "/bin/claude plugin marketplace list --json",
+            json!([
+                { "name": "nemo-relay-local" }
+            ])
+            .to_string(),
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+
+    doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+
+    assert_eq!(
+        setup_runner.calls(),
+        vec![format!("doctor claude-code {DEFAULT_GATEWAY_URL}")]
+    );
+    assert_eq!(
+        runner.capture_commands(),
+        vec![
+            "/bin/claude plugin list --json",
+            "/bin/claude plugin marketplace list --json"
+        ]
+    );
+}
+
+#[test]
+fn doctor_fails_when_claude_host_plugin_is_missing() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output("/bin/claude plugin list --json", json!([]).to_string())
+        .with_capture_output(
+            "/bin/claude plugin marketplace list --json",
+            json!([
+                { "name": "nemo-relay-local" }
+            ])
+            .to_string(),
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+
+    let error = doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("nemo-relay-plugin@nemo-relay-local"));
+    assert!(setup_runner.calls().is_empty());
+}
+
+#[test]
+fn doctor_fails_when_claude_host_marketplace_is_missing() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output(
+            "/bin/claude plugin list --json",
+            json!([
+                { "id": "nemo-relay-plugin@nemo-relay-local" }
+            ])
+            .to_string(),
+        )
+        .with_capture_output(
+            "/bin/claude plugin marketplace list --json",
+            json!([]).to_string(),
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+
+    let error = doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("nemo-relay-local host marketplace"));
+    assert!(setup_runner.calls().is_empty());
 }
 
 #[test]

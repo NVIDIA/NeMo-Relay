@@ -17,9 +17,9 @@ use crate::config::{InstallCommand, PluginHost, UninstallCommand};
 use crate::error::CliError;
 
 use host::{
-    CommandRunner, RealCommandRunner, require_host_cli, require_relay,
+    CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,
     run_host_marketplace_registration, run_host_marketplace_removal, run_host_plugin_registration,
-    run_host_plugin_removal, validate_relay_plugin_shim,
+    run_host_plugin_removal, validate_host_registration, validate_relay_plugin_shim,
 };
 use marketplace::write_plugin_marketplace;
 use setup::{
@@ -313,6 +313,9 @@ fn doctor_host(
     println!("host: {}", host_arg(host));
     println!("marketplace: {}", state.marketplace_root.display());
     println!("plugin: {}", state.plugin_root.display());
+    validate_host_registration(host, options, runner)?;
+    println!("host plugin registration: ok");
+    println!("host marketplace registration: ok");
     run_plugin_doctor(host, options, setup_runner)
 }
 
@@ -326,12 +329,16 @@ fn doctor_host_json_value(
     validate_relay_plugin_shim(&relay, options, runner)?;
     let state = read_state(host, &options.install_dir)
         .ok_or_else(|| format!("no installed {} plugin state found", host_label(host)))?;
+    let host_registration = host_registration_report(host, options, runner)?;
     let plugin = run_plugin_doctor_json(host, setup_runner)?;
+    let ok = host_registration.ok() && plugin.get("ok").and_then(Value::as_bool).unwrap_or(false);
     Ok(json!({
+        "ok": ok,
         "host": host_arg(host),
         "nemo_relay": relay,
         "marketplace": state.marketplace_root,
         "plugin": state.plugin_root,
+        "host_registration": host_registration.to_json(),
         "checks": plugin
     }))
 }

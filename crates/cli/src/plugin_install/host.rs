@@ -7,6 +7,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde_json::{Value, json};
+
 use crate::config::PluginHost;
 
 use super::state::{PluginInstallOptions, PluginLayout};
@@ -108,6 +110,168 @@ pub(super) fn run_host_marketplace_removal(
     )
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct HostRegistrationReport {
+    pub(super) host_plugin_registered: bool,
+    pub(super) host_marketplace_registered: bool,
+}
+
+impl HostRegistrationReport {
+    pub(super) fn ok(&self) -> bool {
+        self.host_plugin_registered && self.host_marketplace_registered
+    }
+
+    pub(super) fn to_json(&self) -> Value {
+        json!({
+            "ok": self.ok(),
+            "host_plugin_registered": self.host_plugin_registered,
+            "host_marketplace_registered": self.host_marketplace_registered
+        })
+    }
+}
+
+pub(super) fn validate_host_registration(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<HostRegistrationReport, String> {
+    let report = host_registration_report(host, options, runner)?;
+    if report.ok() {
+        Ok(report)
+    } else {
+        let mut missing = Vec::new();
+        if !report.host_plugin_registered {
+            missing.push(format!("{PLUGIN_NAME}@{MARKETPLACE_NAME} host plugin"));
+        }
+        if !report.host_marketplace_registered {
+            missing.push(format!("{MARKETPLACE_NAME} host marketplace"));
+        }
+        Err(format!(
+            "{} plugin host registration is incomplete: missing {}",
+            host_cli(host),
+            missing.join(", ")
+        ))
+    }
+}
+
+pub(super) fn host_registration_report(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<HostRegistrationReport, String> {
+    if options.dry_run {
+        return Ok(HostRegistrationReport {
+            host_plugin_registered: true,
+            host_marketplace_registered: true,
+        });
+    }
+    require_host_cli(host, options, runner)?;
+    Ok(match host {
+        PluginHost::ClaudeCode => HostRegistrationReport {
+            host_plugin_registered: claude_plugin_registered(options, runner)?,
+            host_marketplace_registered: claude_marketplace_registered(options, runner)?,
+        },
+        PluginHost::Codex => HostRegistrationReport {
+            host_plugin_registered: codex_plugin_registered(options, runner)?,
+            host_marketplace_registered: codex_marketplace_registered(options, runner)?,
+        },
+        PluginHost::All => unreachable!("all is expanded before host registration checks"),
+    })
+}
+
+fn claude_plugin_registered(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<bool, String> {
+    let output = run_capture_command(
+        "claude",
+        &["plugin".into(), "list".into(), "--json".into()],
+        options,
+        runner,
+    )?;
+    let plugins = parse_json_command_output("claude plugin list --json", output)?;
+    Ok(plugins
+        .as_array()
+        .is_some_and(|plugins| plugins.iter().any(plugin_entry_matches)))
+}
+
+fn claude_marketplace_registered(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<bool, String> {
+    let output = run_capture_command(
+        "claude",
+        &[
+            "plugin".into(),
+            "marketplace".into(),
+            "list".into(),
+            "--json".into(),
+        ],
+        options,
+        runner,
+    )?;
+    let marketplaces = parse_json_command_output("claude plugin marketplace list --json", output)?;
+    Ok(marketplaces
+        .as_array()
+        .is_some_and(|marketplaces| marketplaces.iter().any(marketplace_entry_matches)))
+}
+
+fn codex_plugin_registered(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<bool, String> {
+    let output = run_capture_command(
+        "codex",
+        &["plugin".into(), "list".into(), "--json".into()],
+        options,
+        runner,
+    )?;
+    let plugins = parse_json_command_output("codex plugin list --json", output)?;
+    Ok(plugins
+        .get("installed")
+        .and_then(Value::as_array)
+        .is_some_and(|plugins| plugins.iter().any(plugin_entry_matches)))
+}
+
+fn codex_marketplace_registered(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<bool, String> {
+    let output = run_capture_command(
+        "codex",
+        &["plugin".into(), "marketplace".into(), "list".into()],
+        options,
+        runner,
+    )?;
+    Ok(output
+        .stdout
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .any(|name| name == MARKETPLACE_NAME))
+}
+
+fn plugin_entry_matches(entry: &Value) -> bool {
+    let plugin_id = format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}");
+    string_field(entry, "id") == Some(plugin_id.as_str())
+        || string_field(entry, "pluginId") == Some(plugin_id.as_str())
+        || (string_field(entry, "name") == Some(PLUGIN_NAME)
+            && string_field(entry, "marketplaceName") == Some(MARKETPLACE_NAME))
+}
+
+fn marketplace_entry_matches(entry: &Value) -> bool {
+    string_field(entry, "name") == Some(MARKETPLACE_NAME)
+        || string_field(entry, "id") == Some(MARKETPLACE_NAME)
+}
+
+fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(Value::as_str)
+}
+
+fn parse_json_command_output(command: &str, output: CommandOutput) -> Result<Value, String> {
+    serde_json::from_str::<Value>(&output.stdout)
+        .map_err(|error| format!("failed to parse `{command}` output as JSON: {error}"))
+}
+
 pub(super) fn require_relay(
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -192,6 +356,38 @@ pub(super) fn run_path_command(
     }
 }
 
+pub(super) fn run_capture_command(
+    program: &str,
+    args: &[String],
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<CommandOutput, String> {
+    if options.dry_run {
+        println!("{}", format_command(program, args));
+        // Keep dry-run capture output syntactically valid for future callers that parse stdout.
+        return Ok(CommandOutput::success("null\n".into()));
+    }
+    let resolved = runner
+        .resolve_executable(program)?
+        .ok_or_else(|| format!("required `{program}` executable was not found on PATH"))?;
+    let output = runner.run_capture(&resolved, args)?;
+    if output.status == 0 {
+        Ok(output)
+    } else {
+        let stderr = output.stderr.trim();
+        let detail = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!(": {stderr}")
+        };
+        Err(format!(
+            "{} failed with exit code {}{detail}",
+            format_command(&resolved.display().to_string(), args),
+            output.status
+        ))
+    }
+}
+
 pub(super) fn format_command(program: &str, args: &[String]) -> String {
     let mut parts = vec![program.to_string()];
     parts.extend(args.iter().cloned());
@@ -223,10 +419,28 @@ fn shell_quote(raw: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct CommandOutput {
+    pub(super) status: i32,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+}
+
+impl CommandOutput {
+    pub(super) fn success(stdout: String) -> Self {
+        Self {
+            status: 0,
+            stdout,
+            stderr: String::new(),
+        }
+    }
+}
+
 pub(super) trait CommandRunner {
     fn resolve_executable(&self, command: &str) -> Result<Option<PathBuf>, String>;
     fn run(&self, program: &Path, args: &[String]) -> Result<i32, String>;
     fn run_quiet(&self, program: &Path, args: &[String]) -> Result<i32, String>;
+    fn run_capture(&self, program: &Path, args: &[String]) -> Result<CommandOutput, String>;
 }
 
 pub(super) struct RealCommandRunner;
@@ -276,6 +490,32 @@ impl CommandRunner for RealCommandRunner {
             .status()
             .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         Ok(status.code().unwrap_or(1))
+    }
+
+    fn run_capture(&self, program: &Path, args: &[String]) -> Result<CommandOutput, String> {
+        #[cfg(windows)]
+        if is_windows_command_script(program) {
+            let output = Command::new(env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
+                .args(["/d", "/s", "/c"])
+                .arg(windows_command_line(program, args))
+                .output()
+                .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
+            return Ok(command_output(output));
+        }
+
+        let output = Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
+        Ok(command_output(output))
+    }
+}
+
+fn command_output(output: std::process::Output) -> CommandOutput {
+    CommandOutput {
+        status: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
 }
 
