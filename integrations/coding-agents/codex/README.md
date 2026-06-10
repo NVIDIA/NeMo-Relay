@@ -249,7 +249,7 @@ codex plugin marketplace add "$MARKETPLACE_ROOT"
 codex plugin add nemo-relay-plugin@nemo-relay-local
 ```
 
-For end-to-end installation, prefer `nemo-relay install codex`; it performs the
+For end-to-end installation, we recommend using`nemo-relay install codex`; it performs the
 marketplace registration and the persistent Codex provider/hook setup together.
 If you used the manual source marketplace commands above, remove that plugin
 before running the full installer so source hook templates and generated
