@@ -212,7 +212,7 @@ conflict the code will always take precedence over the files. The layering
 process is as follows:
 
 1. Discover and merge the `plugins.toml` files from lowest to highest precedence
-   (system → project → user), using the file-vs-file rules above.
+   (system → project → user), using the [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
 2. Layer the config object you pass to `initialize` over that merged base. Any
    setting it specifies overrides the file value, and the result is the
    effective config that gets validated and activated.
