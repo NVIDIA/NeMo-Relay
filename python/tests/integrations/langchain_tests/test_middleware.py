@@ -244,6 +244,60 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
     assert round_tripped.messages[0].content == "hello from intercept"
 
 
+def test_langchain_model_response_codec_decodes_text_and_tool_calls():
+    from langchain.agents.middleware import ModelResponse
+    from langchain_core.messages import AIMessage
+
+    from nemo_relay import AnnotatedLLMResponse
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec, model_response_to_json
+
+    codec = LangChainCodec()
+    response = ModelResponse(
+        result=[
+            AIMessage(
+                content="I will search docs.",
+                tool_calls=[
+                    {
+                        "name": "search_docs",
+                        "args": {"query": "Deep Agents"},
+                        "id": "call-search-docs",
+                    }
+                ],
+                response_metadata={"finish_reason": "tool_calls", "model_name": "mock-model"},
+                usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            )
+        ]
+    )
+
+    annotated = codec.decode_response(model_response_to_json(response, nemo_relay.typed.BestEffortAnyCodec()))
+
+    assert isinstance(annotated, AnnotatedLLMResponse)
+    assert annotated.model == "mock-model"
+    assert annotated.response_text() == "I will search docs."
+    assert annotated.finish_reason == "tool_use"
+    assert annotated.usage == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+    assert annotated.tool_calls == [
+        {
+            "id": "call-search-docs",
+            "name": "search_docs",
+            "arguments": {"query": "Deep Agents"},
+        }
+    ]
+
+    unknown_response = ModelResponse(
+        result=[
+            AIMessage(
+                content="done",
+                response_metadata={"finish_reason": "provider_custom_stop"},
+            )
+        ]
+    )
+    unknown_annotated = codec.decode_response(
+        model_response_to_json(unknown_response, nemo_relay.typed.BestEffortAnyCodec())
+    )
+    assert unknown_annotated.finish_reason == "provider_custom_stop"
+
+
 @pytest.mark.parametrize("use_async", [False, True])
 def test_model_call_applies_annotated_llm_request_intercept(
     use_async: bool,

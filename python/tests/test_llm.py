@@ -641,7 +641,10 @@ class TestLLMStreaming:
                 chunks.append(chunk)
             assert chunks == [{"token": "hello"}]
         finally:
-            subscribers.deregister("py_llm_finalizer_fail_sub")
+            try:
+                subscribers.flush()
+            finally:
+                subscribers.deregister("py_llm_finalizer_fail_sub")
 
         end = _llm_event(events, "stream_finalizer_fail_llm", "end")
         assert end.data is None
@@ -669,7 +672,10 @@ class TestLLMStreaming:
                 chunks.append(chunk)
             assert chunks == [{"token": "hello"}]
         finally:
-            subscribers.deregister("py_llm_finalizer_callable_fail_sub")
+            try:
+                subscribers.flush()
+            finally:
+                subscribers.deregister("py_llm_finalizer_callable_fail_sub")
 
         end = _llm_event(events, "stream_finalizer_callable_fail_llm", "end")
         assert end.data is None
