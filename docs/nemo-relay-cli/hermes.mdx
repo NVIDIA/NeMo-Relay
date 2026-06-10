@@ -160,7 +160,11 @@ Important distinction:
 
 ## Smoke Test
 
-For a direct hook-forward smoke, start a standalone gateway in one terminal:
+Use this smoke test to verify the Hermes hook-forward path without launching
+Hermes. It sends one synthetic Hermes hook payload through the same
+`nemo-relay hook-forward hermes` command that generated hooks use.
+
+Start a standalone gateway in one terminal:
 
 ```bash
 nemo-relay --bind 127.0.0.1:4040

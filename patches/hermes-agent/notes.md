@@ -167,7 +167,7 @@ Recommendation: keep credentials and the primary on/off switches in
 ## Smoke Validation
 
 You are now in a patched Hermes checkout with the `nemo-relay` extra installed
-and the patch runtime knobs set in `~/.hermes/.env`.
+and the patch runtime settings set in `~/.hermes/.env`.
 
 ### Structural validation
 
