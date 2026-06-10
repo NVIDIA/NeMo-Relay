@@ -76,11 +76,18 @@ The gateway can receive plugin configuration from three source classes:
 |---|---|
 | `plugins.toml` | Normal operator- and project-managed gateway plugin configuration. |
 | `[plugins].config` in `config.toml` | Inline gateway config for small or generated setups. |
+| `--plugin-config-file path/to/plugins.toml` | Explicit file override for tests, demos, or wrappers that must bypass discovered plugin files. |
 | `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation. |
 
 Use only one source class for a given gateway run. The gateway fails clearly if
-file-based plugin config and `--plugin-config` are both present, or if
-`plugins.toml` and `[plugins].config` are both present.
+`--plugin-config` and `--plugin-config-file` are both present, if file-based
+plugin config and `--plugin-config` are both present, or if `plugins.toml` and
+`[plugins].config` are both present.
+
+`--plugin-config-file` and `NEMO_RELAY_PLUGIN_CONFIG_FILE` load exactly the
+specified TOML file and skip normal `plugins.toml` discovery. This lets an
+operator override a sibling or project plugin file for one run without moving
+files around.
 
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
 to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
@@ -261,8 +268,9 @@ installed by the plugin system.
 
 Keep long-lived plugin setup in `plugins.toml`. Use `[plugins].config` in
 `config.toml` only when a generated or embedded config must keep all gateway
-settings in one file. Use `--plugin-config` for automation that should not write
-files.
+settings in one file. Use `--plugin-config-file` for automation that should use
+a specific TOML file, and `--plugin-config` for automation that should pass
+inline JSON without writing files.
 
 Legacy observability config sections in `config.toml`, such as `[exporters]`,
 `[observability]`, and `[export.openinference]`, are not supported. Configure
