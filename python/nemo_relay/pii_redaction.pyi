@@ -10,7 +10,6 @@ from typing import Literal, TypedDict
 
 from nemo_relay import JsonObject, UnsupportedBehavior
 
-
 class ConfigDiagnostic(TypedDict, total=False):
     level: Literal["warning", "error"]
     code: str
@@ -18,17 +17,14 @@ class ConfigDiagnostic(TypedDict, total=False):
     component: str
     field: str
 
-
 class ConfigReport(TypedDict):
     diagnostics: list[ConfigDiagnostic]
-
 
 @dataclass(slots=True)
 class ConfigPolicy:
     unknown_field: UnsupportedBehavior = ...
     unsupported_value: UnsupportedBehavior = ...
     def to_dict(self) -> JsonObject: ...
-
 
 @dataclass(slots=True)
 class BuiltinConfig:
@@ -42,7 +38,6 @@ class BuiltinConfig:
     unmasked_suffix: int | None = ...
     def to_dict(self) -> JsonObject: ...
 
-
 @dataclass(slots=True)
 class LocalModelConfig:
     backend: str | None = ...
@@ -51,7 +46,6 @@ class LocalModelConfig:
     allow_network: bool | None = ...
     max_latency_ms: int | None = ...
     def to_dict(self) -> JsonObject: ...
-
 
 @dataclass(slots=True)
 class PiiRedactionConfig:
@@ -68,15 +62,12 @@ class PiiRedactionConfig:
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
     def to_dict(self) -> JsonObject: ...
 
-
 PII_REDACTION_PLUGIN_KIND: Literal["pii_redaction"]
-
 
 @dataclass(slots=True)
 class ComponentSpec:
     config: PiiRedactionConfig | JsonObject
     enabled: bool = ...
     def to_dict(self) -> JsonObject: ...
-
 
 def validate_config(config: PiiRedactionConfig | JsonObject) -> ConfigReport: ...

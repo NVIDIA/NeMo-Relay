@@ -85,16 +85,18 @@ class BuiltinConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this built-in backend config to the canonical JSON object shape."""
-        return _normalize_object({
-            "action": self.action,
-            "target_paths": self.target_paths,
-            "pattern": self.pattern,
-            "detector": self.detector,
-            "replacement": self.replacement,
-            "mask_char": self.mask_char,
-            "unmasked_prefix": self.unmasked_prefix,
-            "unmasked_suffix": self.unmasked_suffix,
-        })
+        return _normalize_object(
+            {
+                "action": self.action,
+                "target_paths": self.target_paths,
+                "pattern": self.pattern,
+                "detector": self.detector,
+                "replacement": self.replacement,
+                "mask_char": self.mask_char,
+                "unmasked_prefix": self.unmasked_prefix,
+                "unmasked_suffix": self.unmasked_suffix,
+            }
+        )
 
 
 @dataclass(slots=True)
@@ -109,13 +111,15 @@ class LocalModelConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this local-model config to the canonical JSON object shape."""
-        return _normalize_object({
-            "backend": self.backend,
-            "model_id": self.model_id,
-            "detector_profile": self.detector_profile,
-            "allow_network": self.allow_network,
-            "max_latency_ms": self.max_latency_ms,
-        })
+        return _normalize_object(
+            {
+                "backend": self.backend,
+                "model_id": self.model_id,
+                "detector_profile": self.detector_profile,
+                "allow_network": self.allow_network,
+                "max_latency_ms": self.max_latency_ms,
+            }
+        )
 
 
 @dataclass(slots=True)
@@ -136,19 +140,21 @@ class PiiRedactionConfig:
 
     def to_dict(self) -> JsonObject:
         """Serialize this PII redaction config to the canonical JSON object shape."""
-        return _normalize_object({
-            "version": self.version,
-            "mode": self.mode,
-            "input": self.input,
-            "output": self.output,
-            "tool_input": self.tool_input,
-            "tool_output": self.tool_output,
-            "priority": self.priority,
-            "codec": self.codec,
-            "builtin": self.builtin,
-            "local": self.local,
-            "policy": self.policy,
-        })
+        return _normalize_object(
+            {
+                "version": self.version,
+                "mode": self.mode,
+                "input": self.input,
+                "output": self.output,
+                "tool_input": self.tool_input,
+                "tool_output": self.tool_output,
+                "priority": self.priority,
+                "codec": self.codec,
+                "builtin": self.builtin,
+                "local": self.local,
+                "policy": self.policy,
+            }
+        )
 
 
 PII_REDACTION_PLUGIN_KIND = "pii_redaction"

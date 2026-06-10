@@ -40,7 +40,7 @@ class TestPiiRedactionConfigHelpers:
                 builtin=BuiltinConfig(
                     action="mask",
                     detector="not_a_detector",
-                )
+                ),
             )
         )
         assert any(diag.get("field") == "builtin.detector" for diag in report["diagnostics"])
@@ -56,7 +56,7 @@ class TestPiiRedactionConfigHelpers:
                             builtin=BuiltinConfig(
                                 action="mask",
                                 detector="email",
-                            )
+                            ),
                         )
                     )
                 ]
