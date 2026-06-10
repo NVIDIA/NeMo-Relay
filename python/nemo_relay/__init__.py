@@ -435,6 +435,7 @@ __all__ = [
     "plugin",
     "adaptive",
     "observability",
+    "pii_redaction",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",
