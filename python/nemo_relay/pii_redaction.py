@@ -74,7 +74,7 @@ class ConfigPolicy:
 class BuiltinConfig:
     """Deterministic built-in redaction backend settings."""
 
-    action: Literal["remove", "redact", "regex_replace", "hash", "mask"] = "redact"
+    action: Literal["remove", "redact", "regex_replace", "hash", "mask"] = "remove"
     target_paths: list[str] = field(default_factory=list)
     pattern: str | None = None
     detector: str | None = None

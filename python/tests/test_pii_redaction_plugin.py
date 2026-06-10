@@ -19,7 +19,7 @@ from nemo_relay.pii_redaction import (
 class TestPiiRedactionConfigHelpers:
     def test_defaults_and_component_wrapper(self):
         assert BuiltinConfig().to_dict() == {
-            "action": "redact",
+            "action": "remove",
             "target_paths": [],
         }
         assert LocalModelConfig().to_dict() == {}
