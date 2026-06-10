@@ -213,6 +213,25 @@ fn validate_rejects_regex_replace_without_pattern() {
 }
 
 #[test]
+fn validate_rejects_invalid_builtin_pattern_regex() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "[unterminated"
+        }
+    })));
+
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("builtin.pattern")
+            && diag.message.contains("invalid builtin matcher regex")
+    }));
+}
+
+#[test]
 fn validate_rejects_mask_with_empty_mask_char() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
