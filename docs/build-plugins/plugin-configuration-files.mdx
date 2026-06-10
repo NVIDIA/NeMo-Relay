@@ -206,9 +206,9 @@ Tables inside component config merge recursively.
 
 ## Configuration Layering
 
-Plugin settings can come from files and the code. The files are the 
-configuration base layer and the code sits on top of it. If there is a 
-conflict the code will always take precedence over the files. The layering 
+Plugin settings can come from files and the code. The files are the
+configuration base layer and the code sits on top of it. If there is a
+conflict, the code will always take precedence over the files. The layering
 process is as follows:
 
 1. Discover and merge the `plugins.toml` files from lowest to highest precedence
@@ -225,7 +225,7 @@ Files and code differ only in how they treat a setting you **omit**:
 | A whole component kind, or a key inside a component's `config` | Inherited from a lower-precedence file | Inherited from the file layer |
 
 In other words, a file's gaps are filled by the layers beneath it, but code's
-typed fields are never gaps — they always carry a value, so they always win.
+typed fields are never gaps — they always carry a value, so they always take precedence.
 Only the open-ended parts of your code config (which components you include, and
 the keys within each component's `config`) merge with the files.
 
