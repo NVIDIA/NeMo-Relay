@@ -123,7 +123,7 @@ impl Default for PiiRedactionConfig {
 }
 
 /// Built-in redaction backend settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BuiltinBackendConfig {
     /// Action applied to matching string leaves.
@@ -151,6 +151,21 @@ pub struct BuiltinBackendConfig {
     /// Number of trailing characters to keep when `action = "mask"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmasked_suffix: Option<usize>,
+}
+
+impl Default for BuiltinBackendConfig {
+    fn default() -> Self {
+        Self {
+            action: default_builtin_action(),
+            target_paths: Vec::new(),
+            pattern: None,
+            detector: None,
+            replacement: None,
+            mask_char: None,
+            unmasked_prefix: None,
+            unmasked_suffix: None,
+        }
+    }
 }
 
 /// Local-backend settings for a future in-process local-model runtime.

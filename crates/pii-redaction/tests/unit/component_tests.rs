@@ -100,6 +100,16 @@ fn builtin_registry_includes_pii_redaction_component() {
 }
 
 #[test]
+fn builtin_backend_config_default_matches_documented_action_default() {
+    let config = BuiltinBackendConfig::default();
+
+    assert_eq!(config.action, "remove");
+    assert!(config.target_paths.is_empty());
+    assert!(config.pattern.is_none());
+    assert!(config.detector.is_none());
+}
+
+#[test]
 fn validate_rejects_config_with_no_enabled_surfaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
