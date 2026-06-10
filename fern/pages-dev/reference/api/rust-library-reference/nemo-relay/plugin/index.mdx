@@ -44,7 +44,7 @@ This module owns:
 - [clear_plugin_configuration](/reference/api/rust-library-reference/nemo-relay/plugin/fn-clear-plugin-configuration): Deregisters and clears all configured plugin components.
 - [deregister_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-deregister-plugin): Removes a previously registered plugin.
 - [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay/plugin/fn-ensure-builtin-plugins-registered): Registers core-provided plugin kinds.
-- [initialize_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize-plugins): Configures the active global plugin components.
+- [initialize_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize-plugins): Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. `config` wins on conflicts; as a typed document its default `version`/`policy`/`enabled` override the file, while `config` bodies merge field-by-field. Delegates to [`initialize_plugins_exact`].
 - [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay/plugin/fn-list-plugin-kinds): Lists registered plugin kinds in sorted order.
 - [lookup_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-lookup-plugin): Looks up a registered plugin by kind.
 - [register_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-register-plugin): Registers a plugin by kind.

@@ -70,7 +70,10 @@ The gateway reads only files named `plugins.toml`.
 
 ## Discovery
 
-The gateway can receive plugin configuration from three source classes:
+The gateway resolves plugin configuration using two kinds of input: file and CLI
+sources and an optional code-driven layer.
+
+File and CLI configuration comes from one of three mutually exclusive source classes:
 
 | Source | Use case |
 |---|---|
@@ -78,8 +81,8 @@ The gateway can receive plugin configuration from three source classes:
 | `[plugins].config` in `config.toml` | Inline gateway config for small or generated setups. |
 | `--plugin-config '<json>'` | CI, tests, wrappers, or one-off automation. |
 
-Use only one source class for a given gateway run. The gateway fails clearly if
-file-based plugin config and `--plugin-config` are both present, or if
+Use only one file and CLI source class for a given gateway run. The gateway fails
+clearly if file-based plugin config and `--plugin-config` are both present, or if
 `plugins.toml` and `[plugins].config` are both present.
 
 When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
@@ -188,8 +191,8 @@ across files. A higher-precedence component with the same `kind` merges into the
 lower-precedence component. A component with a different `kind` is added to the
 effective configuration.
 
-The `pricing` component has one additional merge rule: when both lower- and
-higher-precedence files define `components.config.sources`, the
+The `pricing` component has one additional merge rule: when both lower and
+higher-precedence layers define `components.config.sources`, the
 higher-precedence sources are placed before lower-precedence sources instead of
 replacing them. This lets a user or project file override one model while still
 falling back to fleet-managed pricing from `/etc/nemo-relay/plugins.toml`.
@@ -200,6 +203,34 @@ components that reach plugin validation also fail validation.
 
 Arrays inside component config are replaced by the higher-precedence value.
 Tables inside component config merge recursively.
+
+## Configuration Layering
+
+Plugin settings can come from files and the code. The files are the
+configuration base layer and the code sits on top of it. If there is a
+conflict, the code will always take precedence over the files. The layering
+process is as follows:
+
+1. Discover and merge the `plugins.toml` files from lowest to highest precedence
+   (system → project → user), using the [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
+2. Layer the config object you pass to `initialize` over that merged base. Any
+   setting it specifies overrides the file value, and the result is the
+   effective config that gets validated and activated.
+
+
+Files and code differ only in how they treat a setting you **omit**:
+| You omit | In a file | In code |
+|---|---|---|
+| `version`, `policy`, or the `enabled` flag of a component you declare | Inherited from a lower-precedence file | **Always taken from code** — its default if you did not set it |
+| A whole component kind, or a key inside a component's `config` | Inherited from a lower-precedence file | Inherited from the file layer |
+
+In other words, a file's gaps are filled by the layers beneath it, but code's
+typed fields are never gaps — they always carry a value, so they always take precedence.
+Only the open-ended parts of your code config (which components you include, and
+the keys within each component's `config`) merge with the files.
+
+Without a filesystem — for example, a WebAssembly (wasm) build — no files are
+read, so the base is empty and only your `initialize` config applies.
 
 ## Explicit Defaults And Overrides
 
