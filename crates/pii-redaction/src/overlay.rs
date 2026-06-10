@@ -230,11 +230,23 @@ fn overlay_output_text_blocks(items: &mut [Json], message_text: Option<String>) 
 
     let parts: Vec<&str> = text.split('\n').collect();
     for content in text_items {
+        let output_text_count = content
+            .iter()
+            .filter(|block| block.get("type").and_then(Json::as_str) == Some("output_text"))
+            .count();
         let mut text_blocks = content.iter_mut().filter_map(|block| {
             (block.get("type").and_then(Json::as_str) == Some("output_text"))
                 .then_some(block.as_object_mut())
                 .flatten()
         });
+
+        if output_text_count <= 1 {
+            if let Some(block) = text_blocks.next() {
+                set_optional_string_field(block, "text", Some(text.as_str()));
+            }
+            continue;
+        }
+
         for (index, block) in text_blocks.by_ref().enumerate() {
             let part = parts
                 .get(index)
@@ -246,6 +258,10 @@ fn overlay_output_text_blocks(items: &mut [Json], message_text: Option<String>) 
 }
 
 fn overlay_anthropic_text_blocks(blocks: &mut [Json], message_text: Option<String>) {
+    let text_block_count = blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Json::as_str) == Some("text"))
+        .count();
     let parts = message_text
         .as_deref()
         .map(|text| text.split('\n').collect::<Vec<_>>());
@@ -258,6 +274,11 @@ fn overlay_anthropic_text_blocks(blocks: &mut [Json], message_text: Option<Strin
         let Some(block) = block.as_object_mut() else {
             continue;
         };
+        if text_block_count <= 1 {
+            set_optional_string_field(block, "text", message_text.as_deref());
+            text_block_index += 1;
+            continue;
+        }
         let part = parts
             .as_ref()
             .and_then(|parts| parts.get(text_block_index).copied())
@@ -407,6 +428,21 @@ mod tests {
     }
 
     #[test]
+    fn openai_responses_overlay_preserves_full_multiline_text_in_single_output_block() {
+        let mut items = vec![json!({
+            "type": "message",
+            "content": [{"type": "output_text", "text": "raw"}]
+        })];
+
+        overlay_output_text_blocks(&mut items, Some("line one\nline two".to_string()));
+
+        assert_eq!(
+            items[0]["content"][0]["text"],
+            json!("line one\nline two")
+        );
+    }
+
+    #[test]
     fn anthropic_overlay_removes_tool_use_blocks_when_no_sanitized_calls_exist() {
         let mut blocks = vec![
             json!({"type": "text", "text": "hello"}),
@@ -416,5 +452,14 @@ mod tests {
         overlay_anthropic_tool_calls(&mut blocks, None);
 
         assert_eq!(blocks, vec![json!({"type": "text", "text": "hello"})]);
+    }
+
+    #[test]
+    fn anthropic_overlay_preserves_full_multiline_text_in_single_text_block() {
+        let mut blocks = vec![json!({"type": "text", "text": "raw"})];
+
+        overlay_anthropic_text_blocks(&mut blocks, Some("line one\nline two".to_string()));
+
+        assert_eq!(blocks[0]["text"], json!("line one\nline two"));
     }
 }
