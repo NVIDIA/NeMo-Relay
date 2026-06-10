@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
+use serde::de::DeserializeOwned;
 
 use super::core::PyLLMRequest;
 use super::{
@@ -20,6 +21,7 @@ use super::{
     FORCE_ANNOTATED_RESPONSE_TOOL_CALLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
 };
+use nemo_relay::codec::response::FinishReason;
 
 // ---------------------------------------------------------------------------
 // AnnotatedLLMRequest
@@ -457,8 +459,92 @@ pub struct PyAnnotatedLLMResponse {
     pub inner: AnnotatedLLMResponse,
 }
 
+fn optional_py_json<T>(
+    value: Option<&Bound<'_, PyAny>>,
+    field_name: &'static str,
+) -> PyResult<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+
+    let json = py_to_json(value).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("invalid {field_name}: {e}"))
+    })?;
+    serde_json::from_value(json)
+        .map(Some)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid {field_name}: {e}")))
+}
+
+fn optional_finish_reason(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<FinishReason>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+
+    let json = py_to_json(value).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("invalid finish_reason: {e}"))
+    })?;
+    if let serde_json::Value::String(reason) = &json {
+        return Ok(Some(match reason.as_str() {
+            "complete" => FinishReason::Complete,
+            "length" => FinishReason::Length,
+            "tool_use" => FinishReason::ToolUse,
+            "content_filter" => FinishReason::ContentFilter,
+            other => FinishReason::Unknown(other.to_string()),
+        }));
+    }
+
+    serde_json::from_value(json)
+        .map(Some)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid finish_reason: {e}")))
+}
+
 #[pymethods]
 impl PyAnnotatedLLMResponse {
+    #[new]
+    #[pyo3(signature = (
+        id = None,
+        model = None,
+        message = None,
+        tool_calls = None,
+        finish_reason = None,
+        usage = None,
+        api_specific = None,
+        extra = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        id: Option<String>,
+        model: Option<String>,
+        message: Option<&Bound<'_, PyAny>>,
+        tool_calls: Option<&Bound<'_, PyAny>>,
+        finish_reason: Option<&Bound<'_, PyAny>>,
+        usage: Option<&Bound<'_, PyAny>>,
+        api_specific: Option<&Bound<'_, PyAny>>,
+        extra: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: AnnotatedLLMResponse {
+                id,
+                model,
+                message: optional_py_json(message, "message")?,
+                tool_calls: optional_py_json(tool_calls, "tool_calls")?,
+                finish_reason: optional_finish_reason(finish_reason)?,
+                usage: optional_py_json(usage, "usage")?,
+                api_specific: optional_py_json(api_specific, "api_specific")?,
+                extra: optional_py_json(extra, "extra")?.unwrap_or_default(),
+            },
+        })
+    }
+
     #[getter]
     pub(crate) fn id(&self) -> Option<String> {
         self.inner.id.clone()
@@ -506,8 +592,13 @@ impl PyAnnotatedLLMResponse {
         self.inner
             .finish_reason
             .as_ref()
-            .and_then(|fr| serde_json::to_value(fr).ok())
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .map(|reason| match reason {
+                FinishReason::Complete => "complete".to_string(),
+                FinishReason::Length => "length".to_string(),
+                FinishReason::ToolUse => "tool_use".to_string(),
+                FinishReason::ContentFilter => "content_filter".to_string(),
+                FinishReason::Unknown(value) => value.clone(),
+            })
     }
 
     #[getter]

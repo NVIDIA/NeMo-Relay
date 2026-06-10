@@ -55,6 +55,7 @@ dev = [
 ]
 
 test = [
+    "opentelemetry-proto>=1.39,<2",
     "pydantic>=2",
     "pytest>=8",
     "pytest-asyncio>=0.26",
