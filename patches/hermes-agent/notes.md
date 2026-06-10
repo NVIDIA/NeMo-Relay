@@ -3,16 +3,31 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo-Relay Hermes Integration — Operator Notes
+# Hermes Patch Maintenance Notes
 
-These notes are the operator runbook for installing the tracked Hermes +
-NeMo-Relay integration from a fresh NeMo-Relay checkout. The maintained patch is
-runtime-only: it wires Hermes to the NeMo-Relay plugin entry point, hooks, and
-ACG override seam, but it does not carry Hermes-side tests or smoke harnesses.
-At runtime, the plugin emits a NeMo-Relay session scope plus manual LLM/tool
-lifecycle spans and uses `AtifExporter` to materialize trajectory JSON on
-session finalization.
-All commands assume your working directory is the NeMo-Relay repo root unless a
+These notes are for maintaining and validating the tracked Hermes patch in this
+repository. They are not the primary user path for Hermes observability.
+
+Use the current runtime paths first:
+
+- NeMo Relay CLI wrapper: `nemo-relay hermes` manages the local gateway lifetime
+  and observes Hermes through shell hooks plus gateway-routed provider traffic.
+  See [`docs/nemo-relay-cli/hermes.mdx`](../../docs/nemo-relay-cli/hermes.mdx).
+- Upstream Hermes plugin: Hermes' bundled `observability/nemo_relay` plugin
+  emits NeMo Relay observability from inside Hermes. Observe-only plugin builds
+  keep Hermes in control of LLM and tool execution.
+- Adaptive execution: available only when the Hermes build includes adaptive
+  middleware support and the installed NeMo Relay runtime exposes managed
+  `llm.execute(...)` and `tools.execute(...)` boundaries. Verify the Hermes
+  release tag before treating this as released behavior.
+
+The maintained patch is a source-first compatibility artifact for the pinned
+`third_party/hermes-agent` checkout. It wires Hermes to a NeMo Relay plugin
+entry point, lifecycle hooks, and the legacy ACG override seam. At runtime, the
+patch emits a NeMo Relay session scope plus manual LLM/tool lifecycle spans and
+uses `AtifExporter` to materialize trajectory JSON on session finalization.
+
+All commands assume your working directory is the NeMo Relay repo root unless a
 step says otherwise.
 
 ## Prerequisites
@@ -77,7 +92,11 @@ activated `.venv`.
 
 ## Enable
 
-### Step 4: Put persistent operator settings in `~/.hermes/.env`
+### Step 4: Put patch runtime settings in `~/.hermes/.env`
+
+This configuration is for the patch path only. Current upstream Hermes plugin
+configuration uses Hermes' bundled `observability/nemo_relay` plugin and its
+documented `HERMES_NEMO_RELAY_*` settings instead.
 
 Hermes loads `~/.hermes/.env` first and treats it as the durable source of
 truth. If a repo-local project `.env` also exists, Hermes only uses that file
@@ -100,7 +119,7 @@ HERMES_NEMO_RELAY_OPENINFERENCE_INSTRUMENTATION_SCOPE=hermes-agent/nemo-relay/op
 EOF
 ```
 
-Use these knobs as the operator contract:
+Use these knobs as the patch runtime contract:
 
 - `HERMES_NEMO_RELAY_ENABLED=1` enables the integration. If it is unset,
   Hermes falls back to `nemo_relay.enabled` in `~/.hermes/config.yaml`. The
@@ -148,7 +167,7 @@ Recommendation: keep credentials and the primary on/off switches in
 ## Smoke Validation
 
 You are now in a patched Hermes checkout with the `nemo-relay` extra installed
-and the enablement knobs set in `~/.hermes/.env`.
+and the patch runtime knobs set in `~/.hermes/.env`.
 
 ### Structural validation
 
@@ -189,7 +208,7 @@ Success signal:
 
 Then run one real Hermes plugin lifecycle without calling an external model.
 This exercises the maintained runtime integration in the patch: entry-point
-discovery, plugin hook registration, session lifecycle, ATOF export, and
+discovery, plugin hook registration, session lifecycle, ATIF export, and
 OpenInference OTLP export over gRPC.
 
 ```bash
