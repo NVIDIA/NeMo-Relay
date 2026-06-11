@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+import typing
+from collections.abc import Awaitable, Callable, Mapping
 
 from langchain.agents.middleware import AgentMiddleware
 
@@ -21,12 +21,20 @@ from nemo_relay.integrations.langchain._serialization import (
 )
 from nemo_relay.utils import run_sync
 
-if TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from langchain.agents.middleware import ModelRequest, ModelResponse, ToolCallRequest
     from langchain_core.messages import ToolMessage
     from langgraph.types import Command
 
     from nemo_relay.codecs import LlmCodec, LlmResponseCodec
+
+
+class _PreparedModelCall(typing.NamedTuple):
+    object_codec: nemo_relay.typed.BestEffortAnyCodec
+    llm_request: nemo_relay.LLMRequest
+    model_name: str
+    model_codec: LangChainCodec
+    metadata: dict[str, typing.Any] | None
 
 
 class NemoRelayMiddleware(AgentMiddleware):
@@ -51,12 +59,14 @@ class NemoRelayMiddleware(AgentMiddleware):
 
     async def _llm_execute(
         self,
+        *,
         model_name: str,
         request: nemo_relay.LLMRequest,
         codec: LlmCodec | None,
         response_codec: LlmResponseCodec | None,
-        func: Callable[..., Any],
-    ) -> Any:
+        func: Callable[..., typing.Any],
+        metadata: dict[str, typing.Any] | None = None,
+    ) -> typing.Any:
         """Execute a non-streaming LLM call through the NeMo Relay pipeline."""
         return await nemo_relay.llm.execute(
             model_name,
@@ -65,59 +75,82 @@ class NemoRelayMiddleware(AgentMiddleware):
             model_name=model_name,
             codec=codec,
             response_codec=response_codec,
+            metadata=metadata,
         )
 
-    def _prepare_model_call(self, request: ModelRequest[Any]) -> tuple:
+    def _prepare_model_call(self, request: ModelRequest[typing.Any]) -> _PreparedModelCall:
         """Boilerplate code common to both wrap_model_call and awrap_model_call"""
         object_codec = nemo_relay.typed.BestEffortAnyCodec()
         model_name = get_model_name(request.model)
         llm_request = nemo_relay.LLMRequest({}, model_request_to_payload(model_name, request))
         model_codec = LangChainCodec()
-        return (object_codec, llm_request, model_name, model_codec)
+        metadata = self._model_request_metadata(request)
+        return _PreparedModelCall(
+            object_codec=object_codec,
+            llm_request=llm_request,
+            model_name=model_name,
+            model_codec=model_codec,
+            metadata=metadata,
+        )
+
+    def _model_request_metadata(self, request: ModelRequest[typing.Any]) -> dict[str, typing.Any] | None:
+        """Return LangChain run metadata available on the model request."""
+        runtime = getattr(request, "runtime", None)
+        config = getattr(runtime, "config", None)
+        if not isinstance(config, Mapping):
+            return None
+
+        metadata = config.get("metadata")
+        if not isinstance(metadata, Mapping):
+            return None
+
+        return dict(metadata)
 
     def wrap_model_call(
         self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
-    ) -> ModelResponse[Any]:
+        request: ModelRequest[typing.Any],
+        handler: Callable[[ModelRequest[typing.Any]], ModelResponse[typing.Any]],
+    ) -> ModelResponse[typing.Any]:
         """Wrap a sync LangChain agent model call in NeMo Relay LLM execution."""
-        (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
+        prepared = self._prepare_model_call(request)
 
-        async def _call(req: nemo_relay.LLMRequest) -> Any:
+        async def _call(req: nemo_relay.LLMRequest) -> typing.Any:
             response = handler(payload_to_model_request(request, req))
-            return model_response_to_json(response, object_codec)
+            return model_response_to_json(response, prepared.object_codec)
 
         result = run_sync(
             self._llm_execute(
-                model_name=model_name,
-                request=llm_request,
+                model_name=prepared.model_name,
+                request=prepared.llm_request,
                 func=_call,
-                codec=model_codec,
-                response_codec=model_codec,
+                codec=prepared.model_codec,
+                response_codec=prepared.model_codec,
+                metadata=prepared.metadata,
             )
         )
-        return model_response_from_json(result, object_codec)
+        return model_response_from_json(result, prepared.object_codec)
 
     async def awrap_model_call(
         self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any]:
+        request: ModelRequest[typing.Any],
+        handler: Callable[[ModelRequest[typing.Any]], Awaitable[ModelResponse[typing.Any]]],
+    ) -> ModelResponse[typing.Any]:
         """Wrap an async LangChain agent model call in NeMo Relay LLM execution."""
-        (object_codec, llm_request, model_name, model_codec) = self._prepare_model_call(request)
+        prepared = self._prepare_model_call(request)
 
-        async def _call(req: nemo_relay.LLMRequest) -> Any:
+        async def _call(req: nemo_relay.LLMRequest) -> typing.Any:
             response = await handler(payload_to_model_request(request, req))
-            return model_response_to_json(response, object_codec)
+            return model_response_to_json(response, prepared.object_codec)
 
         result = await self._llm_execute(
-            model_name=model_name,
-            request=llm_request,
+            model_name=prepared.model_name,
+            request=prepared.llm_request,
             func=_call,
-            codec=model_codec,
-            response_codec=model_codec,
+            codec=prepared.model_codec,
+            response_codec=prepared.model_codec,
+            metadata=prepared.metadata,
         )
-        return model_response_from_json(result, object_codec)
+        return model_response_from_json(result, prepared.object_codec)
 
     def _prepare_tool_call(self, request: ToolCallRequest) -> tuple:
         """Boilerplate code common to both wrap_tool_call and awrap_tool_call"""
@@ -130,13 +163,13 @@ class NemoRelayMiddleware(AgentMiddleware):
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[typing.Any]],
+    ) -> ToolMessage | Command[typing.Any]:
         """Wrap a sync LangChain agent tool call in NeMo Relay tool execution."""
 
         (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
 
-        def _call(args: Any) -> ToolMessage | Command[Any]:
+        def _call(args: typing.Any) -> ToolMessage | Command[typing.Any]:
             return handler(request.override(tool_call={**request.tool_call, "args": args}))
 
         return run_sync(
@@ -148,13 +181,13 @@ class NemoRelayMiddleware(AgentMiddleware):
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[typing.Any]]],
+    ) -> ToolMessage | Command[typing.Any]:
         """Wrap an async LangChain agent tool call in NeMo Relay tool execution."""
 
         (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
 
-        async def _call(args: Any) -> ToolMessage | Command[Any]:
+        async def _call(args: typing.Any) -> ToolMessage | Command[typing.Any]:
             return await handler(request.override(tool_call={**request.tool_call, "args": args}))
 
         return await nemo_relay.typed.tool_execute(
