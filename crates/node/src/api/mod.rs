@@ -50,6 +50,7 @@ use nemo_relay::plugin::{
 };
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 use crate::callable;
 use crate::convert::{
@@ -66,6 +67,8 @@ fn init() {
         .expect("node runtime ownership initialization should succeed");
     register_adaptive_component()
         .expect("node adaptive plugin component registration should succeed");
+    register_pii_redaction_component()
+        .expect("node pii redaction plugin component registration should succeed");
 }
 
 fn parse_string_map(
