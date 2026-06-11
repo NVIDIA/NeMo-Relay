@@ -1,6 +1,6 @@
 {
   "name": "nemo-relay-plugin",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Codex hooks that forward canonical lifecycle payloads to nemo-relay.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",

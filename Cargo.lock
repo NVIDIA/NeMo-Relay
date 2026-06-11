@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-adaptive"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "nemo-relay",
@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-ffi"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cbindgen",
  "chrono",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-node"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "napi",
@@ -1451,7 +1451,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-pii-redaction"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "futures",
  "nemo-relay",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-python"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "nemo-relay",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-wasm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "js-sys",
