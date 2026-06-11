@@ -61,6 +61,7 @@ use nemo_relay::plugin::{
     validate_plugin_config as validate_plugin_config_impl,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 use crate::callable;
 use crate::convert::{
@@ -2198,12 +2199,17 @@ fn ensure_adaptive_component_registered() -> Result<(), JsValue> {
     register_adaptive_component().map_err(to_js_err)
 }
 
+fn ensure_pii_redaction_component_registered() -> Result<(), JsValue> {
+    register_pii_redaction_component().map_err(to_js_err)
+}
+
 /// Validate a plugin config document and return a structured diagnostics report.
 #[wasm_bindgen(js_name = "validatePluginConfig", unchecked_return_type = "Json")]
 pub fn validate_plugin_config(
     #[wasm_bindgen(unchecked_param_type = "Json")] config: JsValue,
 ) -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
+    ensure_pii_redaction_component_registered()?;
     let config: PluginConfig = serde_wasm_bindgen::from_value(config)?;
     serde_wasm_bindgen::to_value(&validate_plugin_config_impl(&config))
         .map_err(|e| JsValue::from_str(&e.to_string()))
@@ -2849,6 +2855,7 @@ pub fn register_plugin(
     #[wasm_bindgen(unchecked_param_type = "(...args: any[]) => any")] register: Function,
 ) -> Result<(), JsValue> {
     ensure_adaptive_component_registered()?;
+    ensure_pii_redaction_component_registered()?;
     register_plugin_impl(Arc::new(WasmPlugin {
         plugin_kind,
         validate: validate.map(send_wrapper::SendWrapper::new),
@@ -2875,6 +2882,7 @@ pub async fn initialize_plugins(
     #[wasm_bindgen(unchecked_param_type = "Json")] config: JsValue,
 ) -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
+    ensure_pii_redaction_component_registered()?;
     let config: PluginConfig = serde_wasm_bindgen::from_value(config)?;
     let report = initialize_plugins_impl(config).await.map_err(to_js_err)?;
     serde_wasm_bindgen::to_value(&report).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -2897,6 +2905,7 @@ pub fn active_plugin_report() -> Result<JsValue, JsValue> {
 /// List the plugin kinds currently registered with the runtime.
 pub fn list_plugin_kinds() -> Result<JsValue, JsValue> {
     ensure_adaptive_component_registered()?;
+    ensure_pii_redaction_component_registered()?;
     serde_wasm_bindgen::to_value(&list_plugin_kinds_impl())
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }

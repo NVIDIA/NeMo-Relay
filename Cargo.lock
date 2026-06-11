@@ -1397,6 +1397,7 @@ dependencies = [
  "http-body-util",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "opentelemetry",
  "opentelemetry_sdk",
  "reqwest",
@@ -1423,6 +1424,7 @@ dependencies = [
  "libc",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -1439,11 +1441,26 @@ dependencies = [
  "napi-derive",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "uuid",
+]
+
+[[package]]
+name = "nemo-relay-pii-redaction"
+version = "0.4.0"
+dependencies = [
+ "futures",
+ "nemo-relay",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -1453,6 +1470,7 @@ dependencies = [
  "chrono",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -1471,6 +1489,7 @@ dependencies = [
  "js-sys",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",

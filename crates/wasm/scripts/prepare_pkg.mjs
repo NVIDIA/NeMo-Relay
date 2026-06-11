@@ -12,8 +12,8 @@ const nodeJsWrapperDir = path.join(crateDir, 'wrappers', 'nodejs');
 const pkgDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(crateDir, 'pkg');
 
 const rootJsFiles = ['index.js'];
-const jsWrapperFiles = ['typed.js', 'plugin.js', 'adaptive.js', 'observability.js'];
-const typeWrapperFiles = ['typed.d.ts', 'plugin.d.ts', 'adaptive.d.ts', 'observability.d.ts'];
+const jsWrapperFiles = ['typed.js', 'plugin.js', 'adaptive.js', 'observability.js', 'pii_redaction.js'];
+const typeWrapperFiles = ['typed.d.ts', 'plugin.d.ts', 'adaptive.d.ts', 'observability.d.ts', 'pii_redaction.d.ts'];
 const wrapperFiles = [...rootJsFiles, ...jsWrapperFiles, ...typeWrapperFiles];
 const packageMetadata = {
   description: 'WebAssembly bindings for the NeMo Relay agent runtime.',
@@ -103,6 +103,10 @@ function updatePackageManifest(manifest) {
       types: './observability.d.ts',
       default: './observability.js',
     },
+    './pii_redaction': {
+      types: './pii_redaction.d.ts',
+      default: './pii_redaction.js',
+    },
     './typed.js': {
       types: './typed.d.ts',
       default: './typed.js',
@@ -118,6 +122,10 @@ function updatePackageManifest(manifest) {
     './observability.js': {
       types: './observability.d.ts',
       default: './observability.js',
+    },
+    './pii_redaction.js': {
+      types: './pii_redaction.d.ts',
+      default: './pii_redaction.js',
     },
   };
 

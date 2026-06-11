@@ -20,6 +20,7 @@ test = false
 [dependencies]
 nemo-relay = { workspace = true, features = ["atof-streaming", "otel", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay-pii-redaction.workspace = true
 chrono = "0.4"
 napi = { version = "2", features = ["napi6", "async", "serde-json", "tokio_rt"] }
 napi-derive = "2"
