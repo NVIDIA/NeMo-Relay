@@ -60,10 +60,10 @@ At least one managed redaction surface must be enabled.
 | Area | `builtin` | `local_model` |
 |---|---|---|
 | Built-in component kind and config validation | Supported | Supported |
-| Managed LLM `input` | Supported | Extension point only in this PR |
-| Managed LLM `output` | Supported | Extension point only in this PR |
-| Managed `tool_input` | Supported | Extension point only in this PR |
-| Managed `tool_output` | Supported | Extension point only in this PR |
+| Managed LLM `input` | Supported | Extension point only today |
+| Managed LLM `output` | Supported | Extension point only today |
+| Managed `tool_input` | Supported | Extension point only today |
+| Managed `tool_output` | Supported | Extension point only today |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
@@ -325,7 +325,7 @@ That means:
 
 ### Current Status
 
-In this PR:
+Currently:
 
 - the plugin contract accepts `mode = "local_model"`
 - the `local` section currently supports:

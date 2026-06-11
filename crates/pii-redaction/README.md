@@ -108,8 +108,8 @@ The shipped `builtin` backend supports these actions:
 
 The detector catalog includes:
 
-- Common PII: `email`, `phone`, `ip_address`, `ipv6`, `url`, `uuid`
-- Structured secrets: `api_key`, `bearer_token`, `jwt`, `credit_card`
+- Common PII: `email`, `phone`, `ip_address`, `ipv6`, `url`
+- Structured secrets: `api_key`, `uuid`, `bearer_token`, `jwt`, `credit_card`
 - Cloud credentials: `aws_access_key_id`, `aws_secret_access_key`,
   `gcp_api_key`, `azure_storage_account_key`
 
