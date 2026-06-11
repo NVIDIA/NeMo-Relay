@@ -452,7 +452,13 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-relay", "nemo-relay-adaptive", "nemo-relay-ffi", "nemo-relay-cli")
+local_dependencies = (
+    "nemo-relay",
+    "nemo-relay-adaptive",
+    "nemo-relay-pii-redaction",
+    "nemo-relay-ffi",
+    "nemo-relay-cli",
+)
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):
