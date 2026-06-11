@@ -17,67 +17,201 @@ SPDX-License-Identifier: Apache-2.0
 
 # NVIDIA NeMo Relay
 
-## What Is NeMo Relay?
+NVIDIA NeMo Relay helps you see and control what happens inside agent runs
+without rewriting the agent stack you already have. It gives coding agents,
+applications, framework integrations, middleware, and observability backends a
+shared runtime for scopes, policy, plugins, and lifecycle events.
 
-NVIDIA NeMo Relay is a portable execution runtime for agent systems that already have a
-framework, model provider, policy layer, or observability backend. It gives those
-systems one consistent way to describe, control, and observe what happens when an
-agent crosses a request, tool, or LLM boundary.
+The best first step is to get one real run on disk. Once Relay is writing raw
+events and a trajectory file, you have something concrete to inspect, debug, and
+build from.
 
-Agent applications rarely live inside one clean abstraction. A production stack
-might combine NeMo Agent Toolkit, LangChain, LangGraph, provider SDKs, custom
-harness code, NeMo Guardrails, tracing systems, and evaluation pipelines. NeMo
-Relay sits underneath those choices as the shared runtime contract for scopes,
-middleware, plugins, lifecycle events, adaptive behavior, and observability.
+## Start Here: Capture One Local Agent Run
 
-Built as a Rust core with primary Rust, Python, and Node.js bindings, NeMo Relay
-lets applications keep their orchestration model while runtime behavior stays
-consistent across frameworks and languages.
+This walkthrough gives you an end-to-end success signal. You install the
+`nemo-relay` CLI, turn on local exporters, run either Codex or Claude Code
+through Relay, and check that Relay wrote both raw events and normalized
+trajectories.
 
-## Why Use It?
+> [!TIP]
+> Start by trusting the raw Agent Trajectory Observability Format (ATOF) JSONL.
+> It shows the lifecycle events Relay actually captured before anything is
+> translated into Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
+> OpenInference output.
 
-- 🧭 **Own execution context across the whole agent run**: Hierarchical scopes
-  attach tools, LLM calls, middleware, subscribers, and events to the same
-  parent-child execution tree.
-- 🛡️ **Package policy once**: Guardrails and intercepts can block work, sanitize
-  observability payloads, transform requests, or wrap execution without
-  rewriting every call site.
-- 📡 **Emit one lifecycle stream**: Subscribers consume canonical runtime events
-  in-process or export them as [ATIF v1.7](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md)
-  trajectories, OpenTelemetry traces, or OpenInference-compatible traces.
-- 🧩 **Integrate without a framework migration**: NeMo Relay can sit below NeMo
-  ecosystem components, third-party agent frameworks, provider adapters, or
-  direct application code.
-- ⚙️ **Install reusable runtime behavior**: Plugins configure middleware,
-  subscribers, adaptive components, observability exporters, and custom runtime
-  behavior from one shared system.
+### 1. Install the CLI
 
-## What You Get
+```bash
+cargo install nemo-relay-cli
+```
 
-- ✅ **Managed tool and LLM execution**: Run call boundaries through consistent
-  lifecycle helpers and middleware ordering.
-- ✅ **Concurrent request isolation**: Keep request-local middleware and
-  subscribers attached to the scope that owns them, then clean them up when that
-  scope closes.
-- ✅ **Multi-language semantics**: Use the same runtime model from Rust, Python,
-  and Node.js.
-- ✅ **Observability-ready events**: Preserve model metadata, tool call IDs,
-  inputs, outputs, scope relationships, and lifecycle timing for downstream
-  analysis.
-- ✅ **Built-in observability plugin**: Configure Agent Trajectory Observability
-  Format (ATOF), ATIF, OpenTelemetry, and OpenInference exporters without
-  registering subscribers by hand.
-- ✅ **Non-blocking subscriber delivery**: Keep managed execution moving while
-  subscriber callbacks and exporters drain in the background. Flush subscribers
-  before relying on callback side effects or exported files in tests and
-  shutdown paths.
-- ✅ **Extension points for framework authors**: Wrap stable tool and provider
-  callbacks while preserving framework-owned scheduling, retries, memory, and
-  result handling.
+If you use `cargo-binstall`, the CLI can also be installed with:
+
+```bash
+cargo binstall nemo-relay-cli
+```
+
+### 2. Enable Local Observability Output
+
+From the project directory you want to observe, open the project-scoped plugin
+editor:
+
+```bash
+nemo-relay plugins edit --project
+```
+
+The editor creates or updates the nearest project plugin file at
+`.nemo-relay/plugins.toml`. In the menu:
+
+1. Enable the `Observability` component.
+2. Open `ATOF`, toggle the section on, and set:
+   - `output_directory` to `.nemo-relay/atof`
+   - `filename` to `events.jsonl`
+   - `mode` to `overwrite`
+3. Open `ATIF`, toggle the section on, and set:
+   - `output_directory` to `.nemo-relay/atif`
+   - `filename_template` to `trajectory-{session_id}.json`
+4. Press `p` to preview the generated TOML.
+5. Press `s` to save.
+
+> [!NOTE]
+> Use `nemo-relay plugins edit` without `--project` only when you want these
+> exporter settings in your user-level Relay config instead of this one project.
+
+### 3. Run Codex or Claude Code Through Relay
+
+Use the host CLI that is installed on your machine.
+
+```bash
+nemo-relay codex -- exec "Summarize this repository."
+```
+
+```bash
+nemo-relay claude -- "Summarize this repository."
+```
+
+The transparent wrapper starts a local Relay gateway, injects host-specific hook
+and provider settings for that launched process, then shuts the gateway down
+when the agent exits.
+
+> [!WARNING]
+> Codex users may need to review and activate generated hooks before events
+> appear. See the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
+> current hook activation caveat and troubleshooting steps.
+
+### 4. Verify the Run
+
+After the run exits, check that raw events and trajectory files were written:
+
+```bash
+test -s .nemo-relay/atof/events.jsonl
+ls .nemo-relay/atif/*.json
+for file in .nemo-relay/atif/*.json; do
+  python3 -m json.tool "$file" >/dev/null
+done
+```
+
+Then verify that at least one raw ATOF `0.1` event exists:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import json
+
+events_path = Path(".nemo-relay/atof/events.jsonl")
+events = [
+    json.loads(line)
+    for line in events_path.read_text().splitlines()
+    if line.strip()
+]
+
+assert events, "no ATOF events were written"
+assert any(event.get("atof_version") == "0.1" for event in events), "no ATOF 0.1 events found"
+print(f"validated {len(events)} ATOF event(s)")
+PY
+```
+
+A successful run gives you two things to inspect:
+
+- `.nemo-relay/atof/events.jsonl`, the raw canonical event stream.
+- One or more `.nemo-relay/atif/*.json` trajectory files for analysis and
+  evaluation workflows.
+
+> [!TIP]
+> If raw ATOF events exist but LLM spans are missing, provider traffic probably
+> isn't flowing through the Relay gateway. If ATIF is missing, make sure the
+> agent session or turn ended and the output directory is writable. Use
+> [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) when you are ready for
+> persistent host plugin installation, gateway configuration, exporter options,
+> and agent-specific diagnostics.
+
+## Choose Your Next Path
+
+Pick the row closest to what you are trying to do next.
+
+| Goal | Start With |
+|---|---|
+| Observe Codex, Claude Code, Cursor, or Hermes locally | [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
+| Instrument app-owned LLM or tool calls | [Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
+| Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
+| Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
+| Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/observability-plugin/about) |
+| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
+| Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+## Application Quick Starts
+
+If you own the code that calls the model or tool, install the binding for your
+language and route that boundary through Relay directly.
+
+```bash
+# Python
+uv add nemo-relay
+
+# Node.js
+npm install nemo-relay-node
+
+# Rust
+cargo add nemo-relay
+```
+
+Then run the smallest workflow for that binding:
+
+- [Python Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/python)
+- [Node.js Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/nodejs)
+- [Rust Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/rust)
+
+The Node.js package requires Node.js 24 or newer.
+
+## What Relay Adds
+
+Relay is for the messy middle of agent systems. A production application may
+combine NeMo Agent Toolkit, LangChain, LangGraph, provider SDKs, custom harness
+code, NeMo Guardrails, tracing systems, and evaluation pipelines. Relay gives
+those pieces one runtime contract instead of asking every layer to invent its
+own wrappers and trace vocabulary.
+
+Relay gives those systems:
+
+- 🧭 **Scopes** so runs, turns, tools, LLM calls, and subagents have clear
+  ownership, parent-child lineage, cleanup boundaries, and
+  request isolation.
+- ⚙️ **Managed LLM and tool calls** so the same lifecycle and middleware rules
+  apply around each callback.
+- 🛡️ **Middleware** for the places where Relay must block, sanitize, transform,
+  route, retry, or replace execution.
+- 🧩 **Plugins** so reusable observability, guardrail, adaptive, and exporter
+  behavior can be turned on from configuration.
+- 📡 **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
+  OpenInference output all come from the same runtime stream.
+
+Relay does not replace your framework, model provider, application logic,
+observability backend, or guardrail authoring system. It gives those systems a
+common boundary to meet at.
 
 ```mermaid
 flowchart LR
-    App[Application or Framework]
+    App[Application, Framework, or CLI Harness]
 
     subgraph Runtime[NeMo Relay Runtime]
         direction TB
@@ -97,138 +231,97 @@ flowchart LR
     Events --> Output
 ```
 
-## Installation
+## Support Status
 
-Install the published package for your language:
+> [!NOTE]
+> The main supported paths today are Rust, Python, and Node.js. Go,
+> WebAssembly, and raw C FFI are available for source-first users, but they are
+> still experimental.
 
-```bash
-# Rust
-cargo add nemo-relay
-
-# Python
-uv add nemo-relay
-
-# Node.js
-npm install nemo-relay-node
-```
-
-The Node.js package requires Node.js 24 or newer.
-
-### CLI Installation
-
-The NeMo Relay CLI is offered as a separate crate:
-
-```bash
-cargo install nemo-relay-cli
-```
-
-If `cargo-binstall` is available on your machine:
-
-```bash
-cargo binstall nemo-relay-cli
-```
-
-For source builds, testing, and contribution workflow, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Documentation
-
-End-user documentation lives at [docs.nvidia.com/nemo/relay](https://docs.nvidia.com/nemo/relay).
-
-The primary documentation track covers Rust, Python, and Node.js.
-
-The Go, WebAssembly, and raw FFI surfaces are currently experimental and remain source-first under
-`go/nemo_relay`, `crates/wasm`, and `crates/ffi`.
-
-## Binding Status
-
-The table below summarizes the support level for each binding surface.
+The following table shows which language bindings and CLI features are currently supported:
 
 | Binding | Status | Notes |
 |---|---|---|
-| Python | ✅ Fully Supported | Fully documented with Quick Start and Guides |
-| Node.js | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
-| Rust | ✅ Fully Supported | Fully documented with Quick Start and Guides  |
+| Python | ✅ Fully supported | Documented with Quick Start and Guides. |
+| Node.js | ✅ Fully supported | Documented with Quick Start and Guides. |
+| Rust | ✅ Fully supported | Documented with Quick Start and Guides. |
 | NeMo Relay CLI | 🚧 Experimental | Install with `cargo install nemo-relay-cli`. |
 | Go | 🚧 Experimental | Source-first under `go/nemo_relay`. |
 | WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
 | FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
 
-## Agent Harness Support
+### Agent Harness Support
 
-NeMo Relay CLI offers experimental support for several agent harnesses.
-Refer to the NeMo Relay CLI documentation for additional information.
-
-Below is our support matrix for agent harnesses.
+The CLI support is intentionally conservative. Observability works for the
+listed harnesses; security and optimization depend on the hooks, provider
+routes, and execution controls each harness exposes.
 
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
-| Claude Code | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. |
-| Codex | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. Missing some necessary hooks for full feature parity. |
-| Hermes Agent | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. |
-| Cursor | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Tool guardrail support is wired up. LLM optimization is in place. Not feature-rich, missing hooks under `cursor-agent` |
-
-## Third-Party Integrations
-
-Some framework integrations are maintained as packages in this repository. Other
-sample integrations are maintained as patch sets against upstream projects.
+| Claude Code | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Hook forwarding and gateway-routed LLM observability are supported. |
+| Codex | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Hook activation and missing session-end behavior limit full feature parity. |
+| Hermes Agent | ✅ Yes | ⚠️ Partial | ⚠️ Partial | Hook forwarding and gateway-routed LLM observability are supported. |
+| Cursor | 🚧 Partial | ⚠️ Partial | ❌ No | Missing hooks under `cursor-agent` limit full feature coverage. |
 
 ### Public API Integrations
 
-Some integrations can be implemented using public APIs without patching. Public
-API-based integrations live under language-specific integration packages such as
-`python/nemo_relay/integrations/` and `integrations/`.
-
-Below is the support matrix for our public API integrations.
+Use these integrations when the framework exposes stable callbacks, middleware,
+or plugin hooks that preserve enough lifecycle fidelity.
 
 | Agent / Library | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
-| LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
-| LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
-| Deep Agents | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped Tool and LLM calling |
+| LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
+| LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
+| Deep Agents | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
 | OpenClaw | ✅ Yes | ⚠️ Partial | ❌ No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
 
-#### LangChain
+The Python `nemo-relay` package ships extras for LangChain, LangGraph, and Deep
+Agents:
 
-The Python `nemo-relay` package ships several extras that offer comprehensive
-middleware support for the following packages:
+```bash
+uv add "nemo-relay[langchain,langgraph,deepagents]"
+```
 
-- LangChain
-- LangGraph
-- Deep Agents
-
-See the [Python package README](python/nemo_relay/README.md) for more information.
-
-#### OpenClaw
-
-An OpenClaw plugin is available as a Node package `nemo-relay-openclaw`.
-It relies on OpenClaw public plugin hooks plus the generic NeMo Relay plugin
-configuration shape to export telemetry. See the
-[OpenClaw package README](integrations/openclaw/README.md) for more information.
+See [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) for setup
+guides and current caveats.
 
 ### Patch-based Integrations
 
-Patch-based integrations offer experimental support. Our roadmap includes switching over to first-party plugins and packages where upstream extension points allow it.
-
-Use [third_party/README.md](third_party/README.md) for the clone, checkout, and
-patch-application workflow for those integrations.
-
-The following table summarizes maintained third-party integrations and whether each provides observability, security, and optimization support.
+Patch-based integrations are experimental samples maintained against pinned
+upstream checkouts. Use [third_party/README.md](third_party/README.md) for the
+clone, checkout, and patch-application workflow.
 
 | Integration | Observability | Security | Optimization | Notes |
 |:---|:---:|:---:|:---:|:---|
-| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code requiring no middleware |
-| [opencode](third_party/README-opencode.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code |
-| [OpenClaw](third_party/README-openclaw.md) | ✅ Yes | ✅ Yes | ✅ Yes | Adds new middleware support to OpenClaw and a built-in plugin |
-| [Hermes Agent](third_party/README-hermes-agent.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code |
+| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code. |
+| [opencode](third_party/README-opencode.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code. |
+| [OpenClaw](third_party/README-openclaw.md) | ✅ Yes | ✅ Yes | ✅ Yes | Adds middleware support to OpenClaw and a built-in plugin. |
+| [Hermes Agent](third_party/README-hermes-agent.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code. |
+
+## Documentation
+
+End-user documentation lives at
+[docs.nvidia.com/nemo/relay](https://docs.nvidia.com/nemo/relay).
+
+Important local entry points:
+
+- [Overview](https://docs.nvidia.com/nemo/relay/about-nemo-relay/overview)
+- [Installation](https://docs.nvidia.com/nemo/relay/getting-started/installation)
+- [Agent Runtime Primer](https://docs.nvidia.com/nemo/relay/getting-started/agent-runtime-primer)
+- [Testing and Docs](https://docs.nvidia.com/nemo/relay/contribute/testing-and-docs)
+
+For source builds, tests, and contribution workflow, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-The following roadmap outlines planned features and integrations for upcoming releases.
-
 - [ ] NemoClaw support and integration for managed tool and LLM execution flows.
-- [ ] Deeper NVIDIA NeMo ecosystem integration across agent, guardrail, evaluation, and observability workflows.
-- [ ] Expanded adaptive optimization capabilities for performance-aware scheduling, hints, and cache behavior.
-- [ ] First-party plugins and/or packages for common agent runtimes and frameworks.
+- [ ] Deeper NVIDIA NeMo ecosystem integration across agent, guardrail,
+      evaluation, and observability workflows.
+- [ ] Expanded adaptive optimization capabilities for performance-aware
+      scheduling, hints, and cache behavior.
+- [ ] First-party plugins and packages for common agent runtimes and frameworks
+      where upstream extension points allow it.
 
 ## License
 
