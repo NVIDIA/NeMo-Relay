@@ -163,6 +163,14 @@ enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
+Invalid shared TOML, malformed plugin config, unsupported exporter settings,
+or unavailable exporter features fail closed during setup or launch. The
+wrapper does not start the coding agent against a configuration that cannot be
+parsed, validated, or activated. Once the gateway and agent are running,
+exporter delivery failures follow the observability plugin policy: application
+work continues while the failing ATOF, ATIF, OpenTelemetry, or OpenInference
+destination records, logs, or reports the failure.
+
 ## Hook Forwarding
 
 The transparent wrapper hooks call `nemo-relay hook-forward <agent>` with the
@@ -174,11 +182,15 @@ Claude Code and Codex plugin hooks call `nemo-relay plugin-shim hook <agent>`.
 The plugin shim ensures the local sidecar is reachable, then forwards the hook
 payload to the plugin sidecar endpoint.
 
-Since hook forwarding fails open by default, observability outages do not block the
-coding agent. For wrapper-generated `hook-forward` commands, add
+Since hook forwarding fails open by default, gateway or sidecar outages do not
+block the coding agent. The hook command exits successfully after logging the
+forwarding problem, so the host agent can continue even though that hook
+payload may be missing from telemetry. For wrapper-generated `hook-forward`
+commands, add
 `--fail-closed` when policy requires hook delivery to block the agent. For
 plugin shim hooks, set `NEMO_RELAY_FAIL_CLOSED=1` in the hook execution
-environment.
+environment; in that mode, forwarding failures return a non-zero hook command
+status to the host.
 
 Useful wrapper options:
 

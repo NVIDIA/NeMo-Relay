@@ -125,6 +125,37 @@ Include only the sections you want to configure. In layered `plugins.toml`
 files, omission inherits lower-precedence values; write `enabled = false` to
 disable an inherited section.
 
+## Failure Behavior
+
+NeMo Relay treats exporter configuration and exporter delivery failures
+differently. Configuration and activation failures are fail-closed for the
+observability setup: validation or initialization returns an error before the
+new plugin configuration becomes active. Runtime delivery failures are
+fail-open for application work: the tool, LLM, or agent run continues while the
+affected exporter records, logs, or reports the delivery problem.
+
+| Failure | Behavior |
+|---|---|
+| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, or unavailable exporter features | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
+| ATOF file open, serialization, or flush failure | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
+| ATOF streaming endpoint startup or send failure | File output and other endpoints continue. Endpoint failures are logged with the endpoint index; endpoint flush and close timeouts are logged instead of blocking shutdown indefinitely. |
+| ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The failed sink is recorded as unhealthy and skipped for later trajectories. Other configured sinks continue to receive writes. |
+| ATIF dispatcher serialization or subscriber-management failure | The ATIF dispatcher records a fatal exporter error and stops observing later ATIF events. Other observability sections continue to run. |
+| OpenTelemetry or OpenInference construction failure | Plugin initialization fails before the subscriber is registered. |
+| OpenTelemetry or OpenInference export failure after registration | Application work continues. The OTLP exporter reports failures through its runtime logging and flush or shutdown path. |
+
+Missing or delayed telemetry is represented as absence of exporter output, not
+as synthetic success or failure events. NeMo Relay does not backfill events for
+subscribers that register late. If the plugin is cleared while an agent scope
+is still open, the ATIF dispatcher writes the partial trajectory it has already
+observed.
+
+Use `nemo-relay doctor` and exporter-specific logs when validating remote
+collector paths such as OTLP, Intake-connected HTTP endpoints, or object
+storage. For local artifact paths, verify that the running process can create
+the output directory and that teardown calls `plugin.clear()` or
+`clear_plugin_configuration()` before the process exits.
+
 ## Per-Language Plugin Configuration
 
 <Tabs>

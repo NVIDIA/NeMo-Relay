@@ -174,8 +174,9 @@ local→remote transition keeps object names stable. A trailing `/` is added to
 
 If an upload fails for a given destination, that destination is recorded as
 unhealthy and skipped on later trajectories. The other destinations continue
-to receive writes. All recorded sink failures are joined into the dispatcher's
-last-error result on plugin teardown.
+to receive writes. Fatal dispatcher failures, such as trajectory serialization
+failures, stop later ATIF observation and are reported during plugin teardown;
+per-destination sink failures are isolated to the failed sink.
 
 ## Expected Output
 
