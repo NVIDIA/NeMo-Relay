@@ -12,11 +12,11 @@ Use the current runtime paths first:
 
 - NeMo Relay CLI wrapper: `nemo-relay hermes` manages the local gateway lifetime
   and observes Hermes through shell hooks plus gateway-routed provider traffic.
-  See [`docs/nemo-relay-cli/hermes.mdx`](../../docs/nemo-relay-cli/hermes.mdx).
-- Standalone gateway and manual hook setup: run the NeMo Relay gateway yourself
-  and point Hermes hooks or provider traffic at it. See
+  Refer to [`docs/nemo-relay-cli/hermes.mdx`](../../docs/nemo-relay-cli/hermes.mdx).
+- Standalone gateway and manual hook setup: Run the NeMo Relay gateway yourself
+  and point Hermes hooks or provider traffic at it. Refer to
   [`docs/nemo-relay-cli/hermes.mdx`](../../docs/nemo-relay-cli/hermes.mdx).
-- Upstream Hermes plugin: Hermes' bundled `observability/nemo_relay` plugin
+- Upstream Hermes plugin: Hermes bundled `observability/nemo_relay` plugin
   emits NeMo Relay observability from inside Hermes. Observe-only plugin builds
   keep Hermes in control of LLM and tool execution.
 - Adaptive execution: available only when the Hermes build includes adaptive

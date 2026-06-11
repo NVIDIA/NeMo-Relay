@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Hermes Agent Integration Notes
 
-Use this page to choose the right Hermes integration path from the NeMo Relay
+This guide demonstrates how to choose the right Hermes integration path from the NeMo Relay
 repository.
 
 Most users should not patch Hermes from `third_party/hermes-agent`. Use the
