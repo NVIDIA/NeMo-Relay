@@ -35,6 +35,23 @@ Choose `pii_redaction` when you want a reusable built-in policy surface.
 Choose raw middleware when you need bespoke callback logic that does not fit
 the plugin contract.
 
+## Plugin Versus Middleware
+
+Use this matrix when deciding whether to use the built-in `pii_redaction`
+plugin or raw sanitize-guardrail middleware directly.
+
+| Area | `pii_redaction` plugin | Raw middleware |
+|---|---|---|
+| Primary UX | Declarative config through `plugins.toml`, bindings helpers, and the CLI editor | Callback registration in application code |
+| Best fit | Reusable privacy policy shared across apps or teams | App-specific logic tied to runtime state or custom heuristics |
+| Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | You implement the behavior yourself |
+| Built-in detectors | Supported | You implement the matcher yourself |
+| Codec-aware LLM handling | Supported for the documented codecs | You handle normalization and provider shapes yourself |
+| Validation and editor support | Supported | Not provided |
+| Cross-runtime consistency | First-party contract across Relay surfaces | Depends on each app's callback code |
+| Flexibility | Limited to the plugin contract | Full control over sanitize behavior |
+| When to choose it | You want the fastest path to a supported privacy surface | You need behavior the plugin contract does not express |
+
 ## Component Shape
 
 The top-level PII redaction object contains:
@@ -60,10 +77,10 @@ At least one managed redaction surface must be enabled.
 | Area | `builtin` | `local_model` |
 |---|---|---|
 | Built-in component kind and config validation | Supported | Supported |
-| Managed LLM `input` | Supported | Extension point only today |
-| Managed LLM `output` | Supported | Extension point only today |
-| Managed `tool_input` | Supported | Extension point only today |
-| Managed `tool_output` | Supported | Extension point only today |
+| Managed LLM `input` | Supported | Not implemented |
+| Managed LLM `output` | Supported | Not implemented |
+| Managed `tool_input` | Supported | Not implemented |
+| Managed `tool_output` | Supported | Not implemented |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |

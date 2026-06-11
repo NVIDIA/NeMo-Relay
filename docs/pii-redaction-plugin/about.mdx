@@ -7,9 +7,9 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use the PII redaction plugin when you want first-party redaction, hashing, or
-pattern-based replacement around managed NeMo Relay LLM and tool observability
-surfaces through the shared plugin system.
+Use the PII redaction plugin when you want first-party privacy controls for
+managed NeMo Relay LLM and tool observability surfaces through the shared
+plugin system.
 
 The built-in plugin component has kind `pii_redaction` and is available as a
 first-party NeMo Relay plugin.
@@ -101,15 +101,15 @@ the emitted provider-shaped start event. For example, an OpenAI Responses
 request may be recorded in the codec's canonical `input` array form instead of
 the original shorthand request shape.
 
-## Current Non-Goals
+## Current Boundaries
 
-This first-party PR scope does not turn NeMo Relay into a full local-model
-runtime.
+This plugin is intentionally scoped to a deterministic built-in backend plus a
+future local-model extension point.
 
 In particular:
 
 - `local_model` is an extension point, not a complete backend implementation
-  in this PR.
+  today.
 - The plugin does not mutate the real callback arguments or return values.
 - The plugin does not add a subtree or prefix selector language beyond exact
   JSON-pointer matching.
