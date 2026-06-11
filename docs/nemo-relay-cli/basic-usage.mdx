@@ -289,8 +289,9 @@ calling NeMo Relay APIs.
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure
   closes it.
-- Prompt, response, agent-thought, and Hermes LLM hooks are retained as
-  private correlation hints. They are not emitted as NeMo Relay events.
+- Prompt, response, agent-thought, and legacy Hermes `pre_llm_call` /
+  `post_llm_call` hooks are retained as private correlation hints. They are not
+  emitted as NeMo Relay events.
 - Compaction, notification, and unknown hook events become mark events under
   the active session scope.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
@@ -328,12 +329,16 @@ also add `llm_correlation_source`, `llm_correlation_subagent_id`,
 
 Generated hook bundles subscribe to the events needed for that mapping:
 
-| Agent | Correlation hint hooks | Scope, tool, and mark hooks |
+| Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
 | --- | --- | --- |
 | Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
 | Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
 | Cursor | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought` | `sessionStart`, `sessionEnd`, `subagentStart`, `subagentStop`, `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `preCompact`, `stop` |
-| Hermes | `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
+| Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
+
+Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks
+map to NeMo Relay LLM start/end events when present. Hermes `pre_llm_call` and
+`post_llm_call` remain private correlation hints.
 
 Cursor hook-only mode observes agent, subagent, and tool lifecycle. To observe
 Cursor LLM lifecycle completely, configure Cursor model traffic to use the
