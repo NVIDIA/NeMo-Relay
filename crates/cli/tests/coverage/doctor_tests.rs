@@ -736,6 +736,38 @@ async fn collect_observability_registers_pii_redaction_before_validation() {
 }
 
 #[tokio::test]
+async fn collect_observability_reports_invalid_pii_redaction_config() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "pii_redaction",
+                    "enabled": true,
+                    "config": {
+                        "version": 2,
+                        "mode": "builtin",
+                        "builtin": {
+                            "action": "remove"
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_observability(&gateway).await;
+
+    let diagnostic = checks
+        .iter()
+        .find(|check| check.name == "Plugin diagnostic")
+        .expect("plugin diagnostic check");
+    assert_eq!(diagnostic.status, Status::Fail);
+    assert!(diagnostic.details.contains("unsupported_config_version"));
+}
+
+#[tokio::test]
 async fn collect_observability_probes_atof_streaming_endpoint() {
     let (url, body, server_thread) = start_doctor_http_capture_server();
     let gateway = GatewayConfig {

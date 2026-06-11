@@ -1563,6 +1563,39 @@ async fn serve_listener_rejects_invalid_plugin_config() {
 }
 
 #[tokio::test]
+async fn serve_listener_rejects_invalid_pii_redaction_plugin_config() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "pii_redaction",
+                "enabled": true,
+                "config": {
+                    "version": 2,
+                    "mode": "builtin",
+                    "builtin": {
+                        "action": "remove"
+                    }
+                }
+            }
+        ]
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (_shutdown_tx, shutdown_rx) = oneshot::channel();
+    let error = serve_listener(listener, config, Some(shutdown_rx))
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("unsupported"));
+    assert!(error.to_string().contains("version"));
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
+}
+
+#[tokio::test]
 async fn gateway_errors_render_structured_json_responses() {
     let response = CliError::InvalidPayload("bad input".into()).into_response();
 
