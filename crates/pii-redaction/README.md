@@ -15,7 +15,7 @@ The plugin is designed for the common case where teams want a supported,
 config-driven privacy policy surface instead of writing custom sanitize
 middleware by hand.
 
-## Why Use It?
+## Why Use It
 
 - **Use a supported privacy plugin**: Install deterministic redaction behavior
   through the NeMo Relay plugin system instead of custom sanitize callbacks.
@@ -128,4 +128,4 @@ fails fast if one is not installed.
 
 ## Documentation
 
-NeMo Relay documentation: https://docs.nvidia.com/nemo/relay
+[NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
