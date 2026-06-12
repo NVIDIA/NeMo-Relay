@@ -365,6 +365,28 @@ fn default_config_uses_cwd_append_and_timestamped_filename() {
 }
 
 #[test]
+fn endpoint_and_exporter_config_builders_preserve_values() {
+    let dir = temp_dir("atof-config-builders");
+    let endpoint =
+        AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
+            .with_header("x-test", "enabled")
+            .with_timeout_millis(42);
+    let config = AtofExporterConfig::new()
+        .with_output_directory(&dir)
+        .with_mode(AtofExporterMode::Overwrite)
+        .with_filename("custom.jsonl")
+        .with_endpoints(vec![endpoint.clone()]);
+
+    assert_eq!(
+        endpoint.headers.get("x-test").map(String::as_str),
+        Some("enabled")
+    );
+    assert_eq!(endpoint.timeout_millis, 42);
+    assert_eq!(config.path(), dir.join("custom.jsonl"));
+    assert_eq!(config.endpoints, vec![endpoint]);
+}
+
+#[test]
 fn append_mode_preserves_existing_lines() {
     let dir = temp_dir("atof-append");
     let path = dir.join("events.jsonl");
@@ -429,6 +451,27 @@ fn subscriber_writes_scope_and_mark_events_as_raw_jsonl() {
     assert_eq!(lines[0]["category"], "agent");
     assert_eq!(lines[1]["kind"], "mark");
     assert_eq!(lines[1]["data"], json!({"step": 1}));
+}
+
+#[test]
+fn shutdown_is_idempotent_and_subscriber_noops_after_close() {
+    let dir = temp_dir("atof-closed");
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    let subscriber = exporter.subscriber();
+
+    subscriber(&make_mark_event("before-close"));
+    exporter.shutdown().unwrap();
+    subscriber(&make_mark_event("after-close"));
+    exporter.shutdown().unwrap();
+
+    let lines = read_jsonl(exporter.path());
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["name"], "before-close");
 }
 
 #[test]
@@ -1246,6 +1289,220 @@ fn invalid_endpoint_scheme_errors_cleanly() {
             other => panic!("unexpected error: {other}"),
         }
     }
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("x-test".to_string(), "ok".to_string());
+    validate_endpoint_config(&AtofEndpointConfig {
+        url: "http://127.0.0.1:9/events".into(),
+        transport: AtofEndpointTransport::HttpPost,
+        headers: headers.clone(),
+        timeout_millis: 1,
+    })
+    .unwrap();
+    assert_eq!(build_header_map(&headers).unwrap().len(), 1);
+
+    let empty_url = AtofEndpointConfig {
+        url: "  ".into(),
+        transport: AtofEndpointTransport::HttpPost,
+        headers: std::collections::HashMap::new(),
+        timeout_millis: 1,
+    };
+    assert!(
+        validate_endpoint_config(&empty_url)
+            .unwrap_err()
+            .to_string()
+            .contains("endpoint url must be non-empty")
+    );
+
+    let zero_timeout = AtofEndpointConfig {
+        url: "http://127.0.0.1:9/events".into(),
+        transport: AtofEndpointTransport::HttpPost,
+        headers: std::collections::HashMap::new(),
+        timeout_millis: 0,
+    };
+    assert!(
+        validate_endpoint_config(&zero_timeout)
+            .unwrap_err()
+            .to_string()
+            .contains("timeout_millis")
+    );
+
+    let mut bad_header_name = std::collections::HashMap::new();
+    bad_header_name.insert("bad header".to_string(), "ok".to_string());
+    assert!(build_header_map(&bad_header_name).is_err());
+
+    let mut bad_header_value = std::collections::HashMap::new();
+    bad_header_value.insert("x-test".to_string(), "bad\nvalue".to_string());
+    assert!(build_header_map(&bad_header_value).is_err());
+    assert!(
+        build_ndjson_client(&AtofEndpointConfig {
+            url: "http://127.0.0.1:9/events".into(),
+            transport: AtofEndpointTransport::Ndjson,
+            headers: bad_header_value,
+            timeout_millis: 1,
+        })
+        .unwrap_err()
+        .contains("disabled")
+    );
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
+    let (body_tx, body) = ndjson_body_channel();
+    drop(body);
+    send_ndjson_event(0, &body_tx, "{}".into());
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    send_ndjson_flush(0, &body_tx, flush_tx);
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tx.send(EndpointMessage::Event("{}".into())).unwrap();
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    drop(tx);
+
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async { drain_closed(rx).await });
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let _ = read_http_request(&mut stream);
+        stream
+            .write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+    });
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_http_post_endpoint(
+                0,
+                AtofEndpointConfig::new(url, AtofEndpointTransport::HttpPost)
+                    .with_timeout_millis(5_000),
+                rx,
+            )
+            .await;
+        });
+    });
+
+    tx.send(EndpointMessage::Event("{\"kind\":\"mark\"}".into()))
+        .unwrap();
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    worker.join().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("bad header".to_string(), "ok".to_string());
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_http_post_endpoint(
+                0,
+                AtofEndpointConfig {
+                    url: "http://127.0.0.1:9/events".into(),
+                    transport: AtofEndpointTransport::HttpPost,
+                    headers,
+                    timeout_millis: 1,
+                },
+                rx,
+            )
+            .await;
+        });
+    });
+
+    tx.send(EndpointMessage::Event("{\"kind\":\"mark\"}".into()))
+        .unwrap();
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("bad header".to_string(), "ok".to_string());
+    let config = AtofEndpointConfig {
+        url: "ws://127.0.0.1:9/events".into(),
+        transport: AtofEndpointTransport::Websocket,
+        headers,
+        timeout_millis: 1,
+    };
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        assert!(connect_websocket(&config).await.is_err());
+
+        let mut socket = None;
+        let mut pending = std::collections::VecDeque::from(["{\"kind\":\"mark\"}".to_string()]);
+        assert!(!drain_websocket_pending(0, &config, &mut socket, &mut pending).await);
+        assert_eq!(pending.len(), 1);
+    });
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn ndjson_upload_close_timeout_acknowledges_close() {
+    let request = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let request: tokio::task::JoinHandle<reqwest::Result<reqwest::Response>> =
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                unreachable!("timeout should finish before this task completes")
+            });
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        finish_ndjson_upload(0, request, std::time::Duration::from_millis(1), done_tx).await;
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        true
+    });
+    assert!(request);
 }
 
 #[test]

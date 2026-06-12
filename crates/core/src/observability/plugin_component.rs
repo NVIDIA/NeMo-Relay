@@ -31,7 +31,7 @@ use uuid::Uuid;
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
 use crate::api::scope::ScopeType;
-use crate::api::subscriber::{scope_deregister_subscriber, scope_register_subscriber};
+use crate::api::subscriber::{scope_deregister_subscriber, try_scope_register_subscriber};
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointTransport, AtofExporter,
@@ -937,7 +937,7 @@ impl AtifDispatcher {
         // With async subscriber delivery, the root scope may already be closed
         // when the dispatcher observes this start event; global routing still
         // handles descendant events by parent UUID in that case.
-        if scope_register_subscriber(&agent_uuid, &name, callback).is_ok() {
+        if try_scope_register_subscriber(&agent_uuid, &name, callback).is_ok() {
             self.scope_subscribers.insert(agent_uuid, name);
         }
         None

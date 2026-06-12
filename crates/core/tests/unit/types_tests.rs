@@ -768,3 +768,65 @@ fn base_event_and_flattened_specialized_builders_work() {
     assert_eq!(mark.base.name, "mark-builder");
     assert!(mark.base.timestamp.timestamp() > 0);
 }
+
+#[test]
+fn event_deserialization_preserves_unknown_profile_fields_and_mark_profiles() {
+    let event: Event = serde_json::from_value(json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": Uuid::now_v7(),
+        "timestamp": "2026-02-03T04:05:06Z",
+        "name": "quality-check",
+        "category": "custom.vendor",
+        "category_profile": {
+            "subtype": "score",
+            "vendor_score": 0.97,
+            "vendor_tags": ["safe", "fast"]
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(event.kind(), "mark");
+    assert_eq!(
+        event.category().map(EventCategory::as_str),
+        Some("custom.vendor")
+    );
+    let profile = event.category_profile().unwrap();
+    assert_eq!(profile.subtype.as_deref(), Some("score"));
+    assert_eq!(profile.extra["vendor_score"], json!(0.97));
+    assert_eq!(profile.extra["vendor_tags"], json!(["safe", "fast"]));
+    assert_eq!(event.attributes(), None);
+    assert_eq!(event.input(), None);
+    assert_eq!(event.output(), None);
+}
+
+#[test]
+fn event_scope_accessors_return_none_for_unprofiled_and_wrong_phase_payloads() {
+    let start_without_profile = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("start").build(),
+        ScopeCategory::Start,
+        vec!["parallel".into(), "parallel".into(), "relocatable".into()],
+        EventCategory::function(),
+        None,
+    ));
+    assert_eq!(
+        start_without_profile.attributes(),
+        Some(["parallel".to_string(), "relocatable".to_string()].as_slice())
+    );
+    assert_eq!(start_without_profile.category_profile(), None);
+    assert_eq!(start_without_profile.model_name(), None);
+    assert_eq!(start_without_profile.tool_call_id(), None);
+    assert_eq!(start_without_profile.annotated_request(), None);
+    assert_eq!(start_without_profile.annotated_response(), None);
+    assert_eq!(start_without_profile.output(), None);
+
+    let end_without_data = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("end").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::tool(),
+        None,
+    ));
+    assert_eq!(end_without_data.input(), None);
+    assert_eq!(end_without_data.output(), None);
+}

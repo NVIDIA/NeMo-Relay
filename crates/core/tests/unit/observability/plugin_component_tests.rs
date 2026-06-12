@@ -12,7 +12,7 @@ use crate::config_editor::{EditorConfig, EditorFieldKind};
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
     list_plugin_kinds, lookup_plugin, validate_plugin_config,
 };
 use serde_json::json;
@@ -321,7 +321,7 @@ fn empty_and_disabled_config_register_nothing() {
         "openinference": {"enabled": false, "transport": "grpc"}
     }));
     assert!(!validate_plugin_config(&config).has_errors());
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     let state = global_context();
     assert!(state.read().unwrap().event_subscribers.is_empty());
@@ -346,7 +346,7 @@ fn disabled_file_sections_do_not_create_files() {
         }
     }));
     assert!(!validate_plugin_config(&config).has_errors());
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     let agent = push_agent("disabled-agent");
     pop(&agent);
@@ -510,6 +510,42 @@ fn atof_endpoint_validation_rejects_bad_values() {
 }
 
 #[test]
+fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("authorization".to_string(), "token".to_string());
+    let config = build_atof_endpoint_config(
+        2,
+        AtofEndpointSectionConfig {
+            url: "ws://127.0.0.1:47632/events".into(),
+            transport: "websocket".into(),
+            headers: headers.clone(),
+            timeout_millis: 123,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(config.url, "ws://127.0.0.1:47632/events");
+    assert_eq!(
+        config.transport,
+        crate::observability::atof::AtofEndpointTransport::Websocket
+    );
+    assert_eq!(config.headers, headers);
+    assert_eq!(config.timeout_millis, 123);
+
+    let error = build_atof_endpoint_config(
+        3,
+        AtofEndpointSectionConfig {
+            url: "http://127.0.0.1:47632/events".into(),
+            transport: "smtp".into(),
+            headers: std::collections::HashMap::new(),
+            timeout_millis: 3_000,
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("endpoints[3].transport"));
+}
+
+#[test]
 fn initialization_fails_for_invalid_enabled_file_exporters() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -526,7 +562,7 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
             "filename": "events.jsonl"
         }
     }));
-    let error = futures::executor::block_on(initialize_plugins(invalid_atof)).unwrap_err();
+    let error = futures::executor::block_on(initialize_plugins_exact(invalid_atof)).unwrap_err();
     assert!(error.to_string().contains("ATOF mode"));
 
     let invalid_atif_template = plugin_config(json!({
@@ -537,7 +573,8 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
             "filename_template": "single-file.json"
         }
     }));
-    let error = futures::executor::block_on(initialize_plugins(invalid_atif_template)).unwrap_err();
+    let error =
+        futures::executor::block_on(initialize_plugins_exact(invalid_atif_template)).unwrap_err();
     assert!(error.to_string().contains("filename_template"));
 
     let invalid_path = plugin_config(json!({
@@ -547,7 +584,7 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
             "filename": "events.jsonl"
         }
     }));
-    let error = futures::executor::block_on(initialize_plugins(invalid_path)).unwrap_err();
+    let error = futures::executor::block_on(initialize_plugins_exact(invalid_path)).unwrap_err();
     assert!(error.to_string().contains("registration failed"));
 
     let invalid_otel_transport = plugin_config(json!({
@@ -558,7 +595,7 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
         }
     }));
     let error =
-        futures::executor::block_on(initialize_plugins(invalid_otel_transport)).unwrap_err();
+        futures::executor::block_on(initialize_plugins_exact(invalid_otel_transport)).unwrap_err();
     assert!(error.to_string().contains("OpenTelemetry transport"));
 
     let invalid_openinference_transport = plugin_config(json!({
@@ -568,8 +605,9 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
             "transport": "udp"
         }
     }));
-    let error = futures::executor::block_on(initialize_plugins(invalid_openinference_transport))
-        .unwrap_err();
+    let error =
+        futures::executor::block_on(initialize_plugins_exact(invalid_openinference_transport))
+            .unwrap_err();
     assert!(error.to_string().contains("OpenInference transport"));
 }
 
@@ -587,7 +625,7 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
             "mode": "overwrite"
         }
     }));
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     {
         let state = global_context();
@@ -633,7 +671,7 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
             "output_directory": dir
         }
     }));
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     let first = push_agent("first-agent");
     let nested = push_agent("nested-agent");
@@ -1067,6 +1105,38 @@ fn atif_dispatcher_records_failed_agent_writes() {
 }
 
 #[test]
+fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
+    let agent_uuid = Uuid::now_v7();
+    let write = PendingAtifWrite {
+        agent_uuid,
+        session_id: agent_uuid.to_string(),
+        filename: "trajectory.json".into(),
+        local_path: None,
+        payload: b"{}".to_vec(),
+    };
+
+    let results = write_atif(&write, &[], &[SinkLabel::Local, SinkLabel::Remote(0)]);
+
+    assert_eq!(results.len(), 2);
+    assert!(
+        results[0]
+            .1
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("no output path")
+    );
+    assert!(
+        results[1]
+            .1
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("storage[0]")
+    );
+}
+
+#[test]
 fn atif_dispatcher_default_output_path_uses_current_directory() {
     let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
     let (filename, local_path) = dispatcher.prepare_destination("session-1");
@@ -1097,7 +1167,7 @@ fn atif_explicit_options_and_open_agent_teardown_are_written() {
             "filename_template": "custom-{session_id}.atif.json"
         }
     }));
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     let ignored = push_function("not-an-agent");
     pop(&ignored);
@@ -1130,7 +1200,7 @@ fn atif_rejects_unsafe_template_and_ignores_non_top_level_agents() {
         }
     }));
     assert!(validate_plugin_config(&invalid_template).has_errors());
-    assert!(futures::executor::block_on(initialize_plugins(invalid_template)).is_err());
+    assert!(futures::executor::block_on(initialize_plugins_exact(invalid_template)).is_err());
 
     let config = plugin_config(json!({
         "atif": {
@@ -1139,7 +1209,7 @@ fn atif_rejects_unsafe_template_and_ignores_non_top_level_agents() {
             "filename_template": "trajectory-{session_id}.json"
         }
     }));
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     let function = push_function("top-level-function");
     let nested_agent = push_agent("nested-under-function");
@@ -1182,7 +1252,7 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
         }
     }));
     assert!(!validate_plugin_config(&config).has_errors());
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
 
     let state = global_context();
     let names = state
@@ -1564,6 +1634,29 @@ fn atif_storage_http_header_env_empty_env_is_rejected() {
 }
 
 #[test]
+fn atif_storage_http_header_env_whitespace_name_is_rejected() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{
+                "type": "http",
+                "endpoint": "https://example.com/atif",
+                "header_env": {"authorization": " NEMO_RELAY_TEST_ATIF_HTTP_HEADER "}
+            }]
+        }
+    })));
+    assert!(report.has_errors());
+    assert!(
+        report.diagnostics.iter().any(|diag| diag.field.as_deref()
+            == Some("storage[0].header_env.authorization")
+            && diag.message.contains("surrounding whitespace")),
+        "expected diagnostic for whitespace header env var: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn atif_storage_http_header_env_present_env_is_accepted() {
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_OK_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
@@ -1748,4 +1841,86 @@ fn atif_storage_secret_var_empty_name_is_rejected() {
         "expected diagnostic for empty var name: {:?}",
         report.diagnostics
     );
+}
+
+#[test]
+#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
+    let missing = "NEMO_RELAY_TEST_ATIF_HELPER_MISSING_ZZZZ";
+    let empty = "NEMO_RELAY_TEST_ATIF_HELPER_EMPTY_ZZZZ";
+    let secret = "NEMO_RELAY_TEST_ATIF_HELPER_SECRET_ZZZZ";
+    let token = "NEMO_RELAY_TEST_ATIF_HELPER_TOKEN_ZZZZ";
+    // SAFETY: these uniquely named variables are only touched by this test.
+    unsafe {
+        std::env::remove_var(missing);
+        std::env::set_var(empty, "");
+        std::env::set_var(secret, "secret-value");
+        std::env::set_var(token, "token-value");
+    }
+
+    assert_eq!(resolve_env_var_field("field", None).unwrap(), None);
+    assert!(
+        resolve_env_var_field("field", Some(" padded "))
+            .unwrap_err()
+            .to_string()
+            .contains("must be the name of an environment variable")
+    );
+    assert!(
+        resolve_env_var_field("field", Some(missing))
+            .unwrap_err()
+            .to_string()
+            .contains("is not set")
+    );
+    assert!(
+        resolve_env_var_field("field", Some(empty))
+            .unwrap_err()
+            .to_string()
+            .contains("set but empty")
+    );
+    assert_eq!(
+        resolve_env_var_field("field", Some(secret)).unwrap(),
+        Some("secret-value".to_string())
+    );
+
+    assert_eq!(normalize_storage_key_prefix(None), "");
+    assert_eq!(
+        normalize_storage_key_prefix(Some("  nested/path  ")),
+        "nested/path/"
+    );
+    assert_eq!(
+        normalize_storage_key_prefix(Some("nested/path/")),
+        "nested/path/"
+    );
+
+    let overrides = S3BuilderOverrides::resolve(
+        3,
+        &S3StorageConfig {
+            bucket: "bucket".into(),
+            key_prefix: Some("prefix".into()),
+            access_key_id: Some("access".into()),
+            secret_access_key_var: Some(secret.into()),
+            session_token_var: Some(token.into()),
+            region: Some("us-west-2".into()),
+            endpoint_url: Some("http://127.0.0.1:9000".into()),
+            allow_http: Some(true),
+        },
+    )
+    .unwrap();
+    assert_eq!(overrides.access_key_id.as_deref(), Some("access"));
+    assert_eq!(overrides.secret_access_key.as_deref(), Some("secret-value"));
+    assert_eq!(overrides.session_token.as_deref(), Some("token-value"));
+    assert_eq!(overrides.region.as_deref(), Some("us-west-2"));
+    assert_eq!(
+        overrides.endpoint_url.as_deref(),
+        Some("http://127.0.0.1:9000")
+    );
+    assert_eq!(overrides.allow_http, Some(true));
+    let _builder = overrides.apply(object_store::aws::AmazonS3Builder::from_env());
+
+    // SAFETY: cleanup of test-only env vars.
+    unsafe {
+        std::env::remove_var(empty);
+        std::env::remove_var(secret);
+        std::env::remove_var(token);
+    }
 }

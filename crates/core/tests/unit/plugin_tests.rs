@@ -503,7 +503,7 @@ fn test_initialize_plugins_registers_and_clears_components() {
         .build()
         .unwrap();
     let report = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("test.plugin")],
             ..PluginConfig::default()
         }))
@@ -610,7 +610,7 @@ fn test_plugin_config_defaults_debug_and_invalid_config_messages() {
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             version: 2,
             components: vec![PluginComponentSpec::new("missing.plugin")],
             policy: ConfigPolicy {
@@ -854,14 +854,14 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
         .unwrap();
 
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("recording.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
 
     let err = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("restore.fail.plugin")],
             ..PluginConfig::default()
         }))
@@ -898,7 +898,7 @@ fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure(
         .build()
         .unwrap();
     let err = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("partial.fail.plugin")],
             ..PluginConfig::default()
         }))
@@ -927,7 +927,7 @@ fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_ins
         .build()
         .unwrap();
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![
                 PluginComponentSpec::new("recording.plugin"),
                 PluginComponentSpec {
@@ -962,7 +962,7 @@ fn test_initialize_plugins_reports_missing_component_during_activation() {
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("vanishing.plugin")],
             ..PluginConfig::default()
         }))
@@ -1356,14 +1356,14 @@ fn test_initialize_plugins_replaces_previous_configuration_on_success() {
         .unwrap();
 
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("recording.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
 
     let report = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("replacement.plugin")],
             ..PluginConfig::default()
         }))
@@ -1394,14 +1394,14 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
         .unwrap();
 
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("restore.break.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
 
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("restore.fail.plugin")],
             ..PluginConfig::default()
         }))

@@ -126,6 +126,34 @@ pub fn scope_register_subscriber(
     Ok(())
 }
 
+// Internal best-effort variant used by async subscriber callbacks such as the
+// ATIF dispatcher. Those callbacks may run after the observed root scope has
+// already closed, or while the scope stack is locked by event-producing code,
+// so this returns a normal error instead of blocking or panicking.
+pub(crate) fn try_scope_register_subscriber(
+    scope_uuid: &uuid::Uuid,
+    name: &str,
+    callback: EventSubscriberFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let mut guard = scope_stack
+        .try_write()
+        .map_err(|error| FlowError::Internal(format!("scope stack lock unavailable: {error}")))?;
+    let registries = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
+    if registries.event_subscribers.contains_key(name) {
+        return Err(FlowError::AlreadyExists(format!(
+            "{name} subscriber already exists"
+        )));
+    }
+    registries
+        .event_subscribers
+        .insert(name.to_string(), callback);
+    Ok(())
+}
+
 /// Deregister a scope-local lifecycle event subscriber.
 ///
 /// This removes the named subscriber from the registry attached to a specific
