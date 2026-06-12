@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::ffi::OsString;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -36,25 +37,40 @@ static GENERIC_TEST_PLUGIN_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static GENERIC_TEST_PLUGIN_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 struct EnvVarGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
     key: &'static str,
-    old: Option<String>,
+    old: Option<OsString>,
 }
 
 impl EnvVarGuard {
     fn set(key: &'static str, value: &str) -> Self {
-        let old = std::env::var(key).ok();
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let old = std::env::var_os(key);
         unsafe {
             std::env::set_var(key, value);
         }
-        Self { key, old }
+        Self {
+            _guard: guard,
+            key,
+            old,
+        }
     }
 
     fn remove(key: &'static str) -> Self {
-        let old = std::env::var(key).ok();
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let old = std::env::var_os(key);
         unsafe {
             std::env::remove_var(key);
         }
-        Self { key, old }
+        Self {
+            _guard: guard,
+            key,
+            old,
+        }
     }
 }
 

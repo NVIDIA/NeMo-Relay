@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -57,6 +58,40 @@ impl Drop for HomeScope<'_> {
             match self.prev_userprofile.take() {
                 Some(value) => std::env::set_var("USERPROFILE", value),
                 None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+}
+
+struct PathScope<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+    previous: Option<OsString>,
+}
+
+impl<'a> PathScope<'a> {
+    fn set(path: &Path) -> Self {
+        let guard = plugin_install_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var_os("PATH");
+        // SAFETY: This test holds the process-wide environment mutex for the override lifetime.
+        unsafe {
+            std::env::set_var("PATH", path);
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for PathScope<'_> {
+    fn drop(&mut self) {
+        // SAFETY: This restores PATH while the process-wide environment mutex is still held.
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
             }
         }
     }
@@ -650,17 +685,10 @@ fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
 
 #[test]
 fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
-    let guard = plugin_install_env_lock()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let previous_path = std::env::var_os("PATH");
     let dir = tempdir().unwrap();
     let empty_path = dir.path().join("empty-path");
     std::fs::create_dir_all(&empty_path).unwrap();
-    // SAFETY: This test holds the process-wide environment mutex while overriding PATH.
-    unsafe {
-        std::env::set_var("PATH", &empty_path);
-    }
+    let _path = PathScope::set(&empty_path);
 
     let install_error = install(crate::config::InstallCommand {
         host: PluginHost::All,
@@ -744,15 +772,6 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     );
     assert_eq!(with_schema(json!("not-an-object")), json!("not-an-object"));
     assert!(std::panic::catch_unwind(|| host_cli(PluginHost::All)).is_err());
-
-    // SAFETY: Restore PATH before releasing the environment mutex.
-    unsafe {
-        match previous_path {
-            Some(value) => std::env::set_var("PATH", value),
-            None => std::env::remove_var("PATH"),
-        }
-    }
-    drop(guard);
 }
 
 #[test]

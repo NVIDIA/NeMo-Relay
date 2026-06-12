@@ -51,10 +51,12 @@ fn simple_chat_request() -> LlmRequest {
     }
 }
 
-fn unused_local_endpoint() -> String {
+fn spawn_disconnecting_endpoint() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    drop(listener);
+    std::thread::spawn(move || {
+        let _ = listener.accept();
+    });
     format!("http://{address}")
 }
 
@@ -737,7 +739,7 @@ async fn remote_execute_transport_and_stream_status_errors_are_reported() {
     crate::api::runtime::set_thread_scope_stack(crate::api::runtime::create_scope_stack());
 
     let runtime = RemoteBackendRuntime::new(&runtime_config(RemoteBackendConfig {
-        endpoint: Some(unused_local_endpoint()),
+        endpoint: Some(spawn_disconnecting_endpoint()),
         timeout_millis: 50,
         ..valid_remote()
     }))
@@ -973,7 +975,7 @@ async fn tool_remote_check_transport_failures_are_reported() {
     crate::api::runtime::set_thread_scope_stack(stack);
 
     let runtime = RemoteBackendRuntime::new(&runtime_config(RemoteBackendConfig {
-        endpoint: Some(unused_local_endpoint()),
+        endpoint: Some(spawn_disconnecting_endpoint()),
         timeout_millis: 50,
         ..valid_remote()
     }))

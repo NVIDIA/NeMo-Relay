@@ -31,7 +31,7 @@ use uuid::Uuid;
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
 use crate::api::scope::ScopeType;
-use crate::api::subscriber::{scope_deregister_subscriber, try_scope_register_subscriber};
+use crate::api::subscriber::{try_scope_deregister_subscriber, try_scope_register_subscriber};
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointTransport, AtofExporter,
@@ -702,7 +702,7 @@ fn register_atif_dispatcher(
                 guard.flush_open_agents()
             };
             for (scope_uuid, name) in work.scope_subscribers {
-                let _ = scope_deregister_subscriber(&scope_uuid, &name);
+                let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
             }
             for export in work.exports {
                 let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
@@ -1134,7 +1134,7 @@ fn atif_dispatcher_subscriber(
             guard.complete_scope_write(write.agent_uuid, results)
         };
         if let Some((scope_uuid, name)) = scope_subscriber {
-            let _ = scope_deregister_subscriber(&scope_uuid, &name);
+            let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
         }
     })
 }
@@ -1162,7 +1162,7 @@ fn atif_scope_subscriber(
             guard.complete_scope_write(write.agent_uuid, results)
         };
         if let Some((scope_uuid, name)) = scope_subscriber {
-            let _ = scope_deregister_subscriber(&scope_uuid, &name);
+            let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
         }
     })
 }

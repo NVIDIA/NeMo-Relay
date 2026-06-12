@@ -8,6 +8,7 @@ use crate::api::event::{BaseEvent, EventCategory, MarkEvent, ScopeEvent};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{PopScopeParams, PushScopeParams};
+use crate::api::subscriber::scope_deregister_subscriber;
 use crate::config_editor::{EditorConfig, EditorFieldKind};
 #[cfg(feature = "schema")]
 use crate::plugin::plugin_config_schema;
@@ -1126,14 +1127,11 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
             .to_string()
             .contains("no output path")
     );
-    assert!(
-        results[1]
-            .1
-            .as_ref()
-            .unwrap_err()
-            .to_string()
-            .contains("storage[0]")
-    );
+    let remote_error = results[1].1.as_ref().unwrap_err().to_string();
+    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    assert!(remote_error.contains("storage[0]"));
+    #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+    assert!(remote_error.contains("ATIF storage support is not enabled in this build"));
 }
 
 #[test]

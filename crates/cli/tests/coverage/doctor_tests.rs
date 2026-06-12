@@ -8,8 +8,6 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -45,11 +43,15 @@ fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::threa
 }
 
 struct EnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
     values: Vec<(&'static str, Option<OsString>)>,
 }
 
 impl EnvScope {
     fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let previous = values
             .iter()
             .map(|(key, _)| (*key, std::env::var_os(key)))
@@ -62,7 +64,10 @@ impl EnvScope {
                 }
             }
         }
-        Self { values: previous }
+        Self {
+            _guard: guard,
+            values: previous,
+        }
     }
 }
 
@@ -339,7 +344,6 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
 
 #[test]
 fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("workspace");
     let workspace_config = workspace.join(".nemo-relay/config.toml");
@@ -453,7 +457,6 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
 
 #[test]
 fn collect_completions_reports_shell_specific_paths() {
-    let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let zsh_completion = temp.path().join(".zfunc/_nemo-relay");
     std::fs::create_dir_all(zsh_completion.parent().unwrap()).unwrap();
@@ -479,8 +482,6 @@ fn collect_completions_reports_shell_specific_paths() {
 
 #[test]
 fn collect_environment_and_completions_cover_missing_home_and_unknown_shell() {
-    let _guard = ENV_LOCK.lock().unwrap();
-
     let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/opt/bin/elvish")))]);
     let environment = collect_environment();
     assert_eq!(environment.shell.as_deref(), Some("elvish"));
@@ -501,7 +502,6 @@ fn collect_environment_and_completions_cover_missing_home_and_unknown_shell() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn collect_agents_filters_target_and_records_version() {
-    let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let codex = temp.path().join("codex");
     std::fs::write(&codex, "#!/bin/sh\nprintf 'codex 1.2.3\\n'\n").unwrap();
@@ -534,7 +534,6 @@ async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
 
 #[test]
 fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
-    let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();

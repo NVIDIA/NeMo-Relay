@@ -154,6 +154,20 @@ pub(crate) fn try_scope_register_subscriber(
     Ok(())
 }
 
+// Matching non-blocking teardown path for async callbacks that must not wait on
+// the scope-stack write lock during subscriber shutdown.
+pub(crate) fn try_scope_deregister_subscriber(scope_uuid: &uuid::Uuid, name: &str) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let mut guard = scope_stack
+        .try_write()
+        .map_err(|error| FlowError::Internal(format!("scope stack lock unavailable: {error}")))?;
+    let registries = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
+    Ok(registries.event_subscribers.remove(name).is_some())
+}
+
 /// Deregister a scope-local lifecycle event subscriber.
 ///
 /// This removes the named subscriber from the registry attached to a specific

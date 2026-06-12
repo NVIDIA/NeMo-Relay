@@ -12,11 +12,15 @@ fn current_dir_lock() -> &'static Mutex<()> {
 }
 
 struct EnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
     values: Vec<(&'static str, Option<OsString>)>,
 }
 
 impl EnvScope {
     fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let previous = values
             .iter()
             .map(|(key, _)| (*key, std::env::var_os(key)))
@@ -29,7 +33,10 @@ impl EnvScope {
                 }
             }
         }
-        Self { values: previous }
+        Self {
+            _guard: guard,
+            values: previous,
+        }
     }
 }
 
@@ -303,7 +310,7 @@ fn prepares_codex_config_overrides() {
 }
 
 #[test]
-fn prepares_codex_warns_when_no_auth_source_is_detected() {
+fn prepares_codex_with_hooks_when_auth_missing() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::set(&[
