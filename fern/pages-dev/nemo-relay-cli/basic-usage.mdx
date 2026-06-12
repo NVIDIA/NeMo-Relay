@@ -135,6 +135,10 @@ Config file locations are:
 Example:
 
 ```toml
+[gateway]
+max_hook_payload_bytes = 20971520
+max_passthrough_body_bytes = 104857600
+
 [upstream]
 openai_base_url = "https://api.openai.com/v1"
 anthropic_base_url = "https://api.anthropic.com"
@@ -261,6 +265,11 @@ Common environment variables for direct gateway server use are:
 - `NEMO_RELAY_GATEWAY_BIND`
 - `NEMO_RELAY_OPENAI_BASE_URL`
 - `NEMO_RELAY_ANTHROPIC_BASE_URL`
+- `NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES`
+- `NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES`
+
+The default hook payload limit is `20MiB`. The default provider passthrough body
+limit is `100MiB`. Set both values in bytes.
 
 Plugin configuration controls process-level Observability exporters. Per-session
 configuration controls structured metadata on the top-level agent begin event
