@@ -163,8 +163,8 @@ enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
-Invalid shared TOML, malformed plugin config, unsupported exporter settings,
-or unavailable exporter features fail closed during setup or launch. The
+During setup or launch, invalid shared TOML, malformed plugin config, unsupported exporter settings,
+or unavailable exporter features will fail closed. The
 wrapper does not start the coding agent against a configuration that cannot be
 parsed, validated, or activated. Once the gateway and agent are running,
 exporter delivery failures follow the observability plugin policy: application
@@ -189,7 +189,7 @@ payload may be missing from telemetry. For wrapper-generated `hook-forward`
 commands, add
 `--fail-closed` when policy requires hook delivery to block the agent. For
 plugin shim hooks, set `NEMO_RELAY_FAIL_CLOSED=1` in the hook execution
-environment; in that mode, forwarding failures return a non-zero hook command
+environment. In that mode, forwarding failures return a non-zero hook command
 status to the host.
 
 Useful wrapper options:
