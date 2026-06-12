@@ -20,8 +20,19 @@ Install the NeMo Relay CLI when you want the `nemo-relay` executable for
 coding-agent hook and LLM gateway observability.
 
 ```bash
-cargo install nemo-relay-cli@0.4.0
+cargo install nemo-relay-cli@0.5.0
 ```
+
+After installation, `nemo-relay` can also install persistent Claude Code and
+Codex host plugins:
+
+```bash
+nemo-relay install claude-code
+nemo-relay install codex
+```
+
+See [Plugin Installation](/nemo-relay-cli/plugin-installation) for the host
+plugin workflow.
 
 ## Python
 
@@ -29,7 +40,7 @@ Install the Python package when your application uses NeMo Relay through the
 Python wrapper.
 
 ```bash
-uv add nemo-relay@0.4.0
+uv add nemo-relay@0.5.0
 ```
 
 Use `uv add` from an application project that has a `pyproject.toml`; it records
@@ -52,8 +63,8 @@ npm install nemo-relay-node
 Add the Rust crates when your application uses NeMo Relay directly from Rust.
 
 ```bash
-cargo add nemo-relay@0.4.0
-cargo add nemo-relay-adaptive@0.4.0
+cargo add nemo-relay@0.5.0
+cargo add nemo-relay-adaptive@0.5.0
 ```
 
 - `nemo-relay` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
@@ -70,7 +81,7 @@ Install the OpenClaw plugin through OpenClaw so OpenClaw can register and manage
 the package:
 
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.4.0
+openclaw plugins install npm:nemo-relay-openclaw@0.5.0
 openclaw gateway restart
 ```
 
@@ -85,7 +96,7 @@ Install the Python package with the supported framework extras when your
 application uses LangChain, LangGraph, or Deep Agents.
 
 ```bash
-uv add "nemo-relay[langchain,langgraph,deepagents]@0.4.0"
+uv add "nemo-relay[langchain,langgraph,deepagents]@0.5.0"
 ```
 
 The extras install the NeMo Relay Python package plus the dependencies needed by

@@ -13,8 +13,10 @@ use super::super::traits::LlmResponseCodec;
 use crate::codec::pricing::pricing_test_mutex;
 use crate::error::FlowError;
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+    DiagnosticLevel, PluginComponentSpec, PluginConfig, clear_plugin_configuration,
+    initialize_plugins, validate_plugin_config,
 };
+use crate::plugins::pricing::register_pricing_component;
 
 struct ResetPricingResolverGuard;
 
@@ -768,6 +770,9 @@ fn test_pricing_resolver_validates_custom_source_catalogs() {
 
 #[test]
 fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
+    let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap();
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     let mut component = PluginComponentSpec::new("pricing");
     component.config = serde_json::from_value(json!({
@@ -820,6 +825,73 @@ fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
 }
 
 #[test]
+fn test_pricing_plugin_validation_reports_invalid_json_and_catalog_errors() {
+    let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap();
+    register_pricing_component().unwrap();
+    register_pricing_component().unwrap();
+
+    let mut malformed = PluginComponentSpec::new("pricing");
+    malformed.config = serde_json::from_value(json!({
+        "sources": [],
+        "unexpected": true
+    }))
+    .unwrap();
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![malformed],
+        ..PluginConfig::default()
+    });
+    assert!(report.has_errors());
+    assert_eq!(report.diagnostics[0].level, DiagnosticLevel::Error);
+    assert_eq!(report.diagnostics[0].code, "pricing.invalid_config");
+    assert!(
+        report.diagnostics[0]
+            .message
+            .contains("unknown field `unexpected`")
+    );
+
+    let mut invalid_catalog = PluginComponentSpec::new("pricing");
+    invalid_catalog.config = serde_json::from_value(json!({
+        "sources": [
+            {
+                "type": "inline",
+                "catalog": {
+                    "version": 2,
+                    "entries": []
+                }
+            }
+        ]
+    }))
+    .unwrap();
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![invalid_catalog],
+        ..PluginConfig::default()
+    });
+    assert!(report.has_errors());
+    assert!(
+        report.diagnostics[0]
+            .message
+            .contains("unsupported pricing catalog version 2")
+    );
+
+    let duplicate = validate_plugin_config(&PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("pricing"),
+            PluginComponentSpec::new("pricing"),
+        ],
+        ..PluginConfig::default()
+    });
+    assert!(duplicate.has_errors());
+    assert!(
+        duplicate
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "plugin.duplicate_component")
+    );
+}
+
+#[test]
 fn test_pricing_catalog_rejects_duplicate_model_aliases() {
     let err = pricing_catalog_error(json!([
         flat_pricing_entry("a", "same-model", 1.0, 1.0),
@@ -858,6 +930,320 @@ fn test_pricing_catalog_rejects_unsupported_schema_version() {
     assert!(
         err.to_string()
             .contains("unsupported pricing catalog version 2")
+    );
+}
+
+#[test]
+fn test_pricing_catalog_rejects_empty_required_fields_and_invalid_rates() {
+    for (field, expected) in [
+        ("provider", "empty provider"),
+        ("model_id", "empty model_id"),
+        ("currency", "empty currency"),
+        ("pricing_as_of", "empty pricing_as_of"),
+        ("pricing_source", "empty pricing_source"),
+    ] {
+        let mut entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
+        entry[field] = json!(" ");
+
+        let err = pricing_catalog_error(json!([entry]));
+
+        assert!(
+            err.to_string().contains(expected),
+            "expected {expected}, got {err}"
+        );
+    }
+
+    for (field, expected) in [
+        ("input_per_million", "rates.input_per_million"),
+        ("output_per_million", "rates.output_per_million"),
+        ("cache_read_per_million", "rates.cache_read_per_million"),
+        ("cache_write_per_million", "rates.cache_write_per_million"),
+    ] {
+        let mut entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
+        entry["rates"][field] = json!(-0.1);
+
+        let err = pricing_catalog_error(json!([entry]));
+
+        assert!(
+            err.to_string().contains(expected),
+            "expected {expected}, got {err}"
+        );
+    }
+}
+
+#[test]
+fn test_pricing_catalog_rejects_invalid_rate_schedules() {
+    let empty_tiers = pricing_catalog_error(json!([
+        {
+            "provider": "configured",
+            "model_id": "configured-model",
+            "pricing_as_of": "2026-06-04",
+            "pricing_source": "test",
+            "rate_schedule": {
+                "type": "prompt_token_threshold",
+                "tiers": []
+            },
+            "prompt_cache": {
+                "read_accounting": "separate"
+            }
+        }
+    ]));
+    assert!(empty_tiers.to_string().contains("rate_schedule.tiers"));
+
+    let reversed_bounds = pricing_catalog_error(json!([
+        {
+            "provider": "configured",
+            "model_id": "configured-model",
+            "pricing_as_of": "2026-06-04",
+            "pricing_source": "test",
+            "rate_schedule": {
+                "type": "prompt_token_threshold",
+                "tiers": [
+                    {
+                        "min_prompt_tokens": 20,
+                        "max_prompt_tokens": 10,
+                        "rates": {
+                            "input_per_million": 1.0,
+                            "output_per_million": 2.0
+                        }
+                    }
+                ]
+            },
+            "prompt_cache": {
+                "read_accounting": "separate"
+            }
+        }
+    ]));
+    assert!(
+        reversed_bounds
+            .to_string()
+            .contains("rate_schedule.tiers.prompt_tokens")
+    );
+
+    let invalid_tier_rate = pricing_catalog_error(json!([
+        {
+            "provider": "configured",
+            "model_id": "configured-model",
+            "pricing_as_of": "2026-06-04",
+            "pricing_source": "test",
+            "rate_schedule": {
+                "type": "prompt_token_threshold",
+                "tiers": [
+                    {
+                        "rates": {
+                            "input_per_million": -1.0,
+                            "output_per_million": 2.0
+                        }
+                    }
+                ]
+            },
+            "prompt_cache": {
+                "read_accounting": "separate"
+            }
+        }
+    ]));
+    assert!(
+        invalid_tier_rate
+            .to_string()
+            .contains("rate_schedule.tiers[0].rates.input_per_million")
+    );
+}
+
+#[test]
+fn test_pricing_resolver_file_and_source_error_branches() {
+    let missing_path = std::env::temp_dir().join(format!(
+        "nemo-relay-missing-pricing-{}-{}.json",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let err = PricingResolver::from_config(&PricingConfig {
+        sources: vec![PricingSourceConfig::File {
+            path: missing_path.clone(),
+        }],
+    })
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("could not read pricing catalog file")
+    );
+    assert!(
+        err.to_string()
+            .contains(&missing_path.display().to_string())
+    );
+
+    struct EmptyPricingSource;
+
+    impl PricingSource for EmptyPricingSource {
+        fn source_name(&self) -> &str {
+            "empty"
+        }
+
+        fn load_catalog(&self) -> Result<Option<PricingCatalog>, PricingCatalogError> {
+            Ok(None)
+        }
+    }
+
+    let source = EmptyPricingSource;
+    assert_eq!(source.source_name(), "empty");
+    let resolver = PricingResolver::from_sources(vec![Box::new(source)]).unwrap();
+    assert!(resolver.pricing_for_model("anything").is_none());
+
+    struct ErrorPricingSource;
+
+    impl PricingSource for ErrorPricingSource {
+        fn source_name(&self) -> &str {
+            "error"
+        }
+
+        fn load_catalog(&self) -> Result<Option<PricingCatalog>, PricingCatalogError> {
+            Err(PricingCatalogError::UnsupportedVersion { version: 99 })
+        }
+    }
+
+    let err = PricingResolver::from_sources(vec![Box::new(ErrorPricingSource)]).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("unsupported pricing catalog version 99")
+    );
+}
+
+#[test]
+fn test_pricing_public_helpers_and_provider_inference_cover_edge_branches() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([
+        {
+            "provider": "provider-a",
+            "model_id": "priced-model",
+            "aliases": ["alias-model"],
+            "pricing_as_of": "2026-06-04",
+            "pricing_source": "test",
+            "rates": {
+                "input_per_million": 1.0,
+                "output_per_million": 2.0,
+                "cache_read_per_million": 0.25,
+                "cache_write_per_million": 3.0
+            },
+            "prompt_cache": {
+                "read_accounting": "included_in_prompt_tokens"
+            }
+        }
+    ]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog.clone()])).unwrap();
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(500),
+        cache_read_tokens: Some(100),
+        cache_write_tokens: Some(10),
+        ..Usage::default()
+    };
+
+    assert!(catalog.pricing_for_model(" ").is_none());
+    assert_eq!(
+        pricing_for_model("ALIAS-MODEL").unwrap().model_id,
+        "priced-model"
+    );
+    assert_eq!(
+        pricing_for_provider(Some("/provider-a/"), "provider-a/priced-model")
+            .unwrap()
+            .provider,
+        "provider-a"
+    );
+    assert_eq!(
+        estimate_cost("priced-model", &usage).unwrap().total,
+        Some(0.001955)
+    );
+    assert_eq!(
+        estimate_cost_for_provider(Some("provider-a"), "priced-model", &usage)
+            .unwrap()
+            .pricing_provider
+            .as_deref(),
+        Some("provider-a")
+    );
+    assert_eq!(
+        estimate_cost_with_catalog(&catalog, "priced-model", &usage)
+            .unwrap()
+            .pricing_model
+            .as_deref(),
+        Some("priced-model")
+    );
+    assert_eq!(
+        estimate_cost_with_provider(&catalog, Some("provider-a"), "priced-model", &usage)
+            .unwrap()
+            .pricing_provider
+            .as_deref(),
+        Some("provider-a")
+    );
+    assert_eq!(
+        infer_model_provider(" OpenAI ", Some("azure/openai/gpt-4o-mini")),
+        Some("azure/openai".to_string())
+    );
+    assert_eq!(
+        infer_model_provider(" /OpenAI/ ", Some("gpt-4o-mini")),
+        Some("openai".into())
+    );
+    assert_eq!(infer_model_provider(" / ", None), None);
+}
+
+#[test]
+fn test_attach_estimated_cost_preserves_existing_or_incomplete_responses() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+    let catalog = pricing_catalog(json!([flat_pricing_entry(
+        "configured",
+        "configured-model",
+        1.0,
+        2.0
+    )]));
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+
+    let mut with_cost = full_response();
+    with_cost.model = Some("configured-model".into());
+    with_cost.usage.as_mut().unwrap().cost = Some(CostEstimate {
+        total: Some(9.0),
+        currency: "USD".into(),
+        input: None,
+        output: None,
+        cache_read: None,
+        cache_write: None,
+        source: CostSource::ProviderReported,
+        pricing_provider: None,
+        pricing_model: None,
+        pricing_as_of: None,
+        pricing_source: None,
+    });
+    attach_estimated_cost(&mut with_cost);
+    assert_eq!(
+        with_cost
+            .usage
+            .as_ref()
+            .unwrap()
+            .cost
+            .as_ref()
+            .unwrap()
+            .total,
+        Some(9.0)
+    );
+
+    let mut without_model = full_response();
+    without_model.model = None;
+    attach_estimated_cost(&mut without_model);
+    assert!(without_model.usage.as_ref().unwrap().cost.is_none());
+
+    let mut without_usage = minimal_response();
+    without_usage.model = Some("configured-model".into());
+    attach_estimated_cost_for_provider(&mut without_usage, Some("configured"));
+    assert!(without_usage.usage.is_none());
+
+    let mut priced = full_response();
+    priced.model = Some("configured-model".into());
+    attach_estimated_cost_for_provider(&mut priced, Some("configured"));
+    assert_eq!(
+        priced.usage.as_ref().unwrap().cost.as_ref().unwrap().total,
+        Some(0.00005)
     );
 }
 

@@ -78,6 +78,7 @@ openinference = [
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+toml = { version = "0.9" }
 schemars = { version = "0.8", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
@@ -103,6 +104,7 @@ futures = "0.3"
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 serde_json = "1"
 object_store = { version = "0.13", default-features = false, features = ["aws"] }
+tempfile = "3"
 
 [[test]]
 name = "codec_integration"

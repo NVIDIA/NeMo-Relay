@@ -315,6 +315,110 @@ fn reset_global() {
 }
 
 #[test]
+fn test_layer_config_overlay_wins() {
+    // The overlay is the higher-precedence layer: it overrides shared component fields, deep-merges
+    // nested config objects, replaces arrays, appends overlay-only kinds, preserves base-only kinds,
+    // replaces top-level scalars, and recursively merges top-level objects (policy).
+    let base = json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "alpha",
+                "enabled": true,
+                "config": { "keep": "base", "override": "base", "nested": {"a": 1, "b": 2}, "list": [1, 2, 3] }
+            },
+            { "kind": "base_only", "enabled": true, "config": {} }
+        ],
+        "policy": { "unknown_component": "warn", "unknown_field": "warn" }
+    });
+    let overlay = json!({
+        "version": 2,
+        "components": [
+            {
+                "kind": "alpha",
+                "enabled": false,
+                "config": { "override": "overlay", "added": true, "nested": {"b": 20, "c": 30}, "list": [9] }
+            },
+            { "kind": "overlay_only", "enabled": true, "config": {} }
+        ],
+        "policy": { "unknown_component": "error" }
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let components = merged["components"].as_array().unwrap();
+
+    // Ordering: base components first (in base order), then overlay-only components appended.
+    let kinds: Vec<&str> = components
+        .iter()
+        .map(|component| component["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["alpha", "base_only", "overlay_only"]);
+
+    let alpha = &components[0];
+    assert_eq!(alpha["enabled"], json!(false), "overlay enabled wins");
+    assert_eq!(
+        alpha["config"]["keep"],
+        json!("base"),
+        "base-only key preserved"
+    );
+    assert_eq!(
+        alpha["config"]["override"],
+        json!("overlay"),
+        "overlay scalar wins"
+    );
+    assert_eq!(alpha["config"]["added"], json!(true), "overlay key added");
+    assert_eq!(
+        alpha["config"]["nested"],
+        json!({"a": 1, "b": 20, "c": 30}),
+        "nested objects merge recursively"
+    );
+    assert_eq!(
+        alpha["config"]["list"],
+        json!([9]),
+        "arrays are replaced, not merged"
+    );
+
+    // Base-only component is preserved.
+    assert_eq!(components[1]["kind"], json!("base_only"));
+
+    // Top-level scalars are replaced by the overlay; objects (policy) merge recursively.
+    assert_eq!(merged["version"], json!(2));
+    assert_eq!(merged["policy"]["unknown_component"], json!("error"));
+    assert_eq!(
+        merged["policy"]["unknown_field"],
+        json!("warn"),
+        "base-only policy field preserved"
+    );
+}
+
+#[test]
+fn test_layer_config_preserves_multi_instance_kinds() {
+    // A kind used more than once (multi-instance plugins) must not collapse into the first slot.
+    let base = json!({ "components": [ { "kind": "multi", "config": { "n": 0 } } ] });
+    let overlay = json!({
+        "components": [
+            { "kind": "multi", "config": { "n": 1 } },
+            { "kind": "multi", "config": { "tag": "second" } }
+        ]
+    });
+
+    let mut merged = base;
+    layer_config(&mut merged, overlay);
+    let components = merged["components"].as_array().unwrap();
+
+    // First overlay instance pairs with the base instance; the second is appended, not dropped.
+    assert_eq!(components.len(), 2);
+    assert!(
+        components
+            .iter()
+            .all(|component| component["kind"] == json!("multi"))
+    );
+    assert_eq!(components[0]["config"]["n"], json!(1));
+    assert_eq!(components[1]["config"]["tag"], json!("second"));
+}
+
+#[test]
 fn test_config_report_has_errors() {
     let report = ConfigReport {
         diagnostics: vec![ConfigDiagnostic {
@@ -399,7 +503,7 @@ fn test_initialize_plugins_registers_and_clears_components() {
         .build()
         .unwrap();
     let report = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("test.plugin")],
             ..PluginConfig::default()
         }))
@@ -506,7 +610,7 @@ fn test_plugin_config_defaults_debug_and_invalid_config_messages() {
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             version: 2,
             components: vec![PluginComponentSpec::new("missing.plugin")],
             policy: ConfigPolicy {
@@ -750,14 +854,14 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
         .unwrap();
 
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("recording.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
 
     let err = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("restore.fail.plugin")],
             ..PluginConfig::default()
         }))
@@ -794,7 +898,7 @@ fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure(
         .build()
         .unwrap();
     let err = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("partial.fail.plugin")],
             ..PluginConfig::default()
         }))
@@ -823,7 +927,7 @@ fn test_initialize_plugins_skips_disabled_components_and_namespaces_multiple_ins
         .build()
         .unwrap();
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![
                 PluginComponentSpec::new("recording.plugin"),
                 PluginComponentSpec {
@@ -858,7 +962,7 @@ fn test_initialize_plugins_reports_missing_component_during_activation() {
         .build()
         .unwrap();
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("vanishing.plugin")],
             ..PluginConfig::default()
         }))
@@ -1252,14 +1356,14 @@ fn test_initialize_plugins_replaces_previous_configuration_on_success() {
         .unwrap();
 
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("recording.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
 
     let report = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("replacement.plugin")],
             ..PluginConfig::default()
         }))
@@ -1290,14 +1394,14 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
         .unwrap();
 
     runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("restore.break.plugin")],
             ..PluginConfig::default()
         }))
         .unwrap();
 
     let error = runtime
-        .block_on(initialize_plugins(PluginConfig {
+        .block_on(initialize_plugins_exact(PluginConfig {
             components: vec![PluginComponentSpec::new("restore.fail.plugin")],
             ..PluginConfig::default()
         }))
@@ -1314,4 +1418,116 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
 
     assert!(active_plugin_report().is_none());
     reset_global();
+}
+
+#[test]
+fn test_load_plugin_config_files_merges_files_by_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &lower,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n\
+         [components.config]\n\
+         output_directory = \"/var/log\"\n\
+         mode = \"append\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &higher,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         [components.config]\n\
+         mode = \"overwrite\"\n\
+         [[components]]\n\
+         kind = \"adaptive\"\n",
+    )
+    .unwrap();
+
+    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
+        .unwrap()
+        .expect("a file exists");
+    assert_eq!(sources, vec![lower, higher]);
+
+    let components = merged["components"].as_array().unwrap();
+    let observability = &components[0];
+    assert_eq!(observability["kind"], json!("observability"));
+    assert_eq!(
+        observability["enabled"],
+        json!(false),
+        "lower-file enabled is inherited (higher omits it)"
+    );
+    assert_eq!(
+        observability["config"]["output_directory"],
+        json!("/var/log"),
+        "lower-only config key is inherited"
+    );
+    assert_eq!(
+        observability["config"]["mode"],
+        json!("overwrite"),
+        "higher file overrides the shared config key"
+    );
+    assert_eq!(
+        components[1]["kind"],
+        json!("adaptive"),
+        "higher-only component kind is appended"
+    );
+}
+
+#[test]
+fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
+    // The code-vs-file path `initialize_plugins` takes: a typed `PluginConfig` is layered
+    // over the discovered file base. Its serde defaults (`version`/`policy`/`enabled`)
+    // override the file, the free-form `config` body merges, and an undeclared component
+    // kind is inherited from the file.
+    let file_base = json!({
+        "version": 2,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": false,
+                "config": { "output_directory": "/var/log", "mode": "append" }
+            },
+            { "kind": "adaptive", "config": { "ttl": 60 } }
+        ],
+        "policy": {
+            "unknown_component": "error",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
+        }
+    });
+    let code = PluginConfig {
+        components: vec![PluginComponentSpec {
+            config: Map::from_iter([(String::from("mode"), json!("overwrite"))]),
+            ..PluginComponentSpec::new("observability")
+        }],
+        ..PluginConfig::default()
+    };
+
+    let mut merged = file_base;
+    layer_config(&mut merged, serde_json::to_value(code).unwrap());
+    let typed: PluginConfig = serde_json::from_value(merged).unwrap();
+
+    // Typed defaults override the file base.
+    assert_eq!(typed.version, 1, "typed default version overrides the file");
+    assert_eq!(
+        typed.policy.unknown_component,
+        UnsupportedBehavior::Warn,
+        "typed default policy overrides the file"
+    );
+    let observability = &typed.components[0];
+    assert_eq!(observability.kind, "observability");
+    assert!(
+        observability.enabled,
+        "typed default enabled=true overrides the file's false"
+    );
+    // The component config body merges: code's `mode` wins, the file's `output_directory`
+    // is inherited.
+    assert_eq!(observability.config["mode"], json!("overwrite"));
+    assert_eq!(observability.config["output_directory"], json!("/var/log"));
+    // A kind the code config does not declare is inherited from the file.
+    assert_eq!(typed.components[1].kind, "adaptive");
 }

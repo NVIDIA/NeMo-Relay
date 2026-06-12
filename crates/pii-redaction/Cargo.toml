@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-pii-redaction"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "First-party deterministic and model-backed PII redaction plugin surfaces for NeMo Relay."
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+schema = ["dep:schemars", "nemo-relay/schema"]
+
+[dependencies]
+nemo-relay.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+sha2 = "0.11"
+schemars = { version = "0.8", optional = true }
+
+[dev-dependencies]
+nemo-relay = { workspace = true, features = ["openinference"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }

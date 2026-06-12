@@ -31,7 +31,10 @@ use uuid::Uuid;
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
 use crate::api::scope::ScopeType;
-use crate::api::subscriber::{scope_deregister_subscriber, scope_register_subscriber};
+use crate::api::subscriber::{
+    scope_deregister_subscriber, try_scope_deregister_subscriber, try_scope_register_subscriber,
+};
+use crate::error::FlowError;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointTransport, AtofExporter,
@@ -702,7 +705,7 @@ fn register_atif_dispatcher(
                 guard.flush_open_agents()
             };
             for (scope_uuid, name) in work.scope_subscribers {
-                let _ = scope_deregister_subscriber(&scope_uuid, &name);
+                deregister_atif_shutdown_subscriber(&scope_uuid, &name)?;
             }
             for export in work.exports {
                 let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
@@ -729,6 +732,13 @@ fn register_atif_dispatcher(
         }),
     ));
     Ok(())
+}
+
+fn deregister_atif_shutdown_subscriber(scope_uuid: &Uuid, name: &str) -> PluginResult<()> {
+    match scope_deregister_subscriber(scope_uuid, name) {
+        Ok(_) | Err(FlowError::NotFound(_)) => Ok(()),
+        Err(error) => Err(observability_registration_error(error)),
+    }
 }
 
 #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
@@ -937,7 +947,7 @@ impl AtifDispatcher {
         // With async subscriber delivery, the root scope may already be closed
         // when the dispatcher observes this start event; global routing still
         // handles descendant events by parent UUID in that case.
-        if scope_register_subscriber(&agent_uuid, &name, callback).is_ok() {
+        if try_scope_register_subscriber(&agent_uuid, &name, callback).is_ok() {
             self.scope_subscribers.insert(agent_uuid, name);
         }
         None
@@ -1134,7 +1144,7 @@ fn atif_dispatcher_subscriber(
             guard.complete_scope_write(write.agent_uuid, results)
         };
         if let Some((scope_uuid, name)) = scope_subscriber {
-            let _ = scope_deregister_subscriber(&scope_uuid, &name);
+            let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
         }
     })
 }
@@ -1162,7 +1172,7 @@ fn atif_scope_subscriber(
             guard.complete_scope_write(write.agent_uuid, results)
         };
         if let Some((scope_uuid, name)) = scope_subscriber {
-            let _ = scope_deregister_subscriber(&scope_uuid, &name);
+            let _ = try_scope_deregister_subscriber(&scope_uuid, &name);
         }
     })
 }

@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Relay Claude Code Observability
+# NeMo Relay Plugin
 
 This package contains Claude Code hook entries that forward canonical Claude
 Code hook JSON to `nemo-relay` at `/hooks/claude-code`.
@@ -16,15 +16,14 @@ same local hook and gateway controls as Claude Code.
 
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-relay hook-forward claude`.
+  `nemo-relay plugin-shim hook claude`.
 
 ## Captured Events
 
-The bundle forwards `SessionStart`, `SessionEnd`, `SubagentStart`,
-`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-`Notification`, and `PreCompact` as scope, tool, or mark events.
-`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop`
-provide private LLM correlation hints for gateway requests.
+The bundle forwards `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`,
+`SubagentStart`, `SubagentStop`, `Notification`, `Stop`, `PreCompact`, and
+`PostCompact` as scope, tool, mark, or private LLM correlation events.
 
 Claude Code observability is turn-oriented. A multi-turn session can produce one
 root `claude-code-turn` span or ATIF trajectory per user turn. That is expected
@@ -105,8 +104,9 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
 claude
 ```
 
-Hook events (tool calls, session markers) are only captured when running
-through the wrapper, which injects ephemeral hooks per-run.
+In manual gateway-only mode without the plugin installed, hook events such as
+tool calls and session markers are only captured when running through the
+wrapper, which injects ephemeral hooks per run.
 
 ## Verify
 
@@ -152,3 +152,135 @@ unknown subagent end arrives during an active turn, Relay may emit a
 Hook events are only available when Claude Code loads this plugin. A standalone
 gateway observes Anthropic LLM traffic, but it cannot recover missing prompt,
 tool, compaction, notification, or subagent hooks.
+## Standalone Plugin Installation
+
+Preferred release install:
+
+```bash
+nemo-relay install claude-code
+```
+
+`nemo-relay install claude-code` writes a local Claude Code marketplace,
+installs `nemo-relay-plugin` at user scope, and enables Claude Code provider
+routing through NeMo Relay.
+
+No separate provider-routing command is required when installing through
+`nemo-relay install`.
+
+The install command requires `nemo-relay` to be available on `PATH`. It does not
+require launching Claude Code through the `nemo-relay` wrapper.
+
+Package or unpack the plugin so the plugin root contains:
+
+```text
+nemo-relay-plugin/
+  .claude-plugin/plugin.json
+  hooks/hooks.json
+```
+
+The hook shim starts the sidecar lazily if no gateway is already reachable.
+
+Repo marketplace discovery is also supported:
+
+```bash
+claude plugin marketplace add NVIDIA/NeMo-Relay \
+  --sparse .claude-plugin integrations/coding-agents/claude-code
+claude plugin install nemo-relay-plugin@nemo-relay --scope user
+```
+
+That path reads `.claude-plugin/marketplace.json` from the repository and
+installs this Claude Code plugin from `integrations/coding-agents/claude-code`.
+Source hooks invoke `nemo-relay plugin-shim hook claude` directly. Use
+`nemo-relay install claude-code` for the complete provider-routing setup.
+
+Create a local Claude Code marketplace and copy the plugin under that
+marketplace root:
+
+```bash
+MARKETPLACE_ROOT="$HOME/.local/share/nemo-relay/claude-code-marketplace"
+PLUGIN_ROOT="$MARKETPLACE_ROOT/plugins/nemo-relay-plugin"
+mkdir -p "$MARKETPLACE_ROOT/.claude-plugin" "$MARKETPLACE_ROOT/plugins"
+cp -R /path/to/nemo-relay-plugin "$PLUGIN_ROOT"
+```
+
+Create `$MARKETPLACE_ROOT/.claude-plugin/marketplace.json`:
+
+```json
+{
+  "name": "nemo-relay-local",
+  "metadata": {
+    "description": "Local NeMo Relay plugins for Claude Code."
+  },
+  "owner": {
+    "name": "NVIDIA Corporation and Affiliates",
+    "email": "noreply@nvidia.com"
+  },
+  "plugins": [
+    {
+      "name": "nemo-relay-plugin",
+      "description": "Forward Claude Code lifecycle hooks to a local NeMo Relay sidecar.",
+      "source": "./plugins/nemo-relay-plugin",
+      "category": "development"
+    }
+  ]
+}
+```
+
+Validate the marketplace, add it to Claude Code, and install the plugin:
+
+```bash
+claude plugin validate "$MARKETPLACE_ROOT"
+claude plugin marketplace add "$MARKETPLACE_ROOT"
+claude plugin install nemo-relay-plugin@nemo-relay-local --scope user
+```
+
+For a one-session development smoke test without persistent plugin
+installation, launch Claude Code with the plugin directory:
+
+```bash
+claude --plugin-dir "$PLUGIN_ROOT"
+```
+
+Hook commands in the source `hooks/hooks.json` template use
+`nemo-relay plugin-shim hook claude`, so source marketplace installs rely on
+the same `nemo-relay` executable available on `PATH`.
+
+If you set up the marketplace manually for development, use the top-level
+installer commands for provider routing and rollback:
+
+```bash
+nemo-relay install claude-code
+nemo-relay uninstall claude-code
+```
+
+Run read-only plugin checks:
+
+```bash
+nemo-relay doctor --plugin claude-code
+```
+
+Start a normal Claude Code session:
+
+```bash
+claude
+```
+
+The installed hooks start the Relay sidecar lazily, and provider traffic is
+routed through `ANTHROPIC_BASE_URL=http://127.0.0.1:47632`.
+
+To upgrade manually, replace the plugin directory contents with the new package,
+keep the same `MARKETPLACE_ROOT`, update the marketplace, and rerun the
+top-level installer:
+
+```bash
+claude plugin marketplace update nemo-relay-local
+claude plugin update nemo-relay-plugin
+nemo-relay install claude-code
+```
+
+To uninstall, restore Claude Code provider settings, uninstall the plugin, remove
+the marketplace registration, and remove the generated marketplace directory:
+
+```bash
+nemo-relay uninstall claude-code
+```

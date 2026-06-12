@@ -388,6 +388,33 @@ try {
 NODE
 }
 
+set_coding_agent_plugin_versions() {
+    local version="$1"
+
+    node - "$version" <<'NODE'
+const fs = require('fs');
+const version = process.argv[2];
+const manifests = [
+  'integrations/coding-agents/claude-code/.claude-plugin/plugin.json',
+  'integrations/coding-agents/codex/.codex-plugin/plugin.json',
+];
+
+for (const manifestPath of manifests) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!manifest.version) {
+    throw new Error(`${manifestPath} missing version field`);
+  }
+  if (manifest.version === version) {
+    console.log(`${manifestPath} already set to ${version}`);
+    continue;
+  }
+  manifest.version = version;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  console.log(`${manifestPath} version updated to ${version}`);
+}
+NODE
+}
+
 read_workspace_version() {
     local python_executable=""
     python_executable="$(uv_python_executable)"
@@ -425,7 +452,13 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-relay", "nemo-relay-adaptive", "nemo-relay-ffi", "nemo-relay-cli")
+local_dependencies = (
+    "nemo-relay",
+    "nemo-relay-adaptive",
+    "nemo-relay-pii-redaction",
+    "nemo-relay-ffi",
+    "nemo-relay-cli",
+)
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):
@@ -527,6 +560,7 @@ set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
+    set_coding_agent_plugin_versions "$version"
 }
 
 set_python_package_version() {
@@ -819,6 +853,38 @@ test-rust:
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
     junit_out=""
+    test_config_root="$(mktemp -d)"
+    cleanup_test_config_root() {
+        rm -rf "$test_config_root"
+    }
+    trap cleanup_test_config_root EXIT
+
+    host_os="$(uname -s 2>/dev/null || true)"
+    is_windows=false
+    case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
+        Windows:*|*:msys*:*|*:win32*:*|*:*:MINGW*|*:*:MSYS*|*:*:CYGWIN*)
+            is_windows=true
+            ;;
+    esac
+    native_test_config_path() {
+        if [[ "$is_windows" == true ]] && command -v cygpath >/dev/null 2>&1; then
+            cygpath -w "$1"
+        else
+            printf '%s\n' "$1"
+        fi
+    }
+
+    xdg_config_home="$test_config_root/xdg"
+    mkdir -p "$xdg_config_home"
+    export XDG_CONFIG_HOME="$(native_test_config_path "$xdg_config_home")"
+    if [[ "$is_windows" == true ]]; then
+        appdata_home="$test_config_root/AppData/Roaming"
+        localappdata_home="$test_config_root/AppData/Local"
+        mkdir -p "$appdata_home" "$localappdata_home"
+        export APPDATA="$(native_test_config_path "$appdata_home")"
+        export LOCALAPPDATA="$(native_test_config_path "$localappdata_home")"
+    fi
+
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
@@ -827,7 +893,7 @@ test-rust:
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
-        cargo nextest run --workspace --profile ci
+        cargo nextest run --workspace --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \

@@ -4,11 +4,8 @@
 use super::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use clap_complete::Shell;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn zsh_uses_zdotdir_when_set() {
@@ -93,34 +90,58 @@ fn write_atomic_creates_target_and_removes_temp_file() {
 
 #[test]
 fn install_writes_detected_shell_completion() {
-    let _guard = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let old_home = std::env::var_os("HOME");
-    let old_zdotdir = std::env::var_os("ZDOTDIR");
-    let old_shell = std::env::var_os("SHELL");
-
-    unsafe {
-        std::env::set_var("HOME", temp.path());
-        std::env::remove_var("ZDOTDIR");
-        std::env::set_var("SHELL", "/bin/zsh");
-    }
+    let _env = EnvScope::set(&[
+        ("HOME", Some(temp.path().as_os_str())),
+        ("ZDOTDIR", None),
+        ("SHELL", Some(std::ffi::OsStr::new("/bin/zsh"))),
+    ]);
 
     let path = install(None).unwrap();
-
-    restore_env("HOME", old_home);
-    restore_env("ZDOTDIR", old_zdotdir);
-    restore_env("SHELL", old_shell);
 
     assert_eq!(path, temp.path().join(".zfunc/_nemo-relay"));
     let script = std::fs::read_to_string(path).unwrap();
     assert!(script.contains("nemo-relay"));
 }
 
-fn restore_env(key: &str, value: Option<OsString>) {
-    unsafe {
-        match value {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
+struct EnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            values: previous,
+        }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
         }
     }
 }

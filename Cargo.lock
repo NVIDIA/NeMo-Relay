@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -1348,10 +1348,12 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
+ "toml",
  "tonic",
  "typed-builder",
  "uuid",
@@ -1362,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-adaptive"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "nemo-relay",
@@ -1381,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-stream",
  "axum",
@@ -1395,6 +1397,7 @@ dependencies = [
  "http-body-util",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "opentelemetry",
  "opentelemetry_sdk",
  "reqwest",
@@ -1414,13 +1417,14 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-ffi"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cbindgen",
  "chrono",
  "libc",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -1429,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-node"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "napi",
@@ -1437,6 +1441,7 @@ dependencies = [
  "napi-derive",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "serde",
  "serde_json",
  "tokio",
@@ -1445,12 +1450,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-pii-redaction"
+version = "0.5.0"
+dependencies = [
+ "futures",
+ "nemo-relay",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "nemo-relay-python"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
@@ -1463,12 +1483,13 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-wasm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "js-sys",
  "nemo-relay",
  "nemo-relay-adaptive",
+ "nemo-relay-pii-redaction",
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",

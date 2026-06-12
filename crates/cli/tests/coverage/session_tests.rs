@@ -3789,6 +3789,118 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
 }
 
 #[tokio::test]
+async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
+    let subscriber_name = "cli-claude-direct-gateway-turn-input-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured_events = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let captured = captured_events.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let event_session_id = event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str);
+            if event.name() == "prompt_submitted"
+                && event.data().cloned().unwrap_or(Value::Null)
+                    == json!({ "prompt": "inspect direct mode" })
+            {
+                captured.lock().unwrap().push(json!({
+                    "kind": "prompt_mark",
+                    "data": event.data().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+                return;
+            }
+            if event_session_id != Some("claude-direct-race") {
+                return;
+            }
+            if event.scope_category() == Some(ScopeCategory::Start)
+                && event.name() == "claude-code-turn"
+            {
+                captured.lock().unwrap().push(json!({
+                    "kind": "turn_start",
+                    "input": event.input().cloned().unwrap_or(Value::Null),
+                    "metadata": event.metadata().cloned().unwrap_or(Value::Null)
+                }));
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let prep = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("claude-direct-race".into()),
+                provider: "anthropic.messages".into(),
+                model_name: Some("claude-sonnet-4-5".into()),
+                request: LlmRequest {
+                    headers: Map::new(),
+                    content: json!({
+                        "model": "claude-sonnet-4-5",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": "inspect direct mode"
+                            }
+                        ]
+                    }),
+                },
+                metadata: json!({ "gateway_path": "/v1/messages" }),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!prep.bypass_managed_pipeline);
+    manager
+        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .await;
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::PromptSubmitted(SessionEvent {
+                session_id: "claude-direct-race".into(),
+                agent_kind: AgentKind::ClaudeCode,
+                event_name: "UserPromptSubmit".into(),
+                payload: json!({ "prompt": "inspect direct mode" }),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+
+    flush_subscribers().unwrap();
+    let events = captured_events.lock().unwrap().clone();
+    let turn_starts = events
+        .iter()
+        .filter(|event| event["kind"] == json!("turn_start"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        turn_starts.len(),
+        1,
+        "later UserPromptSubmit must not create a duplicate turn: {events:#?}"
+    );
+    assert_eq!(
+        turn_starts[0]["input"],
+        json!({ "prompt": "inspect direct mode" })
+    );
+    assert_eq!(
+        turn_starts[0]["metadata"]["turn_source"],
+        json!("gateway_request")
+    );
+    assert!(events.iter().any(|event| {
+        event["kind"] == json!("prompt_mark")
+            && event["data"] == json!({ "prompt": "inspect direct mode" })
+    }));
+
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
 async fn claude_orphan_subagent_stop_after_closed_turn_does_not_open_null_turn() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();

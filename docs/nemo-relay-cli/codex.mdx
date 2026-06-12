@@ -1,7 +1,7 @@
 ---
 title: "Codex"
 description: ""
-position: 4
+position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -56,6 +56,41 @@ nemo-relay run \
   --print \
   -- codex
 ```
+
+## Persistent Plugin Install
+
+Install the persistent plugin for Codex. It should start normally and load
+NeMo Relay from its plugin marketplace:
+
+```bash
+nemo-relay install codex
+```
+
+The installer creates a local marketplace, installs
+`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
+`nemo-relay-openai` provider alias at `http://127.0.0.1:47632`. It then uses the
+existing `nemo-relay` binary on `PATH` but does not install a plugin-local Relay
+binary.
+
+Codex plugin mode uses hook-supervised on-demand startup only. It does not install a
+wrapper, user-level daemon, launch agent, system user service, scheduled
+task, login item, or persistent supervisor.
+
+To check for the installed plugin, enter:
+
+```bash
+nemo-relay doctor --plugin codex
+```
+
+To remove the plugin, enter:
+
+```bash
+nemo-relay uninstall codex
+```
+
+Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
+directories, first-request capture limits, rollback behavior, and source
+marketplace notes.
 
 ## Shared Config
 

@@ -24,8 +24,8 @@ use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
-    PluginRegistrationContext, clear_plugin_configuration, deregister_plugin, initialize_plugins,
-    register_plugin, validate_plugin_config,
+    PluginRegistrationContext, clear_plugin_configuration, deregister_plugin,
+    initialize_plugins_exact, register_plugin, validate_plugin_config,
 };
 use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
 use nemo_relay_adaptive::acg::{StabilityThresholds, analyze_stability, build_prompt_ir};
@@ -558,7 +558,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
     reset_global();
     register_adaptive_component().unwrap();
 
-    let report = initialize_plugins(PluginConfig {
+    let report = initialize_plugins_exact(PluginConfig {
         components: vec![
             AdaptiveComponent::new(AdaptiveConfig {
                 state: Some(StateConfig {
@@ -665,7 +665,7 @@ async fn test_adaptive_plugin_rejects_unsupported_mode_with_strict_policy() {
     reset_global();
     register_adaptive_component().unwrap();
 
-    let err = initialize_plugins(PluginConfig {
+    let err = initialize_plugins_exact(PluginConfig {
         components: vec![
             AdaptiveComponent::new(AdaptiveConfig {
                 policy: ConfigPolicy {
@@ -780,7 +780,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
     register_adaptive_component().unwrap();
     register_plugin(Arc::new(HeaderPlugin)).unwrap();
 
-    initialize_plugins(PluginConfig {
+    initialize_plugins_exact(PluginConfig {
         components: vec![
             AdaptiveComponent::new(AdaptiveConfig {
                 adaptive_hints: Some(AdaptiveHintsComponentConfig::default()),
@@ -916,7 +916,7 @@ async fn test_top_level_plugin_registration_rolls_back_partial_work() {
 
     register_plugin(Arc::new(FailingPlugin)).unwrap();
 
-    let err = initialize_plugins(PluginConfig {
+    let err = initialize_plugins_exact(PluginConfig {
         components: vec![PluginComponentSpec {
             kind: "test.failing_plugin".into(),
             enabled: true,

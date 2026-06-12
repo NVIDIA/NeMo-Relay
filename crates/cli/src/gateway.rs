@@ -48,6 +48,7 @@ pub(crate) async fn passthrough(
     State(state): State<AppState>,
     request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
+    state.touch();
     let prepared = prepare_gateway_request(&state.config, request).await?;
     let prep = state
         .sessions
@@ -883,6 +884,7 @@ pub(crate) async fn models(
     State(state): State<AppState>,
     request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
+    state.touch();
     let (parts, _body) = request.into_parts();
     if parts.method != Method::GET {
         return build_response(

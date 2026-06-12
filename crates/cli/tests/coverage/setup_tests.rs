@@ -2,30 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-// Tests that exercise the global-config write path must run serially with respect to each other
-// because `save_config` reads `$XDG_CONFIG_HOME`. CI runners commonly set this var to a real
-// `/home/runner/.config` path, which would override the per-test `home` tempdir and make
-// path-prefix assertions racy/false. This guard clears the var for the duration of the test
-// and restores its prior value on drop.
-fn xdg_env_lock() -> &'static Mutex<()> {
+// Current-directory changes are process-wide, so tests that enter a temp workspace
+// must run serially with respect to each other.
+fn cwd_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-struct XdgScope<'a> {
-    _guard: std::sync::MutexGuard<'a, ()>,
+// Tests that exercise the global-config write path clear `$XDG_CONFIG_HOME`
+// because CI runners commonly set it to a real `/home/runner/.config` path.
+struct XdgScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
 }
 
-impl<'a> XdgScope<'a> {
+impl XdgScope {
     fn cleared() -> Self {
-        let guard = xdg_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let prev = std::env::var_os("XDG_CONFIG_HOME");
-        // SAFETY: We hold the mutex for the lifetime of this scope, and the only other tests
-        // that touch XDG_CONFIG_HOME also go through this guard. Restored on drop.
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
         }
@@ -36,9 +36,8 @@ impl<'a> XdgScope<'a> {
     }
 }
 
-impl<'a> Drop for XdgScope<'a> {
+impl Drop for XdgScope {
     fn drop(&mut self) {
-        // SAFETY: see `cleared()` above — the env mutex is still held.
         unsafe {
             match self.prev.take() {
                 Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
@@ -48,14 +47,14 @@ impl<'a> Drop for XdgScope<'a> {
     }
 }
 
-struct CwdScope<'a> {
-    _guard: std::sync::MutexGuard<'a, ()>,
+struct CwdScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
     prev: PathBuf,
 }
 
-impl<'a> CwdScope<'a> {
+impl CwdScope {
     fn enter(path: &std::path::Path) -> Self {
-        let guard = xdg_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let guard = cwd_lock().lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(path).unwrap();
         Self {
@@ -65,9 +64,51 @@ impl<'a> CwdScope<'a> {
     }
 }
 
-impl<'a> Drop for CwdScope<'a> {
+impl Drop for CwdScope {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.prev).unwrap();
+    }
+}
+
+struct EnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            values: previous,
+        }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 }
 
@@ -96,6 +137,11 @@ fn detect_installed_agents_finds_binaries_on_path() {
     assert!(detected.contains(&CodingAgent::Cursor));
     assert!(!detected.contains(&CodingAgent::Codex));
     assert!(!detected.contains(&CodingAgent::Hermes));
+}
+
+#[test]
+fn detect_installed_agents_handles_missing_path() {
+    assert!(detect_installed_agents_in(None).is_empty());
 }
 
 #[test]
@@ -254,6 +300,26 @@ fn save_config_writes_both_scopes_when_both_selected() {
 }
 
 #[test]
+fn global_config_dir_and_preview_paths_prefer_xdg_when_set() {
+    let xdg = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(xdg.path().as_os_str()))]);
+
+    assert_eq!(
+        global_config_dir(home.path()),
+        xdg.path().join("nemo-relay")
+    );
+    assert_eq!(
+        preview_paths(ConfigScope::Both, cwd.path(), home.path()),
+        vec![
+            cwd.path().join(".nemo-relay/config.toml"),
+            xdg.path().join("nemo-relay/config.toml"),
+        ]
+    );
+}
+
+#[test]
 fn build_config_emits_hooks_path_for_hermes_when_set() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
@@ -351,6 +417,39 @@ command = "custom"
 }
 
 #[test]
+fn read_existing_defaults_prefers_workspace_and_reports_scope_variants() {
+    let cwd = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(cwd.path());
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", None),
+        ("HOME", Some(home.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+
+    assert!(read_existing_defaults().is_none());
+
+    let global_path = home.path().join(".config/nemo-relay/config.toml");
+    std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+    std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+    let defaults = read_existing_defaults().unwrap();
+    assert_eq!(defaults.scope, Some(ConfigScope::Global));
+    assert_eq!(defaults.agents, vec![CodingAgent::Codex]);
+
+    let workspace_path = cwd.path().join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(workspace_path.parent().unwrap()).unwrap();
+    std::fs::write(&workspace_path, "[agents.claude]\ncommand = \"claude\"\n").unwrap();
+    let defaults = read_existing_defaults().unwrap();
+    assert_eq!(defaults.scope, Some(ConfigScope::Both));
+    assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
+
+    std::fs::remove_file(&global_path).unwrap();
+    let defaults = read_existing_defaults().unwrap();
+    assert_eq!(defaults.scope, Some(ConfigScope::Project));
+    assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
+}
+
+#[test]
 fn install_hermes_hooks_writes_yaml_and_merges_existing() {
     let cwd = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -406,6 +505,29 @@ enabled = true
 }
 
 #[test]
+fn write_or_merge_overwrites_without_merge_scope_and_reports_malformed_existing_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    std::fs::write(&path, "[agents.codex]\ncommand = \"old\"\n").unwrap();
+    let doc = build_config(&SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![CodingAgent::Hermes],
+        hermes_hooks_path: Some(temp.path().join(".hermes/config.yaml")),
+    });
+
+    write_or_merge(&path, &doc, None).unwrap();
+    let overwritten = std::fs::read_to_string(&path).unwrap();
+    assert!(!overwritten.contains("[agents.codex]"));
+    assert!(overwritten.contains("[agents.hermes]"));
+
+    std::fs::write(&path, "[agents.codex\n").unwrap();
+    let error = write_or_merge(&path, &doc, Some(CodingAgent::Hermes))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("could not parse existing config"));
+}
+
+#[test]
 fn reset_removes_whole_project_config_or_one_agent() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(temp.path());
@@ -433,6 +555,31 @@ command = "codex"
     reset(None).unwrap();
 
     assert!(!path.exists());
+}
+
+#[test]
+fn reset_removes_empty_agents_table_when_last_agent_is_removed() {
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(temp.path());
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let path = config_dir.join("config.toml");
+    std::fs::write(&path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+
+    reset(Some(CodingAgent::Codex)).unwrap();
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(!contents.contains("[agents]"));
+    assert!(!contents.contains("[agents.codex]"));
+}
+
+#[test]
+fn reset_noops_when_project_config_is_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(temp.path());
+
+    reset(None).unwrap();
+    reset(Some(CodingAgent::Codex)).unwrap();
 }
 
 #[test]

@@ -323,6 +323,79 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
 }
 
 #[test]
+fn cli_help_lists_plugin_install_commands() {
+    let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for command in ["install", "uninstall"] {
+        assert!(
+            stdout.contains(&format!("  {command}")),
+            "expected `--help` to list `{command}` subcommand, got:\n{stdout}"
+        );
+    }
+}
+
+#[test]
+fn cli_install_dry_run_plans_local_codex_marketplace() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .args([
+            "install",
+            "codex",
+            "--dry-run",
+            "--skip-doctor",
+            "--install-dir",
+        ])
+        .arg(temp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("codex-marketplace"),
+        "stdout was:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("codex plugin marketplace add"),
+        "stdout was:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("configure Codex provider and hook-supervised lazy startup"),
+        "stdout was:\n{stdout}"
+    );
+}
+
+#[test]
+fn cli_doctor_plugin_help_accepts_plugin_flag() {
+    let output = Command::new(gateway_bin())
+        .args(["doctor", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--plugin"), "stdout was:\n{stdout}");
+}
+
+#[test]
+fn cli_doctor_plugin_accepts_json_flag() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .args(["doctor", "--plugin", "codex", "--json", "--install-dir"])
+        .arg(temp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("cannot be used with"),
+        "stderr was:\n{stderr}"
+    );
+}
+
+#[test]
 fn cli_easy_path_invokes_setup_when_no_config_found() {
     // When no config exists anywhere, the easy path fires setup. In a non-TTY test
     // context the setup errors with a clear "requires a TTY" message; that's the contract

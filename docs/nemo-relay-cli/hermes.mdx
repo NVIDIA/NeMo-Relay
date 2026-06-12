@@ -1,21 +1,46 @@
 ---
 title: "Hermes Agent"
 description: ""
-position: 6
+position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use this guide to observe local Hermes Agent sessions with NeMo Relay through
-Hermes shell hooks and the `nemo-relay` gateway.
+The NeMo Relay CLI wrapper and gateway allows you to observe local Hermes Agent sessions. The guide below shows you how to observe these sessions.
 
-Hermes shell hooks provide session, subagent, tool, and LLM lifecycle events.
-For NeMo Relay contract work, `pre_api_request`, `post_api_request`, and
-`api_request_error` are the authoritative LLM lifecycle hooks. The legacy
+This path is different from the upstream Hermes
+`observability/nemo_relay` plugin. The CLI wrapper observes Hermes through
+Hermes shell hooks. It can record LLM request/response payloads from sanitized
+Hermes API hook payloads when the Hermes build provides them, or from provider
+traffic routed through the NeMo Relay gateway. The upstream Hermes plugin runs
+inside Hermes and is configured from Hermes itself.
+
+Hermes shell hooks provide session, subagent, tool, and LLM lifecycle signals.
+For hook-based LLM lifecycle telemetry, `pre_api_request`, `post_api_request`,
+and `api_request_error` are the authoritative Hermes hooks. The legacy
 `pre_llm_call` and `post_llm_call` hooks still exist, but only as private
-hint-style signals. Complete LLM request and response observability still
-requires model traffic to route through the gateway.
+hint-style signals for correlation. When Hermes hook payloads include sanitized
+request and response bodies, NeMo Relay records them from the hooks. Gateway
+routing is still the direct provider-traffic path, and it remains the best
+fallback when a Hermes build emits summary-only hook payloads.
+
+## Choose the Right Hermes Path
+
+Use the `nemo-relay hermes` wrapper when you want NeMo Relay to manage the
+local gateway lifetime for a Hermes process and collect hook plus
+gateway-routed LLM observability.
+
+Use the upstream Hermes `observability/nemo_relay` plugin when you want Hermes
+itself to load the bundled plugin and emit NeMo Relay observability through
+Hermes plugin configuration. Observe-only plugin builds keep Hermes in control
+of LLM and tool execution.
+
+Use adaptive execution only with a Hermes build that includes the adaptive
+middleware contract and a NeMo Relay runtime that exposes managed
+`llm.execute(...)` and `tools.execute(...)` boundaries. Verify the Hermes
+release tag before depending on adaptive execution in a released Hermes
+environment.
 
 ## Transparent Run
 
@@ -78,6 +103,10 @@ enabled = true
 enabled = true
 output_directory = ".nemo-relay/atif"
 
+[components.config.atof]
+enabled = true
+output_directory = ".nemo-relay/atof"
+
 [components.config.openinference]
 enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
@@ -130,8 +159,17 @@ Important distinction:
 
 ## Smoke Test
 
-Run a small Hermes session that starts, invokes one tool, and exits. Then check
-hook forwarding directly:
+Use this smoke test to verify the Hermes hook-forward path without launching
+Hermes. It sends one synthetic Hermes hook payload through the same
+`nemo-relay hook-forward hermes` command that generated hooks use.
+
+Start a standalone gateway in one terminal:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040
+```
+
+Then check Hermes hook forwarding from another terminal:
 
 ```bash
 curl -f http://127.0.0.1:4040/healthz
@@ -145,10 +183,11 @@ relying on unattended capture.
 
 ## Verify Export
 
-End a Hermes turn or finalize the session and confirm Agent Trajectory
-Interchange Format (ATIF) exists:
+End a Hermes turn or finalize the session and confirm the configured exporters
+received data:
 
 ```bash
+ls .nemo-relay/atof
 ls .nemo-relay/atif
 ```
 
@@ -156,7 +195,8 @@ The gateway writes or updates an ATIF snapshot when it receives
 `on_session_end`, `on_session_finalize`, or `on_session_reset`.
 `on_session_end` is a per-turn snapshot boundary: it does not close the NeMo
 Relay session and does not emit a visible trajectory mark. `on_session_finalize`
-and `on_session_reset` close the session.
+and `on_session_reset` close the session. When ATOF export is enabled, the raw
+event stream is written continuously as lifecycle events arrive.
 
 ## Troubleshoot LLM Lifecycle
 

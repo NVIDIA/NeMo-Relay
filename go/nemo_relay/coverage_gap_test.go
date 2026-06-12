@@ -78,7 +78,7 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PushScope failed: %v", err)
 	}
-	if err := PopScope(handle, WithScopeEndMetadata(json.RawMessage("{"))); err == nil {
+	if PopScope(handle, WithScopeEndMetadata(json.RawMessage("{"))) == nil {
 		t.Fatal("expected PopScope to fail on invalid end metadata JSON")
 	}
 	if err := PopScope(handle); err != nil {

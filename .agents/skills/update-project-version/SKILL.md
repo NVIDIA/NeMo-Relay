@@ -45,14 +45,30 @@ pre-release or build-metadata variants used during packaging.
    - `[workspace.package].version`
    - `workspace.dependencies.nemo-relay.version`
    - `workspace.dependencies.nemo-relay-adaptive.version`
+   - `workspace.dependencies.nemo-relay-pii-redaction.version`
    - `workspace.dependencies.nemo-relay-ffi.version`
+   - `workspace.dependencies.nemo-relay-cli.version`
    - `crates/node/package.json` `version`
    - `integrations/openclaw/package.json` `version`
    - `package-lock.json` `packages["crates/node"].version`
    - `package-lock.json` `packages["integrations/openclaw"].version`
-3. If editing helper code, keep `set_project_version`,
-   `set_cargo_workspace_version`, and `set_node_package_versions` aligned with
-   those same fields. `set_node_package_version` remains a compatibility alias.
+   - `integrations/openclaw/package.json` `dependencies["nemo-relay-node"]`
+   - `package-lock.json`
+     `packages["integrations/openclaw"].dependencies["nemo-relay-node"]`
+3. If editing helper code, keep helper inputs aligned with those same fields:
+   - `set_project_version` should call the Cargo, Node, and coding-agent plugin
+     version helpers for the same target version.
+   - `set_cargo_workspace_version` should update `[workspace.package].version`
+     plus `workspace.dependencies.nemo-relay.version`,
+     `workspace.dependencies.nemo-relay-adaptive.version`,
+     `workspace.dependencies.nemo-relay-pii-redaction.version`,
+     `workspace.dependencies.nemo-relay-ffi.version`, and
+     `workspace.dependencies.nemo-relay-cli.version`.
+   - `set_node_package_versions` should update `crates/node/package.json`,
+     `integrations/openclaw/package.json`, the corresponding `package-lock.json`
+     package entries, and the OpenClaw `nemo-relay-node` dependency entries in
+     both files.
+   `set_node_package_version` remains a compatibility alias.
    `set_npm_package_version` remains the reusable npm JSON helper for Node and
    WebAssembly packaging recipes.
 4. Refresh generated surfaces:
@@ -74,7 +90,7 @@ pre-release or build-metadata variants used during packaging.
 
 ## Validation
 
-- `rg -n '^version =|nemo-relay = \\{ version =|nemo-relay-adaptive = \\{ version =' Cargo.toml`
+- `rg -n '^version =|nemo-relay = \\{ version =|nemo-relay-adaptive = \\{ version =|nemo-relay-pii-redaction = \\{ version =|nemo-relay-ffi = \\{ version =|nemo-relay-cli = \\{ version =' Cargo.toml`
 - `rg -n '\"version\"' crates/node/package.json integrations/openclaw/package.json package-lock.json`
 - `cargo check --workspace`
 - If Rust attribution files are expected to stay current:

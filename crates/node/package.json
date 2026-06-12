@@ -1,6 +1,6 @@
 {
   "name": "nemo-relay-node",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Node.js bindings for the NeMo Relay agent runtime.",
   "keywords": [
     "agents",
@@ -44,6 +44,10 @@
     "./observability": {
       "types": "./observability.d.ts",
       "default": "./observability.js"
+    },
+    "./pii_redaction": {
+      "types": "./pii_redaction.d.ts",
+      "default": "./pii_redaction.js"
     }
   },
   "engines": {

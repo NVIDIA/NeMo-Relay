@@ -276,3 +276,7 @@ fn usage_has_tokens(usage: &Usage) -> bool {
 fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
     if count == 1 { singular } else { plural }
 }
+
+#[cfg(test)]
+#[path = "../tests/coverage/pricing_tests.rs"]
+mod tests;

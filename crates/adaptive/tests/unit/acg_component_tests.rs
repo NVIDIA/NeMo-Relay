@@ -13,6 +13,7 @@ use crate::acg::prompt_ir::SpanId;
 use crate::acg::prompt_ir::{
     BlockContentType, PromptBlock, PromptIR, PromptRole, ProvenanceLabel, SensitivityLabel,
 };
+use crate::config::AcgComponentConfig;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackendDyn;
 use nemo_relay::api::llm::LlmRequest;
@@ -285,6 +286,28 @@ fn sample_prompt_ir(span: &str) -> PromptIR {
     }
 }
 
+#[test]
+fn acg_component_default_config_and_thresholds_are_stable() {
+    let config = AcgComponentConfig::default();
+
+    assert_eq!(config.provider, "passthrough");
+    assert_eq!(config.observation_window, 100);
+    assert_eq!(config.priority, 50);
+    assert_eq!(config.stability_thresholds.stable_threshold, 0.95);
+    assert_eq!(config.stability_thresholds.semi_stable_threshold, 0.50);
+    assert_eq!(
+        config
+            .stability_thresholds
+            .min_observations_for_full_confidence,
+        20
+    );
+
+    let serialized = serde_json::to_value(&config).unwrap();
+    assert_eq!(serialized["provider"], json!("passthrough"));
+    assert_eq!(serialized["observation_window"], json!(100));
+    assert_eq!(serialized["priority"], json!(50));
+}
+
 struct FailingStabilityBackend;
 
 impl StorageBackendDyn for FailingStabilityBackend {
@@ -434,6 +457,39 @@ fn acg_component_translate_request_passes_through_when_planner_finds_no_profitab
     assert!(
         translated.is_none(),
         "non-profitable anthropic prefixes should leave the request unchanged",
+    );
+}
+
+#[test]
+fn acg_component_translate_request_errors_are_fail_open() {
+    let error = crate::acg::AcgError::Internal("synthetic".into());
+    assert!(
+        translate_request_error(
+            "agent-1",
+            "openai",
+            "learning-key",
+            "profile-key",
+            "synthetic_reason",
+            &error,
+        )
+        .is_none()
+    );
+
+    let request = sample_anthropic_request();
+    let plugin = build_provider_plugin("openai").expect("openai plugin should build");
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: Some(layered_stability_result(6)),
+        acg_observation_count: 6,
+    }));
+
+    assert!(
+        translate_request(&request, "agent-1", "openai", plugin.as_ref(), &hot_cache).is_none(),
+        "incompatible provider/request-surface rewrites should pass through",
     );
 }
 
@@ -1015,6 +1071,36 @@ async fn acg_component_execution_intercept_rewrites_non_streaming_requests() {
     assert!(result["messages"][0]["content"][0]["cache_control"].is_object());
 }
 
+#[test]
+fn acg_component_request_intercept_passes_original_request_and_annotation_when_translation_is_skipped()
+ {
+    let invalid_request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"model": "unknown"}),
+    };
+    let annotated = sample_annotated_request("unknown-model");
+    let plugin = build_provider_plugin("anthropic").unwrap();
+    let intercept = create_acg_llm_request_intercept(
+        sample_hot_cache(),
+        "agent-1".to_string(),
+        "anthropic".to_string(),
+        plugin,
+    );
+
+    let (translated, returned_annotated) = intercept(
+        "anthropic",
+        invalid_request.clone(),
+        Some(annotated.clone()),
+    )
+    .expect("request intercept should pass through");
+
+    assert_eq!(translated.content, invalid_request.content);
+    assert_eq!(
+        returned_annotated.and_then(|request| request.model),
+        annotated.model
+    );
+}
+
 #[tokio::test]
 async fn acg_component_register_fails_open_when_stability_backend_errors() {
     let hot_cache = sample_hot_cache();
@@ -1189,4 +1275,39 @@ async fn acg_component_execution_intercept_passes_original_request_when_translat
         .expect("execution intercept should succeed");
 
     assert_eq!(result, invalid_request.content);
+}
+
+#[tokio::test]
+async fn acg_component_stream_execution_intercept_passes_original_request_when_translation_is_skipped()
+ {
+    let invalid_request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"model": "unknown"}),
+    };
+    let plugin = build_provider_plugin("anthropic").unwrap();
+    let intercept = create_acg_llm_stream_execution_intercept(
+        sample_hot_cache(),
+        "agent-1".to_string(),
+        "anthropic".to_string(),
+        plugin,
+    );
+    let next: LlmStreamExecutionNextFn = Arc::new(|req| {
+        Box::pin(async move {
+            Ok(Box::pin(tokio_stream::iter(vec![Ok(req.content)]))
+                as Pin<
+                    Box<dyn tokio_stream::Stream<Item = nemo_relay::error::Result<Json>> + Send>,
+                >)
+        })
+    });
+
+    let mut stream = intercept("anthropic", invalid_request.clone(), next)
+        .await
+        .expect("stream intercept should pass through");
+    let first = stream
+        .next()
+        .await
+        .expect("stream should yield original request")
+        .expect("stream item should be ok");
+
+    assert_eq!(first, invalid_request.content);
 }

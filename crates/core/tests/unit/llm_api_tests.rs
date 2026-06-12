@@ -3,6 +3,8 @@
 
 //! Unit tests for LLM API lifecycle behavior.
 
+#![allow(clippy::await_holding_lock)]
+
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -25,6 +27,12 @@ fn reset_global() {
     *context.write().unwrap() = NemoRelayContextState::new();
 }
 
+fn lock_global_runtime() -> std::sync::MutexGuard<'static, ()> {
+    crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
 fn request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
@@ -34,6 +42,7 @@ fn request() -> LlmRequest {
 
 #[test]
 fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
+    let _guard = lock_global_runtime();
     reset_global();
 
     let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
@@ -112,6 +121,7 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
 
 #[test]
 fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
+    let _guard = lock_global_runtime();
     reset_global();
 
     let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
@@ -172,6 +182,7 @@ fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
 
 #[test]
 fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
+    let _guard = lock_global_runtime();
     reset_global();
 
     let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));

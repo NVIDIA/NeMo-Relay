@@ -85,6 +85,73 @@ fn docked_frame_includes_version_tag() {
     );
 }
 
+#[test]
+fn print_headers_fall_back_to_plain_header_when_stdout_is_not_terminal() {
+    print_intro();
+    print_doctor_header();
+}
+
+#[test]
+fn banner_support_decision_covers_terminal_environment_branches() {
+    assert!(!supports_banner_for(
+        false,
+        false,
+        None,
+        None,
+        Some(MIN_WIDTH)
+    ));
+    assert!(!supports_banner_for(
+        true,
+        true,
+        None,
+        None,
+        Some(MIN_WIDTH)
+    ));
+    assert!(!supports_banner_for(
+        true,
+        false,
+        Some("true"),
+        None,
+        Some(MIN_WIDTH)
+    ));
+    assert!(!supports_banner_for(
+        true,
+        false,
+        Some("1"),
+        None,
+        Some(MIN_WIDTH)
+    ));
+    assert!(!supports_banner_for(
+        true,
+        false,
+        None,
+        Some("dumb"),
+        Some(MIN_WIDTH)
+    ));
+    assert!(!supports_banner_for(
+        true,
+        false,
+        None,
+        None,
+        Some(MIN_WIDTH - 1)
+    ));
+    assert!(supports_banner_for(
+        true,
+        false,
+        Some("false"),
+        Some("xterm-256color"),
+        Some(MIN_WIDTH)
+    ));
+}
+
+#[test]
+fn terminal_width_helper_covers_default_parse_and_non_terminal_paths() {
+    assert_eq!(terminal_width_for(false, Some("200")), None);
+    assert_eq!(terminal_width_for(true, Some("200")), Some(200));
+    assert_eq!(terminal_width_for(true, Some("not-a-number")), Some(120));
+    assert_eq!(terminal_width_for(true, None), Some(120));
+}
+
 fn frame_grid_rows(frame: &str) -> Vec<&str> {
     frame
         .lines()
