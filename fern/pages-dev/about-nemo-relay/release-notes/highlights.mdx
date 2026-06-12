@@ -9,67 +9,75 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page summarizes the notable capabilities in the current release
 documentation set.
 
-## NeMo Relay 0.3
+## NVIDIA NeMo Relay 0.4
 
-NeMo Relay 0.3 adds first-party guardrails, richer trajectory export, adaptive
-plugin workflows, and clearer integration support for agent runtimes.
+NVIDIA NeMo Relay 0.4 adds host plugin installation, first-party PII redaction, local
+Guardrails execution, pricing-aware observability, streaming raw-event export,
+and stronger coding-agent trace fidelity.
 
-### Breaking Changes
+### Compatibility Notes
 
-- The project was renamed to NeMo Relay across documentation, package guidance,
-  and CLI-facing surfaces.
-- The core runtime registry surface was narrowed. Applications should use the
-  documented middleware, intercept, subscriber, and plugin APIs instead of broad
-  registry access.
-- Native subscriber delivery is now non-blocking. Event construction remains
-  synchronous, but subscriber callbacks and exporter work are queued on a
-  process-wide background dispatcher. Applications and tests that depend on
-  subscriber side effects must call the subscriber flush API before reading
-  captured events, files, or exported trace output.
+- The Python-only NeMo Guardrails example plugin was removed. Applications
+  should use the built-in `nemo_guardrails` component instead.
+- Pricing estimates require an inline, file-backed, or embedding-provided
+  pricing source. NeMo Relay does not ship provider price data by default.
+- Local NeMo Guardrails mode requires Python 3.11 or newer and
+  `nemoguardrails==0.22.0` in the runtime environment.
 
-### Guardrails
+### CLI And Plugin Configuration
 
-- Added the built-in `nemo_guardrails` plugin contract for installing NeMo
-  Guardrails behavior through NeMo Relay plugin configuration.
-- Added a remote NeMo Guardrails backend for deployments that call an external
-  guardrails service.
-- Added CLI editor support for guardrails plugin configuration.
-- Added guardrail scopes for conditional guardrails so trace output shows
-  guardrail execution boundaries more clearly.
-- Integrated security guardrails around managed agent calls.
+- Added `nemo-relay install`, `uninstall`, and `doctor --plugin` flows for
+  Claude Code and Codex host plugins.
+- Added generated local marketplace support so Claude Code and Codex can load
+  NeMo Relay through native host plugin mechanisms.
+- Layered code-driven plugin configuration over materialized global, project,
+  and user plugin files while preserving documented file precedence.
+- Added pricing source management commands for validating catalogs, adding
+  file-backed sources, and resolving model pricing.
+
+### Guardrails And Redaction
+
+- Added a local Python-backed backend for the built-in `nemo_guardrails`
+  component.
+- Expanded Guardrails configuration docs for local and remote backend behavior,
+  supported codecs, request defaults, tool boundaries, and streaming behavior.
+- Added the first-party PII redaction plugin crate with deterministic local
+  backend support and Python, Node.js, and WebAssembly helper surfaces.
 
 ### Observability
 
-- Exposed canonical ATOF event JSON across bindings so applications can consume
-  the same event shape from Rust, Python, and Node.js.
-- Upgraded ATIF exporters to ATIF v1.7 with nested subagent support.
-- Added first-class S3-compatible storage export for ATIF traces.
-- Added streaming LLM chunk marks for more precise streaming trace inspection.
-- Fixed LLM start event ordering so managed LLM start events are emitted before
-  execution intercepts.
-- Fixed ATIF tool-observation correlation.
-
-### Plugins And Adaptive Runtime
-
-- Enabled the adaptive plugin for the CLI and OpenClaw workflows.
-- Added CLI editor support for adaptive plugin configuration.
-- Added a Python context manager for plugin initialization and teardown.
+- Added ATOF streaming endpoints for HTTP POST, WebSocket, and long-lived
+  NDJSON uploads.
+- Added ATIF HTTP storage export alongside S3-compatible storage destinations.
+- Added model-pricing lookup and cost layering for managed LLM responses.
+- Propagated normalized LLM cost into ATIF step metrics, OpenInference
+  attributes, and OpenTelemetry attributes.
+- Set OpenTelemetry span status from NeMo Relay execution results.
+- Preserved sanitized LLM request payloads in annotations and start-event
+  output.
 
 ### Integrations
 
-- Improved LangChain serialization for wrapped requests and responses.
-- Preserved OpenClaw tool call replay visibility with the upgrade to OpenClaw 2026.5.26
-- Updated the launch banner to use `NEMO RELAY`.
+- Improved Hermes hook injection, routed-provider observability, wrapped ATIF
+  fidelity, subagent lineage, and error-path export consistency.
+- Added Codex observability contract coverage and suppressed noisy Claude Code
+  lifecycle events.
+- Added nested subagent session lineage and more consistent cost, provenance,
+  replay, placeholder, and hook-only fallback exports for OpenClaw.
+- Improved LangChain input serialization and fixed plugin context-manager
+  deadlock behavior.
+- Added flattened OpenInference LLM attributes for annotations and replay.
+- Annotated Deep Agents model responses and refreshed LangGraph callback
+  coverage.
 
 ### Documentation And Tooling
 
-- Switched the documentation site to Fern and consolidated Fern publishing.
-- Added broken-link validation for Fern documentation.
-- Added agent runtime primer, trace incident runbook, plugin-building, migration,
-  and adaptive tuning guidance.
-- Added built-in guardrails plugin documentation.
-- Added CI path filters, CLI draft release assets, dependency updates, and ATIF
-  S3 storage test coverage.
+- Updated installation documentation for 0.4 packages and host plugin setup.
+- Clarified Hermes integration paths and coding-agent plugin source manifests.
+- Added NVSkills CI request workflow and regenerated NeMo Relay skill eval
+  datasets.
+- Updated dependency attribution files and isolated Rust test behavior for CI
+  and SonarQube cleanup.
 
 The complete changelog and release artifacts can be viewed on
 [GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).

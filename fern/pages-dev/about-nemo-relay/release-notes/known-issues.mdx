@@ -9,10 +9,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page lists current limitations and support notes for the release
 documentation set.
 
-## NeMo Relay 0.3
+## NeMo Relay 0.4
 
-These notes apply to the NeMo Relay 0.3 release. The following known issues
-and limitations apply to NeMo Relay 0.3:
+These notes apply to the NeMo Relay 0.4 release. The following known issues
+and limitations apply to NeMo Relay 0.4:
 
 - Go, WebAssembly, and the raw C FFI surface are experimental and source-first.
 - Generated API pages cover Rust, Python, and Node.js. Experimental bindings do
@@ -20,6 +20,11 @@ and limitations apply to NeMo Relay 0.3:
 - The NeMo Relay CLI is experimental. Coding agent observability support varies
   due to capabilities of hooks. Any encountered problems should be filed as
   bugs.
+- Host plugin mode depends on each coding-agent host's plugin, hook, and
+  provider-routing behavior. Hooks alone cannot produce complete LLM request
+  and response spans.
+- Complete first-request capture in Codex plugin mode depends on Codex firing
+  an installed hook before the first provider request.
 - Node.js 24 or newer is required for Node.js binding and package workflows.
 - OpenClaw support uses public hook-backed telemetry with partial security and
   optimization support. Security is limited to pre-tool conditional guardrails,
@@ -27,7 +32,22 @@ and limitations apply to NeMo Relay 0.3:
   a managed execution path.
 - The NeMo Guardrails plugin remote backend depends on the availability,
   latency, and policy behavior of the configured remote service.
+- The NeMo Guardrails plugin local backend starts a Python worker subprocess.
+  That worker environment must provide Python 3.11 or newer and
+  `nemoguardrails==0.22.0`; `SUPPORTED_NEMOGUARDRAILS_VERSION` in
+  `crates/core/src/plugins/nemo_guardrails/local_worker.py` is the
+  authoritative pin.
+- The PII redaction plugin currently provides deterministic local backend
+  support. Local-model backend configuration is reserved for future expansion.
+- Pricing estimates depend on configured pricing sources and the freshness of
+  the source catalog. Unknown model pricing and missing token data leave cost
+  absent instead of defaulting to zero.
+- ATOF streaming endpoints depend on collector availability. Failed endpoints
+  are skipped or retried without blocking file output or other configured
+  endpoints.
 - S3-compatible ATIF export requires valid storage credentials and endpoint
+  configuration in the runtime environment.
+- Remote ATIF storage requires valid destination credentials and endpoint
   configuration in the runtime environment.
 - `LLMRequest` objects in the Python binding should be treated as immutable.
   Request middleware that changes content should return a new request object.
@@ -36,15 +56,27 @@ and limitations apply to NeMo Relay 0.3:
   exporter output. Deregistering a subscriber affects future emissions, but
   callbacks from already-queued event snapshots may still run.
 
-### Fixed in NeMo Relay 0.3
+### Fixed in NeMo Relay 0.4
+
+- ATIF shutdown no longer deadlocks queued subscribers.
+- Sanitized LLM requests are resolved from annotations for observability output.
+- Structured ATIF tool results and Hermes tool-result observations are
+  preserved more reliably.
+- Hermes routed-provider spans, wrapped ATIF fidelity, subagent lineage, and
+  error-path export consistency are covered and corrected.
+- OpenClaw observability output is more consistent for nested subagents, model
+  timing diagnostics, hook-backed provenance, placeholder replay, and
+  hook-only fallback exports.
+- LangChain serialization handles wrapped integration payloads more reliably.
+- Plugin context-manager teardown avoids the previous deadlock path.
+- Node.js `withScope` callbacks receive a real `ScopeHandle`.
+- Deep Agents model responses are annotated for downstream observability.
+
+### Fixed in Earlier Releases
 
 - Managed LLM start events are emitted before execution intercepts.
 - Coding-agent trace scopes are aligned with NeMo Relay agent scope semantics.
 - ATIF tool observations are correlated with their matching tool calls.
 - OpenClaw tool call replay visibility is preserved.
-- LangChain serialization handles wrapped integration payloads more reliably.
-
-### Fixed in Earlier Releases
-
 - Enabled TLS support for OTLP HTTP export.
 - Preserved Go scope stacks across OS threads.
