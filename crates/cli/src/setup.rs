@@ -33,7 +33,7 @@ use self::model::{
 #[cfg(test)]
 use self::model::{Defaults, global_config_dir, read_agents_from_doc, write_or_merge};
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 use self::model::detect_installed_agents_in;
 
 ///
