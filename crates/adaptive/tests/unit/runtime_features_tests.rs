@@ -7,25 +7,32 @@ use super::*;
 
 use std::sync::Arc;
 
-use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::llm::llm_request_intercepts;
+use nemo_relay::api::llm::{
+    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
+    llm_request_intercepts, llm_stream_call_execute,
+};
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, deregister_tool_execution_intercept,
     register_llm_execution_intercept, register_llm_request_intercept,
     register_llm_stream_execution_intercept, register_tool_execution_intercept,
 };
-use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::ToolExecutionNextFn;
 use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::error::FlowError;
-use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
+use nemo_relay::plugin::{ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
 use nemo_relay::plugin::{clear_plugin_configuration, rollback_registrations};
 use serde_json::json;
 use tokio::sync::Mutex;
 
+use crate::acg::profile::{BlockStabilityScore, StabilityClass};
+use crate::acg::prompt_ir::SpanId;
+use crate::acg::stability::StabilityAnalysisResult;
 use crate::config::{BackendSpec, StateConfig};
 use crate::intercepts::AGENT_HINTS_HEADER_KEY;
 use crate::trie::accumulator::AccumulatorState;
@@ -33,6 +40,7 @@ use crate::trie::serialization::TrieEnvelope;
 use crate::types::metadata::{AgentHints, MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
+use tokio_stream::StreamExt;
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 
@@ -60,6 +68,54 @@ fn sample_plan(agent_id: &str) -> ExecutionPlan {
             }],
             extensions: json!({}),
         },
+    }
+}
+
+fn long_text(token_count: usize) -> String {
+    "x".repeat(token_count * 4)
+}
+
+fn layered_acg_request() -> LlmRequest {
+    LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "claude-sonnet-4-20250514",
+            "system": long_text(1400),
+            "messages": [
+                {"role": "user", "content": long_text(1500)},
+                {"role": "user", "content": long_text(1600)}
+            ]
+        }),
+    }
+}
+
+fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
+    StabilityAnalysisResult {
+        scores: vec![
+            BlockStabilityScore {
+                span_id: SpanId("block-0".to_string()),
+                classification: StabilityClass::Stable,
+                score: 0.99,
+                confidence: 0.95,
+                observation_count,
+            },
+            BlockStabilityScore {
+                span_id: SpanId("block-1".to_string()),
+                classification: StabilityClass::Stable,
+                score: 0.99,
+                confidence: 0.9,
+                observation_count,
+            },
+            BlockStabilityScore {
+                span_id: SpanId("block-2".to_string()),
+                classification: StabilityClass::Stable,
+                score: 0.99,
+                confidence: 0.85,
+                observation_count,
+            },
+        ],
+        stable_prefix_length: 3,
+        total_observations: observation_count,
     }
 }
 
@@ -234,6 +290,119 @@ fn build_learners_filters_unknown_entries() {
         None,
     );
     assert_eq!(learners.len(), 1);
+}
+
+#[test]
+fn adaptive_runtime_validate_config_covers_supported_warning_error_and_ignore_branches() {
+    for (mode, provider) in [
+        ("observe_only", "passthrough"),
+        ("inject_hints", "anthropic"),
+        ("schedule", "openai"),
+    ] {
+        let report = AdaptiveRuntime::validate_config(&AdaptiveConfig {
+            state: Some(StateConfig {
+                backend: BackendSpec::in_memory(),
+            }),
+            tool_parallelism: Some(ToolParallelismComponentConfig {
+                mode: mode.to_string(),
+                ..ToolParallelismComponentConfig::default()
+            }),
+            acg: Some(AcgComponentConfig {
+                provider: provider.to_string(),
+                ..AcgComponentConfig::default()
+            }),
+            ..AdaptiveConfig::default()
+        });
+        assert!(
+            report.diagnostics.is_empty(),
+            "{mode}/{provider} should not emit diagnostics: {:?}",
+            report.diagnostics
+        );
+    }
+
+    let missing_state = AdaptiveRuntime::validate_config(&AdaptiveConfig {
+        telemetry: Some(TelemetryComponentConfig::default()),
+        acg: Some(AcgComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    });
+    assert_eq!(
+        missing_state
+            .diagnostics
+            .iter()
+            .filter(
+                |diag| diag.code == "adaptive.section_disabled_missing_state"
+                    && diag.level == DiagnosticLevel::Warning
+            )
+            .count(),
+        2
+    );
+
+    let errors = AdaptiveRuntime::validate_config(&AdaptiveConfig {
+        version: 99,
+        state: Some(StateConfig {
+            backend: BackendSpec {
+                kind: "unknown-backend".to_string(),
+                config: serde_json::Map::new(),
+            },
+        }),
+        tool_parallelism: Some(ToolParallelismComponentConfig {
+            mode: "unsupported".to_string(),
+            ..ToolParallelismComponentConfig::default()
+        }),
+        acg: Some(AcgComponentConfig {
+            provider: "custom-provider".to_string(),
+            ..AcgComponentConfig::default()
+        }),
+        policy: ConfigPolicy {
+            unknown_component: UnsupportedBehavior::Error,
+            unsupported_value: UnsupportedBehavior::Error,
+            ..ConfigPolicy::default()
+        },
+        ..AdaptiveConfig::default()
+    });
+    assert!(errors.has_errors());
+    assert!(errors.diagnostics.iter().any(
+        |diag| diag.code == "adaptive.unknown_backend" && diag.level == DiagnosticLevel::Error
+    ));
+    assert!(
+        errors
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("mode")
+                && diag.level == DiagnosticLevel::Error)
+    );
+    assert!(
+        errors
+            .diagnostics
+            .iter()
+            .any(|diag| diag.field.as_deref() == Some("provider")
+                && diag.level == DiagnosticLevel::Error)
+    );
+
+    let ignored = AdaptiveRuntime::validate_config(&AdaptiveConfig {
+        version: 99,
+        state: Some(StateConfig {
+            backend: BackendSpec {
+                kind: "unknown-backend".to_string(),
+                config: serde_json::Map::new(),
+            },
+        }),
+        tool_parallelism: Some(ToolParallelismComponentConfig {
+            mode: "unsupported".to_string(),
+            ..ToolParallelismComponentConfig::default()
+        }),
+        acg: Some(AcgComponentConfig {
+            provider: "custom-provider".to_string(),
+            ..AcgComponentConfig::default()
+        }),
+        policy: ConfigPolicy {
+            unknown_component: UnsupportedBehavior::Ignore,
+            unsupported_value: UnsupportedBehavior::Ignore,
+            ..ConfigPolicy::default()
+        },
+        ..AdaptiveConfig::default()
+    });
+    assert!(ignored.diagnostics.is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -648,9 +817,18 @@ async fn acg_feature_registers_execution_and_stream_intercepts() {
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
         .await
         .unwrap();
+    runtime.hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: Some(layered_acg_stability_result(6)),
+        acg_observation_count: 6,
+    }));
     let mut feature = AcgFeature::new(
         AcgComponentConfig {
-            provider: "openai".into(),
+            provider: "anthropic".into(),
             priority: 13,
             ..AcgComponentConfig::default()
         },
@@ -662,11 +840,75 @@ async fn acg_feature_registers_execution_and_stream_intercepts() {
 
     let execution_name = feature.execution_name.clone();
     let stream_name = feature.stream_name.clone();
+    let bound_scopes = runtime.bound_scopes.clone();
     let mut ctx = RegistrationContext::new(&mut runtime);
     feature.register(&mut ctx).await.unwrap();
 
     assert_llm_execution_intercept_registered(&execution_name);
     assert_llm_stream_execution_intercept_registered(&stream_name);
+
+    let next: LlmExecutionNextFn = Arc::new(|request| Box::pin(async move { Ok(request.content) }));
+    let rewritten = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("anthropic")
+            .request(layered_acg_request())
+            .func(next.clone())
+            .model_name("claude-sonnet-4-20250514")
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(rewritten["system"][0]["cache_control"].is_object());
+
+    let stream_next: LlmStreamExecutionNextFn = Arc::new(|request| {
+        Box::pin(async move {
+            let stream: nemo_relay::api::runtime::LlmJsonStream =
+                Box::pin(tokio_stream::iter(vec![Ok(request.content)]));
+            Ok(stream)
+        })
+    });
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("anthropic")
+            .request(layered_acg_request())
+            .func(stream_next.clone())
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| json!({"done": true})))
+            .model_name("claude-sonnet-4-20250514")
+            .build(),
+    )
+    .await
+    .unwrap();
+    let stream_rewritten = stream.next().await.unwrap().unwrap();
+    assert!(stream_rewritten["system"][0]["cache_control"].is_object());
+
+    bound_scopes.write().unwrap().insert(Uuid::now_v7());
+    let passthrough = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("anthropic")
+            .request(layered_acg_request())
+            .func(next)
+            .model_name("claude-sonnet-4-20250514")
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(passthrough["system"].is_string());
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("anthropic")
+            .request(layered_acg_request())
+            .func(stream_next)
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| json!({"done": true})))
+            .model_name("claude-sonnet-4-20250514")
+            .build(),
+    )
+    .await
+    .unwrap();
+    let stream_passthrough = stream.next().await.unwrap().unwrap();
+    assert!(stream_passthrough["system"].is_string());
 
     let mut registrations = ctx.finish();
     rollback_registrations(&mut registrations);
