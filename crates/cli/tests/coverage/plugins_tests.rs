@@ -11,6 +11,7 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 };
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
+use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
 
 fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
     json!({
@@ -221,6 +222,91 @@ fn typed_editor_model_contains_nemo_guardrails_options() {
     assert_eq!(
         rails.field("tool_input").unwrap().kind,
         EditorFieldKind::Json
+    );
+}
+
+#[test]
+fn typed_editor_model_contains_pii_redaction_options() {
+    let schema = PiiRedactionConfig::editor_schema();
+    assert!(!schema.fields.iter().any(|field| field.name == "version"));
+    assert_eq!(
+        schema.field("mode").unwrap().enum_values,
+        &["builtin", "local_model"]
+    );
+    assert_eq!(schema.field("codec").unwrap().kind, EditorFieldKind::Enum);
+    assert_eq!(
+        schema.field("tool_output").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+
+    let builtin = schema.field("builtin").unwrap().schema().unwrap();
+    assert_eq!(builtin.field("action").unwrap().kind, EditorFieldKind::Enum);
+    assert!(
+        builtin
+            .field("action")
+            .unwrap()
+            .enum_values
+            .contains(&"redact")
+    );
+    assert_eq!(
+        builtin.field("target_paths").unwrap().kind,
+        EditorFieldKind::Json
+    );
+    assert_eq!(
+        builtin.field("detector").unwrap().kind,
+        EditorFieldKind::Enum
+    );
+    assert!(
+        builtin
+            .field("detector")
+            .unwrap()
+            .enum_values
+            .contains(&"jwt")
+    );
+    assert!(
+        builtin
+            .field("detector")
+            .unwrap()
+            .enum_values
+            .contains(&"aws_access_key_id")
+    );
+    assert_eq!(
+        builtin.field("replacement").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        builtin.field("mask_char").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        builtin.field("unmasked_prefix").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    assert_eq!(
+        builtin.field("unmasked_suffix").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+
+    let local = schema.field("local").unwrap().schema().unwrap();
+    assert_eq!(
+        local.field("backend").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        local.field("model_id").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        local.field("detector_profile").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert_eq!(
+        local.field("allow_network").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+    assert_eq!(
+        local.field("max_latency_ms").unwrap().kind,
+        EditorFieldKind::Integer
     );
 }
 
@@ -729,6 +815,84 @@ fn editor_save_preserves_unknown_nemo_guardrails_fields_and_sections() {
 }
 
 #[test]
+fn editor_save_preserves_unknown_pii_redaction_fields_and_prunes_version() {
+    let mut config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: PII_REDACTION_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "version": 1,
+                "future_top_level": "preserve",
+                "mode": "builtin",
+                "codec": "openai_chat",
+                "builtin": {
+                    "action": "mask",
+                    "detector": "email",
+                    "target_paths": ["/message"],
+                    "future_builtin": "preserve"
+                },
+                "local": {
+                    "future_local": "preserve"
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        }],
+        ..PluginConfig::default()
+    };
+
+    let mut pii_redaction = component_pii_redaction_state(&config).unwrap();
+    let schema = PiiRedactionConfig::editor_schema();
+    let builtin = schema.field("builtin").unwrap();
+
+    set_struct_field(&mut pii_redaction.config, "mode", json!("builtin")).unwrap();
+    set_struct_field(&mut pii_redaction.config, "codec", json!("openai_chat")).unwrap();
+    set_section_field(
+        &mut pii_redaction.config,
+        builtin,
+        "action",
+        json!("redact"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut pii_redaction.config,
+        builtin,
+        "detector",
+        json!("bearer_token"),
+    )
+    .unwrap();
+    set_section_field(
+        &mut pii_redaction.config,
+        builtin,
+        "replacement",
+        json!("[REDACTED]"),
+    )
+    .unwrap();
+
+    pii_redaction.set_enabled(false);
+    store_pii_redaction_state(&mut config, &pii_redaction).unwrap();
+
+    let component = config
+        .components
+        .iter()
+        .find(|component| component.kind == PII_REDACTION_PLUGIN_KIND)
+        .unwrap();
+    assert!(!component.enabled);
+    assert!(!component.config.contains_key("version"));
+    assert_eq!(
+        component.config.get("future_top_level"),
+        Some(&json!("preserve"))
+    );
+    let builtin = component.config["builtin"].as_object().unwrap();
+    assert_eq!(builtin.get("action"), Some(&json!("redact")));
+    assert_eq!(builtin.get("detector"), Some(&json!("bearer_token")));
+    assert_eq!(builtin.get("future_builtin"), Some(&json!("preserve")));
+    let local = component.config["local"].as_object().unwrap();
+    assert_eq!(local.get("future_local"), Some(&json!("preserve")));
+}
+
+#[test]
 fn adaptive_config_field_reset_handles_optional_and_default_fields() {
     let mut adaptive = AdaptiveConfig {
         agent_id: Some("planner".into()),
@@ -1205,6 +1369,32 @@ fn validate_config_accepts_local_tool_only_nemo_guardrails_component() {
             kind: NEMO_GUARDRAILS_PLUGIN_KIND.to_string(),
             enabled: true,
             config: local_guardrails_component_config("./rails"),
+        }],
+        ..PluginConfig::default()
+    };
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
+fn validate_config_accepts_pii_redaction_component() {
+    let config = PluginConfig {
+        components: vec![PluginComponentSpec {
+            kind: PII_REDACTION_PLUGIN_KIND.to_string(),
+            enabled: true,
+            config: json!({
+                "mode": "builtin",
+                "codec": "openai_chat",
+                "input": true,
+                "output": true,
+                "builtin": {
+                    "action": "redact",
+                    "detector": "email"
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
         }],
         ..PluginConfig::default()
     };

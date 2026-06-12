@@ -17,6 +17,7 @@ use super::{
     wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
     wrap_tool_sanitize_fn,
 };
+use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 struct FfiHostedPluginUserData {
     ptr: *mut libc::c_void,
@@ -126,6 +127,10 @@ fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoRelaySt
     register_adaptive_component().map_err(|err| status_from_plugin_error(&err))
 }
 
+fn ensure_pii_redaction_component_registered() -> std::result::Result<(), NemoRelayStatus> {
+    register_pii_redaction_component().map_err(|err| status_from_plugin_error(&err))
+}
+
 /// Validate a generic plugin config document and return the diagnostics report as JSON.
 ///
 /// # Safety
@@ -141,6 +146,9 @@ pub unsafe extern "C" fn nemo_relay_validate_plugin_config(
         return NemoRelayStatus::NullPointer;
     }
     if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
     let config_value = match c_str_to_json(config_json) {
@@ -180,6 +188,9 @@ pub unsafe extern "C" fn nemo_relay_initialize_plugins(
         return NemoRelayStatus::NullPointer;
     }
     if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
     let config_value = match c_str_to_json(config_json) {
@@ -256,6 +267,9 @@ pub unsafe extern "C" fn nemo_relay_list_plugin_kinds_json(
         return NemoRelayStatus::NullPointer;
     }
     if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
     let kinds_json = match serde_json::to_value(list_plugin_kinds()) {

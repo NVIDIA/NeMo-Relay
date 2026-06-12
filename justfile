@@ -452,7 +452,13 @@ section = ""
 output = []
 changed = []
 found_workspace_version = False
-local_dependencies = ("nemo-relay", "nemo-relay-adaptive", "nemo-relay-ffi", "nemo-relay-cli")
+local_dependencies = (
+    "nemo-relay",
+    "nemo-relay-adaptive",
+    "nemo-relay-pii-redaction",
+    "nemo-relay-ffi",
+    "nemo-relay-cli",
+)
 found_dependencies = set()
 
 for line in text.splitlines(keepends=True):
@@ -847,6 +853,38 @@ test-rust:
     {{ bash_helpers }}
     output_dir="{{ output_dir }}"
     junit_out=""
+    test_config_root="$(mktemp -d)"
+    cleanup_test_config_root() {
+        rm -rf "$test_config_root"
+    }
+    trap cleanup_test_config_root EXIT
+
+    host_os="$(uname -s 2>/dev/null || true)"
+    is_windows=false
+    case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
+        Windows:*|*:msys*:*|*:win32*:*|*:*:MINGW*|*:*:MSYS*|*:*:CYGWIN*)
+            is_windows=true
+            ;;
+    esac
+    native_test_config_path() {
+        if [[ "$is_windows" == true ]] && command -v cygpath >/dev/null 2>&1; then
+            cygpath -w "$1"
+        else
+            printf '%s\n' "$1"
+        fi
+    }
+
+    xdg_config_home="$test_config_root/xdg"
+    mkdir -p "$xdg_config_home"
+    export XDG_CONFIG_HOME="$(native_test_config_path "$xdg_config_home")"
+    if [[ "$is_windows" == true ]]; then
+        appdata_home="$test_config_root/AppData/Roaming"
+        localappdata_home="$test_config_root/AppData/Local"
+        mkdir -p "$appdata_home" "$localappdata_home"
+        export APPDATA="$(native_test_config_path "$appdata_home")"
+        export LOCALAPPDATA="$(native_test_config_path "$localappdata_home")"
+    fi
+
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then

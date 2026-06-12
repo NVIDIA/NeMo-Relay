@@ -20,6 +20,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 nemo-relay = { workspace = true, features = ["otel", "openinference"] }
 nemo-relay-adaptive.workspace = true
+nemo-relay-pii-redaction.workspace = true
 chrono = "0.4"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
