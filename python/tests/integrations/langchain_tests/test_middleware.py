@@ -132,13 +132,11 @@ def recording_middleware_fixture() -> RecordingMiddleware:
 
         async def _llm_execute(
             self,
-            *,
             model_name: str,
             request: nemo_relay.LLMRequest,
             codec: Any,
             response_codec: Any,
             func: Any,
-            metadata: dict[str, Any] | None = None,
         ) -> Any:
             self.calls.append(
                 {
@@ -146,7 +144,6 @@ def recording_middleware_fixture() -> RecordingMiddleware:
                     "request": request,
                     "codec": codec,
                     "response_codec": response_codec,
-                    "metadata": metadata,
                 }
             )
             intercepted = nemo_relay.LLMRequest(
@@ -172,7 +169,6 @@ def model_request_fixture() -> ModelRequest[Any]:
         model=mock_model,
         messages=[HumanMessage(content="hello")],
         model_settings={"temperature": 1.0},
-        runtime=MagicMock(config={"metadata": {"ls_integration": "langchain_create_agent", "langgraph_step": 1}}),
     )
 
 
@@ -201,10 +197,6 @@ def test_wrap_model_call_routes_through_llm_execute(
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert recording_middleware.calls[0]["model_name"] == "mock-model"
     assert recording_middleware.calls[0]["request"].content["model"] == "mock-model"
-    assert recording_middleware.calls[0]["metadata"] == {
-        "ls_integration": "langchain_create_agent",
-        "langgraph_step": 1,
-    }
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
 
     assert isinstance(recording_middleware.calls[0]["codec"], LangChainCodec)
@@ -226,10 +218,6 @@ def test_awrap_model_call_routes_through_llm_execute(
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert recording_middleware.calls[0]["model_name"] == "mock-model"
     assert recording_middleware.calls[0]["request"].content["model"] == "mock-model"
-    assert recording_middleware.calls[0]["metadata"] == {
-        "ls_integration": "langchain_create_agent",
-        "langgraph_step": 1,
-    }
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
 
     assert isinstance(recording_middleware.calls[0]["codec"], LangChainCodec)
