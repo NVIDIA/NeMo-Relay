@@ -83,14 +83,14 @@ nemo_relay_pii_redaction::component::register_pii_redaction_component()?;
 A minimal config can redact detected emails from emitted tool input payloads:
 
 ```toml
-[[plugins.components]]
+[[components]]
 kind = "pii_redaction"
 
-[plugins.components.config]
+[components.config]
 mode = "builtin"
 tool_input = true
 
-[plugins.components.config.builtin]
+[components.config.builtin]
 action = "redact"
 detector = "email"
 target_paths = []
