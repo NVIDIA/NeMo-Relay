@@ -4,7 +4,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -144,6 +145,7 @@ impl AppState {
 }
 
 fn router_with_state(state: AppState) -> Router {
+    let max_hook_payload_bytes = state.config.max_hook_payload_bytes;
     Router::new()
         .route("/healthz", get(healthz))
         .route("/hooks/codex", post(codex_hook))
@@ -158,6 +160,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/v1/messages", post(gateway::passthrough))
         .route("/v1/messages/count_tokens", post(gateway::passthrough))
         .route("/v1/models", get(gateway::models))
+        .layer(DefaultBodyLimit::max(max_hook_payload_bytes))
         .with_state(state)
 }
 
@@ -240,9 +243,10 @@ impl Drop for PluginActivation {
 async fn codex_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = codex::adapt(payload, &headers);
     state
         .sessions
@@ -256,9 +260,10 @@ async fn codex_hook(
 async fn claude_code_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = claude_code::adapt(payload, &headers);
     state
         .sessions
@@ -272,9 +277,10 @@ async fn claude_code_hook(
 async fn cursor_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = cursor::adapt(payload, &headers);
     state
         .sessions
@@ -288,15 +294,24 @@ async fn cursor_hook(
 async fn hermes_hook(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<Value>,
+    payload: Result<Json<Value>, JsonRejection>,
 ) -> Result<Json<Value>, CliError> {
     state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = hermes::adapt(payload, &headers);
     state
         .sessions
         .apply_events(&headers, outcome.events)
         .await?;
     Ok(Json(outcome.response))
+}
+
+fn hook_payload_rejection(rejection: JsonRejection) -> CliError {
+    if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+        CliError::PayloadTooLarge(rejection.to_string())
+    } else {
+        CliError::InvalidPayload(rejection.to_string())
+    }
 }
 
 #[cfg(test)]

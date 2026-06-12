@@ -604,6 +604,8 @@ command = "codex --full-auto"
         .env("NEMO_RELAY_GATEWAY_BIND", "127.0.0.1:0")
         .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
         .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
+        .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
+        .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -612,9 +614,36 @@ command = "codex --full-auto"
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("openai_base_url = http://env-openai"));
     assert!(stdout.contains("anthropic_base_url = http://env-anthropic"));
+    assert!(stdout.contains("max_hook_payload_bytes = 444"));
+    assert!(stdout.contains("max_passthrough_body_bytes = 555"));
     assert!(!stdout.contains("atif_dir"));
     assert!(!stdout.contains("openinference_endpoint"));
     assert!(stdout.contains("argv = codex"));
+}
+
+#[test]
+fn cli_run_rejects_zero_body_limit_env() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(&config, "").unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "0")
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "codex",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES"));
+    assert!(stderr.contains("greater than 0"));
 }
 
 #[test]

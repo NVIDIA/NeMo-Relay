@@ -325,6 +325,12 @@ pub(crate) struct ServerArgs {
     /// Generic plugin configuration JSON for process-level gateway plugin activation.
     #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG")]
     pub(crate) plugin_config: Option<String>,
+    /// Maximum accepted coding-agent hook payload size, in bytes.
+    #[arg(long, env = "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES")]
+    pub(crate) max_hook_payload_bytes: Option<usize>,
+    /// Maximum accepted provider passthrough request body size, in bytes.
+    #[arg(long, env = "NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES")]
+    pub(crate) max_passthrough_body_bytes: Option<usize>,
 }
 
 impl ServerArgs {
@@ -338,9 +344,14 @@ impl ServerArgs {
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
             || self.plugin_config.is_some()
+            || self.max_hook_payload_bytes.is_some()
+            || self.max_passthrough_body_bytes.is_some()
             || self.config.is_some()
     }
 }
+
+pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct GatewayConfig {
@@ -349,6 +360,8 @@ pub(crate) struct GatewayConfig {
     pub(crate) anthropic_base_url: String,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
+    pub(crate) max_hook_payload_bytes: usize,
+    pub(crate) max_passthrough_body_bytes: usize,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -506,9 +519,16 @@ impl Default for CursorAgentConfig {
 // `PluginConfig` activation path.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
+    gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
     plugins: Option<FilePluginsConfig>,
     agents: Option<FileAgentsConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileGatewayConfig {
+    max_hook_payload_bytes: Option<usize>,
+    max_passthrough_body_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -559,6 +579,8 @@ impl Default for GatewayConfig {
             anthropic_base_url: "https://api.anthropic.com".into(),
             metadata: None,
             plugin_config: None,
+            max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+            max_passthrough_body_bytes: DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
         }
     }
 }
@@ -655,6 +677,13 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Resu
     if let Some(value) = &args.plugin_config {
         apply_cli_plugin_config(config, value)?;
     }
+    if let Some(value) = args.max_hook_payload_bytes {
+        config.max_hook_payload_bytes = validate_body_limit("max hook payload bytes", value)?;
+    }
+    if let Some(value) = args.max_passthrough_body_bytes {
+        config.max_passthrough_body_bytes =
+            validate_body_limit("max passthrough body bytes", value)?;
+    }
     Ok(())
 }
 
@@ -709,7 +738,7 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
         config_toml_plugin_sources.first(),
         plugin_toml,
     )?;
-    apply_env_config(&mut resolved.gateway);
+    apply_env_config(&mut resolved.gateway)?;
     Ok(resolved)
 }
 
@@ -812,9 +841,28 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     let config: FileConfig = value.try_into().map_err(|error| {
         CliError::Config(format!("invalid gateway configuration shape: {error}"))
     })?;
+    apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
     apply_file_plugins_config(&mut resolved.gateway, config.plugins);
     apply_file_agents_config(&mut resolved.agents, config.agents);
+    Ok(())
+}
+
+fn apply_file_gateway_config(
+    gateway: &mut GatewayConfig,
+    config: Option<FileGatewayConfig>,
+) -> Result<(), CliError> {
+    let Some(config) = config else {
+        return Ok(());
+    };
+    if let Some(value) = config.max_hook_payload_bytes {
+        gateway.max_hook_payload_bytes =
+            validate_body_limit("gateway.max_hook_payload_bytes", value)?;
+    }
+    if let Some(value) = config.max_passthrough_body_bytes {
+        gateway.max_passthrough_body_bytes =
+            validate_body_limit("gateway.max_passthrough_body_bytes", value)?;
+    }
     Ok(())
 }
 
@@ -923,7 +971,7 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
 
 // Applies environment variables after file configuration. Invalid bind values are ignored here to
 // preserve existing startup behavior, while string values replace earlier layers when present.
-fn apply_env_config(config: &mut GatewayConfig) {
+fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     if let Ok(value) = std::env::var("NEMO_RELAY_GATEWAY_BIND")
         && let Ok(value) = value.parse()
     {
@@ -935,6 +983,29 @@ fn apply_env_config(config: &mut GatewayConfig) {
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         config.anthropic_base_url = value;
     }
+    if let Ok(value) = std::env::var("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES") {
+        config.max_hook_payload_bytes =
+            parse_env_body_limit("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", &value)?;
+    }
+    if let Ok(value) = std::env::var("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES") {
+        config.max_passthrough_body_bytes =
+            parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
+    }
+    Ok(())
+}
+
+fn parse_env_body_limit(name: &str, raw: &str) -> Result<usize, CliError> {
+    let value = raw.parse::<usize>().map_err(|error| {
+        CliError::Config(format!("{name} must be a positive byte count: {error}"))
+    })?;
+    validate_body_limit(name, value)
+}
+
+fn validate_body_limit(name: &str, value: usize) -> Result<usize, CliError> {
+    if value == 0 {
+        return Err(CliError::Config(format!("{name} must be greater than 0")));
+    }
+    Ok(value)
 }
 
 // Recursively merges TOML tables and replaces scalar/array values from the higher-priority side.

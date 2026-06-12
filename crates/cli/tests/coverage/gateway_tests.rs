@@ -111,6 +111,8 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         anthropic_base_url: "http://anthropic/".into(),
         metadata: None,
         plugin_config: None,
+        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
     assert_eq!(
@@ -139,6 +141,8 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
     assert_eq!(
@@ -721,6 +725,8 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
         config: config.clone(),
@@ -748,6 +754,8 @@ async fn models_rejects_non_get_requests_directly() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
         config: config.clone(),

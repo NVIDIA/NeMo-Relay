@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use async_stream::stream;
@@ -8,6 +9,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use futures_util::StreamExt;
+use http_body_util::LengthLimitError;
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
@@ -28,8 +30,6 @@ use crate::config::header_string;
 use crate::error::CliError;
 use crate::server::AppState;
 use crate::session::{GatewayCallPrep, LlmGatewayStart, SessionManager};
-
-const MAX_BODY_BYTES: usize = 100 * 1024 * 1024;
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
@@ -79,9 +79,9 @@ async fn prepare_gateway_request(
     let provider = ProviderRoute::from_path(parts.uri.path()).ok_or_else(|| {
         CliError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
     })?;
-    let body_bytes = axum::body::to_bytes(body, MAX_BODY_BYTES)
+    let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
         .await
-        .map_err(|error| CliError::InvalidPayload(error.to_string()))?;
+        .map_err(passthrough_body_error)?;
     let request_json = serde_json::from_slice::<Value>(&body_bytes).unwrap_or(Value::Null);
     let path_and_query = parts
         .uri
@@ -104,6 +104,19 @@ async fn prepare_gateway_request(
         request_json,
         streaming,
     })
+}
+
+fn passthrough_body_error(error: axum::Error) -> CliError {
+    if error.source().is_some_and(|source| {
+        source.is::<LengthLimitError>()
+            || source
+                .source()
+                .is_some_and(|source| source.is::<LengthLimitError>())
+    }) {
+        CliError::PayloadTooLarge(error.to_string())
+    } else {
+        CliError::InvalidPayload(error.to_string())
+    }
 }
 
 // Builds the [`LlmGatewayStart`] payload from a prepared request. Identifier resolution is shared

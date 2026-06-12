@@ -13,6 +13,8 @@ pub(crate) enum CliError {
     GuardrailRejected(String),
     #[error("invalid hook payload: {0}")]
     InvalidPayload(String),
+    #[error("payload too large: {0}")]
+    PayloadTooLarge(String),
     #[error("gateway upstream error: {0}")]
     Upstream(#[from] reqwest::Error),
     #[error("http error: {0}")]
@@ -50,6 +52,7 @@ impl IntoResponse for CliError {
         let guardrail_reason = self.guardrail_rejection_reason().map(ToOwned::to_owned);
         let status = match (guardrail_reason.is_some(), self) {
             (true, _) => StatusCode::FORBIDDEN,
+            (false, Self::PayloadTooLarge(_)) => StatusCode::PAYLOAD_TOO_LARGE,
             (false, Self::InvalidPayload(_)) => StatusCode::BAD_REQUEST,
             (false, Self::Upstream(_)) => StatusCode::BAD_GATEWAY,
             (

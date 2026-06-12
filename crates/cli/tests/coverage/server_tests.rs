@@ -163,6 +163,8 @@ fn test_config() -> GatewayConfig {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
+        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
 
@@ -186,6 +188,19 @@ fn find_scope_event<'a>(
                 serde_json::to_string_pretty(events).unwrap()
             )
         })
+}
+
+async fn assert_payload_too_large_response(response: axum::response::Response) {
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("payload too large")),
+        "unexpected 413 body: {body}"
+    );
 }
 
 #[tokio::test]
@@ -212,6 +227,58 @@ async fn codex_hook_keeps_codex_response_shape() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
+async fn hook_payload_above_axum_default_succeeds_with_relay_default_limit() {
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/codex")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "codex-large-hook",
+                        "hook_event_name": "sessionStart",
+                        "large": "x".repeat(2 * 1024 * 1024 + 1024)
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn hook_payload_limit_returns_structured_413() {
+    let mut config = test_config();
+    config.max_hook_payload_bytes = 128;
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/codex")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "codex-too-large-hook",
+                        "hook_event_name": "sessionStart",
+                        "large": "x".repeat(1024)
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_payload_too_large_response(response).await;
 }
 
 #[tokio::test]
@@ -1662,6 +1729,10 @@ async fn gateway_errors_render_structured_json_responses() {
     let response = CliError::Config("bad config".into()).into_response();
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let response = CliError::PayloadTooLarge("too much".into()).into_response();
+
+    assert_payload_too_large_response(response).await;
 }
 
 #[tokio::test]
@@ -1974,6 +2045,34 @@ async fn gateway_returns_bad_gateway_when_upstream_is_unreachable() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn passthrough_body_limit_returns_structured_413() {
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    config.max_passthrough_body_bytes = 32;
+    let app = router(config);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/responses")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "input": "x".repeat(1024)
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_payload_too_large_response(response).await;
 }
 
 #[tokio::test]

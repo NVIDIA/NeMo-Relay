@@ -13,6 +13,8 @@ fn config() -> GatewayConfig {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
+        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
 
@@ -100,6 +102,10 @@ fn explicit_toml_config_maps_supported_sections() {
 openai_base_url = "http://openai"
 anthropic_base_url = "http://anthropic"
 
+[gateway]
+max_hook_payload_bytes = 12345
+max_passthrough_body_bytes = 67890
+
 [plugins]
 config = { components = [] }
 
@@ -135,6 +141,8 @@ command = "hermes --yolo chat"
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://anthropic");
+    assert_eq!(resolved.gateway.max_hook_payload_bytes, 12345);
+    assert_eq!(resolved.gateway.max_passthrough_body_bytes, 67890);
     assert_eq!(resolved.gateway.metadata, None);
     assert_eq!(
         resolved.gateway.plugin_config,
@@ -710,6 +718,8 @@ fn server_resolution_applies_all_server_overrides() {
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
         plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
+        max_hook_payload_bytes: Some(222),
+        max_passthrough_body_bytes: Some(333),
     };
 
     let resolved = resolve_server_config(&args).unwrap();
@@ -717,11 +727,51 @@ fn server_resolution_applies_all_server_overrides() {
     assert_eq!(resolved.gateway.bind.to_string(), "127.0.0.1:0");
     assert_eq!(resolved.gateway.openai_base_url, "http://cli-openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
+    assert_eq!(resolved.gateway.max_hook_payload_bytes, 222);
+    assert_eq!(resolved.gateway.max_passthrough_body_bytes, 333);
     assert_eq!(
         resolved.gateway.plugin_config,
         Some(json!({ "version": 1, "components": [] }))
     );
     assert!(args.requested_daemon_mode());
+}
+
+#[test]
+fn gateway_body_limit_defaults_are_stable() {
+    let gateway = GatewayConfig::default();
+
+    assert_eq!(
+        gateway.max_hook_payload_bytes,
+        crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
+    );
+    assert_eq!(
+        gateway.max_passthrough_body_bytes,
+        crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES
+    );
+}
+
+#[test]
+fn gateway_body_limit_file_values_must_be_nonzero() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    for (field, expected) in [
+        ("max_hook_payload_bytes", "gateway.max_hook_payload_bytes"),
+        (
+            "max_passthrough_body_bytes",
+            "gateway.max_passthrough_body_bytes",
+        ),
+    ] {
+        std::fs::write(&path, format!("[gateway]\n{field} = 0\n")).unwrap();
+        let args = ServerArgs {
+            config: Some(path.clone()),
+            ..ServerArgs::default()
+        };
+
+        let error = resolve_server_config(&args).unwrap_err().to_string();
+
+        assert!(error.contains(expected));
+        assert!(error.contains("greater than 0"));
+    }
 }
 
 #[test]

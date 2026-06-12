@@ -607,6 +607,14 @@ impl PreparedRun {
             "anthropic_base_url = {}",
             resolved.gateway.anthropic_base_url
         );
+        println!(
+            "max_hook_payload_bytes = {}",
+            resolved.gateway.max_hook_payload_bytes
+        );
+        println!(
+            "max_passthrough_body_bytes = {}",
+            resolved.gateway.max_passthrough_body_bytes
+        );
         let destinations = exporter_destinations(&resolved.gateway);
         if destinations.is_empty() {
             println!("exporters = not_configured");
