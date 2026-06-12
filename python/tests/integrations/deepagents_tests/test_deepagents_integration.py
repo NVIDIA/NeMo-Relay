@@ -226,13 +226,11 @@ def test_model_call_routes_through_langchain_execution_middleware(
 
         async def _llm_execute(
             self,
-            *,
             model_name: str,
             request: nemo_relay.LLMRequest,
             codec: Any,
             response_codec: Any,
             func: Any,
-            metadata: dict[str, Any] | None = None,
         ) -> Any:
             self.calls.append(
                 {
@@ -240,7 +238,6 @@ def test_model_call_routes_through_langchain_execution_middleware(
                     "request": request,
                     "codec": codec,
                     "response_codec": response_codec,
-                    "metadata": metadata,
                 }
             )
             intercepted = nemo_relay.LLMRequest(
@@ -257,7 +254,6 @@ def test_model_call_routes_through_langchain_execution_middleware(
         model=_mock_deepagents_chat_model([AIMessage(content="unused")]),
         messages=[HumanMessage(content="hello")],
         model_settings={"temperature": 1.0},
-        runtime=MagicMock(config={"metadata": {"ls_integration": "langchain_create_agent", "langgraph_step": 1}}),
     )
     seen_request: dict[str, ModelRequest[Any]] = {}
 
@@ -276,7 +272,6 @@ def test_model_call_routes_through_langchain_execution_middleware(
     assert response.result[0].content == "done"
     assert seen_request["request"].model_settings == {"temperature": 0.25}
     assert middleware.calls[0]["model_name"] == "mock-model"
-    assert middleware.calls[0]["metadata"] == {"ls_integration": "langchain_create_agent", "langgraph_step": 1}
     assert isinstance(middleware.calls[0]["codec"], LangChainCodec)
     assert middleware.calls[0]["response_codec"] is middleware.calls[0]["codec"]
 
