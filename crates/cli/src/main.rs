@@ -137,6 +137,13 @@ fn run_completions(command: CompletionsCommand) -> Result<ExitCode, error::CliEr
 }
 
 fn generate_completions(shell: Option<clap_complete::Shell>) -> Result<(), error::CliError> {
+    generate_completions_to(shell, &mut std::io::stdout())
+}
+
+fn generate_completions_to(
+    shell: Option<clap_complete::Shell>,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), error::CliError> {
     let shell = shell.ok_or_else(|| {
         error::CliError::Config(
             "missing shell argument; pass a shell name (bash, zsh, fish, ...) or \
@@ -145,12 +152,7 @@ fn generate_completions(shell: Option<clap_complete::Shell>) -> Result<(), error
         )
     })?;
     let mut clap_command = <Cli as clap::CommandFactory>::command();
-    clap_complete::generate(
-        shell,
-        &mut clap_command,
-        "nemo-relay",
-        &mut std::io::stdout(),
-    );
+    clap_complete::generate(shell, &mut clap_command, "nemo-relay", writer);
     Ok(())
 }
 
@@ -177,6 +179,11 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
 
 #[cfg(test)]
 mod test_support {
+    pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     pub(crate) static PLUGIN_CONFIG_TEST_LOCK: tokio::sync::Mutex<()> =
         tokio::sync::Mutex::const_new(());
 }
+
+#[cfg(test)]
+#[path = "../tests/coverage/main_tests.rs"]
+mod tests;

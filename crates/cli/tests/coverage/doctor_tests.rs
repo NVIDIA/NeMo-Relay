@@ -338,9 +338,63 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
 }
 
 #[test]
+fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let workspace_config = workspace.join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(workspace_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &workspace_config,
+        "[upstream]\nopenai_base_url = \"http://local\"\n",
+    )
+    .unwrap();
+
+    let xdg = temp.path().join("xdg");
+    let global_config = xdg.join("nemo-relay/config.toml");
+    std::fs::create_dir_all(global_config.parent().unwrap()).unwrap();
+    std::fs::write(&global_config, "[upstream\n").unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+        ("HOME", Some(home.as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+
+    let configuration = collect_configuration(
+        Some(&workspace),
+        Some(&home),
+        Check {
+            name: "Resolution",
+            status: Status::Warn,
+            details: "using fallback layer".into(),
+        },
+        vec!["codex".into(), "hermes".into()],
+    );
+
+    assert_eq!(configuration.workspace.status, Status::Pass);
+    assert!(configuration.workspace.active);
+    assert_eq!(configuration.global.path, global_config);
+    assert_eq!(configuration.global.status, Status::Fail);
+    assert!(configuration.global.details.contains("invalid TOML"));
+
+    let mut report = empty_report();
+    report.configuration = configuration;
+    let rendered = format_human(&report);
+    assert!(rendered.contains("Global"));
+    assert!(rendered.contains("Resolution ! using fallback layer"));
+    assert!(rendered.contains("Agents     codex, hermes"));
+}
+
+#[test]
 fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert_eq!(command_executable("codex --full-auto"), "codex");
     assert_eq!(command_executable(""), "");
+    assert_eq!(
+        agent_command(CodingAgent::ClaudeCode, &AgentConfigs::default(), "claude"),
+        "claude"
+    );
     assert_eq!(
         agent_command_status(Some(std::path::Path::new("/bin/codex")), false, true),
         Status::Warn
@@ -359,6 +413,19 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     agents.hermes.hooks_path = Some(PathBuf::from("/tmp/hermes.yaml"));
     assert!(agent_configured(CodingAgent::Hermes, &agents));
     assert_eq!(configured_agent_names(&agents), vec!["hermes".to_string()]);
+    assert_eq!(
+        hook_status(CodingAgent::ClaudeCode, &agents, true),
+        (Status::Pass, "hooks: injected during run".into())
+    );
+    assert_eq!(
+        hook_status(CodingAgent::Codex, &agents, true),
+        (Status::Pass, "hooks: injected during run".into())
+    );
+    agents.cursor.patch_restore_hooks = true;
+    assert_eq!(
+        hook_status(CodingAgent::Cursor, &agents, true),
+        (Status::Pass, "hooks: patched during run".into())
+    );
 
     let temp = tempfile::tempdir().unwrap();
     let hook = temp.path().join("hooks.yaml");
@@ -373,6 +440,15 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert!(details.contains("missing NeMo Relay hook"));
     let (status, _) = hook_file_status(Ok(hook), CodingAgent::Hermes, false, "hooks");
     assert_eq!(status, Status::Info);
+
+    let mut agents = AgentConfigs::default();
+    let (status, details) = hook_status(CodingAgent::Hermes, &agents, true);
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("not installed"));
+    let (status, details) = hook_status(CodingAgent::Hermes, &agents, false);
+    assert_eq!(status, Status::Info);
+    assert!(details.contains("not configured"));
+    agents.cursor.patch_restore_hooks = false;
 }
 
 #[test]
@@ -399,6 +475,104 @@ fn collect_completions_reports_shell_specific_paths() {
     let checks = collect_completions(Some(temp.path()));
     assert_eq!(checks[0].status, Status::Info);
     assert!(checks[0].details.contains("no $SHELL"));
+}
+
+#[test]
+fn collect_environment_and_completions_cover_missing_home_and_unknown_shell() {
+    let _guard = ENV_LOCK.lock().unwrap();
+
+    let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/opt/bin/elvish")))]);
+    let environment = collect_environment();
+    assert_eq!(environment.shell.as_deref(), Some("elvish"));
+
+    let checks = collect_completions(None);
+    assert_eq!(checks[0].status, Status::Info);
+    assert!(checks[0].details.contains("could not resolve home dir"));
+
+    drop(_env);
+    let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/bin/nu")))]);
+    let home = tempfile::tempdir().unwrap();
+    let checks = collect_completions(Some(home.path()));
+    assert_eq!(checks[0].status, Status::Info);
+    assert!(checks[0].details.contains("no known completion path"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn collect_agents_filters_target_and_records_version() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let codex = temp.path().join("codex");
+    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex 1.2.3\\n'\n").unwrap();
+    make_executable(&codex);
+
+    let _env = EnvScope::set(&[("PATH", Some(temp.path().as_os_str()))]);
+    let resolved = ResolvedConfig::default();
+    let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].name, "codex");
+    assert_eq!(agents[0].status, Status::Warn);
+    assert_eq!(agents[0].version.as_deref(), Some("codex 1.2.3"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let quiet = temp.path().join("quiet-agent");
+    std::fs::write(&quiet, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&quiet);
+
+    assert_eq!(probe_version(&quiet).await, None);
+    assert_eq!(
+        probe_version(&temp.path().join("missing-agent")).await,
+        None
+    );
+}
+
+#[test]
+fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".nemo-relay")).unwrap();
+    std::fs::write(
+        workspace.join(".nemo-relay").join("config.toml"),
+        "[agents.codex]\ncommand = \"codex\"\n",
+    )
+    .unwrap();
+    let _env = EnvScope::set(&[
+        ("HOME", Some(home.as_os_str())),
+        ("XDG_CONFIG_HOME", None),
+        ("PATH", None),
+    ]);
+
+    let info = collect_configuration(
+        Some(&workspace),
+        Some(&home),
+        Check {
+            name: "Resolution",
+            status: Status::Pass,
+            details: "valid".into(),
+        },
+        vec!["codex".into()],
+    );
+    assert_eq!(info.workspace.status, Status::Pass);
+    assert!(info.global.path.starts_with(&home));
+    assert_eq!(info.configured_agents, vec!["codex".to_string()]);
+
+    assert_eq!(which_on_path("definitely-missing"), None);
+    assert_eq!(which_command("/definitely/missing"), None);
+    let binary = temp.path().join("agent-bin");
+    std::fs::write(&binary, "").unwrap();
+    assert_eq!(
+        which_command(binary.to_str().unwrap()).as_deref(),
+        Some(binary.as_path())
+    );
 }
 
 #[test]
@@ -431,6 +605,10 @@ fn observability_component_helpers_cover_disabled_and_default_paths() {
         }))
         .is_none()
     );
+    assert!(observability_file_exporter_check(config, "missing").is_none());
+    let default_dir = observability_file_exporter_check(config, "atof").unwrap();
+    assert_eq!(default_dir.status, Status::Info);
+    assert!(default_dir.details.contains("runtime default"));
 }
 
 #[test]
@@ -446,6 +624,70 @@ fn check_directory_reports_pass_warn_and_fail() {
     std::fs::write(&file, "").unwrap();
     let fail = check_directory("ATOF dir", &file);
     assert_eq!(fail.status, Status::Fail);
+}
+
+#[test]
+fn hook_file_status_covers_resolution_missing_and_invalid_cursor_json() {
+    let resolution_error = hook_file_status(
+        Err(CliError::Config("bad path".into())),
+        CodingAgent::Hermes,
+        true,
+        "hooks",
+    );
+    assert_eq!(resolution_error.0, Status::Fail);
+    assert!(resolution_error.1.contains("could not resolve path"));
+
+    let missing = tempfile::tempdir().unwrap().path().join("missing.yaml");
+    let (status, details) =
+        hook_file_status(Ok(missing.clone()), CodingAgent::Hermes, true, "hooks");
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("missing"));
+
+    let (status, details) = hook_file_status(Ok(missing), CodingAgent::Hermes, false, "hooks");
+    assert_eq!(status, Status::Info);
+    assert!(details.contains("missing"));
+
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("hooks.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{"version":1,"hooks":"hook-forward cursor"}"#,
+    )
+    .unwrap();
+    let (status, details) = hook_file_status(
+        Ok(hooks_path),
+        CodingAgent::Cursor,
+        true,
+        "hooks: user-managed",
+    );
+    assert_eq!(status, Status::Fail);
+    assert!(
+        details.contains("invalid Cursor hooks JSON") || details.contains("has no hooks object")
+    );
+}
+
+#[test]
+fn hook_file_status_covers_plain_files_and_read_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let hooks_path = temp.path().join("config.yaml");
+    std::fs::write(&hooks_path, "hooks:\n  PreToolUse: []\n").unwrap();
+
+    let (status, details) =
+        hook_file_status(Ok(hooks_path.clone()), CodingAgent::Hermes, true, "hooks");
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("missing NeMo Relay hook"));
+
+    let (status, details) =
+        hook_file_status(Ok(hooks_path.clone()), CodingAgent::Hermes, false, "hooks");
+    assert_eq!(status, Status::Info);
+    assert!(details.contains("no NeMo Relay hook"));
+
+    let unreadable_path = temp.path().join("hooks-dir");
+    std::fs::create_dir(&unreadable_path).unwrap();
+    let (status, details) =
+        hook_file_status(Ok(unreadable_path), CodingAgent::Hermes, false, "hooks");
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("could not read"));
 }
 
 #[test]
@@ -818,6 +1060,41 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
 }
 
 #[tokio::test]
+async fn collect_observability_covers_absent_invalid_and_componentless_configs() {
+    let absent = collect_observability(&GatewayConfig::default()).await;
+    assert_eq!(absent[0].status, Status::Info);
+    assert!(absent[0].details.contains("not configured"));
+
+    let invalid = collect_observability(&GatewayConfig {
+        plugin_config: Some(serde_json::json!({"version": "bad"})),
+        ..GatewayConfig::default()
+    })
+    .await;
+    assert_eq!(invalid[0].status, Status::Fail);
+    assert!(invalid[0].details.contains("invalid plugin config"));
+
+    let no_observability = collect_observability(&GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": []
+        })),
+        ..GatewayConfig::default()
+    })
+    .await;
+    assert!(
+        no_observability
+            .iter()
+            .any(|check| check.name == "Observability plugin"
+                && check.details.contains("component not configured"))
+    );
+    assert!(
+        no_observability
+            .iter()
+            .any(|check| check.name == "Pricing" && check.details.contains("not configured"))
+    );
+}
+
+#[tokio::test]
 async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
     let gateway = GatewayConfig {
         plugin_config: Some(serde_json::json!({
@@ -849,6 +1126,223 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
     assert_eq!(endpoint.status, Status::Fail);
     assert!(endpoint.details.contains("invalid scheme"));
     assert!(endpoint.details.contains("must be ws or wss"));
+}
+
+#[tokio::test]
+async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transport() {
+    let missing_url = probe_atof_endpoint(0, &serde_json::json!({})).await;
+    assert_eq!(missing_url.status, Status::Fail);
+    assert!(missing_url.details.contains("missing url"));
+
+    let timeout_zero = probe_atof_endpoint(
+        1,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "timeout_millis": 0
+        }),
+    )
+    .await;
+    assert_eq!(timeout_zero.status, Status::Fail);
+    assert!(timeout_zero.details.contains("timeout_millis"));
+
+    let bad_headers = probe_atof_endpoint(
+        2,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": []
+        }),
+    )
+    .await;
+    assert_eq!(bad_headers.status, Status::Fail);
+    assert!(bad_headers.details.contains("headers must be an object"));
+
+    let non_string_header = probe_atof_endpoint(
+        3,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"x-test": 1}
+        }),
+    )
+    .await;
+    assert_eq!(non_string_header.status, Status::Fail);
+    assert!(
+        non_string_header
+            .details
+            .contains("headers.x-test must be a string")
+    );
+
+    let unsupported = probe_atof_endpoint(
+        4,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "transport": "grpc"
+        }),
+    )
+    .await;
+    assert_eq!(unsupported.status, Status::Fail);
+    assert!(unsupported.details.contains("unsupported transport"));
+}
+
+#[tokio::test]
+async fn atof_http_and_websocket_probes_report_failure_branches() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 1024];
+        let _ = stream.read(&mut buf).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+
+    let failed_http = probe_atof_http_post(
+        &url,
+        Vec::new(),
+        doctor_atof_probe_payload().unwrap(),
+        std::time::Duration::from_secs(2),
+        5,
+    )
+    .await;
+    assert_eq!(failed_http.status, Status::Fail);
+    assert!(failed_http.details.contains("HTTP 500"));
+    handle.join().unwrap();
+
+    let bad_header_name = probe_atof_websocket(
+        "ws://127.0.0.1:1/events",
+        vec![("bad header".to_string(), "value".to_string())],
+        "{}".to_string(),
+        std::time::Duration::from_millis(10),
+        6,
+    )
+    .await;
+    assert_eq!(bad_header_name.status, Status::Fail);
+
+    let bad_header_value = probe_atof_websocket(
+        "ws://127.0.0.1:1/events",
+        vec![("x-test".to_string(), "bad\r\nvalue".to_string())],
+        "{}".to_string(),
+        std::time::Duration::from_millis(10),
+        7,
+    )
+    .await;
+    assert_eq!(bad_header_value.status, Status::Fail);
+
+    let bad_websocket_url = probe_atof_websocket(
+        "ws://[",
+        Vec::new(),
+        "{}".to_string(),
+        std::time::Duration::from_millis(10),
+        8,
+    )
+    .await;
+    assert_eq!(bad_websocket_url.status, Status::Fail);
+}
+
+#[tokio::test]
+async fn atof_http_and_websocket_timeout_errors_are_reported() {
+    let http_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let http_url = format!("http://{}", http_listener.local_addr().unwrap());
+    let http_handle = std::thread::spawn(move || {
+        let (_stream, _) = http_listener.accept().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(75));
+    });
+
+    let http_timeout = probe_atof_http_post(
+        &http_url,
+        Vec::new(),
+        doctor_atof_probe_payload().unwrap(),
+        std::time::Duration::from_millis(10),
+        9,
+    )
+    .await;
+    assert_eq!(http_timeout.status, Status::Fail);
+    assert!(http_timeout.details.contains("http_post"));
+    assert!(
+        http_timeout
+            .details
+            .to_ascii_lowercase()
+            .contains("timeout")
+            || http_timeout
+                .details
+                .to_ascii_lowercase()
+                .contains("timed out")
+            || http_timeout.details.contains("error sending request"),
+        "timeout detail was: {}",
+        http_timeout.details
+    );
+    http_handle.join().unwrap();
+
+    let ws_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let ws_url = format!("ws://{}", ws_listener.local_addr().unwrap());
+    let ws_handle = std::thread::spawn(move || {
+        let (_stream, _) = ws_listener.accept().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(75));
+    });
+    let websocket_timeout = probe_atof_websocket(
+        &ws_url,
+        Vec::new(),
+        "{}".to_string(),
+        std::time::Duration::from_millis(10),
+        10,
+    )
+    .await;
+    assert_eq!(websocket_timeout.status, Status::Fail);
+    assert!(websocket_timeout.details.contains("timed out"));
+    ws_handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn probe_http_named_warns_on_http_errors() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0_u8; 1024];
+        let _ = stream.read(&mut buf).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+
+    let check = probe_http_named("OpenTelemetry endpoint", &url).await;
+    assert_eq!(check.status, Status::Warn);
+    assert!(check.details.contains("HTTP 500"));
+    handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn http_probe_passes_success_and_ndjson_upload_success() {
+    let success_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let success_url = format!("http://{}", success_listener.local_addr().unwrap());
+    let success_handle = std::thread::spawn(move || {
+        let (mut stream, _) = success_listener.accept().unwrap();
+        let mut buf = [0_u8; 1024];
+        let _ = stream.read(&mut buf).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let check = probe_http_named("OpenTelemetry endpoint", &success_url).await;
+    assert_eq!(check.status, Status::Pass);
+    success_handle.join().unwrap();
+
+    let (url, body, server_thread) = start_doctor_http_capture_server();
+    let check = probe_atof_ndjson(
+        &url,
+        Vec::new(),
+        doctor_atof_probe_payload().unwrap(),
+        std::time::Duration::from_secs(2),
+        11,
+    )
+    .await;
+    assert_eq!(check.status, Status::Pass);
+    assert!(
+        body.lock()
+            .unwrap()
+            .contains("nemo_relay.doctor.atof_probe")
+    );
+    server_thread.join().unwrap();
 }
 
 #[tokio::test]
@@ -934,6 +1428,79 @@ async fn collect_observability_fails_for_missing_pricing_file_source() {
         .expect("pricing source check");
     assert_eq!(pricing.status, Status::Fail);
     assert!(pricing.details.contains("unreadable"));
+}
+
+#[tokio::test]
+async fn collect_observability_reports_pricing_disabled_empty_inline_and_invalid_catalogs() {
+    let disabled_config: PluginConfig = serde_json::from_value(serde_json::json!({
+        "version": 1,
+        "components": [{
+            "kind": "pricing",
+            "enabled": false,
+            "config": {}
+        }]
+    }))
+    .unwrap();
+    let mut checks = Vec::new();
+    collect_pricing_component_checks(&mut checks, &disabled_config);
+    assert_eq!(checks[0].status, Status::Info);
+    assert!(checks[0].details.contains("disabled"));
+
+    let empty_config: PluginConfig = serde_json::from_value(serde_json::json!({
+        "version": 1,
+        "components": [{
+            "kind": "pricing",
+            "config": {"sources": []}
+        }]
+    }))
+    .unwrap();
+    let mut checks = Vec::new();
+    collect_pricing_component_checks(&mut checks, &empty_config);
+    assert_eq!(checks[0].status, Status::Info);
+    assert!(checks[0].details.contains("no sources"));
+
+    let inline_config: PluginConfig = serde_json::from_value(serde_json::json!({
+        "version": 1,
+        "components": [{
+            "kind": "pricing",
+            "config": {
+                "sources": [{
+                    "type": "inline",
+                    "catalog": {
+                        "version": 1,
+                        "entries": [{
+                            "provider": "test",
+                            "model_id": "model-a",
+                            "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                            "prompt_cache": {"read_accounting": "separate"},
+                            "pricing_as_of": "2026-06-06",
+                            "pricing_source": "unit"
+                        }]
+                    }
+                }]
+            }
+        }]
+    }))
+    .unwrap();
+    let mut checks = Vec::new();
+    collect_pricing_component_checks(&mut checks, &inline_config);
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(checks[0].details.contains("inline:0 valid (1 entries)"));
+
+    let temp = tempfile::tempdir().unwrap();
+    let invalid = temp.path().join("pricing.json");
+    std::fs::write(&invalid, r#"{"version":1,"entries":[{"bad":true}]}"#).unwrap();
+    let invalid_check = pricing_source_check(9, &PricingSourceConfig::File { path: invalid });
+    assert_eq!(invalid_check.status, Status::Fail);
+    assert!(invalid_check.details.contains("invalid catalog"));
+}
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).unwrap();
 }
 
 #[test]

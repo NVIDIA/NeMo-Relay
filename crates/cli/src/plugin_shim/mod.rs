@@ -59,19 +59,48 @@ fn serve(args: Vec<String>) -> Result<ExitCode, String> {
 }
 
 fn hook(agent: CodingAgent, explicit_gateway_url: Option<&str>) -> Result<ExitCode, String> {
+    let mut input = std::io::stdin();
+    let mut output = std::io::stdout();
+    hook_with_io(
+        agent,
+        explicit_gateway_url,
+        &mut input,
+        &mut output,
+        shared::ensure_sidecar,
+        post_hook,
+        fail_closed,
+    )
+}
+
+fn hook_with_io<R, W, E, P, F>(
+    agent: CodingAgent,
+    explicit_gateway_url: Option<&str>,
+    input: &mut R,
+    output: &mut W,
+    mut ensure_sidecar: E,
+    mut post_hook: P,
+    fail_closed: F,
+) -> Result<ExitCode, String>
+where
+    R: Read,
+    W: Write,
+    E: FnMut(CodingAgent, &str),
+    P: FnMut(CodingAgent, &str, &[u8]) -> Result<Vec<u8>, String>,
+    F: FnOnce() -> bool,
+{
     let url = gateway_url(agent, explicit_gateway_url);
     let mut payload = Vec::new();
-    std::io::stdin()
+    input
         .read_to_end(&mut payload)
         .map_err(|error| format!("failed to read hook payload: {error}"))?;
     if payload.iter().all(u8::is_ascii_whitespace) {
         payload = b"{}".to_vec();
     }
-    shared::ensure_sidecar(agent, &url);
+    ensure_sidecar(agent, &url);
     match post_hook(agent, &url, &payload) {
         Ok(body) => {
             if !body.is_empty() {
-                std::io::stdout()
+                output
                     .write_all(&body)
                     .map_err(|error| format!("failed to write hook response: {error}"))?;
             }

@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{global_plugin_config_path, project_plugin_config_path};
+use crate::config::{
+    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
+};
 use nemo_relay::config_editor::{EditorConfig, EditorSchema};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
@@ -1226,6 +1228,13 @@ fn read_plugin_config_handles_missing_and_invalid_files() {
     std::fs::write(&missing, "components = [\n").unwrap();
     let error = read_plugin_config(&missing).unwrap_err().to_string();
     assert!(error.contains("invalid plugin TOML"), "error was: {error}");
+
+    std::fs::write(&missing, "components = \"not-a-list\"").unwrap();
+    let error = read_plugin_config(&missing).unwrap_err().to_string();
+    assert!(
+        error.contains("invalid plugin config"),
+        "error was: {error}"
+    );
 }
 
 #[test]
@@ -1303,6 +1312,31 @@ fn prune_plugin_defaults_removes_default_policy_and_enabled_true_only() {
     let components = object["components"].as_array().unwrap();
     assert!(!components[0].as_object().unwrap().contains_key("enabled"));
     assert_eq!(components[1]["enabled"], json!(false));
+
+    let mut scalar = json!("unchanged");
+    prune_plugin_defaults(&mut scalar);
+    assert_eq!(scalar, json!("unchanged"));
+
+    let mut object = serde_json::Map::from_iter([("policy".to_string(), json!({"unknown": true}))]);
+    remove_default_field(
+        &mut object,
+        "missing",
+        serde_json::to_value(ConfigPolicy::default()).unwrap(),
+    );
+    assert!(object.contains_key("policy"));
+
+    let mut nested = json!({"a": 1, "b": 2});
+    remove_matching_defaults(&mut nested, &json!({"a": 1, "c": 3}));
+    assert_eq!(nested, json!({"b": 2}));
+
+    let mut non_object = json!(["unchanged"]);
+    remove_matching_defaults(&mut non_object, &json!({"a": 1}));
+    assert_eq!(non_object, json!(["unchanged"]));
+}
+
+#[test]
+fn print_preview_renders_default_plugin_config() {
+    print_preview(&PluginConfig::default()).unwrap();
 }
 
 #[test]
@@ -1656,4 +1690,55 @@ fn target_path_resolves_project_and_global_without_user_env() {
         target_path(TargetScope::Global).unwrap(),
         global_plugin_config_path()
     );
+}
+
+#[test]
+fn target_path_resolves_user_scope_from_xdg_and_reports_missing_home() {
+    let guard = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous_home = std::env::var_os("HOME");
+    let previous_xdg = std::env::var_os("XDG_CONFIG_HOME");
+    let previous_userprofile = std::env::var_os("USERPROFILE");
+    let temp = tempfile::tempdir().unwrap();
+
+    // SAFETY: This test holds the process-wide environment mutex while overriding env vars.
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", temp.path());
+        std::env::remove_var("HOME");
+        std::env::remove_var("USERPROFILE");
+    }
+    assert_eq!(
+        target_path(TargetScope::User).unwrap(),
+        user_plugin_config_path().unwrap()
+    );
+
+    // SAFETY: The mutex is still held while clearing env vars for the error branch.
+    unsafe {
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("HOME");
+        std::env::remove_var("USERPROFILE");
+    }
+    let error = target_path(TargetScope::User).unwrap_err().to_string();
+    assert!(
+        error.contains("cannot determine user config directory"),
+        "error was: {error}"
+    );
+
+    // SAFETY: Restore the original process environment before releasing the mutex.
+    unsafe {
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_xdg {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match previous_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+    }
+    drop(guard);
 }

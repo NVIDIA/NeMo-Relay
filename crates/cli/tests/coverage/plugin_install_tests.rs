@@ -4,12 +4,63 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::json;
 use tempfile::tempdir;
 
-use super::host::CommandOutput;
+use super::host::{
+    CommandOutput, HostRegistrationReport, format_command, host_registration_report,
+    require_host_cli, require_relay, run_capture_command, run_command, run_path_command,
+    validate_host_registration, validate_relay_plugin_shim,
+};
 use super::*;
+
+fn plugin_install_env_lock() -> &'static Mutex<()> {
+    &crate::test_support::ENV_TEST_LOCK
+}
+
+struct HomeScope<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+    prev_home: Option<std::ffi::OsString>,
+    prev_userprofile: Option<std::ffi::OsString>,
+}
+
+impl<'a> HomeScope<'a> {
+    fn enter(path: &Path) -> Self {
+        let guard = plugin_install_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        // SAFETY: This test holds a process-wide mutex for the lifetime of the env override.
+        unsafe {
+            std::env::set_var("HOME", path);
+            std::env::remove_var("USERPROFILE");
+        }
+        Self {
+            _guard: guard,
+            prev_home,
+            prev_userprofile,
+        }
+    }
+}
+
+impl Drop for HomeScope<'_> {
+    fn drop(&mut self) {
+        // SAFETY: This restores the process environment while the mutex is still held.
+        unsafe {
+            match self.prev_home.take() {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match self.prev_userprofile.take() {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+}
 
 #[derive(Default)]
 struct MockRunner {
@@ -32,6 +83,24 @@ impl MockRunner {
     fn with_capture_output(mut self, command: &str, stdout: impl Into<String>) -> Self {
         self.capture_outputs
             .insert(command.into(), CommandOutput::success(stdout.into()));
+        self
+    }
+
+    fn with_capture_status(
+        mut self,
+        command: &str,
+        status: i32,
+        stdout: impl Into<String>,
+        stderr: impl Into<String>,
+    ) -> Self {
+        self.capture_outputs.insert(
+            command.into(),
+            CommandOutput {
+                status,
+                stdout: stdout.into(),
+                stderr: stderr.into(),
+            },
+        );
         self
     }
 
@@ -242,6 +311,448 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
         plugin_hooks(PluginHost::ClaudeCode)["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!("nemo-relay plugin-shim hook claude")
     );
+}
+
+#[test]
+fn plugin_setup_delegates_and_dry_run_skips_runner_calls() {
+    let dir = tempdir().unwrap();
+    let setup_runner = MockSetupRunner::default();
+    let dry_run = PluginInstallOptions {
+        dry_run: true,
+        ..options(dir.path())
+    };
+
+    run_plugin_setup(PluginHost::Codex, &dry_run, &setup_runner).unwrap();
+    run_plugin_uninstall(PluginHost::ClaudeCode, &dry_run, &setup_runner).unwrap();
+    run_plugin_doctor(PluginHost::Codex, &dry_run, &setup_runner).unwrap();
+    assert!(setup_runner.calls().is_empty());
+
+    let normal = options(dir.path());
+    run_plugin_setup(PluginHost::Codex, &normal, &setup_runner).unwrap();
+    run_plugin_uninstall(PluginHost::ClaudeCode, &normal, &setup_runner).unwrap();
+    run_plugin_doctor(PluginHost::Codex, &normal, &setup_runner).unwrap();
+    let report = run_plugin_doctor_json(PluginHost::ClaudeCode, &setup_runner).unwrap();
+
+    assert_eq!(
+        setup_runner.calls(),
+        vec![
+            format!("setup codex {DEFAULT_GATEWAY_URL}"),
+            format!("uninstall claude-code {DEFAULT_GATEWAY_URL}"),
+            format!("doctor codex {DEFAULT_GATEWAY_URL}"),
+            format!("doctor-json claude-code {DEFAULT_GATEWAY_URL}"),
+        ]
+    );
+    assert_eq!(report["ok"], json!(true));
+}
+
+#[test]
+fn real_plugin_setup_runner_uses_temp_home_for_codex_and_claude_paths() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let runner = RealPluginSetupRunner;
+
+    runner
+        .setup(PluginHost::Codex, DEFAULT_GATEWAY_URL)
+        .unwrap();
+    assert!(
+        runner
+            .doctor(PluginHost::Codex, DEFAULT_GATEWAY_URL)
+            .is_ok()
+    );
+    let codex_report = runner
+        .doctor_json(PluginHost::Codex, DEFAULT_GATEWAY_URL)
+        .unwrap();
+    assert_eq!(codex_report["checks"]["codex_provider_alias"], json!(true));
+    assert_eq!(codex_report["checks"]["codex_hooks"], json!(true));
+    runner
+        .uninstall(PluginHost::Codex, DEFAULT_GATEWAY_URL)
+        .unwrap();
+
+    runner
+        .setup(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL)
+        .unwrap();
+    assert!(
+        runner
+            .doctor(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL)
+            .is_ok()
+    );
+    let claude_report = runner
+        .doctor_json(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL)
+        .unwrap();
+    assert_eq!(
+        claude_report["checks"]["claude_provider_routing"],
+        json!(true)
+    );
+    runner
+        .uninstall(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL)
+        .unwrap();
+}
+
+#[test]
+fn setup_action_descriptions_cover_supported_hosts_and_actions() {
+    assert_eq!(
+        setup_action_description(PluginHost::Codex, "configure"),
+        "configure Codex provider and hook-supervised lazy startup"
+    );
+    assert_eq!(
+        setup_action_description(PluginHost::Codex, "restore"),
+        "restore Codex provider and generated hook configuration"
+    );
+    assert_eq!(
+        setup_action_description(PluginHost::Codex, "doctor"),
+        "check Codex provider and generated hooks"
+    );
+    assert_eq!(
+        setup_action_description(PluginHost::ClaudeCode, "configure"),
+        "enable Claude Code provider routing through NeMo Relay"
+    );
+    assert_eq!(
+        setup_action_description(PluginHost::ClaudeCode, "restore"),
+        "restore Claude Code provider routing from NeMo Relay backup"
+    );
+    assert_eq!(
+        setup_action_description(PluginHost::ClaudeCode, "doctor"),
+        "check Claude Code provider routing"
+    );
+}
+
+#[test]
+fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
+    let dir = tempdir().unwrap();
+    let dry_run = PluginInstallOptions {
+        dry_run: true,
+        ..options(dir.path())
+    };
+    let runner = MockRunner::default();
+
+    assert_eq!(
+        require_relay(&dry_run, &runner).unwrap(),
+        PathBuf::from(RELAY_COMMAND)
+    );
+    require_host_cli(PluginHost::Codex, &dry_run, &runner).unwrap();
+    validate_relay_plugin_shim(Path::new("nemo-relay"), &dry_run, &runner).unwrap();
+    run_command(
+        "codex",
+        &["plugin".into(), "add space".into()],
+        &dry_run,
+        &runner,
+    )
+    .unwrap();
+    run_path_command(
+        Path::new("/bin/codex"),
+        &["arg with space".into()],
+        &dry_run,
+        &runner,
+    )
+    .unwrap();
+    let capture = run_capture_command("codex", &["plugin".into()], &dry_run, &runner).unwrap();
+    assert_eq!(capture.stdout, "null\n");
+    let report = host_registration_report(PluginHost::Codex, &dry_run, &runner).unwrap();
+    assert!(report.ok());
+    assert_eq!(report.to_json()["ok"], json!(true));
+    assert_eq!(
+        HostRegistrationReport {
+            host_plugin_registered: false,
+            host_marketplace_registered: true,
+        }
+        .to_json()["host_plugin_registered"],
+        json!(false)
+    );
+
+    let normal = options(dir.path());
+    assert!(
+        require_relay(&normal, &runner)
+            .unwrap_err()
+            .contains("nemo-relay")
+    );
+    assert!(
+        require_host_cli(PluginHost::Codex, &normal, &runner)
+            .unwrap_err()
+            .contains("codex")
+    );
+    assert!(
+        run_command("codex", &["plugin".into()], &normal, &runner)
+            .unwrap_err()
+            .contains("codex")
+    );
+
+    let mut runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex");
+    runner.failing_quiet_suffix = Some("plugin-shim hook --help".into());
+    assert!(
+        validate_relay_plugin_shim(Path::new("/bin/nemo-relay"), &normal, &runner)
+            .unwrap_err()
+            .contains("plugin-shim hook")
+    );
+    runner.failing_suffix = Some("plugin add".into());
+    assert!(
+        run_path_command(
+            Path::new("/bin/codex"),
+            &["plugin".into(), "add".into()],
+            &normal,
+            &runner
+        )
+        .unwrap_err()
+        .contains("exit code 1")
+    );
+    let quoted = format_command(
+        "codex",
+        &["plugin".into(), "arg with space".into(), "quote\"$".into()],
+    );
+    assert!(quoted.contains("\"arg with space\""));
+    assert!(quoted.contains("\"quote\\\"\\$\""));
+
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_status("/bin/codex plugin bad", 2, "", "")
+        .with_capture_status("/bin/codex plugin noisy", 3, "", "boom");
+    assert!(
+        run_capture_command("codex", &["plugin".into(), "bad".into()], &normal, &runner)
+            .unwrap_err()
+            .contains("exit code 2")
+    );
+    assert!(
+        run_capture_command(
+            "codex",
+            &["plugin".into(), "noisy".into()],
+            &normal,
+            &runner
+        )
+        .unwrap_err()
+        .contains(": boom")
+    );
+
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output("/bin/codex plugin list --json", "not json")
+        .with_capture_output("/bin/codex plugin marketplace list", "");
+    assert!(
+        host_registration_report(PluginHost::Codex, &normal, &runner)
+            .unwrap_err()
+            .contains("failed to parse")
+    );
+
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list --json",
+            json!({"installed": []}).to_string(),
+        )
+        .with_capture_output("/bin/codex plugin marketplace list", "MARKETPLACE ROOT\n");
+    let error = validate_host_registration(PluginHost::Codex, &normal, &runner).unwrap_err();
+    assert!(
+        error.contains("host plugin") && error.contains("host marketplace"),
+        "error was: {error}"
+    );
+}
+
+#[test]
+fn host_registration_report_accepts_claude_and_codex_shape_variants() {
+    let dir = tempdir().unwrap();
+    let normal = options(dir.path());
+    let plugin_id = format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}");
+
+    for (plugin_entry, marketplace_entry) in [
+        (
+            json!({"id": plugin_id.clone()}),
+            json!({"id": MARKETPLACE_NAME}),
+        ),
+        (
+            json!({"pluginId": plugin_id.clone()}),
+            json!({"name": MARKETPLACE_NAME}),
+        ),
+        (
+            json!({"name": PLUGIN_NAME, "marketplaceName": MARKETPLACE_NAME}),
+            json!({"id": MARKETPLACE_NAME}),
+        ),
+    ] {
+        let runner = MockRunner::default()
+            .with_executable("claude", "/bin/claude")
+            .with_capture_output(
+                "/bin/claude plugin list --json",
+                json!([plugin_entry]).to_string(),
+            )
+            .with_capture_output(
+                "/bin/claude plugin marketplace list --json",
+                json!([marketplace_entry]).to_string(),
+            );
+        let report = host_registration_report(PluginHost::ClaudeCode, &normal, &runner).unwrap();
+        assert!(report.ok());
+        assert!(report.host_plugin_registered);
+        assert!(report.host_marketplace_registered);
+    }
+
+    for plugin_entry in [
+        json!({"id": plugin_id.clone()}),
+        json!({"pluginId": plugin_id.clone()}),
+        json!({"name": PLUGIN_NAME, "marketplaceName": MARKETPLACE_NAME}),
+    ] {
+        let runner = MockRunner::default()
+            .with_executable("codex", "/bin/codex")
+            .with_capture_output(
+                "/bin/codex plugin list --json",
+                json!({"installed": [plugin_entry]}).to_string(),
+            )
+            .with_capture_output(
+                "/bin/codex plugin marketplace list",
+                format!("{MARKETPLACE_NAME} /tmp/nemo-relay-local\n"),
+            );
+        let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+        assert!(report.ok());
+    }
+
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list --json",
+            json!({"installed": [{"name": PLUGIN_NAME, "marketplaceName": "other"}]}).to_string(),
+        )
+        .with_capture_output("/bin/codex plugin marketplace list", "other /tmp/other\n");
+    let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+    assert!(!report.ok());
+    assert!(!report.host_plugin_registered);
+    assert!(!report.host_marketplace_registered);
+}
+
+#[test]
+fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
+    let dir = tempdir().unwrap();
+    let normal = options(dir.path());
+
+    let runner = MockRunner::default()
+        .with_executable("claude", "/bin/claude")
+        .with_capture_status(
+            "/bin/claude plugin list --json",
+            4,
+            "ignored stdout",
+            "  noisy failure  \n",
+        );
+    let error = host_registration_report(PluginHost::ClaudeCode, &normal, &runner).unwrap_err();
+    assert!(error.contains("exit code 4: noisy failure"));
+
+    let runner = MockRunner::default()
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output(
+            "/bin/claude plugin list --json",
+            json!([{ "id": format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}") }]).to_string(),
+        )
+        .with_capture_status(
+            "/bin/claude plugin marketplace list --json",
+            5,
+            "ignored stdout",
+            "",
+        );
+    let error = host_registration_report(PluginHost::ClaudeCode, &normal, &runner).unwrap_err();
+    assert!(error.contains("exit code 5"));
+    assert!(!error.contains("exit code 5:"));
+}
+
+#[test]
+fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
+    let guard = plugin_install_env_lock()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous_path = std::env::var_os("PATH");
+    let dir = tempdir().unwrap();
+    let empty_path = dir.path().join("empty-path");
+    std::fs::create_dir_all(&empty_path).unwrap();
+    // SAFETY: This test holds the process-wide environment mutex while overriding PATH.
+    unsafe {
+        std::env::set_var("PATH", &empty_path);
+    }
+
+    let install_error = install(crate::config::InstallCommand {
+        host: PluginHost::All,
+        install_dir: Some(dir.path().join("install")),
+        force: false,
+        dry_run: false,
+        skip_doctor: true,
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        install_error.contains("no supported Claude Code or Codex host CLI"),
+        "error was: {install_error}"
+    );
+
+    let uninstall_error = uninstall(crate::config::UninstallCommand {
+        host: PluginHost::All,
+        install_dir: Some(dir.path().join("install")),
+        dry_run: false,
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        uninstall_error.contains("no installed Claude Code or Codex plugin state"),
+        "error was: {uninstall_error}"
+    );
+
+    let doctor_error = doctor(PluginHost::All, Some(dir.path().join("install")), true)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        doctor_error.contains("no installed Claude Code or Codex plugin state"),
+        "error was: {doctor_error}"
+    );
+    let doctor_human_error = doctor(PluginHost::All, Some(dir.path().join("install")), false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        doctor_human_error.contains("no installed Claude Code or Codex plugin state"),
+        "error was: {doctor_human_error}"
+    );
+
+    assert_eq!(
+        install(crate::config::InstallCommand {
+            host: PluginHost::Codex,
+            install_dir: Some(dir.path().join("dry-run-install")),
+            force: false,
+            dry_run: true,
+            skip_doctor: true,
+        })
+        .unwrap(),
+        std::process::ExitCode::SUCCESS
+    );
+
+    let codex_doctor_error = doctor(PluginHost::Codex, Some(dir.path().join("install")), false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        codex_doctor_error.contains("required `nemo-relay` executable"),
+        "error was: {codex_doctor_error}"
+    );
+
+    let codex_uninstall_error = uninstall(crate::config::UninstallCommand {
+        host: PluginHost::Codex,
+        install_dir: Some(dir.path().join("install")),
+        dry_run: false,
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(
+        codex_uninstall_error.contains("required `codex` CLI"),
+        "error was: {codex_uninstall_error}"
+    );
+
+    assert_eq!(host_arg(PluginHost::All), "all");
+    assert_eq!(host_label(PluginHost::All), "all");
+    print_json(&json!({"ok": true})).unwrap();
+    assert_eq!(
+        with_schema(json!({"ok": true})),
+        json!({"ok": true, "schema_version": 1})
+    );
+    assert_eq!(with_schema(json!("not-an-object")), json!("not-an-object"));
+    assert!(std::panic::catch_unwind(|| host_cli(PluginHost::All)).is_err());
+
+    // SAFETY: Restore PATH before releasing the environment mutex.
+    unsafe {
+        match previous_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+    drop(guard);
 }
 
 #[test]

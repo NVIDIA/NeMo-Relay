@@ -458,6 +458,8 @@ fn with_schema(mut value: Value) -> Value {
 #[cfg(test)]
 use marketplace::*;
 #[cfg(test)]
+use setup::setup_action_description;
+#[cfg(test)]
 use state::*;
 
 #[cfg(test)]

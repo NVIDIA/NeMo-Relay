@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,9 +13,55 @@ use tempfile::tempdir;
 
 use super::*;
 
+fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                request.extend_from_slice(&buffer[..count]);
+                if http_request_body_complete(&request) {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => panic!("failed to read local HTTP request: {error}"),
+        }
+    }
+    request
+}
+
+fn http_request_body_complete(request: &[u8]) -> bool {
+    let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let body_start = header_end + 4;
+    let headers = String::from_utf8_lossy(&request[..body_start]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    request.len() >= body_start + content_length
+}
+
 fn home_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    &crate::test_support::ENV_TEST_LOCK
 }
 
 struct HomeScope<'a> {
@@ -74,6 +120,24 @@ impl EnvVarGuard {
         }
         Self { key, previous }
     }
+
+    fn set_value(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: Callers hold the process-wide environment mutex through HomeScope.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: Callers hold the process-wide environment mutex through HomeScope.
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, previous }
+    }
 }
 
 impl Drop for EnvVarGuard {
@@ -86,6 +150,77 @@ impl Drop for EnvVarGuard {
             }
         }
     }
+}
+
+#[test]
+fn hook_with_io_defaults_blank_payload_and_writes_non_empty_response() {
+    let mut input = std::io::Cursor::new(b" \n\t".to_vec());
+    let mut output = Vec::new();
+    let ensured = std::cell::RefCell::new(Vec::new());
+    let seen_payload = std::cell::RefCell::new(Vec::new());
+
+    let status = hook_with_io(
+        CodingAgent::Codex,
+        Some("http://127.0.0.1:59999"),
+        &mut input,
+        &mut output,
+        |agent, url| {
+            ensured
+                .borrow_mut()
+                .push((agent.as_arg().to_string(), url.to_string()));
+        },
+        |agent, url, payload| {
+            assert_eq!(agent, CodingAgent::Codex);
+            assert_eq!(url, "http://127.0.0.1:59999");
+            seen_payload.borrow_mut().extend_from_slice(payload);
+            Ok(br#"{"decision":"allow"}"#.to_vec())
+        },
+        || false,
+    )
+    .unwrap();
+
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert_eq!(&*seen_payload.borrow(), b"{}");
+    assert_eq!(output, br#"{"decision":"allow"}"#);
+    assert_eq!(
+        ensured.into_inner(),
+        vec![("codex".to_string(), "http://127.0.0.1:59999".to_string())]
+    );
+}
+
+#[test]
+fn hook_with_io_applies_fail_open_and_fail_closed_forwarding_policies() {
+    let mut input = std::io::Cursor::new(br#"{"event":"tool"}"#.to_vec());
+    let mut output = Vec::new();
+    let status = hook_with_io(
+        CodingAgent::ClaudeCode,
+        Some("http://127.0.0.1:59998"),
+        &mut input,
+        &mut output,
+        |_agent, _url| {},
+        |_agent, _url, _payload| Err("forward failed open".to_string()),
+        || false,
+    )
+    .unwrap();
+
+    assert_eq!(status, ExitCode::SUCCESS);
+    assert!(output.is_empty());
+
+    let mut input = std::io::Cursor::new(br#"{"event":"tool"}"#.to_vec());
+    let mut output = Vec::new();
+    let error = hook_with_io(
+        CodingAgent::ClaudeCode,
+        Some("http://127.0.0.1:59998"),
+        &mut input,
+        &mut output,
+        |_agent, _url| {},
+        |_agent, _url, _payload| Err("forward failed closed".to_string()),
+        || true,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("forward failed closed"));
+    assert!(output.is_empty());
 }
 
 #[test]
@@ -319,6 +454,53 @@ supports_websockets = false
     .unwrap();
 
     assert_eq!(status, std::process::ExitCode::FAILURE);
+}
+
+#[test]
+fn plugin_shim_helpers_reject_unsupported_agents_and_report_lazy_claude_status() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+
+    assert!(
+        install(PluginShimInstallCommand {
+            agent: CodingAgent::ClaudeCode,
+            gateway_url: DEFAULT_URL.into(),
+        })
+        .unwrap_err()
+        .contains("supports codex")
+    );
+    assert!(
+        uninstall(PluginShimUninstallCommand {
+            agent: CodingAgent::ClaudeCode,
+            gateway_url: DEFAULT_URL.into(),
+        })
+        .unwrap_err()
+        .contains("supports codex")
+    );
+    assert!(
+        provider(PluginShimProviderCommand {
+            agent: CodingAgent::Codex,
+            action: PluginShimProviderAction::Status,
+            gateway_url: DEFAULT_URL.into(),
+        })
+        .unwrap_err()
+        .contains("supports claude")
+    );
+    assert!(
+        doctor_plugin(CodingAgent::Hermes, DEFAULT_URL)
+            .unwrap_err()
+            .contains("supports claude and codex")
+    );
+    assert!(
+        doctor_plugin_json(CodingAgent::Hermes, DEFAULT_URL)
+            .unwrap_err()
+            .contains("supports claude and codex")
+    );
+
+    let report = doctor_plugin_json(CodingAgent::ClaudeCode, DEFAULT_URL).unwrap();
+    assert_eq!(report["ok"], json!(false));
+    assert_eq!(report["sidecar_health"], json!("not_running_lazy_start"));
+    assert_eq!(report["checks"]["claude_provider_routing"], json!(false));
 }
 
 #[test]
@@ -983,6 +1165,44 @@ fn hook_forward_connect_attempt_is_bounded() {
 }
 
 #[test]
+fn hook_forward_posts_to_local_sidecar_and_healthz_accepts_200() {
+    let hook_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let hook_port = hook_listener.local_addr().unwrap().port();
+    let hook_thread = thread::spawn(move || {
+        let (mut stream, _) = hook_listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        let raw = String::from_utf8_lossy(&request);
+        assert!(raw.starts_with("POST /hooks/codex HTTP/1.1"));
+        assert!(raw.contains("Content-Length: 7"));
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .unwrap();
+    });
+
+    let body = post_hook(
+        CodingAgent::Codex,
+        &format!("http://127.0.0.1:{hook_port}"),
+        br#"{"x":1}"#,
+    )
+    .unwrap();
+    assert_eq!(body, b"ok");
+    hook_thread.join().unwrap();
+
+    let health_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let health_port = health_listener.local_addr().unwrap().port();
+    let health_thread = thread::spawn(move || {
+        let (mut stream, _) = health_listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        assert!(String::from_utf8_lossy(&request).starts_with("GET /healthz"));
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    assert!(healthz(&format!("http://127.0.0.1:{health_port}")));
+    health_thread.join().unwrap();
+}
+
+#[test]
 fn hook_http_response_requires_numeric_2xx_status() {
     assert_eq!(
         parse_http_response(b"HTTP/1.1 204 No Content\r\n\r\npayload").unwrap(),
@@ -1012,6 +1232,52 @@ fn unready_sidecar_child_is_terminated_and_pid_removed() {
 
     assert!(error.contains("terminated startup process"));
     assert!(!pid_path.exists());
+}
+
+#[test]
+fn ensure_sidecar_releases_lock_when_startup_fails_fast() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let runtime = dir.path().join("runtime");
+    let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &runtime);
+
+    ensure_sidecar(CodingAgent::Codex, "not a loopback url");
+
+    assert!(
+        !runtime
+            .join("nemo-relay-plugin")
+            .join("not_a_loopback_url-sidecar.lock")
+            .exists()
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn start_sidecar_reports_child_exit_before_healthz_ready() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let relay = dir.path().join("nemo-relay");
+    fs::write(&relay, "#!/bin/sh\nexit 7\n").unwrap();
+    let mut permissions = fs::metadata(&relay).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&relay, permissions).unwrap();
+    let _binary = EnvVarGuard::set_path("NEMO_RELAY_PLUGIN_BINARY", &relay);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let error = start_sidecar(
+        CodingAgent::Codex,
+        &format!("http://127.0.0.1:{port}"),
+        dir.path(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("exited before becoming ready"));
+    assert!(!dir.path().join("codex-sidecar.pid").exists());
 }
 
 #[test]
@@ -1405,6 +1671,513 @@ fn healthz_times_out_for_bad_port_occupant() {
     assert!(!healthz(&format!("http://127.0.0.1:{port}")));
     assert!(started.elapsed() < Duration::from_secs(2));
     handle.join().unwrap();
+}
+
+#[test]
+fn shared_json_helpers_cover_missing_invalid_and_non_object_inputs() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("missing.json");
+    assert_eq!(read_json_object(&missing).unwrap(), json!({}));
+
+    let invalid = dir.path().join("invalid.json");
+    fs::write(&invalid, "{not json").unwrap();
+    assert!(
+        read_json_object(&invalid)
+            .unwrap_err()
+            .contains("invalid JSON")
+    );
+
+    let array = dir.path().join("array.json");
+    fs::write(&array, "[]").unwrap();
+    assert!(
+        read_json_object(&array)
+            .unwrap_err()
+            .contains("must contain a JSON object")
+    );
+
+    let nested = dir.path().join("nested").join("settings.json");
+    write_json(&nested, &json!({"ok": true})).unwrap();
+    assert_eq!(
+        fs::read_to_string(&nested).unwrap(),
+        "{\n  \"ok\": true\n}\n"
+    );
+}
+
+#[test]
+fn shared_filesystem_helpers_cover_tables_snapshots_and_lock_branches() {
+    let dir = tempdir().unwrap();
+    let mut doc = "agent = \"codex\"\n"
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    ensure_table(&mut doc, "agent").insert("enabled", toml_edit::value(true));
+    assert!(doc["agent"].is_table());
+    assert_eq!(doc["agent"]["enabled"].as_bool(), Some(true));
+
+    let missing = dir.path().join("missing.txt");
+    let snapshot = snapshot_optional_file(&missing).unwrap();
+    fs::write(&missing, "created").unwrap();
+    restore_file_snapshot(&snapshot).unwrap();
+    assert!(!missing.exists());
+
+    let existing = dir.path().join("existing.txt");
+    fs::write(&existing, "before").unwrap();
+    let snapshot = snapshot_optional_file(&existing).unwrap();
+    fs::write(&existing, "after").unwrap();
+    restore_file_snapshot(&snapshot).unwrap();
+    assert_eq!(fs::read_to_string(&existing).unwrap(), "before");
+
+    let lock = dir.path().join("lock");
+    assert!(!repair_stale_lock_after(&lock, Duration::ZERO));
+    fs::write(&lock, "not a directory").unwrap();
+    assert!(!repair_stale_lock_after(&lock, Duration::ZERO));
+    fs::remove_file(&lock).unwrap();
+    fs::create_dir(&lock).unwrap();
+    assert!(lock_is_old(&lock, Duration::ZERO));
+    assert!(repair_stale_lock_after(&lock, Duration::ZERO));
+    assert!(!lock.exists());
+}
+
+#[test]
+fn shared_url_env_and_response_helpers_cover_error_branches() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let _plugin_url =
+        EnvVarGuard::set_value("NEMO_RELAY_PLUGIN_GATEWAY_URL", "http://127.0.0.1:47640");
+    let _claude_url = EnvVarGuard::set_value("NEMO_RELAY_GATEWAY_URL", "http://127.0.0.1:47641");
+    let _timeout = EnvVarGuard::set_value("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "7");
+    let _fail_closed = EnvVarGuard::set_value("NEMO_RELAY_FAIL_CLOSED", "1");
+
+    assert_eq!(
+        gateway_url(CodingAgent::Codex, None),
+        "http://127.0.0.1:47640"
+    );
+    assert_eq!(
+        gateway_url(CodingAgent::ClaudeCode, None),
+        "http://127.0.0.1:47641"
+    );
+    assert_eq!(
+        gateway_url(CodingAgent::Codex, Some("http://127.0.0.1:9")),
+        "http://127.0.0.1:9"
+    );
+    assert_eq!(plugin_idle_timeout(), "7");
+    assert!(fail_closed());
+
+    assert_eq!(
+        runtime_dir_for(
+            Some("/run/user/1000".into()),
+            Some("/tmp/ignored".into()),
+            None,
+            dir.path().join("tmp"),
+            Some("ignored".into()),
+            None,
+        ),
+        std::path::PathBuf::from("/run/user/1000").join("nemo-relay-plugin")
+    );
+    assert_eq!(
+        runtime_dir_for(
+            None,
+            None,
+            None,
+            dir.path().join("tmp"),
+            Some("user/name".into()),
+            None,
+        ),
+        dir.path()
+            .join("tmp")
+            .join("user_name")
+            .join("nemo-relay-plugin")
+    );
+    assert_eq!(
+        sidecar_lock_name("http://localhost:47632/hooks"),
+        "localhost-47632"
+    );
+    assert_eq!(sidecar_lock_name("not a url!*"), "not_a_url__");
+
+    assert_eq!(
+        parse_loopback_url("http://localhost:47632/path").unwrap(),
+        ("localhost".to_string(), 47632)
+    );
+    assert!(
+        parse_loopback_url("https://127.0.0.1:47632")
+            .unwrap_err()
+            .contains("http loopback")
+    );
+    assert!(
+        parse_loopback_url("http://192.168.1.2:47632")
+            .unwrap_err()
+            .contains("loopback")
+    );
+    assert!(
+        parse_loopback_url("http://127.0.0.1")
+            .unwrap_err()
+            .contains("missing port")
+    );
+    assert!(
+        parse_loopback_url("http://127.0.0.1:nope")
+            .unwrap_err()
+            .contains("invalid gateway port")
+    );
+
+    assert_eq!(
+        parse_http_response(b"HTTP/1.1 204 No Content\r\nHeader: value\r\n\r\nbody").unwrap(),
+        b"body"
+    );
+    assert!(
+        parse_http_response(b"HTTP/1.1 500 Server Error\r\n\r\nbad")
+            .unwrap_err()
+            .contains("HTTP/1.1 500")
+    );
+    assert!(
+        parse_http_response(b"HTTP/1.1 200 OK\n\nbody")
+            .unwrap_err()
+            .contains("malformed")
+    );
+}
+
+#[test]
+fn shared_defaults_cover_runtime_username_and_empty_segments() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let _plugin_url = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_GATEWAY_URL");
+    let _claude_url = EnvVarGuard::remove("NEMO_RELAY_GATEWAY_URL");
+    let _timeout = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS");
+    let _fail_closed = EnvVarGuard::remove("NEMO_RELAY_FAIL_CLOSED");
+
+    assert_eq!(gateway_url(CodingAgent::Codex, None), DEFAULT_URL);
+    assert_eq!(plugin_idle_timeout(), "300");
+    assert!(!fail_closed());
+    assert_eq!(
+        runtime_dir_for(
+            None,
+            None,
+            Some("/tmp/temp-base".into()),
+            dir.path().join("ignored"),
+            None,
+            Some("bob/name".into()),
+        ),
+        std::path::PathBuf::from("/tmp/temp-base").join("nemo-relay-plugin")
+    );
+    assert_eq!(sidecar_lock_name(""), "unknown");
+    assert_eq!(
+        runtime_dir_for(None, None, None, dir.path().into(), None, None),
+        dir.path().join("unknown-user").join("nemo-relay-plugin")
+    );
+}
+
+#[test]
+fn relay_binary_rejects_missing_override_and_uses_current_exe_fallback() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let missing = dir.path().join("missing-nemo-relay");
+    let _binary_override = EnvVarGuard::set_path("NEMO_RELAY_PLUGIN_BINARY", &missing);
+    assert!(
+        relay_binary()
+            .unwrap_err()
+            .contains("NEMO_RELAY_PLUGIN_BINARY does not exist")
+    );
+    drop(_binary_override);
+    let _binary_override = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_BINARY");
+    assert!(relay_binary().unwrap().exists());
+}
+
+#[test]
+fn claude_provider_enable_status_and_restore_cover_managed_backup_paths() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                "OTHER": "kept"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(claude_settings_path().unwrap(), settings_path);
+    assert_eq!(
+        claude_settings_base_url().as_deref(),
+        Some("https://api.anthropic.com")
+    );
+    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    assert_eq!(claude_settings_base_url().as_deref(), Some(DEFAULT_URL));
+    assert_eq!(
+        json_env_string(&read_json_object(&settings_path).unwrap(), "OTHER"),
+        Some("kept")
+    );
+    claude_provider(PluginShimProviderAction::Status, DEFAULT_URL).unwrap();
+    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    assert_eq!(
+        claude_settings_base_url().as_deref(),
+        Some("https://api.anthropic.com")
+    );
+    assert!(!backup_path(&settings_path).exists());
+}
+
+#[test]
+fn claude_provider_restore_noops_without_matching_backup_or_managed_value() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://custom.example" }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    assert_eq!(
+        claude_settings_base_url().as_deref(),
+        Some("https://custom.example")
+    );
+
+    backup_claude_settings(&settings_path, false).unwrap();
+    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    assert_eq!(
+        claude_settings_base_url().as_deref(),
+        Some("https://custom.example")
+    );
+    assert!(backup_path(&settings_path).exists());
+}
+
+#[test]
+fn claude_provider_errors_for_non_object_env_and_restore_env_type_mismatch() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(&settings_path, r#"{"env": "bad"}"#).unwrap();
+
+    assert!(
+        claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL)
+            .unwrap_err()
+            .contains("non-object env field")
+    );
+
+    let mut value = json!("bad");
+    assert!(
+        remove_json_env_string(&mut value, "ANTHROPIC_BASE_URL")
+            .unwrap_err()
+            .contains("must be a JSON object")
+    );
+    let mut value = json!({"env": "bad"});
+    assert!(
+        remove_json_env_string(&mut value, "ANTHROPIC_BASE_URL")
+            .unwrap_err()
+            .contains("env field")
+    );
+    let mut value = json!({"env": "bad"});
+    assert!(
+        restore_json_env_value(
+            &mut value,
+            &json!({"env": {"ANTHROPIC_BASE_URL": DEFAULT_URL}}),
+            "ANTHROPIC_BASE_URL",
+        )
+        .unwrap_err()
+        .contains("env field")
+    );
+}
+
+#[test]
+fn claude_backup_bootstraps_missing_settings_and_replaces_stale_backup() {
+    let dir = tempdir().unwrap();
+    let settings_path = dir.path().join(".claude").join("settings.json");
+    let backup = backup_path(&settings_path);
+    backup_claude_settings(&settings_path, false).unwrap();
+    assert_eq!(fs::read_to_string(&backup).unwrap(), "{}\n");
+    fs::write(&settings_path, r#"{"env":{"ANTHROPIC_BASE_URL":"new"}}"#).unwrap();
+    backup_claude_settings(&settings_path, false).unwrap();
+    assert_eq!(fs::read_to_string(&backup).unwrap(), "{}\n");
+    backup_claude_settings(&settings_path, true).unwrap();
+    assert!(
+        fs::read_to_string(&backup)
+            .unwrap()
+            .contains("ANTHROPIC_BASE_URL")
+    );
+}
+
+#[test]
+fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&json!({
+            "env": { "ANTHROPIC_BASE_URL": DEFAULT_URL }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let report = doctor_plugin_json(CodingAgent::ClaudeCode, DEFAULT_URL).unwrap();
+    assert_eq!(report["sidecar_health"], json!("not_running_lazy_start"));
+    assert_eq!(report["checks"]["claude_provider_routing"], json!(true));
+    let codex_report = doctor_plugin_json(CodingAgent::Codex, DEFAULT_URL).unwrap();
+    assert_eq!(
+        codex_report["sidecar_health"],
+        json!("not_running_lazy_start")
+    );
+    assert_eq!(codex_report["checks"]["codex_provider_alias"], json!(false));
+    assert_eq!(codex_report["checks"]["codex_hooks"], json!(false));
+    assert!(
+        doctor_plugin_json(CodingAgent::Cursor, DEFAULT_URL)
+            .unwrap_err()
+            .contains("supports claude and codex")
+    );
+    assert!(
+        doctor_plugin(CodingAgent::Cursor, DEFAULT_URL)
+            .unwrap_err()
+            .contains("supports claude and codex")
+    );
+    assert!(
+        doctor_plugin(CodingAgent::Codex, DEFAULT_URL)
+            .unwrap_err()
+            .contains("codex plugin doctor checks failed")
+    );
+    assert!(
+        install(PluginShimInstallCommand {
+            agent: CodingAgent::ClaudeCode,
+            gateway_url: DEFAULT_URL.into(),
+        })
+        .unwrap_err()
+        .contains("supports codex")
+    );
+    assert!(
+        uninstall(PluginShimUninstallCommand {
+            agent: CodingAgent::ClaudeCode,
+            gateway_url: DEFAULT_URL.into(),
+        })
+        .unwrap_err()
+        .contains("supports codex")
+    );
+    assert!(
+        provider(PluginShimProviderCommand {
+            agent: CodingAgent::Codex,
+            action: PluginShimProviderAction::Status,
+            gateway_url: DEFAULT_URL.into(),
+        })
+        .unwrap_err()
+        .contains("supports claude")
+    );
+    assert!(
+        post_hook(CodingAgent::Cursor, DEFAULT_URL, b"{}")
+            .unwrap_err()
+            .contains("supports claude and codex")
+    );
+}
+
+#[test]
+fn plugin_shim_dispatcher_covers_supported_errors_and_serve_failure() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let missing_relay = dir.path().join("missing-nemo-relay");
+    let _binary_override = EnvVarGuard::set_path("NEMO_RELAY_PLUGIN_BINARY", &missing_relay);
+
+    let error = run(PluginShimCommand {
+        command: PluginShimSubcommand::Serve(super::command::PluginShimServeCommand {
+            args: vec![],
+        }),
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("does not exist"));
+
+    let error = run(PluginShimCommand {
+        command: PluginShimSubcommand::Install(PluginShimInstallCommand {
+            agent: CodingAgent::ClaudeCode,
+            gateway_url: DEFAULT_URL.into(),
+        }),
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("supports codex"));
+
+    let error = run(PluginShimCommand {
+        command: PluginShimSubcommand::Uninstall(PluginShimUninstallCommand {
+            agent: CodingAgent::ClaudeCode,
+            gateway_url: DEFAULT_URL.into(),
+        }),
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("supports codex"));
+
+    let error = run(PluginShimCommand {
+        command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
+            agent: CodingAgent::Codex,
+            action: PluginShimProviderAction::Status,
+            gateway_url: DEFAULT_URL.into(),
+        }),
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("supports claude"));
+
+    let error = run(PluginShimCommand {
+        command: PluginShimSubcommand::Doctor(PluginShimDoctorCommand {
+            agent: CodingAgent::Hermes,
+            gateway_url: DEFAULT_URL.into(),
+        }),
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("supports claude and codex"));
+}
+
+#[test]
+fn plugin_shim_dispatcher_covers_claude_provider_status_and_doctor() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+
+    run(PluginShimCommand {
+        command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
+            agent: CodingAgent::ClaudeCode,
+            action: PluginShimProviderAction::Enable,
+            gateway_url: DEFAULT_URL.into(),
+        }),
+    })
+    .unwrap();
+
+    assert_eq!(
+        run(PluginShimCommand {
+            command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
+                agent: CodingAgent::ClaudeCode,
+                action: PluginShimProviderAction::Status,
+                gateway_url: DEFAULT_URL.into(),
+            }),
+        })
+        .unwrap(),
+        std::process::ExitCode::SUCCESS
+    );
+    assert_eq!(
+        run(PluginShimCommand {
+            command: PluginShimSubcommand::Doctor(PluginShimDoctorCommand {
+                agent: CodingAgent::ClaudeCode,
+                gateway_url: DEFAULT_URL.into(),
+            }),
+        })
+        .unwrap(),
+        std::process::ExitCode::SUCCESS
+    );
+
+    run(PluginShimCommand {
+        command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
+            agent: CodingAgent::ClaudeCode,
+            action: PluginShimProviderAction::Restore,
+            gateway_url: DEFAULT_URL.into(),
+        }),
+    })
+    .unwrap();
 }
 
 fn event_contains_command(config: &Value, event: &str, command: &str) -> bool {

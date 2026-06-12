@@ -64,29 +64,52 @@ enum CellStyle {
 }
 
 fn supports_banner() -> bool {
-    if !std::io::stdout().is_terminal() {
+    let stdout_is_terminal = std::io::stdout().is_terminal();
+    let ci = std::env::var("CI").ok();
+    let term = std::env::var("TERM").ok();
+    supports_banner_for(
+        stdout_is_terminal,
+        std::env::var_os("NO_COLOR").is_some(),
+        ci.as_deref(),
+        term.as_deref(),
+        terminal_width(),
+    )
+}
+
+fn supports_banner_for(
+    stdout_is_terminal: bool,
+    no_color: bool,
+    ci: Option<&str>,
+    term: Option<&str>,
+    width: Option<usize>,
+) -> bool {
+    if !stdout_is_terminal {
         return false;
     }
-    if std::env::var_os("NO_COLOR").is_some() {
+    if no_color {
         return false;
     }
-    if std::env::var("CI").is_ok_and(|v| v == "true" || v == "1") {
+    if matches!(ci, Some("true" | "1")) {
         return false;
     }
-    if std::env::var("TERM").as_deref() == Ok("dumb") {
+    if term == Some("dumb") {
         return false;
     }
-    terminal_width().is_some_and(|w| w >= MIN_WIDTH)
+    width.is_some_and(|w| w >= MIN_WIDTH)
 }
 
 fn terminal_width() -> Option<usize> {
-    if !std::io::stdout().is_terminal() {
+    terminal_width_for(
+        std::io::stdout().is_terminal(),
+        std::env::var("COLUMNS").ok().as_deref(),
+    )
+}
+
+fn terminal_width_for(stdout_is_terminal: bool, columns: Option<&str>) -> Option<usize> {
+    if !stdout_is_terminal {
         return None;
     }
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .or(Some(120))
+    columns.and_then(|v| v.parse::<usize>().ok()).or(Some(120))
 }
 
 /// Pure renderer for the static banner. `color=false` strips all ANSI escapes.

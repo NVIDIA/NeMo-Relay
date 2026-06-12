@@ -48,6 +48,14 @@ impl EnvVarGuard {
         }
         Self { key, old }
     }
+
+    fn remove(key: &'static str) -> Self {
+        let old = std::env::var(key).ok();
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, old }
+    }
 }
 
 impl Drop for EnvVarGuard {
@@ -226,6 +234,31 @@ async fn serve_listener_honors_plugin_idle_timeout_env() {
         .expect("plugin idle timeout should stop the sidecar")
         .unwrap();
     result.unwrap();
+}
+
+#[tokio::test]
+async fn plugin_idle_timeout_parses_absent_invalid_zero_and_positive_values() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+
+    let key = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
+    let removed = EnvVarGuard::remove(key);
+    assert_eq!(plugin_idle_timeout(), None);
+    drop(removed);
+
+    let invalid = EnvVarGuard::set(key, "not-a-number");
+    assert_eq!(plugin_idle_timeout(), None);
+    drop(invalid);
+
+    let zero = EnvVarGuard::set(key, "0");
+    assert_eq!(plugin_idle_timeout(), None);
+    drop(zero);
+
+    let positive = EnvVarGuard::set(key, "2");
+    assert_eq!(
+        plugin_idle_timeout(),
+        Some(std::time::Duration::from_secs(2))
+    );
+    drop(positive);
 }
 
 #[tokio::test]

@@ -3,11 +3,47 @@
 
 use super::*;
 use crate::config::{AgentCommandConfig, CursorAgentConfig, GatewayConfig};
+use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
 fn current_dir_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct EnvScope {
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self { values: previous }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -181,6 +217,23 @@ fn agent_with_passthrough_args_appends_to_configured_command() {
 }
 
 #[test]
+fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
+    assert_eq!(default_command_for(CodingAgent::ClaudeCode), "claude");
+    assert_eq!(default_command_for(CodingAgent::Codex), "codex");
+    assert_eq!(default_command_for(CodingAgent::Cursor), "cursor-agent");
+    assert_eq!(default_command_for(CodingAgent::Hermes), "hermes");
+
+    let agents = AgentConfigs {
+        codex: AgentCommandConfig {
+            command: Some("   ".into()),
+            hooks_path: None,
+        },
+        ..AgentConfigs::default()
+    };
+    assert!(configured_command(CodingAgent::Codex, &agents).is_none());
+}
+
+#[test]
 fn prepares_codex_config_overrides() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
@@ -250,6 +303,32 @@ fn prepares_codex_config_overrides() {
 }
 
 #[test]
+fn prepares_codex_warns_when_no_auth_source_is_detected() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", None),
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+    };
+
+    let prepared = PreparedRun::new(
+        CodingAgent::Codex,
+        vec!["codex".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert!(prepared.argv.iter().any(|arg| arg == "features.hooks=true"));
+}
+
+#[test]
 fn exporter_destinations_describe_observability_outputs() {
     let gateway = GatewayConfig {
         plugin_config: Some(json!({
@@ -309,6 +388,74 @@ fn exporter_destinations_describe_observability_outputs() {
 }
 
 #[test]
+fn exporter_destinations_cover_invalid_disabled_and_missing_plugin_configs() {
+    let invalid_plugin = GatewayConfig {
+        plugin_config: Some(json!({"components": "not-a-list"})),
+        ..GatewayConfig::default()
+    };
+    assert_eq!(
+        exporter_destinations(&invalid_plugin),
+        vec!["configured (invalid plugin config)".to_string()]
+    );
+
+    let disabled_observability = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": false,
+                "config": {"version": 1}
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+    assert!(exporter_destinations(&disabled_observability).is_empty());
+
+    let invalid_observability = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {"version": "bad"}
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+    assert_eq!(
+        exporter_destinations(&invalid_observability),
+        vec!["Observability configured (invalid config)".to_string()]
+    );
+
+    assert!(exporter_destinations(&GatewayConfig::default()).is_empty());
+}
+
+#[test]
+fn insert_after_agent_uses_last_matching_agent_or_first_word_fallback() {
+    let mut argv = vec![
+        "wrapper".to_string(),
+        "codex".to_string(),
+        "subcommand".to_string(),
+        "/usr/local/bin/codex".to_string(),
+    ];
+    insert_after_agent(&mut argv, CodingAgent::Codex, ["--config".to_string()]);
+    assert_eq!(
+        argv,
+        vec![
+            "wrapper",
+            "codex",
+            "subcommand",
+            "/usr/local/bin/codex",
+            "--config"
+        ]
+    );
+
+    let mut wrapped = vec!["agent-wrapper".to_string(), "run".to_string()];
+    insert_after_agent(&mut wrapped, CodingAgent::Hermes, ["--hook".to_string()]);
+    assert_eq!(wrapped, vec!["agent-wrapper", "--hook", "run"]);
+}
+
+#[test]
 fn prepares_claude_dry_run_without_writing_plugin() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
@@ -331,6 +478,41 @@ fn prepares_claude_dry_run_without_writing_plugin() {
             .contains(&("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()))
     );
     assert!(prepared.notes[0].contains("would generate"));
+}
+
+#[test]
+fn prepares_claude_dry_inserts_plugin_dir_after_last_agent_executable() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::ClaudeCode,
+        vec![
+            "wrapper".into(),
+            "claude".into(),
+            "subcommand".into(),
+            "/opt/bin/claude".into(),
+            "--resume".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap();
+
+    let plugin_index = prepared
+        .argv
+        .iter()
+        .position(|arg| arg == "--plugin-dir")
+        .expect("plugin dir arg");
+    assert_eq!(prepared.argv[plugin_index - 1], "/opt/bin/claude");
+    assert_eq!(
+        prepared.argv[plugin_index + 1],
+        "<temporary-claude-plugin-dir>"
+    );
+    assert_eq!(prepared.argv.last().map(String::as_str), Some("--resume"));
+    assert!(prepared.temp_dirs.is_empty());
 }
 
 #[test]
@@ -414,6 +596,73 @@ fn prepares_hermes_hook_environment() {
     prepared.restore().unwrap();
     assert!(!hooks_path.exists());
     std::env::set_current_dir(previous).unwrap();
+}
+
+#[test]
+fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::set(&[
+        ("HERMES_HOME", None),
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+    };
+
+    let prepared = PreparedRun::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap();
+
+    let hook_path = temp.path().join(".hermes/config.yaml");
+    assert!(prepared.notes[0].contains(&hook_path.display().to_string()));
+    assert!(
+        prepared
+            .env
+            .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
+    );
+    assert!(!hook_path.exists());
+}
+
+#[test]
+fn hermes_hooks_path_prefers_configured_then_env_then_home() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let configured = temp.path().join("configured.yaml");
+    assert_eq!(hermes_hooks_path(Some(&configured)).unwrap(), configured);
+
+    let _env = EnvScope::set(&[
+        ("HERMES_HOME", Some(temp.path().as_os_str())),
+        ("HOME", None),
+        ("USERPROFILE", None),
+    ]);
+    assert_eq!(
+        hermes_hooks_path(None).unwrap(),
+        temp.path().join("config.yaml")
+    );
+
+    drop(_env);
+    let _env = EnvScope::set(&[
+        ("HERMES_HOME", None),
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+    assert_eq!(
+        hermes_hooks_path(None).unwrap(),
+        temp.path().join(".hermes/config.yaml")
+    );
+
+    drop(_env);
+    let _env = EnvScope::set(&[("HERMES_HOME", None), ("HOME", None), ("USERPROFILE", None)]);
+    let error = hermes_hooks_path(None).unwrap_err().to_string();
+    assert!(error.contains("could not resolve home directory"));
 }
 
 #[test]
@@ -644,6 +893,44 @@ fn cursor_restore_reports_failed_temporary_hook_removal() {
 }
 
 #[test]
+fn hermes_restore_reports_restore_and_temporary_removal_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let restore_missing_backup = PreparedRun {
+        argv: vec![],
+        env: vec![],
+        temp_dirs: vec![],
+        cursor_restore: None,
+        hermes_restore: Some(HermesRestore {
+            path: temp.path().join("config.yaml"),
+            backup_path: Some(temp.path().join("missing-backup.yaml")),
+            had_original: true,
+        }),
+        notes: vec![],
+    };
+
+    let error = restore_missing_backup.restore().unwrap_err().to_string();
+    assert!(error.contains("failed to restore Hermes hooks"));
+
+    let hooks_path = temp.path().join("hooks-dir");
+    std::fs::create_dir(&hooks_path).unwrap();
+    let remove_temporary_dir = PreparedRun {
+        argv: vec![],
+        env: vec![],
+        temp_dirs: vec![],
+        cursor_restore: None,
+        hermes_restore: Some(HermesRestore {
+            path: hooks_path,
+            backup_path: None,
+            had_original: false,
+        }),
+        notes: vec![],
+    };
+
+    let error = remove_temporary_dir.restore().unwrap_err().to_string();
+    assert!(error.contains("failed to remove temporary Hermes hooks"));
+}
+
+#[test]
 fn cursor_restore_noops_when_original_was_declared_without_backup() {
     let prepared = PreparedRun {
         argv: vec![],
@@ -659,6 +946,72 @@ fn cursor_restore_noops_when_original_was_declared_without_backup() {
     };
 
     prepared.restore().unwrap();
+}
+
+#[test]
+fn hook_backup_and_write_helpers_cover_missing_existing_and_toml_escaping() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing_cursor = temp.path().join("missing-hooks.json");
+    assert_eq!(
+        backup_existing_cursor_hooks(&missing_cursor).unwrap(),
+        (false, None)
+    );
+
+    let cursor_hooks = temp.path().join("hooks.json");
+    std::fs::write(&cursor_hooks, "{}").unwrap();
+    let (had_original, cursor_backup) = backup_existing_cursor_hooks(&cursor_hooks).unwrap();
+    assert!(had_original);
+    assert!(cursor_backup.as_ref().unwrap().exists());
+
+    let missing_hermes = temp.path().join("missing-config.yaml");
+    assert_eq!(
+        backup_existing_hermes_hooks(&missing_hermes).unwrap(),
+        (false, None)
+    );
+
+    let hermes_hooks = temp.path().join("config.yaml");
+    std::fs::write(&hermes_hooks, "hooks: {}\n").unwrap();
+    let (had_original, hermes_backup) = backup_existing_hermes_hooks(&hermes_hooks).unwrap();
+    assert!(had_original);
+    assert!(hermes_backup.as_ref().unwrap().exists());
+
+    let written_hooks = temp.path().join("written/hooks.json");
+    std::fs::create_dir_all(written_hooks.parent().unwrap()).unwrap();
+    write_hooks(&written_hooks, json!({"hooks": []})).unwrap();
+    assert!(
+        std::fs::read_to_string(&written_hooks)
+            .unwrap()
+            .contains("hooks")
+    );
+
+    let groups = hook_groups_toml(&json!([{
+        "matcher": "Shell\"Run",
+        "hooks": [{"command": "nemo-relay \"quoted\""}]
+    }]));
+    assert!(groups.contains("matcher=\"Shell\\\"Run\""));
+    assert!(groups.contains("command=\"nemo-relay \\\"quoted\\\"\""));
+
+    let escaped = toml_string(r#"C:\tmp\"quoted""#);
+    assert!(escaped.starts_with('"'));
+    assert!(escaped.ends_with('"'));
+    assert!(escaped.contains(r#"C:\\tmp\\"#));
+    assert!(escaped.contains(r#"\"quoted\""#));
+}
+
+#[cfg(unix)]
+#[test]
+fn exit_code_preserves_normal_and_shell_wrapped_codes() {
+    let status = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 7"])
+        .status()
+        .unwrap();
+    assert_eq!(exit_code(status), ExitCode::from(7));
+
+    let status = std::process::Command::new("/bin/sh")
+        .args(["-c", "exit 300"])
+        .status()
+        .unwrap();
+    assert_eq!(exit_code(status), ExitCode::from(44));
 }
 
 #[test]

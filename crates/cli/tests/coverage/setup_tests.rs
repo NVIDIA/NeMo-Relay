@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -71,6 +72,41 @@ impl<'a> Drop for CwdScope<'a> {
     }
 }
 
+struct EnvScope {
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self { values: previous }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+}
+
 // Stub-binary detection relies on the Unix executable bit. Windows-side agent presence checks
 // use a different mechanism (e.g. `.exe` extension matching), so this lookup test is gated to
 // Unix to keep cross-platform CI green; covering the Windows code path is left to a separate
@@ -96,6 +132,11 @@ fn detect_installed_agents_finds_binaries_on_path() {
     assert!(detected.contains(&CodingAgent::Cursor));
     assert!(!detected.contains(&CodingAgent::Codex));
     assert!(!detected.contains(&CodingAgent::Hermes));
+}
+
+#[test]
+fn detect_installed_agents_handles_missing_path() {
+    assert!(detect_installed_agents_in(None).is_empty());
 }
 
 #[test]
@@ -254,6 +295,27 @@ fn save_config_writes_both_scopes_when_both_selected() {
 }
 
 #[test]
+fn global_config_dir_and_preview_paths_prefer_xdg_when_set() {
+    let _guard = xdg_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let xdg = tempfile::tempdir().unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(xdg.path().as_os_str()))]);
+
+    assert_eq!(
+        global_config_dir(home.path()),
+        xdg.path().join("nemo-relay")
+    );
+    assert_eq!(
+        preview_paths(ConfigScope::Both, cwd.path(), home.path()),
+        vec![
+            cwd.path().join(".nemo-relay/config.toml"),
+            xdg.path().join("nemo-relay/config.toml"),
+        ]
+    );
+}
+
+#[test]
 fn build_config_emits_hooks_path_for_hermes_when_set() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
@@ -351,6 +413,43 @@ command = "custom"
 }
 
 #[test]
+fn read_existing_defaults_prefers_workspace_and_reports_scope_variants() {
+    let _guard = xdg_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let cwd = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(cwd.path()).unwrap();
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", None),
+        ("HOME", Some(home.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
+
+    assert!(read_existing_defaults().is_none());
+
+    let global_path = home.path().join(".config/nemo-relay/config.toml");
+    std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+    std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+    let defaults = read_existing_defaults().unwrap();
+    assert_eq!(defaults.scope, Some(ConfigScope::Global));
+    assert_eq!(defaults.agents, vec![CodingAgent::Codex]);
+
+    let workspace_path = cwd.path().join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(workspace_path.parent().unwrap()).unwrap();
+    std::fs::write(&workspace_path, "[agents.claude]\ncommand = \"claude\"\n").unwrap();
+    let defaults = read_existing_defaults().unwrap();
+    assert_eq!(defaults.scope, Some(ConfigScope::Both));
+    assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
+
+    std::fs::remove_file(&global_path).unwrap();
+    let defaults = read_existing_defaults().unwrap();
+    assert_eq!(defaults.scope, Some(ConfigScope::Project));
+    assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
+
+    std::env::set_current_dir(previous).unwrap();
+}
+
+#[test]
 fn install_hermes_hooks_writes_yaml_and_merges_existing() {
     let cwd = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -406,6 +505,29 @@ enabled = true
 }
 
 #[test]
+fn write_or_merge_overwrites_without_merge_scope_and_reports_malformed_existing_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("config.toml");
+    std::fs::write(&path, "[agents.codex]\ncommand = \"old\"\n").unwrap();
+    let doc = build_config(&SetupAnswers {
+        scope: ConfigScope::Project,
+        agents: vec![CodingAgent::Hermes],
+        hermes_hooks_path: Some(temp.path().join(".hermes/config.yaml")),
+    });
+
+    write_or_merge(&path, &doc, None).unwrap();
+    let overwritten = std::fs::read_to_string(&path).unwrap();
+    assert!(!overwritten.contains("[agents.codex]"));
+    assert!(overwritten.contains("[agents.hermes]"));
+
+    std::fs::write(&path, "[agents.codex\n").unwrap();
+    let error = write_or_merge(&path, &doc, Some(CodingAgent::Hermes))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("could not parse existing config"));
+}
+
+#[test]
 fn reset_removes_whole_project_config_or_one_agent() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(temp.path());
@@ -433,6 +555,31 @@ command = "codex"
     reset(None).unwrap();
 
     assert!(!path.exists());
+}
+
+#[test]
+fn reset_removes_empty_agents_table_when_last_agent_is_removed() {
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(temp.path());
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let path = config_dir.join("config.toml");
+    std::fs::write(&path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+
+    reset(Some(CodingAgent::Codex)).unwrap();
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(!contents.contains("[agents]"));
+    assert!(!contents.contains("[agents.codex]"));
+}
+
+#[test]
+fn reset_noops_when_project_config_is_missing() {
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CwdScope::enter(temp.path());
+
+    reset(None).unwrap();
+    reset(Some(CodingAgent::Codex)).unwrap();
 }
 
 #[test]
