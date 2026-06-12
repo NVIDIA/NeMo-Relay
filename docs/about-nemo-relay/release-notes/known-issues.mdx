@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page lists current limitations and support notes for the release
 documentation set.
 
-## NVIDIA NeMo Relay 0.3
+## NeMo Relay 0.3
 
 These notes apply to the NeMo Relay 0.3 release. The following known issues
 and limitations apply to NeMo Relay 0.3:
@@ -17,9 +17,9 @@ and limitations apply to NeMo Relay 0.3:
 - Go, WebAssembly, and the raw C FFI surface are experimental and source-first.
 - Generated API pages cover Rust, Python, and Node.js. Experimental bindings do
   not yet have the same generated documentation depth.
-- NeMo Relay CLI host coverage varies by agent. Cursor remains limited by
-  incomplete hook and gateway-routing coverage, Codex requires manual hook
-  activation, and optimization depends on the host and provider route.
+- The NeMo Relay CLI is experimental. Coding agent observability support varies
+  due to capabilities of hooks. Any encountered problems should be filed as
+  bugs.
 - Node.js 24 or newer is required for Node.js binding and package workflows.
 - OpenClaw support uses public hook-backed telemetry with partial security and
   optimization support. Security is limited to pre-tool conditional guardrails,
