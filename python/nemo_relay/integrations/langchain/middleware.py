@@ -34,7 +34,6 @@ class _PreparedModelCall(typing.NamedTuple):
     llm_request: nemo_relay.LLMRequest
     model_name: str
     model_codec: LangChainCodec
-    metadata: dict[str, typing.Any] | None
 
 
 class NemoRelayMiddleware(AgentMiddleware):
@@ -65,7 +64,6 @@ class NemoRelayMiddleware(AgentMiddleware):
         codec: LlmCodec | None,
         response_codec: LlmResponseCodec | None,
         func: Callable[..., typing.Any],
-        metadata: dict[str, typing.Any] | None = None,
     ) -> typing.Any:
         """Execute a non-streaming LLM call through the NeMo Relay pipeline."""
         return await nemo_relay.llm.execute(
@@ -75,7 +73,6 @@ class NemoRelayMiddleware(AgentMiddleware):
             model_name=model_name,
             codec=codec,
             response_codec=response_codec,
-            metadata=metadata,
         )
 
     def _prepare_model_call(self, request: ModelRequest[typing.Any]) -> _PreparedModelCall:
@@ -84,27 +81,12 @@ class NemoRelayMiddleware(AgentMiddleware):
         model_name = get_model_name(request.model)
         llm_request = nemo_relay.LLMRequest({}, model_request_to_payload(model_name, request))
         model_codec = LangChainCodec()
-        metadata = self._model_request_metadata(request)
         return _PreparedModelCall(
             object_codec=object_codec,
             llm_request=llm_request,
             model_name=model_name,
-            model_codec=model_codec,
-            metadata=metadata,
+            model_codec=model_codec
         )
-
-    def _model_request_metadata(self, request: ModelRequest[typing.Any]) -> dict[str, typing.Any] | None:
-        """Return LangChain run metadata available on the model request."""
-        runtime = getattr(request, "runtime", None)
-        config = getattr(runtime, "config", None)
-        if not isinstance(config, Mapping):
-            return None
-
-        metadata = config.get("metadata")
-        if not isinstance(metadata, Mapping):
-            return None
-
-        return dict(metadata)
 
     def wrap_model_call(
         self,
@@ -124,8 +106,7 @@ class NemoRelayMiddleware(AgentMiddleware):
                 request=prepared.llm_request,
                 func=_call,
                 codec=prepared.model_codec,
-                response_codec=prepared.model_codec,
-                metadata=prepared.metadata,
+                response_codec=prepared.model_codec
             )
         )
         return model_response_from_json(result, prepared.object_codec)
@@ -147,8 +128,7 @@ class NemoRelayMiddleware(AgentMiddleware):
             request=prepared.llm_request,
             func=_call,
             codec=prepared.model_codec,
-            response_codec=prepared.model_codec,
-            metadata=prepared.metadata,
+            response_codec=prepared.model_codec
         )
         return model_response_from_json(result, prepared.object_codec)
 
