@@ -34,6 +34,10 @@ navigation:
   title: NeMo Guardrails Plugin
   slug: nemo-guardrails-plugin
   title-source: frontmatter
+- folder: ../pages-dev/pii-redaction-plugin
+  title: PII Redaction Plugin
+  slug: pii-redaction-plugin
+  title-source: frontmatter
 - folder: ../pages-dev/integrate-into-frameworks
   title: Integrate into Frameworks
   slug: integrate-into-frameworks
