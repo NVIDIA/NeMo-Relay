@@ -371,7 +371,19 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: |
           set -euo pipefail
-          for package in nemo-relay nemo-relay-adaptive nemo-relay-ffi nemo-relay-cli; do
+          version="${{ github.ref_name }}"
+          packages=(
+            nemo-relay
+            nemo-relay-adaptive
+            nemo-relay-pii-redaction
+            nemo-relay-ffi
+            nemo-relay-cli
+          )
+          for package in "${packages[@]}"; do
+            if cargo info "${package}@${version}" --registry crates-io >/dev/null 2>&1; then
+              echo "${package} ${version} already exists on crates.io; skipping"
+              continue
+            fi
             cargo publish --package "$package" --no-verify --allow-dirty
           done
 
@@ -395,6 +407,8 @@ jobs:
 
       - name: Publish to PyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          skip-existing: true
 
   publish-npm:
     name: Publish (npm)
@@ -449,6 +463,11 @@ jobs:
       - name: Publish Node.js package to npm
         run: |
           set -euo pipefail
+          version="${{ github.ref_name }}"
+          if npm view "nemo-relay-node@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "nemo-relay-node ${version} already exists on npm; skipping"
+            exit 0
+          fi
           unzip -q ./consolidated.zip -d combined
           echo "Platform binaries included:"
           ls -la combined/package/*.node
@@ -457,6 +476,11 @@ jobs:
       - name: Publish OpenClaw plugin package to npm
         run: |
           set -euo pipefail
+          version="${{ github.ref_name }}"
+          if npm view "nemo-relay-openclaw@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "nemo-relay-openclaw ${version} already exists on npm; skipping"
+            exit 0
+          fi
           for pkg in ./openclaw-package/*.tgz; do
             echo "Publishing ${pkg}..."
             npm publish "${pkg}" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
@@ -464,7 +488,12 @@ jobs:
 
       - name: Publish WebAssembly package to npm
         run: |
-          set -e
+          set -euo pipefail
+          version="${{ github.ref_name }}"
+          if npm view "nemo-relay-wasm@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "nemo-relay-wasm ${version} already exists on npm; skipping"
+            exit 0
+          fi
           for pkg in ./wasm-package/*.tgz; do
             echo "Publishing ${pkg}..."
             npm publish "${pkg}" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
