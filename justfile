@@ -893,7 +893,7 @@ test-rust:
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
-        cargo nextest run --workspace --profile ci
+        cargo nextest run --workspace --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \
