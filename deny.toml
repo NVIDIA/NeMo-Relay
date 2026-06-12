@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2026-0176", reason = "PyO3 0.29 fixes this, but pyo3-async-runtimes and pythonize are still on the PyO3 0.28 line." },
+    { id = "RUSTSEC-2026-0177", reason = "PyO3 0.29 fixes this, but pyo3-async-runtimes and pythonize are still on the PyO3 0.28 line." },
+]
+
 [bans]
 skip = [
     { crate = "getrandom@0.4.2", reason = "build-only duplicate internal to cbindgen's tempfile stack" },
