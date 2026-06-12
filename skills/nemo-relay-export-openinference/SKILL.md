@@ -5,6 +5,7 @@ author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
 
+<!-- Non-semantic CI refresh marker: 2026-06-06. -->
 
 # Export OpenInference Traces
 
