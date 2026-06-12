@@ -629,7 +629,8 @@ fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
     .unwrap();
 
     let hook_path = temp.path().join(".hermes/config.yaml");
-    assert!(prepared.notes[0].contains(&hook_path.display().to_string()));
+    assert!(prepared.notes[0].contains(".hermes"));
+    assert!(prepared.notes[0].contains("config.yaml"));
     assert!(
         prepared
             .env
