@@ -1,0 +1,43 @@
+---
+title: "Module types"
+sidebar-title: "types"
+description: "Core data types for the Adaptive Cache Governor (ACG) crate."
+position: 17
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Core data types for the Adaptive Cache Governor (ACG) crate.
+
+This module defines the vocabulary types used by the Adaptive Cache Governor (ACG) system: [`OptimizationIntent`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-optimizationintent) enum with 9 variants, per-variant payload structs, [`OptimizationIntentBundle`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-optimizationintentbundle), [`AgentIdentity`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-agentidentity), and supporting enums ([`SharingScope`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-sharingscope), [`RetentionTier`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-retentiontier), [`PlacementTarget`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-placementtarget), [`ModelClass`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-modelclass), [`IntentType`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-intenttype)).
+
+All types derive [`serde::Serialize`](https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html) and [`serde::Deserialize`](https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html) so they can be round-tripped through JSON without loss.
+
+## Structs
+
+- [AgentIdentity](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-agentidentity): Identity model for an agent type.
+- [CacheStabilityIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-cachestabilityintent): Cache stability analysis results for a prompt region.
+- [CompressionIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-compressionintent): Content compression intent.
+- [ContentExtractionIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-contentextractionintent): Content extraction intent for variable content detection.
+- [IntentOutcome](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-intentoutcome): Records the outcome of translating a single optimization intent.
+- [ModelRoutingIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-modelroutingintent): Model routing and selection intent.
+- [OptimizationIntentBundle](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-optimizationintentbundle): A bundle of optimization intents for a single request.
+- [PlacementIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-placementintent): Context placement optimization intent.
+- [PriorityIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-priorityintent): Latency and priority routing intent.
+- [RetentionIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-retentionintent): Cache retention policy intent.
+- [SerializationIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-serializationintent): Serialization and fanout optimization intent.
+- [ToolScopeIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-toolscopeintent): Tool scope and phase management intent.
+- [TranslationReport](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/struct-translationreport): A plugin's complete report on how it handled an intent bundle.
+
+## Enums
+
+- [IntentType](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-intenttype): Discriminant enum for intent types (used in translation report outcomes).
+- [ModelClass](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-modelclass): Model complexity/criticality class for routing.
+- [OptimizationIntent](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-optimizationintent): A single optimization intent emitted by a behavioral model.
+- [PlacementTarget](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-placementtarget): Target location for context placement.
+- [ReasonCode](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-reasoncode): Machine-readable reason for the translation outcome.
+- [RetentionTier](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-retentiontier): Retention tier for cached state.
+- [SharingScope](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-sharingscope): Sharing scope for cached content - stability does not imply shareability. Default is `Session` per security requirements.
+- [TranslationStatus](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/types/enum-translationstatus): Outcome status for a single intent translation.

@@ -1,0 +1,113 @@
+---
+title: "Struct Otlp Section Config"
+sidebar-title: "OtlpSectionConfig"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-otlpsectionconfig"
+description: "Shared OTLP exporter config for OpenTelemetry and OpenInference."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct OtlpSectionConfig &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub transport: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub endpoint: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub headers: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub resource_attributes: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub service_name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub service_namespace: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub service_version: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub instrumentation_scope: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub timeout_millis: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n&#125;"}} /></pre>
+
+Shared OTLP exporter config for OpenTelemetry and OpenInference.
+
+The `opentelemetry` and `openinference` sections share the same shape but construct different subscriber implementations. Both sections are disabled by default and use `http_binary` transport unless configured otherwise.
+
+## Fields
+
+### `enabled: bool`
+
+Whether the subscriber is active.
+
+### `transport: String`
+
+OTLP transport: `http_binary` or `grpc`.
+
+### `endpoint: Option<String>`
+
+OTLP endpoint.
+
+### `headers: HashMap<String, String>`
+
+Extra exporter headers or metadata.
+
+### `resource_attributes: HashMap<String, String>`
+
+Extra resource attributes.
+
+### `service_name: String`
+
+`service.name` resource attribute.
+
+### `service_namespace: Option<String>`
+
+Optional `service.namespace` resource attribute.
+
+### `service_version: Option<String>`
+
+Optional `service.version` resource attribute.
+
+### `instrumentation_scope: Option<String>`
+
+Instrumentation scope name.
+
+### `timeout_millis: u64`
+
+Export timeout in milliseconds.
+
+## Trait Implementations
+
+### `impl Clone for OtlpSectionConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OtlpSectionConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for OtlpSectionConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for OtlpSectionConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl EditorConfig for OtlpSectionConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `editor_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+### `impl Serialize for OtlpSectionConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-otlpsectionconfig\">OtlpSectionConfig</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

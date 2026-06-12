@@ -1,0 +1,28 @@
+---
+title: "Function validate_plugin_config"
+sidebar-title: "validate_plugin_config"
+description: "Validates a plugin configuration document."
+position: 21
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate_plugin_config(config: &amp;<a href=\"struct-pluginconfig\">PluginConfig</a>) -&gt; <a href=\"struct-configreport\">ConfigReport</a>"}} /></pre>
+
+Validates a plugin configuration document.
+
+This is a pure validation pass. It does not mutate the active runtime configuration.
+
+## Parameters
+
+- `config`: Plugin configuration to validate.
+
+## Returns
+
+A [`ConfigReport`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport) describing warnings and errors discovered during validation.
+
+## Notes
+
+Validation checks host policy, plugin multiplicity rules, unknown component kinds, and plugin-provided validation hooks.

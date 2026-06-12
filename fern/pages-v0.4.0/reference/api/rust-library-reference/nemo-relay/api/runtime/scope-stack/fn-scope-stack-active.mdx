@@ -1,0 +1,25 @@
+---
+title: "Function scope_stack_active"
+sidebar-title: "scope_stack_active"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-scope-stack-active"
+description: "Report whether the current context has an explicitly active scope stack."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_stack_active() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Report whether the current context has an explicitly active scope stack.
+
+This checks task-local state first and otherwise falls back to the thread-local explicit flag.
+
+## Returns
+
+`true` when the current async task or thread already owns an active scope stack and `false` otherwise.
+
+## Notes
+
+A synchronized thread-local stack does not count as explicit unless it was installed through [`set_thread_scope_stack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-set-thread-scope-stack).

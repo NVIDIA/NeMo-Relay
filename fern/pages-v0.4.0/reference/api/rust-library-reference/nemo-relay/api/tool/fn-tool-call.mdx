@@ -1,0 +1,39 @@
+---
+title: "Function tool_call"
+sidebar-title: "tool_call"
+description: "Start a manual tool lifecycle span."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_call(params: <a href=\"struct-toolcallparams\">ToolCallParams</a>&lt;'_&gt;) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-toolhandle\">ToolHandle</a>&gt;"}} /></pre>
+
+Start a manual tool lifecycle span.
+
+This emits a tool-start event after applying sanitize-request guardrails to the payload recorded for observability.
+
+## Parameters
+
+- `name`: Tool name recorded on the emitted lifecycle event.
+- `args`: Raw tool arguments associated with the span.
+- `parent`: Optional explicit parent scope.
+- `attributes`: Tool attribute bitflags applied to the span.
+- `data`: Optional application payload stored on the returned handle. The emitted start event data is the sanitized `args` payload.
+- `metadata`: Optional JSON metadata recorded on the start event.
+- `tool_call_id`: Optional provider-specific correlation identifier.
+- `timestamp`: Optional timestamp recorded as the handle start time and on the emitted start event. When `None`, the current UTC time is used.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the created [`ToolHandle`](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolhandle).
+
+## Errors
+
+Returns an error when the runtime owner check fails or when internal state cannot be read safely.
+
+## Notes
+
+Sanitize-request guardrails affect only the emitted start-event payload, not the caller-owned `args` value.

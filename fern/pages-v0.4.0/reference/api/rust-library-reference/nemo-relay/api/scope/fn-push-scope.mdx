@@ -1,0 +1,39 @@
+---
+title: "Function push_scope"
+sidebar-title: "push_scope"
+description: "Push a new scope onto the active scope stack."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_scope(params: <a href=\"struct-pushscopeparams\">PushScopeParams</a>&lt;'_&gt;) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&gt;"}} /></pre>
+
+Push a new scope onto the active scope stack.
+
+This creates a new [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle), emits a scope-start event to global and scope-local subscribers, and makes the new scope the current top of stack.
+
+## Parameters
+
+- `name`: Human-readable scope name recorded on emitted lifecycle events.
+- `scope_type`: Semantic category for the new scope.
+- `parent`: Optional explicit parent scope. When `None`, the current top of stack is used as the parent.
+- `attributes`: Bitflags that modify scope behavior and observability.
+- `data`: Optional application payload stored on the returned handle.
+- `metadata`: Optional JSON metadata recorded on the emitted start event.
+- `input`: Optional JSON payload exported as the Agent Trajectory Observability Format (ATOF) data payload.
+- `timestamp`: Optional timestamp recorded as the handle start time and on the emitted start event. When `None`, the current UTC time is used.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the newly created [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle).
+
+## Errors
+
+Returns an error when the runtime owner check fails or when internal state cannot be read safely.
+
+## Notes
+
+Scope-local subscribers attached to ancestor scopes observe the emitted start event before the function returns.

@@ -1,0 +1,291 @@
+---
+title: "Typed Helpers"
+description: "Typed wrappers for NeMo Relay Node.js execute APIs."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/typed.d.ts`.
+
+Import from `nemo-relay-node/typed`.
+
+Typed wrappers for NeMo Relay Node.js execute APIs.
+
+## Interfaces
+
+### `JsonObject`
+
+A JSON object with recursively JSON-serializable values.
+
+```ts
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+```
+
+### `JsonArray`
+
+A JSON array with recursively JSON-serializable values.
+
+```ts
+export interface JsonArray extends Array<JsonValue> {}
+```
+
+### `LlmRequestShape`
+
+Canonical JSON shape for an opaque LLM request payload.
+
+```ts
+export interface LlmRequestShape {
+  headers: JsonObject;
+  content: JsonValue;
+}
+```
+
+### `LlmCodec`
+
+A codec for annotating and unwrapping LLM JSON request payloads.
+
+Use when an LLM integration needs custom request parsing or normalization before the raw payload is passed through the NeMo Relay LLM middleware pipeline.
+
+```ts
+export interface LlmCodec {
+  /**
+   * Decode a raw LLM request payload into the normalized JSON shape used by
+   * the codec.
+   *
+   * @param request - The raw request payload as a JSON-serializable value.
+   * @returns The decoded or normalized JSON request representation.
+   */
+  decode(request: JsonValue): JsonValue;
+  /**
+   * Encode an annotated request payload back into the JSON shape expected by
+   * the underlying LLM implementation.
+   *
+   * @param annotated - The normalized or annotated JSON payload produced by middleware.
+   * @param original - The original JSON request payload before annotation.
+   * @returns A JSON payload ready to pass to the underlying LLM implementation.
+   */
+  encode(annotated: JsonValue, original: JsonValue): JsonValue;
+}
+```
+
+### `LlmResponseCodec`
+
+A codec for normalizing and decoding raw LLM responses into `JsonValue`.
+
+Use when model output requires custom parsing or normalization before the response is consumed as plain JSON by the library.
+
+```ts
+export interface LlmResponseCodec {
+  /**
+   * Decode a raw LLM response payload into the normalized JSON shape expected
+   * by the library.
+   *
+   * Implementations should return a JSON-serializable value and should prefer
+   * normalizing missing or provider-specific fields into a stable shape when
+   * possible.
+   *
+   * @param response - The raw response payload as a JSON-serializable value.
+   * @returns The decoded or normalized JSON response representation.
+   */
+  decodeResponse(response: JsonValue): JsonValue;
+}
+```
+
+### `Codec`
+
+A codec that converts between a typed value `T` and a JSON-serializable representation (`JsonValue` by default).
+
+```ts
+export interface Codec<T, TJson = JsonValue> {
+  /** Convert a typed value to a JSON-serializable object. */
+  toJson(value: T): TJson;
+  /** Reconstruct a typed value from a JSON-serializable object. */
+  fromJson(data: TJson): T;
+}
+```
+
+### `TypedToolExecuteOptions`
+
+Options for `typedToolExecute`.
+
+```ts
+export interface TypedToolExecuteOptions {
+  handle?: ScopeHandle | null;
+  attributes?: number | null;
+  data?: JsonValue;
+  metadata?: JsonValue;
+}
+```
+
+### `TypedLlmExecuteOptions`
+
+Options for `typedLlmExecute`.
+
+```ts
+export interface TypedLlmExecuteOptions {
+  handle?: ScopeHandle | null;
+  attributes?: number | null;
+  data?: JsonValue;
+  metadata?: JsonValue;
+  modelName?: string | null;
+  codec?: LlmCodec | null;
+  responseCodec?: LlmResponseCodec | null;
+}
+```
+
+### `TypedLlmStreamExecuteOptions`
+
+Options for `typedLlmStreamExecute`.
+
+```ts
+export interface TypedLlmStreamExecuteOptions {
+  handle?: ScopeHandle | null;
+  attributes?: number | null;
+  data?: JsonValue;
+  metadata?: JsonValue;
+  modelName?: string | null;
+  codec?: LlmCodec | null;
+  responseCodec?: LlmResponseCodec | null;
+}
+```
+
+## Classes
+
+### `JsonPassthrough`
+
+A passthrough codec that performs no conversion. Use when arguments or results are already plain JSON objects.
+
+```ts
+export declare class JsonPassthrough implements Codec<JsonValue> {
+  toJson(value: JsonValue): JsonValue;
+  fromJson(data: JsonValue): JsonValue;
+}
+```
+
+## Functions
+
+### `typedToolExecute`
+
+Execute a typed tool call through the JSON middleware pipeline.
+
+Converts `args` to JSON, runs the native tool execution lifecycle, and decodes the final JSON result back into the caller's typed result shape.
+
+**Parameters**
+
+- `name`: Tool name.
+- `args`: Typed tool arguments.
+- `func`: The tool implementation.
+- `argsCodec`: Codec for args serialization/deserialization.
+- `resultCodec`: Codec for result serialization/deserialization.
+- `options`: Optional scope handle, attributes, data, metadata.
+
+**Returns**
+
+A promise resolving to the decoded typed tool result.
+
+**Remarks**
+
+The wrapper accepts both synchronous and promise-returning tool implementations; codec failures and native execution errors propagate to the returned promise.
+
+```ts
+export declare function typedToolExecute<TArgs, TResult>(
+  name: string,
+  args: TArgs,
+  func: (args: TArgs) => TResult | Promise<TResult>,
+  argsCodec: Codec<TArgs>,
+  resultCodec: Codec<TResult>,
+  options?: TypedToolExecuteOptions,
+): Promise<TResult>;
+```
+
+### `typedLlmExecute`
+
+Execute a typed LLM call through the JSON middleware pipeline.
+
+Forwards the JSON-shaped request payload into the native LLM lifecycle and decodes the final response with the supplied response codec before resolving.
+
+**Parameters**
+
+- `name`: Model/provider name.
+- `request`: The LLM request object (\{headers, content\}).
+- `func`: The LLM implementation.
+- `responseCodec`: Codec for response serialization/deserialization.
+- `options`: Optional scope handle, attributes, data, metadata, modelName.
+
+**Returns**
+
+A promise resolving to the decoded typed LLM response.
+
+**Remarks**
+
+`options.responseCodec` only affects annotated response event payloads; failures while decoding those event payloads are downgraded to debug logging and do not rewrite the caller-visible response.
+
+```ts
+export declare function typedLlmExecute<TRequest extends LlmRequestShape, TResponse>(
+  name: string,
+  request: TRequest,
+  func: (request: TRequest) => TResponse | Promise<TResponse>,
+  responseCodec: Codec<TResponse>,
+  options?: TypedLlmExecuteOptions,
+): Promise<TResponse>;
+```
+
+### `typedLlmStreamExecute`
+
+Execute a typed streaming LLM call through the JSON middleware pipeline.
+
+Chunks yielded by `func` are converted to JSON via `chunkCodec.toJson` before entering the middleware pipeline. After interception, chunks are converted back via `chunkCodec.fromJson` before reaching `collector`. The `finalizer` result is converted via `responseCodec.toJson`.
+
+**Parameters**
+
+- `name`: Model/provider name.
+- `request`: The LLM request object (\{headers, content\}).
+- `func`: Async iterable producer for typed stream chunks.
+- `collector`: Callback invoked with each decoded typed chunk.
+- `finalizer`: Callback that returns the final typed aggregate response.
+- `chunkCodec`: Codec for stream chunk serialization/deserialization.
+- `responseCodec`: Codec for final response serialization/deserialization.
+- `options`: Optional scope handle, attributes, data, metadata, modelName.
+
+**Returns**
+
+A promise resolving to the native `LlmStream` handle.
+
+**Remarks**
+
+The wrapper bridges async iteration back into the native stream lifecycle and closes the stream even when the source iterator throws.
+
+```ts
+export declare function typedLlmStreamExecute<TRequest extends LlmRequestShape, TChunk, TResponse>(
+  name: string,
+  request: TRequest,
+  func: (request: TRequest) => AsyncIterable<TChunk>,
+  collector: (chunk: TChunk) => void,
+  finalizer: () => TResponse,
+  chunkCodec: Codec<TChunk>,
+  responseCodec: Codec<TResponse>,
+  options?: TypedLlmStreamExecuteOptions,
+): Promise<LlmStream>;
+```
+
+## Type Aliases
+
+### `JsonPrimitive`
+
+One JSON scalar value accepted by the typed wrapper APIs.
+
+```ts
+export type JsonPrimitive = string | number | boolean | null;
+```
+
+### `JsonValue`
+
+Any JSON-serializable value accepted by the typed wrapper APIs.
+
+```ts
+export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
+```
+

@@ -1,0 +1,38 @@
+---
+title: "Module openinference"
+sidebar-title: "openinference"
+description: "OpenInference subscriber support for NeMo Relay."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+OpenInference subscriber support for NeMo Relay.
+
+This crate adapts NeMo Relay lifecycle events into OpenInference trace spans:
+
+- scope/tool/LLM `Start` events open spans
+- matching `End` events close spans
+- `Mark` events become span events on the active parent span when possible
+- orphan marks fall back to zero-duration spans so they still reach OTLP
+
+The public API is intentionally small:
+
+- [`OpenInferenceConfig`](/reference/api/rust-library-reference/nemo-relay/observability/openinference/struct-openinferenceconfig) configures the OTLP exporter and OpenInference metadata
+- [`OpenInferenceSubscriber`](/reference/api/rust-library-reference/nemo-relay/observability/openinference/struct-openinferencesubscriber) exposes a NeMo Relay [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn) and convenience `register` / `deregister` / `force_flush` / `shutdown` methods
+
+## Structs
+
+- [OpenInferenceConfig](/reference/api/rust-library-reference/nemo-relay/observability/openinference/struct-openinferenceconfig): Configuration for the OpenInference subscriber.
+- [OpenInferenceSubscriber](/reference/api/rust-library-reference/nemo-relay/observability/openinference/struct-openinferencesubscriber): OpenInference-backed NeMo Relay subscriber.
+
+## Enums
+
+- [OpenInferenceError](/reference/api/rust-library-reference/nemo-relay/observability/openinference/enum-openinferenceerror): Errors produced while configuring or operating the OpenInference subscriber.
+- [OtlpTransport](/reference/api/rust-library-reference/nemo-relay/observability/openinference/enum-otlptransport): Supported OTLP trace transports.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/observability/openinference/type-result): Result type for the OpenInference subscriber crate.

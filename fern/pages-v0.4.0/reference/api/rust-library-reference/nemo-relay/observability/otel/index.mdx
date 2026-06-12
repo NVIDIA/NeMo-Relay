@@ -1,0 +1,38 @@
+---
+title: "Module otel"
+sidebar-title: "otel"
+description: "OpenTelemetry subscriber support for NeMo Relay."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+OpenTelemetry subscriber support for NeMo Relay.
+
+This crate adapts NeMo Relay lifecycle events into OpenTelemetry trace spans:
+
+- scope/tool/LLM `Start` events open spans
+- matching `End` events close spans
+- `Mark` events become span events on the active parent span when possible
+- orphan marks fall back to zero-duration spans so they still reach OTLP
+
+The public API is intentionally small:
+
+- [`OpenTelemetryConfig`](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryconfig) configures the OTLP exporter and resource metadata
+- [`OpenTelemetrySubscriber`](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber) exposes a NeMo Relay [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn) and convenience `register` / `deregister` / `force_flush` / `shutdown` methods
+
+## Structs
+
+- [OpenTelemetryConfig](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetryconfig): Configuration for the OpenTelemetry subscriber.
+- [OpenTelemetrySubscriber](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber): OpenTelemetry-backed NeMo Relay subscriber.
+
+## Enums
+
+- [OpenTelemetryError](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-opentelemetryerror): Errors produced while configuring or operating the OpenTelemetry subscriber.
+- [OtlpTransport](/reference/api/rust-library-reference/nemo-relay/observability/otel/enum-otlptransport): Supported OTLP trace transports.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/observability/otel/type-result): Result type for the OpenTelemetry subscriber crate.

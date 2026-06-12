@@ -1,0 +1,25 @@
+---
+title: "Function extract_scope_path"
+sidebar-title: "extract_scope_path"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers/fn-extract-scope-path"
+description: "Extracts the current function call path from the NeMo Relay scope stack."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn extract_scope_path() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Extracts the current function call path from the NeMo Relay scope stack.
+
+Walks all scopes from root to top, skipping the root scope (index 0), and collects names of Agent and Function scopes. This path is used for prediction trie lookup.
+
+## Returns
+
+A vector of scope names from the current Agent and Function scope path. Returns an empty vector when the scope stack cannot be read safely.
+
+## Notes
+
+The implicit root scope is always skipped.

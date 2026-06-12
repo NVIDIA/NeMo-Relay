@@ -1,0 +1,224 @@
+---
+title: "Codex"
+description: ""
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide to observe local Codex CLI sessions and local Codex GUI or app
+sessions that honor the same local config and gateway routing. Cloud or remote
+Codex tasks are partial or unsupported for local gateway LLM capture because the
+local gateway cannot observe provider traffic that never reaches the machine.
+
+## Requirements
+
+`codex-cli >= 0.129.0`. The gateway uses the `features.hooks` flag and the
+`nemo-relay-openai` provider alias, both of which require this version. Earlier
+versions either reject the provider override or do not recognize the hooks
+feature flag.
+
+<Warning>
+As of Codex 0.129, Codex requires hooks to be manually reviewed and activated
+before they run. Generated NeMo Relay hook configuration is not enough on its own
+if Codex leaves those hooks inactive. Review and activate the installed or
+injected hooks in Codex before expecting NeMo Relay events. This is being tracked
+upstream as [openai/codex#21639](https://github.com/openai/codex/issues/21639).
+
+</Warning>
+
+## Transparent Run
+
+Use the wrapper for no-install local observability:
+
+```bash
+nemo-relay codex
+```
+
+Pass Codex arguments after `--`:
+
+```bash
+nemo-relay codex -- exec "Summarize this repository."
+```
+
+This shortcut is equivalent to `nemo-relay run -- codex`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port, enables Codex hooks with CLI config
+overrides, injects hook commands that use `NEMO_RELAY_GATEWAY_URL`, and points
+Codex at a temporary `nemo-relay-openai` provider alias that uses the gateway
+URL while preserving Codex's OpenAI auth path.
+
+Inspect what would be launched without starting Codex:
+
+```bash
+nemo-relay run \
+  --dry-run \
+  --print \
+  -- codex
+```
+
+## Persistent Plugin Install
+
+Install the persistent plugin for Codex. It should start normally and load
+NeMo Relay from its plugin marketplace:
+
+```bash
+nemo-relay install codex
+```
+
+The installer creates a local marketplace, installs
+`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
+`nemo-relay-openai` provider alias at `http://127.0.0.1:47632`. It then uses the
+existing `nemo-relay` binary on `PATH` but does not install a plugin-local Relay
+binary.
+
+Codex plugin mode uses hook-supervised on-demand startup only. It does not install a
+wrapper, user-level daemon, launch agent, system user service, scheduled
+task, login item, or persistent supervisor.
+
+To check for the installed plugin, enter:
+
+```bash
+nemo-relay doctor --plugin codex
+```
+
+To remove the plugin, enter:
+
+```bash
+nemo-relay uninstall codex
+```
+
+Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
+directories, first-request capture limits, rollback behavior, and source
+marketplace notes.
+
+## Shared Config
+
+Create `.nemo-relay/config.toml` for project defaults or
+`~/.config/nemo-relay/config.toml` for user defaults:
+
+```toml
+[upstream]
+openai_base_url = "https://api.openai.com/v1"
+
+[agents.codex]
+command = "codex"
+```
+
+Then configure observability with `nemo-relay plugins edit --project` or
+`.nemo-relay/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-relay/atif"
+```
+
+Run `nemo-relay run --agent codex` to use the configured command and plugin
+config. User config takes priority over project and system config.
+
+## Standalone Gateway
+
+Use the long-running gateway only when you want Codex running outside the
+wrapper:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040
+```
+
+Then edit `~/.codex/config.toml` and configure local Codex to use a gateway
+provider alias instead of overriding the reserved built-in `openai` provider:
+
+```toml
+model_provider = "nemo-relay-openai"
+
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay OpenAI"
+base_url = "http://127.0.0.1:4040"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+```
+
+After saving the file, restart the Codex GUI or app so it reloads the provider
+configuration. For CLI usage, start a new `codex` process.
+
+<Warning>
+Some Codex GUI or app versions appear to scope visible conversation history by
+the active provider configuration. If existing conversations disappear after
+switching `model_provider` to `nemo-relay-openai`, the history has not been
+removed if it returns after restoring the previous provider configuration. Use
+this standalone provider alias only while capturing gateway telemetry, or prefer
+the transparent wrapper for CLI sessions. See the upstream Codex
+[history visibility discussion](https://github.com/openai/codex/issues/15494#issuecomment-4164170537)
+for context.
+</Warning>
+
+Local Codex GUI or app sessions have the same support level only when they read
+the same local hook/plugin config and provider routing. Cloud tasks may still
+emit some lifecycle hooks, but complete LLM lifecycle capture requires model
+traffic to pass through the gateway.
+
+## Captured Events
+
+Generated Codex hooks include `SessionStart`, `SessionEnd`, `SubagentStart`,
+`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
+`Notification`, and `PreCompact` for scope, tool, and mark events.
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
+retained as private LLM correlation hints and are not emitted as standalone
+NeMo Relay events.
+
+The transparent wrapper passes hook entries as Codex CLI config overrides and
+sets `features.hooks=true` for that launched process. Persistent install writes
+`.codex/config.toml` with `features.hooks = true` and merges generated hook
+entries into `.codex/hooks.json`.
+
+## Smoke Test
+
+Run a small Codex prompt that starts a session and uses one simple tool. Then
+check hook forwarding directly:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+printf '{"session_id":"smoke-codex","hook_event_name":"sessionStart"}' \
+  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward codex --fail-closed
+```
+
+The response should match Codex hook semantics. For most lifecycle events it is
+an empty JSON object.
+
+## Verify Export
+
+End the Codex session and confirm Agent Trajectory Interchange Format (ATIF)
+exists:
+
+```bash
+ls .nemo-relay/atif
+```
+
+The gateway writes `<session-id>.atif.json` after every conversation turn for
+Codex sessions (Codex's hook surface has no `SessionEnd`-equivalent event, so
+the gateway uses each per-turn `Stop` hook to snapshot the trajectory; the file
+grows cumulatively across turns and the final write reflects the full session).
+For agents that do emit a session-end hook, the same file is written once on
+session close. If the file is missing, confirm `features.hooks = true`, hook
+config loading, and that `plugins.toml` enables the ATIF exporter with a
+writable `output_directory`.
+
+## Troubleshoot LLM Lifecycle
+
+If agent/tool events exist but LLM spans are missing, the active Codex provider
+is not pointing at the gateway for the active Codex process. If only GUI
+sessions are missing spans, confirm the GUI is using local provider
+configuration rather than a remote execution path.
+
+If LLM spans exist but attach to the session instead of a subagent, pass
+`x-nemo-relay-subagent-id` on gateway requests or include shared
+`conversation_id`, `generation_id`, or `request_id` values in both hook payloads
+and provider requests.

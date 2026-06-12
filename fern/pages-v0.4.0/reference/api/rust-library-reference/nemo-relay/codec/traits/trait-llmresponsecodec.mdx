@@ -1,0 +1,54 @@
+---
+title: "Trait LlmResponse Codec"
+sidebar-title: "LlmResponseCodec"
+description: "Decode-only codec for LLM API responses."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmResponseCodec: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required method\n    fn decode_response(&amp;self, response: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;;\n&#125;"}} /></pre>
+
+Decode-only codec for LLM API responses.
+
+Unlike [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec) (which is bidirectional for requests), response codecs are introspection-only: they parse a raw response into structured form but never need to encode back. This matches the pipeline design where responses are observed, not modified.
+
+## Design
+
+- **Synchronous**: `decode_response` is a pure data transform (JSON parsing), not an I/O operation.
+- **`Send + Sync`**: Required for storage in `Arc` behind `RwLock`.
+- **Trait object**: Codecs are registered at runtime, stored as `Arc<dyn LlmResponseCodec>`.
+- **Fallible**: Returns `Result`; managed call sites may omit annotations on decode failure, while manual lifecycle bindings may surface the error.
+
+## Two-Phase Decode
+
+Implementations should use a two-phase decode pattern:
+
+1. Deserialize raw JSON into API-specific intermediate structs
+2. Map intermediate structs into the normalized `AnnotatedLlmResponse`
+
+## Required Methods
+
+#### `decode_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode_response(&amp;self, response: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;"}} /></pre>
+
+Parse a raw JSON response into normalized structured form.
+
+Implementations should return `Err` only for genuinely unparseable input.
+
+## Implementors
+
+### `impl LlmResponseCodec for AnthropicMessagesCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../anthropic/struct-anthropicmessagescodec\">AnthropicMessagesCodec</a>"}} /></pre>
+
+### `impl LlmResponseCodec for OpenAIChatCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../openai_chat/struct-openaichatcodec\">OpenAIChatCodec</a>"}} /></pre>
+
+### `impl LlmResponseCodec for OpenAIResponsesCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmresponsecodec\">LlmResponseCodec</a> for <a href=\"../openai_responses/struct-openairesponsescodec\">OpenAIResponsesCodec</a>"}} /></pre>

@@ -1,0 +1,109 @@
+---
+title: "nemo_relay.pii_redaction"
+sidebar-title: "pii_redaction"
+description: "PII redaction plugin configuration helpers."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/pii_redaction.pyi`.
+
+Module `nemo_relay.pii_redaction`.
+
+PII redaction plugin configuration helpers.
+
+## Classes
+
+### `ConfigDiagnostic(TypedDict)`
+
+One PII redaction validation diagnostic.
+
+### `ConfigReport(TypedDict)`
+
+Validation report for PII redaction configuration.
+
+### `ConfigPolicy`
+
+Policy for unsupported PII redaction configuration.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this policy to the canonical JSON object shape.
+
+### `BuiltinConfig`
+
+Deterministic built-in redaction backend settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this built-in backend config to the canonical JSON object shape.
+
+### `LocalModelConfig`
+
+Future local-model backend seam settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this local-model config to the canonical JSON object shape.
+
+### `PiiRedactionConfig`
+
+Canonical config document for the top-level PII redaction component.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this PII redaction config to the canonical JSON object shape.
+
+### `ComponentSpec`
+
+Top-level PII redaction component wrapper.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this component to the canonical plugin shape.
+
+## Functions
+
+### `validate_config`
+
+```python
+def validate_config(config: PiiRedactionConfig | JsonObject) -> ConfigReport
+```
+
+Validate a PII redaction config document without activating it.
+
+## Type Aliases And Constants
+
+- `PII_REDACTION_PLUGIN_KIND`
+

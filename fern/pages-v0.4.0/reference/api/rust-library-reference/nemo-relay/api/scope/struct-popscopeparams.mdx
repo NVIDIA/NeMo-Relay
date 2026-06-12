@@ -1,0 +1,44 @@
+---
+title: "Struct PopScope Params"
+sidebar-title: "PopScopeParams"
+description: "Builder parameters for `pop_scope`."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PopScopeParams&lt;'a&gt; &#123;\n    pub handle_uuid: &amp;'a <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    pub output: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>
+
+Builder parameters for [`pop_scope`](/reference/api/rust-library-reference/nemo-relay/api/scope/fn-pop-scope).
+
+## Fields
+
+### `handle_uuid: &'a Uuid`
+
+UUID of the scope that should be popped.
+
+### `output: Option<Json>`
+
+Optional JSON payload exported as the semantic scope output.
+
+### `metadata: Option<Json>`
+
+Optional JSON payload metadata to be appended to the metadata set when the scope was created.
+
+### `timestamp: Option<DateTime<Utc>>`
+
+Optional timestamp recorded on the emitted end event. When omitted, the runtime records the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Implementations
+
+### `impl<'a> PopScopeParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-popscopeparams\">PopScopeParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `builder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; PopScopeParamsBuilder&lt;'a, (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+
+Create a builder for building `PopScopeParams`. On the builder, call `.handle_uuid(...)`, `.output(...)`(optional), `.metadata(...)`(optional), `.timestamp(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `PopScopeParams`.

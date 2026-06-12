@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+- folder: ../pages-v0.4.0/about-nemo-relay
+  title: About NVIDIA NeMo Relay
+  slug: about-nemo-relay
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/getting-started
+  title: Getting Started
+  slug: getting-started
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/nemo-relay-cli
+  title: NVIDIA NeMo Relay CLI
+  slug: nemo-relay-cli
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/supported-integrations
+  title: Supported Integrations
+  slug: supported-integrations
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/instrument-applications
+  title: Instrument Applications
+  slug: instrument-applications
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/observability-plugin
+  title: Observability Plugin
+  slug: observability-plugin
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/adaptive-plugin
+  title: Adaptive Plugin
+  slug: adaptive-plugin
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/nemo-guardrails-plugin
+  title: NeMo Guardrails Plugin
+  slug: nemo-guardrails-plugin
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/pii-redaction-plugin
+  title: PII Redaction Plugin
+  slug: pii-redaction-plugin
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/integrate-into-frameworks
+  title: Integrate into Frameworks
+  slug: integrate-into-frameworks
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/build-plugins
+  title: Build Plugins
+  slug: build-plugins
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/contribute
+  title: Contribute
+  slug: contribute
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/reference
+  title: Reference
+  slug: reference
+  title-source: frontmatter
+- folder: ../pages-v0.4.0/resources
+  title: Resources
+  slug: resources
+  title-source: frontmatter

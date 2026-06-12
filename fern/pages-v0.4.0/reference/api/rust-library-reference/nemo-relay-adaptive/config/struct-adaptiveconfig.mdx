@@ -1,0 +1,102 @@
+---
+title: "Struct Adaptive Config"
+sidebar-title: "AdaptiveConfig"
+description: "Canonical config document for the adaptive plugin component."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AdaptiveConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub agent_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub state: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-stateconfig\">StateConfig</a>&gt;,\n    pub telemetry: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-telemetrycomponentconfig\">TelemetryComponentConfig</a>&gt;,\n    pub adaptive_hints: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-adaptivehintscomponentconfig\">AdaptiveHintsComponentConfig</a>&gt;,\n    pub tool_parallelism: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-toolparallelismcomponentconfig\">ToolParallelismComponentConfig</a>&gt;,\n    pub acg: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-acgcomponentconfig\">AcgComponentConfig</a>&gt;,\n    pub policy: <a href=\"../../nemo-relay/plugin/struct-configpolicy\">ConfigPolicy</a>,\n&#125;"}} /></pre>
+
+Canonical config document for the adaptive plugin component.
+
+## Fields
+
+### `version: u32`
+
+Adaptive config schema version.
+
+### `agent_id: Option<String>`
+
+Fallback agent identifier used when no Agent scope is active. Scoped runtime calls use the active Agent scope name instead.
+
+### `state: Option<StateConfig>`
+
+Shared state backend configuration.
+
+### `telemetry: Option<TelemetryComponentConfig>`
+
+Built-in adaptive telemetry settings.
+
+### `adaptive_hints: Option<AdaptiveHintsComponentConfig>`
+
+Built-in LLM hint injection settings.
+
+### `tool_parallelism: Option<ToolParallelismComponentConfig>`
+
+Built-in tool scheduling settings.
+
+### `acg: Option<AcgComponentConfig>`
+
+Adaptive Cache Governor settings.
+
+### `policy: ConfigPolicy`
+
+Adaptive-local unsupported-config policy.
+
+## Trait Implementations
+
+### `impl Clone for AdaptiveConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for AdaptiveConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for AdaptiveConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for AdaptiveConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl EditorConfig for AdaptiveConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `editor_schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+### `impl Serialize for AdaptiveConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-adaptiveconfig\">AdaptiveConfig</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

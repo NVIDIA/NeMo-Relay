@@ -1,0 +1,46 @@
+---
+title: "Trait Streaming Codec"
+sidebar-title: "StreamingCodec"
+description: "Per-provider streaming codec used with `crate::api::llm::llm_stream_call_execute`."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait StreamingCodec: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required methods\n    fn collector(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>;\n    fn finalizer(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>;\n&#125;"}} /></pre>
+
+Per-provider streaming codec used with [`crate::api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute).
+
+`collector()` and `finalizer()` produce owned closures that share the codec's internal accumulation state. Implementations typically wrap that state in `Arc<Mutex<...>>` so each `&self`-produced closure captures a clone of the handle.
+
+[`LlmFinalizerFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmfinalizerfn) is `FnOnce`, so a [`StreamingCodec`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec) instance is single-use: callers construct a fresh instance per managed-lifecycle call and discard it after the stream completes.
+
+## Required Methods
+
+#### `collector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn collector(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmcollectorfn\">LlmCollectorFn</a>"}} /></pre>
+
+Returns a closure that consumes one decoded provider event per call.
+
+#### `finalizer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn finalizer(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-llmfinalizerfn\">LlmFinalizerFn</a>"}} /></pre>
+
+Returns a closure that, when called once at end of stream, produces the assembled response payload in the shape the matching [`crate::codec::traits::LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) can decode.
+
+## Implementors
+
+### `impl StreamingCodec for AnthropicMessagesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../anthropic/struct-anthropicmessagesstreamingcodec\">AnthropicMessagesStreamingCodec</a>"}} /></pre>
+
+### `impl StreamingCodec for OpenAIChatStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../openai_chat/struct-openaichatstreamingcodec\">OpenAIChatStreamingCodec</a>"}} /></pre>
+
+### `impl StreamingCodec for OpenAIResponsesStreamingCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-streamingcodec\">StreamingCodec</a> for <a href=\"../openai_responses/struct-openairesponsesstreamingcodec\">OpenAIResponsesStreamingCodec</a>"}} /></pre>

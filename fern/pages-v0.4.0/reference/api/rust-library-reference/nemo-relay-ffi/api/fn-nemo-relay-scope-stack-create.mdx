@@ -1,0 +1,29 @@
+---
+title: "Function nemo_relay_scope_stack_create"
+sidebar-title: "nemo_relay_scope_stack_create"
+description: "Create a new isolated scope stack with its own root scope."
+position: 111
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_scope_stack_create(\n    out: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffiscopestack\">FfiScopeStack</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Create a new isolated scope stack with its own root scope.
+
+Each scope stack is independent: scopes pushed on one do not appear on another. Use `nemo_relay_scope_stack_set_thread` to bind a stack to the current thread before making other NeMo Relay API calls.
+
+## Parameters
+
+- `out`: On success, receives a heap-allocated `FfiScopeStack` that must be freed with `nemo_relay_scope_stack_free`.
+
+## Returns
+
+- Returns [`NemoRelayStatus::Ok`](/reference/api/rust-library-reference/nemo-relay-ffi/error/enum-nemorelaystatus) on success and writes the new scope stack to `out`.
+- Returns [`NemoRelayStatus::NullPointer`](/reference/api/rust-library-reference/nemo-relay-ffi/error/enum-nemorelaystatus) when `out` is null.
+
+## Safety
+
+`out` must be a valid, non-null pointer.

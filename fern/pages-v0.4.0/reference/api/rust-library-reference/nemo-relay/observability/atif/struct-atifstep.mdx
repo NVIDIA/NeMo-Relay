@@ -1,0 +1,106 @@
+---
+title: "Struct Atif Step"
+sidebar-title: "AtifStep"
+description: "A single step in an ATIF trajectory."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtifStep &#123;Show 13 fields\n    pub step_id: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n    pub source: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub message: <a href=\"../../json/type-json\">Json</a>,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub model_name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub reasoning_effort: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub reasoning_content: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub tool_calls: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-atiftoolcall\">AtifToolCall</a>&gt;&gt;,\n    pub observation: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atifobservation\">AtifObservation</a>&gt;,\n    pub metrics: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atifmetrics\">AtifMetrics</a>&gt;,\n    pub llm_call_count: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n    pub is_copied_context: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;,\n    pub extra: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n&#125;"}} /></pre>
+
+A single step in an ATIF trajectory.
+
+## Fields
+
+### `step_id: usize`
+
+1-based ordinal step ID.
+
+### `source: String`
+
+Source of the step: `"system"`, `"user"`, or `"agent"`.
+
+### `message: Json`
+
+The message content (string or array of content parts).
+
+### `timestamp: Option<String>`
+
+ISO 8601 timestamp.
+
+### `model_name: Option<String>`
+
+LLM model name, if applicable.
+
+### `reasoning_effort: Option<Json>`
+
+Qualitative or quantitative measure of reasoning effort.
+
+### `reasoning_content: Option<String>`
+
+The agent's explicit internal reasoning.
+
+### `tool_calls: Option<Vec<AtifToolCall>>`
+
+Tool calls made by the agent in this step.
+
+### `observation: Option<AtifObservation>`
+
+Observation (tool results) for this step.
+
+### `metrics: Option<AtifMetrics>`
+
+Token usage and cost metrics.
+
+### `llm_call_count: Option<u64>`
+
+Number of LLM calls represented by this step.
+
+### `is_copied_context: Option<bool>`
+
+Whether this step was copied from a previous trajectory for context.
+
+### `extra: Option<Json>`
+
+Extra metadata.
+
+## Trait Implementations
+
+### `impl Clone for AtifStep`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-atifstep\">AtifStep</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-atifstep\">AtifStep</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for AtifStep`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-atifstep\">AtifStep</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for AtifStep`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-atifstep\">AtifStep</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl Serialize for AtifStep`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-atifstep\">AtifStep</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

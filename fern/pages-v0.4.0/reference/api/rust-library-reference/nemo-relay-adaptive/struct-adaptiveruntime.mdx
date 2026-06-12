@@ -1,0 +1,164 @@
+---
+title: "Struct Adaptive Runtime"
+sidebar-title: "AdaptiveRuntime"
+description: "Hosted adaptive runtime that registers NeMo Relay plugin components."
+position: 40
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct AdaptiveRuntime { /* private fields */ }
+```
+
+Hosted adaptive runtime that registers NeMo Relay plugin components.
+
+This type validates configuration, builds the configured storage backend, registers intercepts and subscribers, and maintains the hot cache used by adaptive features on the request path.
+
+## Implementations
+
+### `impl AdaptiveRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-adaptiveruntime\">AdaptiveRuntime</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn new(config: <a href=\"config/struct-adaptiveconfig\">AdaptiveConfig</a>) -&gt; <a href=\"error/type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Create a new adaptive runtime from configuration.
+
+##### Parameters
+
+- `config`: Adaptive runtime configuration to validate and apply.
+
+##### Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/type-result) containing a new [`AdaptiveRuntime`](/reference/api/rust-library-reference/nemo-relay-adaptive/struct-adaptiveruntime).
+
+##### Errors
+
+Returns [`AdaptiveError::InvalidConfig`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/enum-adaptiveerror) when validation reports errors, or any backend-construction error produced while building the configured state backend.
+
+#### `validate_config`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate_config(config: &amp;<a href=\"config/struct-adaptiveconfig\">AdaptiveConfig</a>) -&gt; <a href=\"../nemo-relay/plugin/struct-configreport\">ConfigReport</a>"}} /></pre>
+
+Validate an adaptive runtime configuration without constructing a runtime.
+
+##### Parameters
+
+- `config`: Configuration to validate.
+
+##### Returns
+
+A [`ConfigReport`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport) containing validation diagnostics.
+
+#### `report`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn report(&amp;self) -&gt; &amp;<a href=\"../nemo-relay/plugin/struct-configreport\">ConfigReport</a>"}} /></pre>
+
+Return the configuration report captured during construction.
+
+##### Returns
+
+The [`ConfigReport`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport) associated with this runtime.
+
+#### `wait_for_idle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn wait_for_idle(&amp;self)"}} /></pre>
+
+Block until the telemetry drain has processed all pending events.
+
+##### Notes
+
+This method performs a simple polling wait and is intended for tests, shutdown paths, or other coordination points.
+
+#### `build_cache_request_facts`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_cache_request_facts(\n    &amp;self,\n    agent_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    provider: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    annotated_request: &amp;<a href=\"../nemo-relay/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"acg/telemetry/struct-cacherequestfacts\">CacheRequestFacts</a>&gt;"}} /></pre>
+
+Build cache-diagnostics facts for an annotated request.
+
+##### Parameters
+
+- `agent_id`: Agent identifier associated with the request.
+- `provider`: Logical provider name associated with the request.
+- `annotated_request`: Annotated request to analyze.
+
+##### Returns
+
+`Some(CacheRequestFacts)` when enough hot-cache state is available to derive them and `None` otherwise.
+
+#### `bind_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn bind_scope(&amp;mut self, scope_uuid: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>) -&gt; <a href=\"error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Bind the runtime's ACG request rewrite to an active scope.
+
+External framework integrations can bind the runtime to a session scope and then invoke `nemo_relay.llm.request_intercepts(...)` explicitly at the provider boundary. Once any scope is bound, this runtime's hosted ACG execution intercept becomes pass-through so external frameworks do not double-translate requests.
+
+##### Errors
+
+Returns an error when the runtime is not yet registered, when ACG is not configured for this runtime, or when the scope-local request intercept cannot be constructed or registered.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn register(&amp;mut self) -&gt; <a href=\"error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register all configured adaptive features with the shared runtime.
+
+##### Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/type-result) that is `Ok(())` when registration succeeds.
+
+##### Errors
+
+Returns any error raised while seeding state or registering features.
+
+#### `deregister`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;mut self) -&gt; <a href=\"error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Deregister all previously registered adaptive features.
+
+##### Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/type-result) that is `Ok(())` after registrations have been rolled back.
+
+##### Errors
+
+Returns any rollback error surfaced by the hosted plugin system.
+
+#### `shutdown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn shutdown(self) -&gt; <a href=\"error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Deregister the runtime and consume it.
+
+##### Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay-adaptive/error/type-result) that is `Ok(())` when shutdown completes.
+
+##### Errors
+
+Propagates any error returned by [`Self::deregister`](/reference/api/rust-library-reference/nemo-relay-adaptive/struct-adaptiveruntime).
+
+## Trait Implementations
+
+### `impl Debug for AdaptiveRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-adaptiveruntime\">AdaptiveRuntime</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Drop for AdaptiveRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-adaptiveruntime\">AdaptiveRuntime</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

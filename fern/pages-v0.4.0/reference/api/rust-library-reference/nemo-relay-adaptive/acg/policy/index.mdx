@@ -1,0 +1,26 @@
+---
+title: "Module policy"
+sidebar-title: "policy"
+description: "Policy types for the Adaptive Cache Governor (ACG) system."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Policy types for the Adaptive Cache Governor (ACG) system.
+
+## Structs
+
+- [ArchetypeRoutingOverride](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-archetyperoutingoverride): Routing override for one observed session archetype.
+- [CachePolicy](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-cachepolicy): Policy controlling when ACG outputs can be cached and reused.
+- [PolicyEnvelope](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-policyenvelope): Versioned wrapper for an ACG policy document.
+- [RetentionPolicy](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-retentionpolicy): Policy controlling how long learned artifacts should be retained.
+- [RewritePolicy](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-rewritepolicy): Policy controlling what prompt rewrites the runtime can apply automatically.
+- [RoutingPolicy](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-routingpolicy): Policy controlling model-class routing decisions.
+- [ScopeRetentionOverride](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/struct-scoperetentionoverride): Retention-tier override for one sharing scope.
+
+## Enums
+
+- [TransformationClass](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/policy/enum-transformationclass): Rewrite category that an ACG policy can allow or deny.

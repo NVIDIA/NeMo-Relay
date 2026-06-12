@@ -1,0 +1,167 @@
+---
+title: "nemo_relay.codecs"
+sidebar-title: "codecs"
+description: "Protocol definitions for request and response codecs used by `nemo_relay.llm`."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/codecs.pyi`.
+
+Module `nemo_relay.codecs`.
+
+Protocol definitions for request and response codecs used by `nemo_relay.llm`.
+
+## Classes
+
+### `LlmCodec(Protocol)`
+
+Protocol for request codecs used by annotated LLM intercepts.
+
+#### Methods
+
+##### `decode`
+
+```python
+def decode(request: LLMRequest) -> AnnotatedLLMRequest
+```
+
+Decode a raw provider request into `AnnotatedLLMRequest`.
+
+##### `encode`
+
+```python
+def encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest
+```
+
+Merge annotated edits back into the original raw request.
+
+### `LlmResponseCodec(Protocol)`
+
+Protocol for codecs that normalize raw LLM responses.
+
+#### Methods
+
+##### `decode_response`
+
+```python
+def decode_response(response: Json) -> AnnotatedLLMResponse
+```
+
+Decode a raw provider response into `AnnotatedLLMResponse`.
+
+### `OpenAIChatCodec`
+
+Built-in codec for OpenAI Chat Completions requests and responses.
+
+#### Methods
+
+##### `OpenAIChatCodec`
+
+```python
+def OpenAIChatCodec() -> None
+```
+
+Create an instance.
+
+##### `decode`
+
+```python
+def decode(request: LLMRequest) -> AnnotatedLLMRequest
+```
+
+Decode an OpenAI Chat Completions request.
+
+##### `encode`
+
+```python
+def encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest
+```
+
+Encode a normalized request back into Chat Completions format.
+
+##### `decode_response`
+
+```python
+def decode_response(response: Json) -> AnnotatedLLMResponse
+```
+
+Decode an OpenAI Chat Completions response.
+
+### `OpenAIResponsesCodec`
+
+Built-in codec for OpenAI Responses requests and responses.
+
+#### Methods
+
+##### `OpenAIResponsesCodec`
+
+```python
+def OpenAIResponsesCodec() -> None
+```
+
+Create an instance.
+
+##### `decode`
+
+```python
+def decode(request: LLMRequest) -> AnnotatedLLMRequest
+```
+
+Decode an OpenAI Responses request.
+
+##### `encode`
+
+```python
+def encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest
+```
+
+Encode a normalized request back into Responses format.
+
+##### `decode_response`
+
+```python
+def decode_response(response: Json) -> AnnotatedLLMResponse
+```
+
+Decode an OpenAI Responses response.
+
+### `AnthropicMessagesCodec`
+
+Built-in codec for Anthropic Messages requests and responses.
+
+#### Methods
+
+##### `AnthropicMessagesCodec`
+
+```python
+def AnthropicMessagesCodec() -> None
+```
+
+Create an instance.
+
+##### `decode`
+
+```python
+def decode(request: LLMRequest) -> AnnotatedLLMRequest
+```
+
+Decode an Anthropic Messages request.
+
+##### `encode`
+
+```python
+def encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest
+```
+
+Encode a normalized request back into Messages format.
+
+##### `decode_response`
+
+```python
+def decode_response(response: Json) -> AnnotatedLLMResponse
+```
+
+Decode an Anthropic Messages response.
+

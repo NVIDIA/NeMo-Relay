@@ -1,0 +1,57 @@
+---
+title: "nemo_relay.scope"
+sidebar-title: "scope"
+description: "Scope stack operations."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/scope.py`.
+
+Module `nemo_relay.scope`.
+
+Scope stack operations.
+
+## Functions
+
+### `get_handle`
+
+```python
+def get_handle() -> ScopeHandle
+```
+
+Return the current top-of-stack `ScopeHandle`.
+
+### `push`
+
+```python
+def push(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, timestamp: datetime | None = None) -> ScopeHandle
+```
+
+Push a new child scope and return its handle.
+
+### `pop`
+
+```python
+def pop(handle: ScopeHandle, *, output: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
+```
+
+Pop a scope previously returned by `push()` or `scope()`.
+
+### `event`
+
+```python
+def event(name: str, *, handle: ScopeHandle | None = None, data: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
+```
+
+Emit a `Mark` event under the current or provided scope.
+
+### `scope`
+
+```python
+def scope(name: str, scope_type: ScopeType, *, handle: ScopeHandle | None = None, attributes: ScopeAttributes | None = None, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, timestamp: datetime | None = None, end_timestamp: datetime | None = None) -> Iterator[ScopeHandle]
+```
+
+Create a scope for the duration of a `with` block.
+

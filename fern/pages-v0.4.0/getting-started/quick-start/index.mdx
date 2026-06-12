@@ -1,0 +1,67 @@
+---
+title: "Quick Start"
+description: ""
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Choose the Quick Start path for the boundary you want Relay to observe or
+control.
+
+## Local Coding-Agent Runs
+
+Use the NVIDIA NeMo Relay CLI when you want to observe a local Codex, Claude
+Code, Cursor, or Hermes Agent session without changing application code.
+
+<CardGroup cols={1}>
+<Card
+  title="CLI Basic Usage"
+  icon="terminal"
+  iconPosition="left"
+  href="/nemo-relay-cli/basic-usage"
+>
+
+Run a coding-agent CLI through Relay, forward hooks, route model traffic through
+the local gateway, and export traces or trajectories.
+</Card>
+
+</CardGroup>
+
+## Application-Owned Code
+
+Use a binding Quick Start when your application owns the LLM or tool call and
+you want to instrument that boundary directly.
+
+<CardGroup cols={3}>
+<Card
+  title="Python Quick Start"
+  icon="brands python"
+  iconPosition="left"
+  href="/getting-started/quick-start/python"
+>
+
+Smallest Python workflow that emits scope, tool, and LLM events.
+</Card>
+
+<Card
+  title="Node.js Quick Start"
+  icon="brands node-js"
+  iconPosition="left"
+  href="/getting-started/quick-start/nodejs"
+>
+
+Smallest Node.js workflow that emits scope, tool, and LLM events.
+</Card>
+
+<Card
+  title="Rust Quick Start"
+  icon="brands rust"
+  iconPosition="left"
+  href="/getting-started/quick-start/rust"
+>
+
+Smallest Rust workflow that emits scope, tool, and LLM events.
+</Card>
+
+</CardGroup>

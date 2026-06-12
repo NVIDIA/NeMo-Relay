@@ -1,0 +1,45 @@
+---
+title: "Function llm_stream_call_execute"
+sidebar-title: "llm_stream_call_execute"
+description: "Execute a streaming LLM call through the managed middleware pipeline."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn llm_stream_call_execute(\n    params: <a href=\"struct-llmstreamcallexecuteparams\">LlmStreamCallExecuteParams</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../runtime/callbacks/type-llmjsonstream\">LlmJsonStream</a>&gt;"}} /></pre>
+
+Execute a streaming LLM call through the managed middleware pipeline.
+
+This runs the same pre-execution middleware as [`llm_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-execute), emits the LLM-start event, and then wraps the provider stream so chunk callbacks and finalization can emit a single LLM-end event when streaming completes.
+
+## Parameters
+
+- `name`: Logical provider or model family name recorded on emitted events.
+- `request`: Raw [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) passed into the managed pipeline.
+- `func`: Streaming provider callback or execution continuation.
+- `collector`: Per-chunk collector callback used to accumulate stream state.
+- `finalizer`: Finalizer callback used to construct the completed response.
+- `parent`: Optional explicit parent scope for the emitted LLM span.
+- `attributes`: LLM attribute bitflags applied to the managed span.
+- `data`: Optional application payload stored on the managed LLM handle. It may be used on failure end events that have no output payload.
+- `metadata`: Optional JSON metadata recorded on emitted events.
+- `model_name`: Optional normalized model name for observability output.
+- `codec`: Optional request codec used to produce annotated request data for intercepts and events.
+- `response_codec`: Optional response codec used to attach annotated response data to the end event.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing a boxed stream of JSON chunks.
+
+## Errors
+
+Returns [`FlowError::GuardrailRejected`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when conditional-execution guardrails block the call, or any error raised by request intercepts, execution intercepts, stream callbacks, codecs, or the provider callback.
+
+## Notes
+
+The LLM-start event is emitted before stream execution intercepts run.
+
+The returned stream emits chunk-level results while the runtime defers the LLM-end event until the collector and finalizer complete.

@@ -1,0 +1,27 @@
+---
+title: "Module openai_responses"
+sidebar-title: "openai_responses"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/openai_responses"
+description: "Built-in codec for the OpenAI Responses API."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+Built-in codec for the OpenAI Responses API.
+
+Implements [`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec) (request decode/encode) and [`LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) (response decode) for the OpenAI Responses API format.
+
+The Responses API differs significantly from Chat Completions:
+
+- **Response**: Heterogeneous `output` array (message, function_call, reasoning) instead of `choices[0].message`.
+- **Finish reason**: Derived from `status` + `incomplete_details.reason` instead of `finish_reason` field.
+- **Request**: Uses `input` (string or array) instead of `messages`, and `instructions` (top-level) instead of system message.
+- **Max tokens**: `max_output_tokens` instead of `max_tokens`.
+
+## Structs
+
+- [OpenAIResponsesCodec](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses/struct-openairesponsescodec): Built-in codec for the OpenAI Responses API.
+- [OpenAIResponsesStreamingCodec](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses/struct-openairesponsesstreamingcodec): Streaming counterpart to [`OpenAIResponsesCodec`](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses/struct-openairesponsescodec).

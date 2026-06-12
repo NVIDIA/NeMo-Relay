@@ -1,0 +1,36 @@
+---
+title: "Function nemo_relay_push_scope"
+sidebar-title: "nemo_relay_push_scope"
+description: "Push a new scope onto the scope stack."
+position: 71
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_push_scope(\n    name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    scope_type: <a href=\"../types/enum-nemorelayscopetype\">NemoRelayScopeType</a>,\n    parent: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n    attributes: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    input_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i64.html\">i64</a>,\n    out: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffiscopehandle\">FfiScopeHandle</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Push a new scope onto the scope stack.
+
+This creates a scope handle, emits a scope Start event, and makes the new scope the current top of the active stack.
+
+## Parameters
+
+- `name`: Null-terminated scope name.
+- `scope_type`: The type of scope to create.
+- `parent`: Optional parent scope handle, or null to use the current top of stack.
+- `attributes`: Bitfield of scope attributes.
+- `data_json`: Optional null-terminated JSON string stored on the scope handle, or null.
+- `metadata_json`: Optional null-terminated JSON metadata string recorded on the start event, or null.
+- `input_json`: Optional null-terminated JSON string exported as the semantic scope input on the start event, or null.
+- `timestamp_unix_micros`: Optional Unix microseconds timestamp for the handle start time and start event, or null to use the current UTC time.
+- `out`: On success, receives a heap-allocated `FfiScopeHandle` that must be freed with `nemo_relay_scope_handle_free`.
+
+## Errors
+
+Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when `timestamp_unix_micros` is outside the supported timestamp range.
+
+## Safety
+
+`name` must be a valid C string. `out` must be non-null. `parent`, `data_json`, `metadata_json`, `input_json`, and `timestamp_unix_micros` may be null; when non-null, optional pointers must be valid for reads for the duration of the call.

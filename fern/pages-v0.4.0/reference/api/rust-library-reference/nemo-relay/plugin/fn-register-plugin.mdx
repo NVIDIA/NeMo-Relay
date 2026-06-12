@@ -1,0 +1,34 @@
+---
+title: "Function register_plugin"
+sidebar-title: "register_plugin"
+description: "Registers a plugin by kind."
+position: 19
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_plugin(plugin: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"trait-plugin\">Plugin</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers a plugin by kind.
+
+Registering the same kind twice returns [`PluginError::RegistrationFailed`](/reference/api/rust-library-reference/nemo-relay/plugin/enum-pluginerror). Register a plugin kind with the global plugin registry.
+
+Registered plugins can then participate in validation and initialization of [`PluginConfig`](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginconfig) documents.
+
+## Parameters
+
+- `plugin`: Plugin implementation to register.
+
+## Returns
+
+A plugin [`Result`](/reference/api/rust-library-reference/nemo-relay/plugin/type-result) that is `Ok(())` when the plugin kind was added to the registry.
+
+## Errors
+
+Returns an error when a plugin with the same kind is already registered or when the registry lock is poisoned.
+
+## Notes
+
+Registration affects future validation and initialization only.

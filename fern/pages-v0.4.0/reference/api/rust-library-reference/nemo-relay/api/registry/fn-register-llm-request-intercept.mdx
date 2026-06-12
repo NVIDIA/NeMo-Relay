@@ -1,0 +1,29 @@
+---
+title: "Function register_llm_request_intercept"
+sidebar-title: "register_llm_request_intercept"
+description: "Register a global LLM request intercept. Request intercepts can rewrite or annotate the outgoing LLM request."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    callable: <a href=\"../runtime/callbacks/type-llmrequestinterceptfn\">LlmRequestInterceptFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register a global LLM request intercept. Request intercepts can rewrite or annotate the outgoing LLM request.
+
+## Parameters
+
+- `name`: Unique middleware name in the global registry.
+- `priority`: Lower values run earlier in the chain.
+- `break_chain`: Whether the intercept should stop later request intercepts after it returns.
+- `callable`: Intercept callback stored under `name`.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the intercept was registered.
+
+## Errors
+
+Returns [`FlowError::AlreadyExists`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the name is already in use or an internal error if the runtime state cannot be updated.

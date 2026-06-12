@@ -1,0 +1,80 @@
+---
+title: "Struct Open Inference Subscriber"
+sidebar-title: "OpenInferenceSubscriber"
+description: "OpenInference-backed NeMo Relay subscriber."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct OpenInferenceSubscriber { /* private fields */ }
+```
+
+OpenInference-backed NeMo Relay subscriber.
+
+## Implementations
+
+### `impl OpenInferenceSubscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-openinferencesubscriber\">OpenInferenceSubscriber</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(config: <a href=\"struct-openinferenceconfig\">OpenInferenceConfig</a>) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Builds a subscriber backed by a new OTLP tracer provider.
+
+#### `from_tracer_provider`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Builds a subscriber from an already-configured tracer provider.
+
+#### `subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>
+
+Returns the raw NeMo Relay subscriber callback for custom registration flows.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers this subscriber globally with the NeMo Relay runtime.
+
+#### `deregister`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregisters a previously-registered global subscriber by name.
+
+#### `force_flush`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn force_flush(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Flushes finished spans through the underlying tracer provider.
+
+#### `shutdown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Shuts down the underlying tracer provider.
+
+Call `deregister(...)` first if the subscriber is still registered with NeMo Relay.
+
+## Trait Implementations
+
+### `impl Clone for OpenInferenceSubscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-openinferencesubscriber\">OpenInferenceSubscriber</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-openinferencesubscriber\">OpenInferenceSubscriber</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

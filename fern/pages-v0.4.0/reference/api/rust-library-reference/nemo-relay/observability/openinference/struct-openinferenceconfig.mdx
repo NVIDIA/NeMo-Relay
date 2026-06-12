@@ -1,0 +1,112 @@
+---
+title: "Struct Open Inference Config"
+sidebar-title: "OpenInferenceConfig"
+description: "Configuration for the OpenInference subscriber."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+```rust
+pub struct OpenInferenceConfig { /* private fields */ }
+```
+
+Configuration for the OpenInference subscriber.
+
+## Implementations
+
+### `impl OpenInferenceConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-openinferenceconfig\">OpenInferenceConfig</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a config with sensible defaults.
+
+#### `with_transport`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_transport(self, transport: <a href=\"enum-otlptransport\">OtlpTransport</a>) -&gt; Self"}} /></pre>
+
+Selects the OTLP transport.
+
+#### `with_service_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_name(self, service_name: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the `service.name` resource attribute.
+
+#### `with_endpoint`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_endpoint(self, endpoint: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
+
+#### `with_header`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_header(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Adds a header/metadata entry for the exporter.
+
+#### `with_resource_attribute`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_resource_attribute(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Adds a resource attribute as a string key/value pair.
+
+#### `with_timeout`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_timeout(self, timeout: <a href=\"https://doc.rust-lang.org/1.93.0/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>
+
+Sets the OTLP request timeout.
+
+#### `with_service_namespace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_namespace(self, namespace: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the service namespace resource attribute.
+
+#### `with_service_version`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_version(self, version: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the service version resource attribute.
+
+#### `with_instrumentation_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_instrumentation_scope(self, scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Sets the instrumentation scope name used for emitted spans.
+
+## Trait Implementations
+
+### `impl Clone for OpenInferenceConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-openinferenceconfig\">OpenInferenceConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-openinferenceconfig\">OpenInferenceConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OpenInferenceConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-openinferenceconfig\">OpenInferenceConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for OpenInferenceConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-openinferenceconfig\">OpenInferenceConfig</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

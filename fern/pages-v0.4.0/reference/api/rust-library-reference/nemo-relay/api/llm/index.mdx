@@ -1,0 +1,33 @@
+---
+title: "Module llm"
+sidebar-title: "llm"
+description: "LLM lifecycle helpers and managed execution entry points."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+LLM lifecycle helpers and managed execution entry points.
+
+## Structs
+
+- [CreateLlmHandleParams](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-createllmhandleparams): Builder parameters for [`NemoRelayContextState::create_llm_handle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+- [EndLlmHandleParams](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-endllmhandleparams): Builder parameters for [`NemoRelayContextState::build_llm_end_event`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+- [LlmAttributes](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
+- [LlmCallEndParams](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmcallendparams): Builder parameters for [`llm_call_end`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-end).
+- [LlmCallExecuteParams](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmcallexecuteparams): Builder parameters for [`llm_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-execute).
+- [LlmCallParams](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmcallparams): Builder parameters for [`llm_call`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call).
+- [LlmHandle](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmhandle): Runtime-owned handle identifying an active or completed LLM call.
+- [LlmRequest](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
+- [LlmStreamCallExecuteParams](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmstreamcallexecuteparams): Builder parameters for [`llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute).
+
+## Functions
+
+- [llm_call](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call): Start a manual LLM lifecycle span.
+- [llm_call_end](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-end): Finish a manual LLM lifecycle span.
+- [llm_call_execute](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call-execute): Execute an LLM call through the managed middleware pipeline.
+- [llm_conditional_execution](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-conditional-execution): Run only the LLM conditional-execution guardrail chain.
+- [llm_request_intercepts](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-request-intercepts): Run only the LLM request-intercept chain.
+- [llm_stream_call_execute](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute): Execute a streaming LLM call through the managed middleware pipeline.

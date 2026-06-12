@@ -1,0 +1,65 @@
+---
+title: "nemo-relay-adaptive"
+sidebar-title: "nemo-relay-adaptive"
+description: "NeMo Relay Adaptive"
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+## NeMo Relay Adaptive
+
+Adaptive config helpers and core-plugin integration for NeMo Relay. Adaptive behavior is enabled through the generic core plugin system.
+
+This crate provides the adaptive runtime, persistence abstractions, learner implementations, and Adaptive Cache Governor (ACG) analysis types used to derive and apply runtime hints from observed NeMo Relay executions.
+
+## Re-exports
+
+- `pub use config::AcgComponentConfig;`
+- `pub use config::AdaptiveConfig;`
+- `pub use config::AdaptiveHintsComponentConfig;`
+- `pub use config::BackendSpec;`
+- `pub use config::StateConfig;`
+- `pub use config::TelemetryComponentConfig;`
+- `pub use config::ToolParallelismComponentConfig;`
+- `pub use context_helpers::LATENCY_SENSITIVITY_POINTER;`
+- `pub use context_helpers::extract_scope_path;`
+- `pub use context_helpers::read_manual_latency_sensitivity;`
+- `pub use context_helpers::resolve_agent_id;`
+- `pub use context_helpers::resolve_shared_parent_scope_identity;`
+- `pub use context_helpers::set_latency_sensitivity;`
+- `pub use error::AdaptiveError;`
+- `pub use error::Result;`
+- `pub use redis::RedisBackend;`
+- `pub use storage::erased::AnyBackend;`
+- `pub use storage::memory::InMemoryBackend;`
+- `pub use storage::traits::StorageBackend;`
+- `pub use storage::traits::StorageBackendDyn;`
+
+## Modules
+
+- [acg](/reference/api/rust-library-reference/nemo-relay-adaptive/acg): Canonical Adaptive Cache Governor (ACG) module surface exposed from the adaptive crate.
+- [acg_component](/reference/api/rust-library-reference/nemo-relay-adaptive/acg_component): Adaptive Cache Governor (ACG) request and execution intercept helpers for the adaptive runtime.
+- [acg_learner](/reference/api/rust-library-reference/nemo-relay-adaptive/acg_learner): Adaptive Cache Governor (ACG) learner for the adaptive telemetry pipeline.
+- [acg_profile](/reference/api/rust-library-reference/nemo-relay-adaptive/acg_profile): Derives stable Adaptive Cache Governor (ACG) profile keys from structured LLM requests.
+- [adaptive_hints_intercept](/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept): AdaptiveHintsIntercept: opt-in LLM request intercept that injects AgentHints from HotCache trie.
+- [cache_diagnostics](/reference/api/rust-library-reference/nemo-relay-adaptive/cache_diagnostics): Runtime-local cache miss request facts and diagnostics tracking.
+- [config](/reference/api/rust-library-reference/nemo-relay-adaptive/config): Canonical adaptive config and diagnostics types.
+- [context_helpers](/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers): Context helpers for reading scope metadata on the intercept hot path.
+- [drain](/reference/api/rust-library-reference/nemo-relay-adaptive/drain): Background drain task for async telemetry processing.
+- [error](/reference/api/rust-library-reference/nemo-relay-adaptive/error): Error types for the nemo-relay-adaptive crate.
+- [intercepts](/reference/api/rust-library-reference/nemo-relay-adaptive/intercepts): Intercept factories for the `nemo-relay-adaptive` crate, including Adaptive Cache Governor (ACG) intercepts.
+- [learner](/reference/api/rust-library-reference/nemo-relay-adaptive/learner): Learning primitives and built-in learner implementations. Adaptive learners that derive runtime hints from observed executions.
+- [plugin_component](/reference/api/rust-library-reference/nemo-relay-adaptive/plugin_component): Core plugin integration for the adaptive runtime.
+- [redis](/reference/api/rust-library-reference/nemo-relay-adaptive/redis): Redis-backed [`StorageBackend`](/reference/api/rust-library-reference/nemo-relay-adaptive/storage/traits/trait-storagebackend) implementation.
+- [storage](/reference/api/rust-library-reference/nemo-relay-adaptive/storage): Storage backends and backend traits for adaptive state persistence. Storage backends for adaptive runtime state and learned artifacts.
+- [subscriber](/reference/api/rust-library-reference/nemo-relay-adaptive/subscriber): Event subscriber factory and event-to-record mapping helpers.
+- [tool_parallelism_learner](/reference/api/rust-library-reference/nemo-relay-adaptive/tool_parallelism_learner): Learner that derives tool fan-out plans from observed runs. Learner that derives tool parallelism plans from observed runs.
+- [trie](/reference/api/rust-library-reference/nemo-relay-adaptive/trie): Prediction trie data structures for the online learning engine.
+- [types](/reference/api/rust-library-reference/nemo-relay-adaptive/types): Serializable adaptive data models shared across runtime components. Serializable adaptive runtime data models.
+
+## Structs
+
+- [AdaptiveRuntime](/reference/api/rust-library-reference/nemo-relay-adaptive/struct-adaptiveruntime): Hosted adaptive runtime that registers NeMo Relay plugin components.

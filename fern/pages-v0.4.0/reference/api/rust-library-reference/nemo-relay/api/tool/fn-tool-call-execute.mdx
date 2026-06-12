@@ -1,0 +1,38 @@
+---
+title: "Function tool_call_execute"
+sidebar-title: "tool_call_execute"
+description: "Execute a tool call through the managed middleware pipeline."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn tool_call_execute(params: <a href=\"struct-toolcallexecuteparams\">ToolCallExecuteParams</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+
+Execute a tool call through the managed middleware pipeline.
+
+This runs conditional-execution guardrails, request intercepts, sanitize-request guardrails, execution intercepts, the tool callback, and sanitize-response guardrails in the runtime-defined order.
+
+## Parameters
+
+- `name`: Tool name recorded on emitted lifecycle events.
+- `args`: Raw tool arguments passed into the managed pipeline.
+- `func`: Tool callback or execution continuation.
+- `parent`: Optional explicit parent scope for the emitted tool span.
+- `attributes`: Tool attribute bitflags applied to the managed span.
+- `data`: Optional application payload stored on the managed tool handle. It may be used on failure end events that have no output payload.
+- `metadata`: Optional JSON metadata recorded on emitted events.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the raw tool result returned by the callback or an execution intercept.
+
+## Errors
+
+Returns [`FlowError::GuardrailRejected`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when conditional-execution guardrails block the call, or any error raised by request intercepts, execution intercepts, or the callback itself.
+
+## Notes
+
+When execution fails after the start event has been emitted, the runtime still emits a tool-end event without an output payload.

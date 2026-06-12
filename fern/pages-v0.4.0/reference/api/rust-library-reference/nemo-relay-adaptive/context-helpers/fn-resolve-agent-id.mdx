@@ -1,0 +1,25 @@
+---
+title: "Function resolve_agent_id"
+sidebar-title: "resolve_agent_id"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/context_helpers/fn-resolve-agent-id"
+description: "Resolves the agent ID from the current scope stack."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve_agent_id() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Resolves the agent ID from the current scope stack.
+
+Walks all scopes from root to top, skipping the implicit root scope (index 0, name="root"), and returns the name of the first Agent-typed scope.
+
+## Returns
+
+The first Agent scope name found on the current stack, or `None` when no Agent scope is active.
+
+## Notes
+
+Returns `None` when the scope stack cannot be read safely.

@@ -1,0 +1,32 @@
+---
+title: "Function nemo_relay_tool_call_end"
+sidebar-title: "nemo_relay_tool_call_end"
+description: "End a manual tool call lifecycle span."
+position: 117
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_tool_call_end(\n    handle: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffitoolhandle\">FfiToolHandle</a>,\n    result_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    data_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    metadata_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i64.html\">i64</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+End a manual tool call lifecycle span.
+
+This emits a tool End event after applying sanitize-response guardrails to the observability payload. Response intercepts only run through `nemo_relay_tool_call_execute`.
+
+## Parameters
+
+- `handle`: The tool handle from `nemo_relay_tool_call`.
+- `result_json`: Tool result as a null-terminated JSON C string. This result becomes the end-event data after sanitize-response guardrails unless it sanitizes to JSON null.
+- `data_json`: Optional null-terminated JSON data used when the sanitized result is JSON null, or null.
+- `metadata_json`: Optional null-terminated JSON metadata recorded on the end event, or null.
+- `timestamp_unix_micros`: Optional Unix microseconds timestamp for the end event, or null to use the runtime default end timestamp.
+
+## Errors
+
+Returns `InvalidJson` for invalid JSON inputs and `InvalidArg` when `timestamp_unix_micros` is outside the supported timestamp range.
+
+## Safety
+
+`handle` and `result_json` must be valid, non-null pointers. Optional pointer arguments may be null; when non-null, they must be valid for reads for the duration of the call.

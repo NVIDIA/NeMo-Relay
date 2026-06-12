@@ -1,0 +1,28 @@
+---
+title: "Module canonicalize"
+sidebar-title: "canonicalize"
+description: "RFC 8785 JSON Canonicalization and whitespace normalization for cache stability."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+RFC 8785 JSON Canonicalization and whitespace normalization for cache stability.
+
+This module provides deterministic JSON serialization (RFC 8785 / JCS) and whitespace normalization so that semantically equivalent content always produces byte-identical output. This is critical for cache key stability: without canonicalization, tool schemas or JSON content with different key orders would produce different hashes and miss the cache.
+
+## Public functions
+
+- [`canonicalize_json`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-canonicalize-json) - Canonicalize a JSON string per RFC 8785.
+- [`canonicalize_value`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-canonicalize-value) - Canonicalize a `serde_json::Value` per RFC 8785.
+- [`normalize_whitespace`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-normalize-whitespace) - Trim and collapse whitespace in text content.
+- [`sha256_hex`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-sha256-hex) - Compute SHA-256 hex digest with `"sha256:"` prefix.
+
+## Functions
+
+- [canonicalize_json](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-canonicalize-json): Canonicalize a JSON string per RFC 8785 (JCS).
+- [canonicalize_value](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-canonicalize-value): Canonicalize a `serde_json::Value` per RFC 8785.
+- [normalize_whitespace](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-normalize-whitespace): Normalize whitespace in text content.
+- [sha256_hex](/reference/api/rust-library-reference/nemo-relay-adaptive/acg/canonicalize/fn-sha256-hex): Compute SHA-256 hex digest with `"sha256:"` prefix.

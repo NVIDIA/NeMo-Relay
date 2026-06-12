@@ -1,0 +1,207 @@
+---
+title: "Hermes Agent"
+description: ""
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+The NeMo Relay CLI wrapper and gateway allows you to observe local Hermes Agent sessions. The guide below shows you how to observe these sessions.
+
+This path is different from the upstream Hermes
+`observability/nemo_relay` plugin. The CLI wrapper observes Hermes through
+Hermes shell hooks. It can record LLM request/response payloads from sanitized
+Hermes API hook payloads when the Hermes build provides them, or from provider
+traffic routed through the NeMo Relay gateway. The upstream Hermes plugin runs
+inside Hermes and is configured from Hermes itself.
+
+Hermes shell hooks provide session, subagent, tool, and LLM lifecycle signals.
+For hook-based LLM lifecycle telemetry, `pre_api_request`, `post_api_request`,
+and `api_request_error` are the authoritative Hermes hooks. The legacy
+`pre_llm_call` and `post_llm_call` hooks still exist, but only as private
+hint-style signals for correlation. When Hermes hook payloads include sanitized
+request and response bodies, NeMo Relay records them from the hooks. Gateway
+routing is still the direct provider-traffic path, and it remains the best
+fallback when a Hermes build emits summary-only hook payloads.
+
+## Choose the Right Hermes Path
+
+Use the `nemo-relay hermes` wrapper when you want NeMo Relay to manage the
+local gateway lifetime for a Hermes process and collect hook plus
+gateway-routed LLM observability.
+
+Use the upstream Hermes `observability/nemo_relay` plugin when you want Hermes
+itself to load the bundled plugin and emit NeMo Relay observability through
+Hermes plugin configuration. Observe-only plugin builds keep Hermes in control
+of LLM and tool execution.
+
+Use adaptive execution only with a Hermes build that includes the adaptive
+middleware contract and a NeMo Relay runtime that exposes managed
+`llm.execute(...)` and `tools.execute(...)` boundaries. Verify the Hermes
+release tag before depending on adaptive execution in a released Hermes
+environment.
+
+## Transparent Run
+
+Use the wrapper when you want the gateway lifetime managed for a local Hermes
+process:
+
+```bash
+nemo-relay hermes
+```
+
+Pass Hermes arguments after `--`:
+
+```bash
+nemo-relay hermes -- chat --provider custom
+```
+
+Once NeMo Relay config exists, this shortcut is equivalent to
+`nemo-relay run --agent hermes`. The wrapper starts a gateway on a dynamic
+`127.0.0.1` port and exports `NEMO_RELAY_GATEWAY_URL` for the launched
+process. After initial NeMo Relay setup exists, Hermes hook configuration is
+temporary in this mode: the launcher merges the NeMo Relay hook-forward
+commands into the configured Hermes hook file for the run and restores the
+original file afterward. The wrapper also sets `HERMES_ACCEPT_HOOKS=1` so
+Hermes can use the injected hook commands without extra manual approval
+prompts.
+
+If no NeMo Relay config exists yet, `nemo-relay hermes` triggers the setup flow
+first and then launches Hermes through the same wrapped pipeline.
+
+Inspect what would be launched without starting Hermes:
+
+```bash
+nemo-relay run \
+  --dry-run \
+  --print \
+  -- hermes
+```
+
+## Shared Config
+
+Create `.nemo-relay/config.toml` for project defaults or
+`~/.config/nemo-relay/config.toml` for user defaults:
+
+```toml
+[agents.hermes]
+command = "hermes"
+```
+
+Then configure observability with `nemo-relay plugins edit --project` or
+`.nemo-relay/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-relay/atif"
+
+[components.config.atof]
+enabled = true
+output_directory = ".nemo-relay/atof"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
+Run `nemo-relay run --agent hermes` to use the configured command and plugin
+config. User config takes priority over project and system config.
+
+## Hermes Hook Setup
+
+Unlike the other agents, Hermes reads hooks from `.hermes/config.yaml`. The
+setup wizard writes that file for you when you select hermes — running
+`nemo-relay config` (or `nemo-relay config hermes` to scope to one agent) merges
+NeMo Relay hook commands into the YAML, preserving any existing config, and
+records the path under `[agents.hermes].hooks_path` in `.nemo-relay/config.toml`.
+
+The generated Hermes hooks cover `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `pre_llm_call`, `post_llm_call`,
+`pre_api_request`, `post_api_request`, `api_request_error`, `pre_tool_call`,
+`post_tool_call`, `subagent_start`, and `subagent_stop`.
+
+The API hooks are the main Hermes LLM lifecycle path for NeMo Relay. The legacy
+LLM hooks remain installed because they can still provide useful private hints,
+but they are not treated as equal peers to the API hooks in the observability
+contract.
+
+Hermes hook forwarding prefers `NEMO_RELAY_GATEWAY_URL` when set (this is what
+`nemo-relay hermes` injects on every run). When launched outside the wrapper —
+e.g., bare `hermes` against a long-running gateway — the hook command falls
+back to `--gateway-url http://127.0.0.1:4040`.
+
+For standalone gateway mode, start the daemon manually:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040
+```
+
+Then point Hermes provider traffic at `http://127.0.0.1:4040` for any provider
+mode that exposes a local OpenAI-compatible or Anthropic-compatible base URL.
+This is the practical routed-provider validation path today.
+
+Important distinction:
+
+- Wrapped execution is the authoritative path for Hermes hook-path validation.
+- Wrapped execution does not automatically rewrite Hermes provider `base_url`,
+  `custom_providers`, or `api_mode`.
+- Routed `/v1/messages`, `/v1/chat/completions`, or `/v1/responses` validation
+  therefore requires explicit Hermes provider configuration in addition to the
+  wrapped or standalone gateway.
+
+## Smoke Test
+
+Use this smoke test to verify the Hermes hook-forward path without launching
+Hermes. It sends one synthetic Hermes hook payload through the same
+`nemo-relay hook-forward hermes` command that generated hooks use.
+
+Start a standalone gateway in one terminal:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040
+```
+
+Then check Hermes hook forwarding from another terminal:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+printf '{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}' \
+  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward hermes --fail-closed
+```
+
+The response should be `{}`. If Hermes prompts for hook consent, approve the
+NeMo Relay hook command interactively or through Hermes configuration before
+relying on unattended capture.
+
+## Verify Export
+
+End a Hermes turn or finalize the session and confirm the configured exporters
+received data:
+
+```bash
+ls .nemo-relay/atof
+ls .nemo-relay/atif
+```
+
+The gateway writes or updates an ATIF snapshot when it receives
+`on_session_end`, `on_session_finalize`, or `on_session_reset`.
+`on_session_end` is a per-turn snapshot boundary: it does not close the NeMo
+Relay session and does not emit a visible trajectory mark. `on_session_finalize`
+and `on_session_reset` close the session. When ATOF export is enabled, the raw
+event stream is written continuously as lifecycle events arrive.
+
+## Troubleshoot LLM Lifecycle
+
+If hook events appear but LLM spans are missing, Hermes model traffic is not
+routed through the gateway. If LLM spans exist but attach to the top-level agent
+instead of a subagent, include shared identifiers in Hermes hook payloads and
+gateway requests, such as `conversation_id`, `generation_id`, `request_id`, or
+`x-nemo-relay-subagent-id`.

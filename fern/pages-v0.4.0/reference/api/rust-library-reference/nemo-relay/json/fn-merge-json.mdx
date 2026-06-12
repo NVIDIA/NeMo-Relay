@@ -1,0 +1,29 @@
+---
+title: "Function merge_json"
+sidebar-title: "merge_json"
+description: "Shallow-merge two optional JSON values."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn merge_json(a: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;, b: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;"}} /></pre>
+
+Shallow-merge two optional JSON values.
+
+This is used throughout the runtime to combine optional `data` and `metadata` payloads without recursively descending into nested objects.
+
+## Parameters
+
+- `a`: Base JSON value.
+- `b`: Override JSON value.
+
+## Returns
+
+An [`Option`](https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html) containing the merged JSON value. When both inputs are JSON objects, keys from `b` override keys from `a`. When only one input is present, that input is returned. When both inputs are present but at least one is not an object, `b` wins.
+
+## Notes
+
+The merge is shallow. Nested objects are replaced rather than merged recursively.

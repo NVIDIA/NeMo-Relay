@@ -1,0 +1,14 @@
+---
+title: "Type Alias Nemo Relay Json Cb"
+sidebar-title: "NemoRelayJsonCb"
+description: "Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts. The returned string must be allocated with `malloc` or equivalent."
+position: 27
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayJsonCb = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>, json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>;"}} /></pre>
+
+Generic JSON-to-JSON callback, used for LLM response sanitization and intercepts. The returned string must be allocated with `malloc` or equivalent.

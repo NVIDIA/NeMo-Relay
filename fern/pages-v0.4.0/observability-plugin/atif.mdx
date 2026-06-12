@@ -1,0 +1,395 @@
+---
+title: "Agent Trajectory Interchange Format (ATIF)"
+description: ""
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `atif` section when you want one Agent Trajectory Interchange Format
+(ATIF) trajectory artifact per top-level agent run.
+
+The plugin-managed ATIF dispatcher watches for direct child scopes with category
+`agent`, creates a scope-local exporter for each one, and writes the trajectory
+when that agent scope ends. Nested agent scopes remain in the parent
+trajectory.
+
+## `plugins.toml` Example
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atif]
+enabled = true
+agent_name = "Planner"
+agent_version = "1.0.0"
+model_name = "unknown"
+output_directory = "logs"
+filename_template = "trajectory-{session_id}.json"
+```
+
+This configuration writes a trajectory file such as
+`logs/trajectory-<scope-uuid>.json` for each top-level agent scope.
+
+## Fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | Must be `true` to write trajectories. |
+| `agent_name` | `NeMo Relay` | Agent metadata written into the trajectory. |
+| `agent_version` | NeMo Relay crate version | Agent version metadata. |
+| `model_name` | `unknown` | Default model metadata when no call-level model is present. |
+| `tool_definitions` | Omitted | Optional ATIF tool metadata. |
+| `extra` | Omitted | Optional ATIF agent metadata. |
+| `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
+| `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. |
+| `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend instead of being written locally. See [Remote storage](#remote-storage). |
+
+## Remote storage
+
+For sandboxed runtimes such as NemoClaw / Omnistation / OpenShell, where local
+trace files are not durable across sessions, configure `storage` to ship
+completed trajectories directly to object storage. When `storage` is non-empty
+the local file write is replaced by uploads to every configured backend;
+`output_directory` is ignored.
+
+Each storage entry is tagged with a `type` discriminator so additional
+backends can be added without breaking existing configs. S3-compatible object
+storage and HTTP endpoints are supported.
+
+### S3-compatible storage
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[[components.config.atif.storage]]
+type = "s3"
+bucket = "nemo-relay-traces"
+key_prefix = "openshell/"
+```
+
+### HTTP endpoint storage
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[[components.config.atif.storage]]
+type = "http"
+endpoint = "https://observability.example.com/atif"
+timeout_millis = 3000
+
+[components.config.atif.storage.headers]
+x-team = "agent-platform"
+
+[components.config.atif.storage.header_env]
+authorization = "NEMO_RELAY_ATIF_HTTP_AUTH"
+```
+
+The HTTP backend sends one `POST` per completed trajectory. The request body is
+the rendered ATIF JSON file with `content-type: application/json`. NeMo Relay
+also sets `x-nemo-relay-atif-filename` and
+`x-nemo-relay-atif-session-id` headers so receivers can keep the same object
+identity that local files and S3 uploads use.
+
+HTTP `2xx` responses are treated as success. Any non-`2xx` response or
+transport error records the endpoint as unhealthy and skips it for later
+trajectories. Other configured destinations continue to receive writes.
+
+| Field | Default | Notes |
+|---|---|---|
+| `endpoint` | required | Destination `http://` or `https://` URL. |
+| `headers` | `{}` | Static request headers. |
+| `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
+| `timeout_millis` | `3000` | Per-request timeout in milliseconds. Must be positive. |
+
+### Multiple destinations
+
+Add additional `[[components.config.atif.storage]]` tables to fan out the same
+trajectory to every destination — for example, an in-cluster MinIO target and a
+remote HTTP endpoint:
+
+```toml
+[components.config.atif]
+enabled = true
+filename_template = "trajectory-{session_id}.json"
+
+[[components.config.atif.storage]]
+type = "s3"
+bucket = "nemo-relay-traces"
+key_prefix = "openshell/"
+
+[[components.config.atif.storage]]
+type = "http"
+endpoint = "https://observability.example.com/atif"
+```
+
+#### Connection fields
+
+By default, credentials, region, and endpoint URL are read from the standard
+AWS environment variables. Any non-secret connection field can also be set
+directly in the config so a single file can describe a complete destination,
+which is what unblocks running multiple S3-compatible endpoints side by side
+(for example, an in-cluster MinIO target and a remote AWS target):
+
+| Field | Default | Notes |
+|---|---|---|
+| `bucket` | required | Destination bucket name. |
+| `key_prefix` | `""` | Optional prefix applied to every object. A trailing `/` is added if missing. |
+| `access_key_id` | `AWS_ACCESS_KEY_ID` | Inline static access key ID. |
+| `region` | `AWS_REGION` | Bucket region. |
+| `endpoint_url` | `AWS_ENDPOINT_URL` | Endpoint override for S3-compatible storage. |
+| `allow_http` | `AWS_ALLOW_HTTP` | Set to `true` when targeting an HTTP endpoint. |
+
+Explicit fields take precedence; anything left unset falls back to the matching
+`AWS_*` environment variable.
+
+#### Secret credential fields
+
+Secret values stay out of checked-in config files. Each secret field carries a
+`_var` suffix and holds the *name* of an environment variable that contains the
+secret value. The name is validated at plugin initialization time:
+
+| Field | Env Var Fallback | Notes |
+|---|---|---|
+| `secret_access_key_var` | `AWS_SECRET_ACCESS_KEY` | Name of the env var that holds the static secret key. |
+| `session_token_var` | `AWS_SESSION_TOKEN` | Name of the env var that holds the optional STS session token. |
+
+
+Each trajectory is uploaded under `{key_prefix}{rendered_filename}`. The
+`filename_template` is rendered the same way it would be for local files, so a
+local→remote transition keeps object names stable. A trailing `/` is added to
+`key_prefix` when one is missing.
+
+If an upload fails for a given destination, that destination is recorded as
+unhealthy and skipped on later trajectories. The other destinations continue
+to receive writes. Fatal dispatcher failures, such as trajectory serialization
+failures, stop later ATIF observation and are reported during plugin teardown;
+per-destination sink failures are isolated to the failed sink.
+
+## Expected Output
+
+The exporter translates NeMo Relay lifecycle events into ATIF v1.7 trajectory
+data. LLM start and end events become model steps, tool events become tool
+calls and observations, and scope nesting contributes lineage metadata.
+Nested agent scopes are embedded in the parent file as `subagent_trajectories`
+and referenced from parent observation results with
+`subagent_trajectory_ref.trajectory_id`. The reference points to the embedded
+child trajectory by ID so consumers can validate the parent and child as one
+single-file ATIF v1.7 artifact.
+
+The plugin writes each trajectory when the top-level agent scope closes. If the
+plugin is cleared while an agent is still open, teardown flushes the partial
+trajectory.
+
+To correlate ATIF with OpenTelemetry or OpenInference traces from the same run,
+join on NeMo Relay UUIDs. The plugin-managed ATIF `session_id` is the top-level
+agent scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
+and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
+same values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
+
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Relay own the ATIF
+dispatcher lifecycle.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import plugin
+from nemo_relay.observability import AtifConfig, ComponentSpec, ObservabilityConfig
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                atif=AtifConfig(
+                    enabled=True,
+                    agent_name="Planner",
+                    agent_version="1.0.0",
+                    model_name="unknown",
+                    output_directory="logs",
+                    filename_template="trajectory-{session_id}.json",
+                )
+            )
+        )
+    ]
+)
+
+report = plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+await plugin.initialize(config)
+try:
+    # Run instrumented application work here.
+    pass
+finally:
+    plugin.clear()
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
+
+await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 1,
+      atif: observability.atifConfig({
+        enabled: true,
+        agent_name: "Planner",
+        agent_version: "1.0.0",
+        model_name: "unknown",
+        output_directory: "logs",
+        filename_template: "trajectory-{session_id}.json",
+      }),
+    }),
+  ],
+});
+
+try {
+  // Run instrumented application work here.
+} finally {
+  plugin.clear();
+}
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::plugin_component::{
+    AtifSectionConfig, ComponentSpec, ObservabilityConfig,
+};
+use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    atif: Some(AtifSectionConfig {
+        enabled: true,
+        agent_name: "Planner".into(),
+        agent_version: "1.0.0".into(),
+        model_name: "unknown".into(),
+        output_directory: Some("logs".into()),
+        filename_template: "trajectory-{session_id}.json".into(),
+        ..AtifSectionConfig::default()
+    }),
+    ..ObservabilityConfig::default()
+});
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+};
+
+let report = validate_plugin_config(&config);
+assert!(!report.has_errors());
+
+let active = initialize_plugins(config).await?;
+```
+
+</Tab>
+
+</Tabs>
+
+## Manual API
+
+Use the manual `AtifExporter` API when you need explicit collection boundaries
+or one exporter object per run.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import AtifExporter
+
+exporter = AtifExporter("session-1", "agent", "1.0.0", model_name="demo-model")
+exporter.register("atif-exporter")
+
+# Run instrumented application work here.
+
+trajectory = exporter.export()
+exporter.deregister("atif-exporter")
+exporter.clear()
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const { AtifExporter } = require("nemo-relay-node");
+
+const exporter = new AtifExporter("session-1", "agent", "1.0.0", "demo-model");
+exporter.register("atif-exporter");
+
+try {
+  // Run instrumented application work here.
+
+  const trajectoryJson = exporter.exportJson();
+  console.log(trajectoryJson);
+} finally {
+  exporter.deregister("atif-exporter");
+  exporter.clear();
+}
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
+
+let exporter = AtifExporter::new(
+    "session-1".to_string(),
+    AtifAgentInfo {
+        name: "agent".to_string(),
+        version: "1.0.0".to_string(),
+        model_name: Some("demo-model".to_string()),
+        tool_definitions: None,
+        extra: None,
+    },
+);
+register_subscriber("atif-exporter", exporter.subscriber())?;
+
+// Run instrumented application work here.
+
+flush_subscribers()?;
+let trajectory = exporter.export()?;
+let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
+println!("{trajectory_json}");
+
+let _ = deregister_subscriber("atif-exporter")?;
+exporter.clear();
+```
+
+</Tab>
+
+</Tabs>
+
+## Common Validation Failures
+
+- `filename_template` does not contain `{session_id}`.
+- The output directory is not writable at runtime.
+- Tool definitions or `extra` metadata are not JSON-compatible.
+- The application never opens a top-level `agent` scope, so no trajectory file
+  is created.
+- `storage[i].type` is unknown or `storage[i].bucket` is empty for some entry.
+- `storage` is non-empty in a build that was compiled without the
+  `atif-storage` feature, or on a target (such as WebAssembly) where remote
+  storage is not supported.
