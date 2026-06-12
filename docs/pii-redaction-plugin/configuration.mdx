@@ -11,7 +11,7 @@ Use this page when you want to configure the built-in PII redaction plugin
 component. The component kind is `pii_redaction`.
 
 For plugin file discovery, precedence, merge behavior, editor controls, and
-gateway conflict rules, see
+gateway conflict rules, refer to
 [Plugin Configuration Files](/build-plugins/plugin-configuration-files).
 
 <Note>
@@ -25,9 +25,10 @@ field names stay `snake_case` in every binding and in `plugins.toml`.
 This plugin uses the same sanitize-guardrail middleware family documented in
 [Middleware](/about-nemo-relay/concepts/middleware).
 
-The difference is the layer of abstraction:
+The difference between raw middleware and `pii_redaction` is the layer of
+abstraction:
 
-- raw middleware asks you to register sanitize callbacks directly in code
+- Raw middleware asks you to register sanitize callbacks directly in code
 - `pii_redaction` gives you a first-party, config-driven privacy contract on
   top of those same runtime hooks
 
@@ -107,7 +108,7 @@ To use `mode = "builtin"`:
 
 You can write this config directly in `plugins.toml`, or create and edit it
 through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
-precedence, merge behavior, and editor controls, see
+precedence, merge behavior, and editor controls, refer to
 [Plugin Configuration Files](/build-plugins/plugin-configuration-files).
 
 ```toml
@@ -158,12 +159,12 @@ The NeMo Relay CLI plugin editor now exposes `pii_redaction` directly through
 
 Use the editor when you want to:
 
-- toggle the component on or off
-- choose `builtin` or `local_model`
-- set the LLM `codec`
-- edit `builtin` action settings such as `action`, `target_paths`,
+- Toggle the component on or off
+- Choose `builtin` or `local_model`
+- Set the LLM `codec`
+- Edit `builtin` action settings such as `action`, `target_paths`,
   `pattern`, `detector`, `replacement`, and masking fields
-- edit `local.backend` for a runtime-provided future local-model backend
+- Edit `local.backend` for a runtime-provided future local-model backend
 
 The editor preserves unknown fields when it rewrites an existing
 `pii_redaction` component, so future or runtime-specific settings are not
@@ -243,20 +244,20 @@ inside the string leaf.
 When `detector` is set and you do not specify `unmasked_prefix` or
 `unmasked_suffix`, the built-in backend applies detector-aware defaults:
 
-- `email`: preserves the domain and the first local-part character
-- `phone`: preserves the last four digits while keeping separators intact
-- `api_key`: preserves the vendor-style prefix such as `sk-` and the last four characters
-- `ip_address`: preserves the last octet
-- `ipv6`: preserves the last segment
-- `url`: preserves the scheme and host, then collapses the path/query tail
-- `uuid`: preserves the last four characters
-- `bearer_token`: preserves the auth scheme and the last four characters
-- `jwt`: preserves the header segment and the tail of the signature
-- `credit_card`: preserves the last four digits while keeping separators intact
-- `aws_access_key_id`: preserves the provider prefix and the last four characters
-- `aws_secret_access_key`: preserves the last four characters
-- `gcp_api_key`: preserves the `AIza`-style prefix and the last four characters
-- `azure_storage_account_key`: preserves the last four characters
+- `email`: Preserves the domain and the first local-part character
+- `phone`: Preserves the last four digits while keeping separators intact
+- `api_key`: Preserves the vendor-style prefix such as `sk-` and the last four characters
+- `ip_address`: Preserves the last octet
+- `ipv6`: Preserves the last segment
+- `url`: Preserves the scheme and host, then collapses the path/query tail
+- `uuid`: Preserves the last four characters
+- `bearer_token`: Preserves the auth scheme and the last four characters
+- `jwt`: Preserves the header segment and the tail of the signature
+- `credit_card`: Preserves the last four digits while keeping separators intact
+- `aws_access_key_id`: Preserves the provider prefix and the last four characters
+- `aws_secret_access_key`: Preserves the last four characters
+- `gcp_api_key`: Preserves the `AIza`-style prefix and the last four characters
+- `azure_storage_account_key`: Preserves the last four characters
 
 ## Path Semantics
 
@@ -278,16 +279,16 @@ recommended contract for new configuration.
 
 Use this plugin when:
 
-- the privacy behavior should be reusable across applications
-- config-driven enablement matters more than hand-written callbacks
-- you want built-in detectors and action semantics
-- you want a documented first-party NeMo Relay privacy surface
+- The privacy behavior should be reusable across applications
+- Config-driven enablement matters more than hand-written callbacks
+- You want built-in detectors and action semantics
+- You want a documented first-party NeMo Relay privacy surface
 
 Use raw middleware when:
 
-- the policy depends on application-specific runtime state
-- the sanitization logic is too custom for the plugin contract
-- you need to prototype or experiment before standardizing behavior
+- The policy depends on application-specific runtime state
+- The sanitization logic is too custom for the plugin contract
+- You need to prototype or experiment before standardizing behavior
 
 The runtime effect is still sanitize-guardrail middleware in both cases. The
 plugin simply gives you a standardized policy layer on top.

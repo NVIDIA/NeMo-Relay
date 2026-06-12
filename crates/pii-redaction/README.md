@@ -15,32 +15,25 @@ The plugin is designed for the common case where teams want a supported,
 config-driven privacy policy surface instead of writing custom sanitize
 middleware by hand.
 
-## Why Use It
+## Key Features
 
-- **Use a supported privacy plugin**: Install deterministic redaction behavior
-  through the NeMo Relay plugin system instead of custom sanitize callbacks.
-- **Cover tool and LLM observability surfaces**: Sanitize emitted tool
-  request/response payloads and supported codec-backed LLM request/response
-  payloads through one shared config surface.
-- **Choose explicit action semantics**: Use `remove`, `redact`,
-  `regex_replace`, `hash`, or `mask` depending on the privacy and debugging
-  tradeoff you need.
-- **Start deterministic, leave room for model-backed policy later**: Ship the
-  lightweight `builtin` backend now and keep `local_model` as the future seam
-  for local inference-based detection.
+NeMo Relay PII Redaction allows you to:
 
-## What You Get
-
-- **`PiiRedactionConfig`**: Canonical config contract for the top-level
+- Use `PiiRedactionConfig`, the canonical config contract for the top-level
   `pii_redaction` plugin component.
-- **Deterministic `builtin` backend**: Production-ready action engine for
-  remove/redact/replace/hash/mask workflows.
-- **Built-in detector presets**: First-party detectors for common PII,
+- Install deterministic redaction behavior through the NeMo Relay privacy
+  plugin system instead of custom sanitize callbacks.
+- Sanitize emitted tool request or response payloads and supported codec-backed
+  LLM request/response payloads through one shared config surface.
+- Choose explicit action semantics such as `remove`, `redact`,
+  `regex_replace`, `hash`, or `mask`, depending on the privacy and debugging
+  tradeoff you need.
+- Use built-in detector presets as first-party detectors for common PII,
   structured secrets, and cloud credentials.
-- **Codec-aware LLM handling**: Overlay support for `openai_chat`,
+- Handle codec-aware LLMs with overlay support for `openai_chat`,
   `openai_responses`, and `anthropic_messages`.
-- **Local backend seam**: `local_model` config contract and provider
-  registration surface for future model-backed implementations.
+- Use the `local_model` config contract and provider registration surface for
+  future model-backed implementations.
 
 ## Plugin Versus Raw Middleware
 

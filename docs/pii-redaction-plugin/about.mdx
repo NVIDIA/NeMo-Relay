@@ -11,8 +11,8 @@ Use the PII redaction plugin when you want first-party privacy controls for
 managed NeMo Relay LLM and tool observability surfaces through the shared
 plugin system.
 
-The built-in plugin component has kind `pii_redaction` and is available as a
-first-party NeMo Relay plugin.
+The built-in plugin component uses `kind = "pii_redaction"` and is available as
+a first-party NeMo Relay plugin.
 
 The plugin is designed around backend modes:
 
@@ -45,21 +45,19 @@ surface.
 
 Use the plugin when you want:
 
-- a reusable privacy policy that many applications or teams can share
-- declarative config through `plugins.toml` or `nemo-relay plugins edit`
-- built-in actions, detector presets, and codec-aware LLM handling
-- a supported, documented NeMo Relay surface instead of hand-registered callbacks
+- A reusable privacy policy that many applications or teams can share
+- Declarative config through `plugins.toml` or `nemo-relay plugins edit`
+- Built-in actions, detector presets, and codec-aware LLM handling
+- A supported, documented NeMo Relay surface instead of hand-registered callbacks
 
 Use raw sanitize-guardrail middleware when you want:
 
-- custom redaction logic authored directly in application code
-- dynamic behavior based on runtime state, external lookups, or one-off heuristics
-- experiments that are too app-specific to become a first-party plugin contract
+- Custom redaction logic authored directly in application code
+- Dynamic behavior based on runtime state, external lookups, or one-off heuristics
+- Experiments that are too app-specific to become a first-party plugin contract
 
-So the distinction is:
-
-- middleware is the **mechanism**
-- `pii_redaction` is the **packaged policy**
+The difference between middleware and `pii_redaction` is that middleware is the
+**mechanism** and `pii_redaction` is the **packaged policy**.
 
 ## Current Scope
 
