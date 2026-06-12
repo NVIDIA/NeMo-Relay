@@ -96,7 +96,7 @@ when the agent exits.
 
 > [!WARNING]
 > Codex users may need to review and activate generated hooks before events
-> appear. See the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
+> appear. Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
 > current hook activation caveat and troubleshooting steps.
 
 ### 4. Verify the Run
@@ -147,7 +147,7 @@ A successful run gives you two things to inspect:
 
 ## Choose Your Next Path
 
-Pick the row closest to what you are trying to do next.
+Pick the row closest to what you are trying to do next. Refer to the corresponding documentation for more information.
 
 | Goal | Start With |
 |---|---|
@@ -185,7 +185,7 @@ The Node.js package requires Node.js 24 or newer.
 
 ## What Relay Adds
 
-Relay is for the messy middle of agent systems. A production application may
+Relay is the liaison between agent systems. A production application may
 combine NeMo Agent Toolkit, LangChain, LangGraph, provider SDKs, custom harness
 code, NeMo Guardrails, tracing systems, and evaluation pipelines. Relay gives
 those pieces one runtime contract instead of asking every layer to invent its
@@ -193,16 +193,16 @@ own wrappers and trace vocabulary.
 
 Relay gives those systems:
 
-- 🧭 **Scopes** so runs, turns, tools, LLM calls, and subagents have clear
+- **Scopes** so runs, turns, tools, LLM calls, and subagents have clear
   ownership, parent-child lineage, cleanup boundaries, and
   request isolation.
-- ⚙️ **Managed LLM and tool calls** so the same lifecycle and middleware rules
+- **Managed LLM and tool calls** so the same lifecycle and middleware rules
   apply around each callback.
-- 🛡️ **Middleware** for the places where Relay must block, sanitize, transform,
+- **Middleware** for the places where Relay must block, sanitize, transform,
   route, retry, or replace execution.
-- 🧩 **Plugins** so reusable observability, guardrail, adaptive, and exporter
+- **Plugins** so reusable observability, guardrail, adaptive, and exporter
   behavior can be turned on from configuration.
-- 📡 **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
+- **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
   OpenInference output all come from the same runtime stream.
 
 Relay does not replace your framework, model provider, application logic,
@@ -242,27 +242,29 @@ The following table shows which language bindings and CLI features are currently
 
 | Binding | Status | Notes |
 |---|---|---|
-| Python | ✅ Fully supported | Documented with Quick Start and Guides. |
-| Node.js | ✅ Fully supported | Documented with Quick Start and Guides. |
-| Rust | ✅ Fully supported | Documented with Quick Start and Guides. |
-| NeMo Relay CLI | ✅ Supported | Local observability and hook-backed security are supported; optimization is partial and host-dependent. |
-| Go | 🚧 Experimental | Source-first under `go/nemo_relay`. |
-| WebAssembly | 🚧 Experimental | Source-first under `crates/wasm`. |
-| FFI | 🚧 Experimental | Source-first under `crates/ffi`. |
+| Python | Fully supported | Documented with Quick Start and Guides. |
+| Node.js | Fully supported | Documented with Quick Start and Guides. |
+| Rust | Fully supported | Documented with Quick Start and Guides. |
+| NeMo Relay CLI | Supported | Local observability and hook-backed security are supported; optimization is partial and host-dependent. |
+| Go | Experimental | Source-first under `go/nemo_relay`. |
+| WebAssembly | Experimental | Source-first under `crates/wasm`. |
+| FFI | Experimental | Source-first under `crates/ffi`. |
 
 ### Agent Harness Support
 
 The CLI support matrix separates the supported CLI surface from host-specific
-coverage. Observability works for the listed harnesses; security is supported
-when the host exposes blocking hooks; optimization remains partial and
-host-dependent.
+coverage.
+
+- Observability works for the listed harnesses.
+- Security is supported when the host exposes blocking hooks.
+- Optimization remains partial and host-dependent.
 
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
-| Claude Code | ✅ Yes | ✅ Yes | ⚠️ Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
-| Codex | ✅ Yes | ✅ Yes | ⚠️ Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
-| Hermes Agent | ✅ Yes | ✅ Yes | ⚠️ Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
-| Cursor | 🚧 Partial | ⚠️ Limited | ❌ No | Missing hooks under `cursor-agent` and manual gateway routing limit full feature coverage. |
+| Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
+| Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
+| Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
+| Cursor | Partial | Limited | No | Missing hooks under `cursor-agent` and manual gateway routing limit full feature coverage. |
 
 ### Public API Integrations
 
@@ -271,10 +273,10 @@ or plugin hooks that preserve enough lifecycle fidelity.
 
 | Agent / Library | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
-| LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
-| LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
-| Deep Agents | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
-| OpenClaw | ✅ Yes | ⚠️ Partial | ❌ No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
+| LangChain | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| LangGraph | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
+| OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
 
 The Python `nemo-relay` package ships extras for LangChain, LangGraph, and Deep
 Agents:
@@ -283,10 +285,10 @@ Agents:
 uv add "nemo-relay[langchain,langgraph,deepagents]"
 ```
 
-See [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) for setup
+Refer to [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) for setup
 guides and current caveats.
 
-### Patch-based Integrations
+### Patch-Based Integrations
 
 Patch-based integrations are experimental samples maintained against pinned
 upstream checkouts. Use [third_party/README.md](third_party/README.md) for the
@@ -294,15 +296,15 @@ clone, checkout, and patch-application workflow.
 
 | Integration | Observability | Security | Optimization | Notes |
 |:---|:---:|:---:|:---:|:---|
-| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code. |
-| [opencode](third_party/README-opencode.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code. |
-| [OpenClaw](third_party/README-openclaw.md) | ✅ Yes | ✅ Yes | ✅ Yes | Adds middleware support to OpenClaw and a built-in plugin. |
-| [Hermes Agent](third_party/README-hermes-agent.md) | ✅ Yes | ✅ Yes | ✅ Yes | Directly patches behavior into code. |
+| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | Yes | Yes | Yes | Directly patches behavior into code. |
+| [opencode](third_party/README-opencode.md) | Yes | Yes | Yes | Directly patches behavior into code. |
+| [OpenClaw](third_party/README-openclaw.md) | Yes | Yes | Yes | Adds middleware support to OpenClaw and a built-in plugin. |
+| [Hermes Agent](third_party/README-hermes-agent.md) | Yes | Yes | Yes | Directly patches behavior into code. |
 
 ## Documentation
 
 End-user documentation lives at
-[docs.nvidia.com/nemo/relay](https://docs.nvidia.com/nemo/relay).
+[NVIDIA NeMo Relay documentation](https://docs.nvidia.com/nemo/relay).
 
 Important local entry points:
 
@@ -311,7 +313,7 @@ Important local entry points:
 - [Agent Runtime Primer](https://docs.nvidia.com/nemo/relay/getting-started/agent-runtime-primer)
 - [Testing and Docs](https://docs.nvidia.com/nemo/relay/contribute/testing-and-docs)
 
-For source builds, tests, and contribution workflow, see
+For source builds, tests, and contribution workflow, refer to
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap

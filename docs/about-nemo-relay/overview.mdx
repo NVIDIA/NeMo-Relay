@@ -8,7 +8,7 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-NVIDIA NeMo Relay helps you see and control what happens inside agent runs
+NVIDIA NeMo Relay helps you observe and control what happens inside agent runs
 without rewriting the agent stack you already have. It gives coding agents,
 applications, framework integrations, middleware, and observability backends a
 shared runtime for scopes, policy, plugins, and lifecycle events.
@@ -19,7 +19,7 @@ observability or policy systems need to understand what happened. Relay gives
 those boundaries one runtime contract instead of asking each layer to invent its
 own wrappers, trace vocabulary, and cleanup rules.
 
-## Where Relay Fits
+## Integrating With Relay
 
 Relay sits around the work you want to observe or control. Work can be a local
 coding-agent session, a request, a turn, an LLM call, a tool call, a subagent
@@ -31,7 +31,7 @@ observability backend, or guardrail authoring system. It gives those systems a
 common runtime boundary to meet at.
 </Note>
 
-The first design question is simple: where can Relay see or control the real
+The first design question is simple: where can Relay observe or control the real
 work? The answer determines whether you should use a CLI sidecar, direct SDK
 instrumentation, a maintained integration, a framework wrapper, or a plugin.
 
@@ -63,7 +63,7 @@ captured before anything is translated into
 [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif),
 OpenTelemetry, or OpenInference output.
 
-A good first integration usually looks like this:
+A good first integration process workflow is as follows:
 
 1. Create or identify one scope boundary.
 2. Capture one LLM, tool, session, or turn boundary.
@@ -72,17 +72,19 @@ A good first integration usually looks like this:
 5. Add middleware only when Relay must block, sanitize, rewrite, route, or
    replace real execution.
 
-## What Relay Adds
+## Key Features
 
-- 🧭 **Scopes** so runs, turns, tools, LLM calls, and subagents have clear
+NeMo Relay offers the following features when you use it with your agent stacks:
+
+- **Scopes** so runs, turns, tools, LLM calls, and subagents have clear
   ownership, parent-child lineage, cleanup boundaries, and request isolation.
-- ⚙️ **Managed LLM and tool calls** so the same lifecycle and middleware rules
+- **Managed LLM and tool calls** so the same lifecycle and middleware rules
   apply around each callback.
-- 🛡️ **Middleware** for the places where Relay must block, sanitize, transform,
+- **Middleware** for the places where Relay must block, sanitize, transform,
   route, retry, or replace execution.
-- 🧩 **Plugins** so reusable observability, guardrail, adaptive, and exporter
+- **Plugins** so reusable observability, guardrail, adaptive, and exporter
   behavior can be turned on from configuration.
-- 📡 **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
+- **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
   OpenInference output all come from the same runtime stream.
 
 Use [Concepts](/about-nemo-relay/concepts) when you want the deeper model for
@@ -106,7 +108,7 @@ Node.js parity. Public behavior should stay consistent across the supported
 runtime surfaces.
 </Warning>
 
-## Read Next
+## Documentation
 
 Use the tasks below to build your understanding and set up Relay:
 
