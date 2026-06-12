@@ -139,56 +139,70 @@ pub(super) fn uninstall_codex_config(
     let mut doc = raw
         .parse::<DocumentMut>()
         .map_err(|error| format!("invalid TOML in {}: {error}", path.display()))?;
-    let backup = backup_path(path);
-    let backup_doc = if backup.exists() {
-        let raw = fs::read_to_string(&backup)
-            .map_err(|error| format!("failed to read {}: {error}", backup.display()))?;
-        Some(
-            raw.parse::<DocumentMut>()
-                .map_err(|error| format!("invalid TOML in {}: {error}", backup.display()))?,
-        )
-    } else {
-        None
-    };
-
+    let backup_doc = read_codex_backup_doc(path)?;
     let provider_is_managed = codex_provider_item_is_managed(&doc, gateway_url);
-    if let Some(backup_doc) = backup_doc.as_ref() {
-        if provider_is_managed {
-            restore_top_level_item_if_str(
+    match backup_doc.as_ref() {
+        Some(backup_doc) => {
+            restore_codex_config_from_backup(
                 &mut doc,
                 backup_doc,
-                "model_provider",
-                "nemo-relay-openai",
+                provider_is_managed,
+                preserve_hooks,
             );
-            restore_table_item(&mut doc, backup_doc, "model_providers", "nemo-relay-openai");
         }
-        if !preserve_hooks || feature_hooks_enabled(&doc) != Some(true) {
-            restore_table_item_if_bool(&mut doc, backup_doc, "features", "hooks", true);
-        }
-    } else {
-        if provider_is_managed
-            && doc
-                .get("model_provider")
-                .and_then(Item::as_value)
-                .and_then(|value| value.as_str())
-                == Some("nemo-relay-openai")
-        {
-            doc.as_table_mut().remove("model_provider");
-        }
-        if provider_is_managed
-            && let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut)
-        {
-            providers.remove("nemo-relay-openai");
-        }
-        if provider_is_managed && !preserve_hooks {
-            remove_table_item_if_bool(&mut doc, "features", "hooks", true);
-        }
+        None => remove_codex_config_without_backup(&mut doc, provider_is_managed, preserve_hooks),
     }
 
     remove_empty_table(&mut doc, "model_providers");
     remove_empty_table(&mut doc, "features");
     atomic_write(path, doc.to_string().as_bytes())?;
     remove_backup(path)
+}
+
+fn read_codex_backup_doc(path: &Path) -> Result<Option<DocumentMut>, String> {
+    let backup = backup_path(path);
+    if !backup.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&backup)
+        .map_err(|error| format!("failed to read {}: {error}", backup.display()))?;
+    raw.parse::<DocumentMut>()
+        .map(Some)
+        .map_err(|error| format!("invalid TOML in {}: {error}", backup.display()))
+}
+
+fn restore_codex_config_from_backup(
+    doc: &mut DocumentMut,
+    backup_doc: &DocumentMut,
+    provider_is_managed: bool,
+    preserve_hooks: bool,
+) {
+    if provider_is_managed {
+        restore_top_level_item_if_str(doc, backup_doc, "model_provider", "nemo-relay-openai");
+        restore_table_item(doc, backup_doc, "model_providers", "nemo-relay-openai");
+    }
+    if !preserve_hooks || feature_hooks_enabled(doc) != Some(true) {
+        restore_table_item_if_bool(doc, backup_doc, "features", "hooks", true);
+    }
+}
+
+fn remove_codex_config_without_backup(
+    doc: &mut DocumentMut,
+    provider_is_managed: bool,
+    preserve_hooks: bool,
+) {
+    if !provider_is_managed {
+        return;
+    }
+    if top_level_item_is_str(doc, "model_provider", "nemo-relay-openai") {
+        doc.as_table_mut().remove("model_provider");
+    }
+    if let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut) {
+        providers.remove("nemo-relay-openai");
+    }
+    if !preserve_hooks {
+        remove_table_item_if_bool(doc, "features", "hooks", true);
+    }
 }
 
 pub(super) fn install_codex_hooks(path: &Path, gateway_url: &str) -> Result<(), String> {
@@ -353,13 +367,16 @@ pub(super) fn restore_top_level_item_if_str(
     key: &str,
     expected: &str,
 ) {
-    let current = doc
-        .get(key)
-        .and_then(Item::as_value)
-        .and_then(|value| value.as_str());
-    if current == Some(expected) {
+    if top_level_item_is_str(doc, key, expected) {
         restore_top_level_item(doc, backup, key);
     }
+}
+
+fn top_level_item_is_str(doc: &DocumentMut, key: &str, expected: &str) -> bool {
+    doc.get(key)
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        == Some(expected)
 }
 
 pub(super) fn restore_table_item(

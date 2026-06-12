@@ -3,6 +3,8 @@
 
 //! Unit tests for tool API lifecycle behavior.
 
+#![allow(clippy::await_holding_lock)]
+
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -20,8 +22,15 @@ fn reset_global() {
     *context.write().unwrap() = NemoRelayContextState::new();
 }
 
+fn lock_global_runtime() -> std::sync::MutexGuard<'static, ()> {
+    crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+}
+
 #[test]
 fn tool_call_execute_adds_otel_status_metadata_to_end_events() {
+    let _guard = lock_global_runtime();
     reset_global();
 
     let captured_events = Arc::new(Mutex::new(Vec::<(String, Option<Json>)>::new()));
