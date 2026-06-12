@@ -136,9 +136,9 @@ affected exporter records, logs, or reports the delivery problem.
 
 | Failure | Behavior |
 |---|---|
-| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, or unavailable exporter features | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
-| ATOF file open, serialization, or flush failure | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
-| ATOF streaming endpoint startup or send failure | File output and other endpoints continue. Endpoint failures are logged with the endpoint index; endpoint flush and close timeouts are logged instead of blocking shutdown indefinitely. |
+| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF endpoint config, unavailable ATOF streaming support, or ATOF endpoint worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
+| ATOF event serialization or file write/flush failure after activation | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
+| ATOF streaming endpoint connection or send failure after activation | File output and other already-started endpoints continue. Endpoint failures are logged with the endpoint index; endpoint flush and close timeouts are logged instead of blocking shutdown indefinitely. |
 | ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The failed sink is recorded as unhealthy and skipped for later trajectories. Other configured sinks continue to receive writes. |
 | ATIF dispatcher serialization or subscriber-management failure | The ATIF dispatcher records a fatal exporter error and stops observing later ATIF events. Other observability sections continue to run. |
 | OpenTelemetry or OpenInference construction failure | Plugin initialization fails before the subscriber is registered. |
@@ -150,10 +150,12 @@ subscribers that register late. If the plugin is cleared while an agent scope
 is still open, the ATIF dispatcher writes the partial trajectory it has already
 observed.
 
-Use `nemo-relay doctor` and exporter-specific logs when validating remote
-collector paths such as OTLP, Intake-connected HTTP endpoints, or object
-storage. For local artifact paths, verify that the running process can create
-the output directory and that teardown calls `plugin.clear()` or
+Use `nemo-relay doctor` to validate local ATOF and ATIF output directories,
+OTLP HTTP endpoints, and ATOF streaming endpoints. Validate ATIF remote storage
+destinations, including HTTP storage and S3-compatible storage, with exporter
+logs and backend-side checks because `nemo-relay doctor` does not probe
+`atif.storage`. For local artifact paths, verify that the running process can
+create the output directory and that teardown calls `plugin.clear()` or
 `clear_plugin_configuration()` before the process exits.
 
 ## Per-Language Plugin Configuration
