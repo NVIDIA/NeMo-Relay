@@ -30,7 +30,7 @@ The release pipeline publishes these package surfaces from a tag push:
 
 | Ecosystem | Published Surface |
 |---|---|
-| crates.io | `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, `nemo-relay-cli` |
+| crates.io | `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-ffi`, `nemo-relay-cli` |
 | PyPI | `nemo-relay` |
 | npm | `nemo-relay-node`, `nemo-relay-openclaw`, `nemo-relay-wasm` |
 | GitHub Releases | CLI binaries and `SHA256SUMS` |
@@ -50,9 +50,9 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
 
 - The root `Cargo.toml` `workspace.package.version` is the canonical release
   version for the Rust workspace.
-- The root `Cargo.toml` `workspace.dependencies` entries for
-  `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, and `nemo-relay-cli` must
-  stay aligned with that same version.
+- The root `Cargo.toml` `workspace.dependencies` entries for `nemo-relay`,
+  `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-ffi`, and
+  `nemo-relay-cli` must stay aligned with that same version.
 - `crates/node/package.json` carries the base npm version for the Node.js
   package. The repository-root `package-lock.json` carries the npm workspace
   lock entries and must be updated with it.
@@ -133,7 +133,8 @@ Before you create a release tag, confirm the following:
 4. Registry credentials and repository settings are in place:
    - GitHub Actions `id-token: write` access for the top-level crates.io publish job
    - crates.io trusted publishers for `nemo-relay`, `nemo-relay-adaptive`,
-     `nemo-relay-ffi`, and `nemo-relay-cli` are configured for the top-level
+     `nemo-relay-pii-redaction`, `nemo-relay-ffi`, and `nemo-relay-cli` are
+     configured for the top-level
      [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) workflow
    - GitHub Actions `id-token: write` access is available for the top-level npm publish job
    - GitHub Actions `id-token: write` access for the top-level PyPI publish job
@@ -153,7 +154,8 @@ The helper updates:
 
 1. The root [`Cargo.toml`](Cargo.toml) workspace version.
 2. The root [`Cargo.toml`](Cargo.toml) `workspace.dependencies` versions for
-   `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-ffi`, and `nemo-relay-cli`.
+   `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`,
+   `nemo-relay-ffi`, and `nemo-relay-cli`.
 3. [`crates/node/package.json`](crates/node/package.json) and the `crates/node`
    entry in the root [`package-lock.json`](package-lock.json) to the same
    release version.
@@ -242,8 +244,8 @@ The release pipeline then:
    jobs complete:
    - `publish-rust` stamps Cargo workspace versions from the release tag, then
      runs `cargo publish --package` for `nemo-relay`, `nemo-relay-adaptive`,
-     `nemo-relay-ffi`, and `nemo-relay-cli` through trusted publishing from
-     the top-level workflow
+     `nemo-relay-pii-redaction`, `nemo-relay-ffi`, and `nemo-relay-cli`
+     through trusted publishing from the top-level workflow
    - `publish-python` uploads the wheel artifacts to PyPI with trusted
      publishing from the top-level workflow
    - `publish-npm` publishes the Node.js, OpenClaw plugin, and WebAssembly npm
@@ -308,7 +310,8 @@ for that tag.
 
 After the release is live, verify:
 
-1. The expected crates are visible on crates.io.
+1. The `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`,
+   `nemo-relay-ffi`, and `nemo-relay-cli` crates are visible on crates.io.
 2. The `nemo-relay` wheel is visible on PyPI.
 3. The `nemo-relay-node`, `nemo-relay-openclaw`, and `nemo-relay-wasm` packages
    are visible on npm.
