@@ -3347,6 +3347,12 @@ impl AdaptiveRuntime {
     }
 
     /// Register all configured adaptive runtime features.
+    ///
+    /// `register()` and `shutdown()` both temporarily take ownership of the
+    /// runtime state, so concurrent calls are mutually exclusive by design.
+    /// Once either operation takes the state, another concurrent registration or
+    /// shutdown attempt fails with "adaptive runtime already shut down". This
+    /// prevents double-registration and shutdown-during-registration races.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn register(&self, env: Env) -> napi::Result<JsObject> {
         let inner = self.inner.clone();

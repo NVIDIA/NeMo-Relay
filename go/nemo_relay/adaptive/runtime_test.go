@@ -18,6 +18,7 @@ func TestAdaptivePackageRuntimeHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime failed: %v", err)
 	}
+	defer runtime.Shutdown()
 	if err := runtime.Register(); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
