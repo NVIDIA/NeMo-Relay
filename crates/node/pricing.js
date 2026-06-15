@@ -82,12 +82,13 @@ function promptTokenThresholdRateSchedule(tiers = [], config = {}) {
  * @returns {object} A normalized model pricing entry.
  */
 function catalogEntry(config) {
+  const { prompt_cache: promptCacheConfig, ...entryConfig } = config;
   return {
     aliases: [],
     currency: 'USD',
     unit: 'per_token',
-    prompt_cache: promptCache(),
-    ...config,
+    ...entryConfig,
+    prompt_cache: promptCache(promptCacheConfig),
   };
 }
 

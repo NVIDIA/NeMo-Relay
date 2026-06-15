@@ -193,6 +193,9 @@ func NewTokenRateTier(rates TokenPricingRates) TokenRateTier {
 
 // NewPromptTokenThresholdRateSchedule returns a full-request prompt-token threshold schedule.
 func NewPromptTokenThresholdRateSchedule(tiers ...TokenRateTier) PromptTokenThresholdRateSchedule {
+	if tiers == nil {
+		tiers = []TokenRateTier{}
+	}
 	return PromptTokenThresholdRateSchedule{
 		AppliesTo: "full_request",
 		Tiers:     tiers,

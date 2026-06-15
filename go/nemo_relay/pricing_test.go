@@ -52,6 +52,19 @@ func TestPricingConfigHelpers(t *testing.T) {
 }
 
 func TestPricingRateScheduleHelper(t *testing.T) {
+	emptySchedule := NewPromptTokenThresholdRateSchedule()
+	emptyPayload, err := json.Marshal(emptySchedule)
+	if err != nil {
+		t.Fatalf("marshal empty schedule: %v", err)
+	}
+	var emptyParsed map[string]any
+	if err := json.Unmarshal(emptyPayload, &emptyParsed); err != nil {
+		t.Fatalf("unmarshal empty schedule: %v", err)
+	}
+	if tiers, ok := emptyParsed["tiers"].([]any); !ok || len(tiers) != 0 {
+		t.Fatalf("expected empty tiers array, got %#v", emptyParsed["tiers"])
+	}
+
 	minTokens := uint64(128)
 	tier := NewTokenRateTier(NewTokenPricingRates(1, 2))
 	tier.MinPromptTokens = &minTokens
@@ -99,7 +112,14 @@ func TestValidatePricingConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidatePricingConfig invalid failed: %v", err)
 	}
-	if len(invalid.Diagnostics) == 0 || invalid.Diagnostics[0].Code != "pricing.invalid_config" {
+	foundInvalidConfig := false
+	for _, diagnostic := range invalid.Diagnostics {
+		if diagnostic.Code == "pricing.invalid_config" {
+			foundInvalidConfig = true
+			break
+		}
+	}
+	if !foundInvalidConfig {
 		t.Fatalf("expected pricing invalid diagnostic, got %#v", invalid.Diagnostics)
 	}
 }

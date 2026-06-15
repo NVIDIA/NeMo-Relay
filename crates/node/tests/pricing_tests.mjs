@@ -37,6 +37,9 @@ describe('pricing plugin helpers', () => {
     assert.equal(component.kind, pricing.PRICING_PLUGIN_KIND);
     assert.equal(component.enabled, true);
     assert.equal(component.config.sources[0].type, 'inline');
+    assert.deepEqual(pricedEntry({ prompt_cache: {} }).prompt_cache, {
+      read_accounting: 'included_in_prompt_tokens',
+    });
   });
 
   it('builds file sources and threshold rate schedules', () => {
