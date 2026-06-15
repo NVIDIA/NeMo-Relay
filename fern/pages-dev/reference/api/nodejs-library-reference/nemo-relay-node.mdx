@@ -204,6 +204,43 @@ export declare class OpenInferenceSubscriber {
 }
 ```
 
+### `AdaptiveRuntime`
+
+Owned adaptive runtime that can register adaptive features outside the plugin system.
+
+```ts
+export declare class AdaptiveRuntime {
+  /**
+   * Create an adaptive runtime wrapper from config.
+   *
+   * The runtime is constructed lazily when `register()` is awaited.
+   */
+  constructor(config: Json)
+  /**
+   * Register all configured adaptive runtime features.
+   *
+   * `register()` and `shutdown()` both temporarily take ownership of the
+   * runtime state, so concurrent calls are mutually exclusive by design.
+   * Once either operation takes the state, another concurrent registration or
+   * shutdown attempt fails with "adaptive runtime already shut down". This
+   * prevents double-registration and shutdown-during-registration races.
+   */
+  register(): Promise<void>
+  /** Deregister all previously registered adaptive runtime features. */
+  deregister(): void
+  /** Shut down the adaptive runtime and consume its Rust runtime state. */
+  shutdown(): Promise<void>
+  /** Block until the telemetry drain has processed pending events. */
+  waitForIdle(): void
+  /** Return the validation report captured during runtime construction. */
+  report(): Json
+  /** Bind the runtime's ACG request rewrite to a scope. */
+  bindScope(scopeHandle: ScopeHandle): void
+  /** Build cache request facts for an annotated LLM request. */
+  buildCacheRequestFacts(options: Json): Json | null
+}
+```
+
 ### `LlmStream`
 
 An async iterator over chunks from a streaming LLM response.
@@ -1138,6 +1175,30 @@ Run the registered LLM conditional execution guardrail chain. Throws if any guar
 
 ```ts
 export declare function llmConditionalExecution(request: Json): Promise<void>
+```
+
+### `validateAdaptiveConfig`
+
+Validate an adaptive config document without constructing a runtime.
+
+```ts
+export declare function validateAdaptiveConfig(config: Json): Json
+```
+
+### `buildCacheTelemetryEvent`
+
+Build one adaptive cache telemetry event from normalized usage.
+
+```ts
+export declare function buildCacheTelemetryEvent(options: Json): Json | null
+```
+
+### `setLatencySensitivity`
+
+Set manual latency sensitivity on the current scope.
+
+```ts
+export declare function setLatencySensitivity(value: number): void
 ```
 
 ### `validatePluginConfig`

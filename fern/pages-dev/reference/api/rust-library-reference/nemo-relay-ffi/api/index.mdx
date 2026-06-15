@@ -25,6 +25,17 @@ Each function clears the thread-local error before executing and returns an [`Ne
 ## Functions
 
 - [nemo_relay_active_plugin_report_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-active-plugin-report-json): Return the last successfully configured plugin report as JSON.
+- [nemo_relay_adaptive_build_cache_telemetry_event](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-build-cache-telemetry-event): Build one cache telemetry event as JSON.
+- [nemo_relay_adaptive_runtime_bind_scope](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-bind-scope): Bind ACG request rewrites to a scope.
+- [nemo_relay_adaptive_runtime_build_cache_request_facts](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-build-cache-request-facts): Build cache request facts as JSON.
+- [nemo_relay_adaptive_runtime_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-create): Create an owned adaptive runtime handle from config JSON.
+- [nemo_relay_adaptive_runtime_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-deregister): Deregister configured adaptive runtime features.
+- [nemo_relay_adaptive_runtime_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-register): Register configured adaptive runtime features.
+- [nemo_relay_adaptive_runtime_report_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-report-json): Return the runtime construction report as JSON.
+- [nemo_relay_adaptive_runtime_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-shutdown): Shut down the adaptive runtime and consume its Rust runtime state.
+- [nemo_relay_adaptive_runtime_wait_for_idle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-runtime-wait-for-idle): Wait until the adaptive telemetry drain has processed pending events.
+- [nemo_relay_adaptive_set_latency_sensitivity](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-set-latency-sensitivity): Set manual latency sensitivity on the current scope.
+- [nemo_relay_adaptive_validate_config](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-adaptive-validate-config): Validate an adaptive config document and return the diagnostics report as JSON.
 - [nemo_relay_anthropic_messages_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-anthropic-messages-codec-new): Create a new Anthropic Messages API codec handle.
 - [nemo_relay_atif_exporter_clear](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-clear): Clears all collected events from the exporter.
 - [nemo_relay_atif_exporter_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atif-exporter-create): Creates a new ATIF exporter.

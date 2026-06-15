@@ -15,6 +15,7 @@ This module defines opaque handle wrappers, enumerations, accessor functions, an
 
 ## Structs
 
+- [FfiAdaptiveRuntime](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiadaptiveruntime): Opaque owned adaptive runtime handle.
 - [FfiAtifExporter](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiatifexporter): Opaque ATIF exporter handle.
 - [FfiAtofExporter](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiatofexporter): Opaque ATOF JSONL exporter handle.
 - [FfiCodecHandle](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-fficodechandle): Opaque handle carrying both request and response codec trait objects.
@@ -35,6 +36,7 @@ This module defines opaque handle wrappers, enumerations, accessor functions, an
 
 ## Functions
 
+- [nemo_relay_adaptive_runtime_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-adaptive-runtime-free): Free an adaptive runtime handle previously returned by `nemo_relay_adaptive_runtime_create`.
 - [nemo_relay_atif_exporter_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-atif-exporter-free): Free an ATIF exporter handle previously returned by `nemo_relay_atif_exporter_create`.
 - [nemo_relay_atof_exporter_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-atof-exporter-free): Free an ATOF JSONL exporter handle previously returned by `nemo_relay_atof_exporter_create`.
 - [nemo_relay_codec_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-codec-free): Free a codec handle previously returned by one of the codec constructor functions (`nemo_relay_openai_chat_codec_new`, etc.).
