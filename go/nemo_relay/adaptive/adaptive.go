@@ -28,6 +28,9 @@ type Config = nemo_relay.AdaptiveConfig
 // ComponentSpec wraps adaptive config as a top-level adaptive component.
 type ComponentSpec = nemo_relay.AdaptiveComponentSpec
 
+// Runtime owns adaptive runtime registrations outside the plugin system.
+type Runtime = nemo_relay.AdaptiveRuntime
+
 // StateConfig selects the adaptive state backend.
 type StateConfig = nemo_relay.AdaptiveStateConfig
 
@@ -48,6 +51,24 @@ type AcgStabilityThresholds = nemo_relay.AcgStabilityThresholds
 
 // AcgConfig configures the adaptive cache governor.
 type AcgConfig = nemo_relay.AcgConfig
+
+// CacheUsage is normalized LLM token usage for cache telemetry.
+type CacheUsage = nemo_relay.CacheUsage
+
+// AgentIdentity identifies the agent associated with cache telemetry.
+type AgentIdentity = nemo_relay.AgentIdentity
+
+// CacheRequestFactsInput is the typed input for building cache request facts.
+type CacheRequestFactsInput = nemo_relay.CacheRequestFactsInput
+
+// CacheRequestFacts describes request-time facts used to classify cache misses.
+type CacheRequestFacts = nemo_relay.CacheRequestFacts
+
+// CacheTelemetryEventInput is the typed input for building cache telemetry events.
+type CacheTelemetryEventInput = nemo_relay.CacheTelemetryEventInput
+
+// CacheTelemetryEvent is the normalized adaptive cache telemetry event.
+type CacheTelemetryEvent = nemo_relay.CacheTelemetryEvent
 
 // PluginKind is the top-level plugin kind used by the adaptive component.
 const PluginKind = nemo_relay.AdaptivePluginKind
@@ -100,4 +121,24 @@ func NewComponentSpec(config Config) ComponentSpec {
 // Component converts adaptive config directly into the shared plugin shape.
 func Component(config Config) nemo_relay.PluginComponentSpec {
 	return nemo_relay.AdaptiveComponent(config)
+}
+
+// ValidateConfig validates an adaptive runtime config without constructing a runtime.
+func ValidateConfig(config Config) (nemo_relay.ConfigReport, error) {
+	return nemo_relay.ValidateAdaptiveConfig(config)
+}
+
+// NewRuntime creates an owned adaptive runtime from config.
+func NewRuntime(config Config) (*Runtime, error) {
+	return nemo_relay.NewAdaptiveRuntime(config)
+}
+
+// BuildCacheTelemetryEvent builds one cache telemetry event from normalized usage.
+func BuildCacheTelemetryEvent(input CacheTelemetryEventInput) (*CacheTelemetryEvent, error) {
+	return nemo_relay.BuildCacheTelemetryEvent(input)
+}
+
+// SetLatencySensitivity sets manual latency sensitivity on the current scope.
+func SetLatencySensitivity(value uint32) error {
+	return nemo_relay.SetLatencySensitivity(value)
 }

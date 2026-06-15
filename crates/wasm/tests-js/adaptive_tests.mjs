@@ -82,3 +82,77 @@ test('WebAssembly adaptive wrappers build adaptive component specs', () => {
     },
   );
 });
+
+test('WebAssembly adaptive wrappers validate config through the native runtime', () => {
+  assert.deepEqual(adaptive.validateConfig(adaptive.defaultConfig()).diagnostics, []);
+});
+
+test('WebAssembly adaptive wrappers build cache telemetry events from options', () => {
+  const event = adaptive.buildCacheTelemetryEvent({
+    provider: 'openai',
+    requestId: '00000000-0000-0000-0000-000000000301',
+    usage: {
+      prompt_tokens: 100,
+      completion_tokens: 10,
+      cache_read_tokens: 25,
+    },
+    agentId: 'wasm-agent',
+    templateVersion: 'v1',
+    toolsetHash: 'tools',
+    modelFamily: 'gpt',
+    tenantScope: 'tenant',
+    timestamp: '2026-06-15T00:00:00Z',
+  });
+
+  assert.equal(event.provider, 'openai');
+  assert.equal(event.cache_read_tokens, 25);
+  assert.equal(event.total_prompt_tokens, 100);
+  assert.equal(event.hit_rate, 0.25);
+  assert.equal(event.agent_identity.agent_id, 'wasm-agent');
+});
+
+test('WebAssembly adaptive runtime registers and builds cache request facts', async () => {
+  const runtime = new adaptive.AdaptiveRuntime({
+    version: 1,
+    agent_id: 'wasm-adaptive-openai',
+    state: {
+      backend: adaptive.inMemoryBackend(),
+    },
+    acg: adaptive.acgConfig({
+      provider: 'openai',
+    }),
+  });
+
+  await runtime.register();
+  try {
+    assert.deepEqual(runtime.report().diagnostics, []);
+    const facts = runtime.buildCacheRequestFacts({
+      provider: 'openai',
+      requestId: '00000000-0000-0000-0000-000000000302',
+      annotatedRequest: {
+        messages: [
+          {
+            role: 'user',
+            content: 'Find sources about caching',
+          },
+        ],
+        model: 'gpt-4.1-mini',
+      },
+      agentId: 'wasm-adaptive-openai',
+    });
+
+    assert.deepEqual(facts, {
+      missing_facts: ['acg_stability_unavailable'],
+      provider: 'openai',
+      stable_prefix_length: 0,
+    });
+    runtime.waitForIdle();
+    runtime.deregister();
+  } finally {
+    await runtime.shutdown().catch(() => {});
+  }
+});
+
+test('WebAssembly adaptive wrappers reject invalid latency sensitivity values', () => {
+  assert.throws(() => adaptive.setLatencySensitivity(0), /positive/);
+});

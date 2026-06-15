@@ -23,11 +23,14 @@
 //! All functions use `JsValue` for JSON payloads and return `Result<T, JsValue>`
 //! where errors are thrown as JavaScript exceptions.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use js_sys::{Function, Reflect};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -50,6 +53,8 @@ use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle as CoreScopeHandle};
 use nemo_relay::api::subscriber as relay_subscriber_api;
 use nemo_relay::api::tool as relay_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::response::Usage;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
@@ -60,7 +65,12 @@ use nemo_relay::plugin::{
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
     validate_plugin_config as validate_plugin_config_impl,
 };
+use nemo_relay_adaptive::acg::{
+    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
+};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 use crate::callable;
@@ -2201,6 +2211,368 @@ fn ensure_adaptive_component_registered() -> Result<(), JsValue> {
 
 fn ensure_pii_redaction_component_registered() -> Result<(), JsValue> {
     register_pii_redaction_component().map_err(to_js_err)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheTelemetryOptions {
+    provider: String,
+    #[serde(alias = "request_id")]
+    request_id: String,
+    usage: Option<Json>,
+    #[serde(default, alias = "request_facts")]
+    request_facts: Option<Json>,
+    #[serde(alias = "agent_id")]
+    agent_id: String,
+    #[serde(alias = "template_version")]
+    template_version: String,
+    #[serde(alias = "toolset_hash")]
+    toolset_hash: String,
+    #[serde(alias = "model_family")]
+    model_family: String,
+    #[serde(alias = "tenant_scope")]
+    tenant_scope: String,
+    timestamp: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheRequestFactsOptions {
+    provider: String,
+    #[serde(alias = "request_id")]
+    request_id: String,
+    #[serde(alias = "annotated_request")]
+    annotated_request: Json,
+    #[serde(alias = "agent_id")]
+    agent_id: String,
+    timestamp: Option<String>,
+}
+
+enum WasmAdaptiveRuntimeState {
+    Pending {
+        config: AdaptiveConfig,
+        report: nemo_relay::plugin::ConfigReport,
+    },
+    Ready(CoreAdaptiveRuntime),
+}
+
+/// Owned adaptive runtime that can register adaptive features outside the plugin system.
+#[wasm_bindgen(js_name = AdaptiveRuntime)]
+pub struct AdaptiveRuntime {
+    inner: Rc<RefCell<Option<WasmAdaptiveRuntimeState>>>,
+}
+
+#[wasm_bindgen(js_class = AdaptiveRuntime)]
+impl AdaptiveRuntime {
+    /// Create an adaptive runtime wrapper from config.
+    ///
+    /// The runtime is constructed lazily when `register()` is awaited.
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        #[wasm_bindgen(unchecked_param_type = "Json")] config: JsValue,
+    ) -> Result<Self, JsValue> {
+        let config_json = js_to_json(&config)?;
+        let config: AdaptiveConfig = serde_json::from_value(config_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let report = validate_adaptive_config_or_err(&config)?;
+        Ok(Self {
+            inner: Rc::new(RefCell::new(Some(WasmAdaptiveRuntimeState::Pending {
+                config,
+                report,
+            }))),
+        })
+    }
+
+    /// Register all configured adaptive runtime features.
+    pub fn register(&self) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let state = inner
+                .try_borrow_mut()
+                .map_err(|_| JsValue::from_str("adaptive runtime is locked"))?
+                .take()
+                .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+
+            let (result, next_state) = match state {
+                WasmAdaptiveRuntimeState::Pending { config, report } => {
+                    match CoreAdaptiveRuntime::new(config.clone()).await {
+                        Ok(mut runtime) => {
+                            let result = runtime
+                                .register()
+                                .await
+                                .map_err(|error| JsValue::from_str(&error.to_string()));
+                            (result, Some(WasmAdaptiveRuntimeState::Ready(runtime)))
+                        }
+                        Err(error) => (
+                            Err(JsValue::from_str(&error.to_string())),
+                            Some(WasmAdaptiveRuntimeState::Pending { config, report }),
+                        ),
+                    }
+                }
+                WasmAdaptiveRuntimeState::Ready(mut runtime) => {
+                    let result = runtime
+                        .register()
+                        .await
+                        .map_err(|error| JsValue::from_str(&error.to_string()));
+                    (result, Some(WasmAdaptiveRuntimeState::Ready(runtime)))
+                }
+            };
+
+            *inner
+                .try_borrow_mut()
+                .map_err(|_| JsValue::from_str("adaptive runtime is locked"))? = next_state;
+            result.map(|_| JsValue::UNDEFINED)
+        })
+    }
+
+    /// Deregister all previously registered adaptive runtime features.
+    pub fn deregister(&self) -> Result<(), JsValue> {
+        let mut guard = self.inner.try_borrow_mut().map_err(|_| {
+            JsValue::from_str(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+        match state {
+            WasmAdaptiveRuntimeState::Pending { .. } => Ok(()),
+            WasmAdaptiveRuntimeState::Ready(runtime) => runtime
+                .deregister()
+                .map_err(|error| JsValue::from_str(&error.to_string())),
+        }
+    }
+
+    /// Shut down the adaptive runtime and consume its Rust runtime state.
+    pub fn shutdown(&self) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let state = inner
+                .try_borrow_mut()
+                .map_err(|_| JsValue::from_str("adaptive runtime is locked"))?
+                .take()
+                .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+            match state {
+                WasmAdaptiveRuntimeState::Pending { .. } => Ok(JsValue::UNDEFINED),
+                WasmAdaptiveRuntimeState::Ready(runtime) => runtime
+                    .shutdown()
+                    .await
+                    .map(|_| JsValue::UNDEFINED)
+                    .map_err(|error| JsValue::from_str(&error.to_string())),
+            }
+        })
+    }
+
+    /// Block until the telemetry drain has processed pending events.
+    #[wasm_bindgen(js_name = "waitForIdle")]
+    pub fn wait_for_idle(&self) -> Result<(), JsValue> {
+        let guard = self.inner.try_borrow().map_err(|_| {
+            JsValue::from_str(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+        match state {
+            WasmAdaptiveRuntimeState::Pending { .. } => Ok(()),
+            WasmAdaptiveRuntimeState::Ready(runtime) => {
+                runtime.wait_for_idle();
+                Ok(())
+            }
+        }
+    }
+
+    /// Return the validation report captured during runtime construction.
+    #[wasm_bindgen(unchecked_return_type = "Json")]
+    pub fn report(&self) -> Result<JsValue, JsValue> {
+        let guard = self.inner.try_borrow().map_err(|_| {
+            JsValue::from_str(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+        let report = match state {
+            WasmAdaptiveRuntimeState::Pending { report, .. } => report,
+            WasmAdaptiveRuntimeState::Ready(runtime) => runtime.report(),
+        };
+        serde_wasm_bindgen::to_value(report).map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Bind the runtime's ACG request rewrite to a scope.
+    #[wasm_bindgen(js_name = "bindScope")]
+    pub fn bind_scope(&self, scope_handle: &ScopeHandle) -> Result<(), JsValue> {
+        let mut guard = self.inner.try_borrow_mut().map_err(|_| {
+            JsValue::from_str(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+        match state {
+            WasmAdaptiveRuntimeState::Pending { .. } => Err(JsValue::from_str(
+                "adaptive runtime must be registered before binding ACG request intercepts",
+            )),
+            WasmAdaptiveRuntimeState::Ready(runtime) => runtime
+                .bind_scope(scope_handle.inner.uuid)
+                .map_err(|error| JsValue::from_str(&error.to_string())),
+        }
+    }
+
+    /// Build cache request facts for an annotated LLM request.
+    #[wasm_bindgen(
+        js_name = "buildCacheRequestFacts",
+        unchecked_return_type = "Json | null"
+    )]
+    pub fn build_cache_request_facts(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "Json")] options: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let options: CacheRequestFactsOptions = serde_wasm_bindgen::from_value(options)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let _request_id = parse_cache_telemetry_request_id(&options.request_id)?;
+        let _timestamp = parse_cache_telemetry_timestamp(options.timestamp.as_deref())?;
+        let annotated_request: AnnotatedLlmRequest =
+            serde_json::from_value(options.annotated_request).map_err(|error| {
+                JsValue::from_str(&format!("invalid annotatedRequest: {error}"))
+            })?;
+        let guard = self.inner.try_borrow().map_err(|_| {
+            JsValue::from_str(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("adaptive runtime already shut down"))?;
+        match state {
+            WasmAdaptiveRuntimeState::Pending { .. } => Err(JsValue::from_str(
+                "adaptive runtime must be registered before building cache request facts",
+            )),
+            WasmAdaptiveRuntimeState::Ready(runtime) => {
+                match runtime.build_cache_request_facts(
+                    &options.agent_id,
+                    &options.provider,
+                    &annotated_request,
+                ) {
+                    Some(facts) => serde_wasm_bindgen::to_value(&facts)
+                        .map_err(|error| JsValue::from_str(&error.to_string())),
+                    None => Ok(JsValue::NULL),
+                }
+            }
+        }
+    }
+}
+
+fn validate_adaptive_config_or_err(
+    config: &AdaptiveConfig,
+) -> Result<nemo_relay::plugin::ConfigReport, JsValue> {
+    let report = CoreAdaptiveRuntime::validate_config(config);
+    if report.has_errors() {
+        let joined = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(JsValue::from_str(&joined));
+    }
+    Ok(report)
+}
+
+fn parse_cache_telemetry_provider(provider: &str) -> Result<CacheTelemetryProvider, JsValue> {
+    match provider {
+        "anthropic" => Ok(CacheTelemetryProvider::Anthropic),
+        "openai" => Ok(CacheTelemetryProvider::OpenAI),
+        other => Err(JsValue::from_str(&format!("unsupported provider: {other}"))),
+    }
+}
+
+fn parse_cache_telemetry_request_id(request_id: &str) -> Result<Uuid, JsValue> {
+    Uuid::parse_str(request_id)
+        .map_err(|error| JsValue::from_str(&format!("invalid requestId UUID: {error}")))
+}
+
+fn parse_cache_telemetry_timestamp(timestamp: Option<&str>) -> Result<DateTime<Utc>, JsValue> {
+    match timestamp {
+        Some(value) => DateTime::parse_from_rfc3339(value)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| JsValue::from_str(&format!("invalid timestamp: {error}"))),
+        None => Ok(Utc::now()),
+    }
+}
+
+fn parse_cache_request_facts(value: Option<Json>) -> Result<Option<CacheRequestFacts>, JsValue> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|error| JsValue::from_str(&format!("invalid requestFacts: {error}")))
+}
+
+/// Validate an adaptive config document without constructing a runtime.
+#[wasm_bindgen(js_name = "validateAdaptiveConfig", unchecked_return_type = "Json")]
+pub fn validate_adaptive_config(
+    #[wasm_bindgen(unchecked_param_type = "Json")] config: JsValue,
+) -> Result<JsValue, JsValue> {
+    let config_json = js_to_json(&config)?;
+    let config: AdaptiveConfig = serde_json::from_value(config_json)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&CoreAdaptiveRuntime::validate_config(&config))
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+/// Build one adaptive cache telemetry event from normalized usage.
+#[wasm_bindgen(
+    js_name = "buildCacheTelemetryEvent",
+    unchecked_return_type = "Json | null"
+)]
+pub fn build_cache_telemetry_event(
+    #[wasm_bindgen(unchecked_param_type = "Json")] options: JsValue,
+) -> Result<JsValue, JsValue> {
+    let options: CacheTelemetryOptions = serde_wasm_bindgen::from_value(options)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let provider = parse_cache_telemetry_provider(&options.provider)?;
+    let request_id = parse_cache_telemetry_request_id(&options.request_id)?;
+    let timestamp = parse_cache_telemetry_timestamp(options.timestamp.as_deref())?;
+    let Some(usage_json) = options.usage else {
+        return Ok(JsValue::NULL);
+    };
+    let usage: Usage = serde_json::from_value(usage_json)
+        .map_err(|error| JsValue::from_str(&format!("invalid usage: {error}")))?;
+    let request_facts = parse_cache_request_facts(options.request_facts)?;
+    let agent_identity = AgentIdentity {
+        agent_id: options.agent_id,
+        template_version: options.template_version,
+        toolset_hash: options.toolset_hash,
+        model_family: options.model_family,
+        tenant_scope: options.tenant_scope,
+    };
+    match CacheTelemetryEvent::from_usage(
+        request_id,
+        agent_identity,
+        provider,
+        &usage,
+        timestamp,
+        request_facts.as_ref(),
+    ) {
+        Some(event) => serde_wasm_bindgen::to_value(&event)
+            .map_err(|error| JsValue::from_str(&error.to_string())),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Set manual latency sensitivity on the current scope.
+#[wasm_bindgen(js_name = "setLatencySensitivity")]
+pub fn set_latency_sensitivity(value: u32) -> Result<(), JsValue> {
+    if value == 0 {
+        return Err(JsValue::from_str("sensitivity must be positive (> 0)"));
+    }
+    adaptive_set_latency_sensitivity(value).map_err(|error| JsValue::from_str(&error))
 }
 
 /// Validate a plugin config document and return a structured diagnostics report.

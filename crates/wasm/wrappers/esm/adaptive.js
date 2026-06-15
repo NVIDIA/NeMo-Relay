@@ -2,8 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as plugin from './plugin.js';
+import {
+  AdaptiveRuntime,
+  buildCacheTelemetryEvent as nativeBuildCacheTelemetryEvent,
+  setLatencySensitivity as nativeSetLatencySensitivity,
+  validateAdaptiveConfig,
+} from './pkg/index.js';
 
 export const ADAPTIVE_PLUGIN_KIND = 'adaptive';
+export { AdaptiveRuntime };
 
 /**
  * Create a default adaptive component config.
@@ -160,4 +167,34 @@ export function ComponentSpec(config, { enabled = true } = {}) {
   return plugin.ComponentSpec(ADAPTIVE_PLUGIN_KIND, config, {
     enabled,
   });
+}
+
+/**
+ * Validate an adaptive config document without constructing a runtime.
+ *
+ * @param {object} config - Adaptive runtime configuration document.
+ * @returns {object} A structured validation report with diagnostics.
+ */
+export function validateConfig(config) {
+  return validateAdaptiveConfig(config);
+}
+
+/**
+ * Build one adaptive cache telemetry event from normalized usage.
+ *
+ * @param {object} options - Cache telemetry event inputs.
+ * @returns {object|null} A telemetry event, or `null` when usage lacks prompt tokens.
+ */
+export function buildCacheTelemetryEvent(options) {
+  return nativeBuildCacheTelemetryEvent(options);
+}
+
+/**
+ * Set manual latency sensitivity on the current scope.
+ *
+ * @param {number} value - Positive sensitivity value to store on the current scope.
+ * @returns {void} Nothing.
+ */
+export function setLatencySensitivity(value) {
+  return nativeSetLatencySensitivity(value);
 }

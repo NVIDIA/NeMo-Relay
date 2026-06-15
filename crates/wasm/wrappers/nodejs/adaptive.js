@@ -3,6 +3,7 @@
 
 'use strict';
 
+const lib = require('./nemo_relay_wasm.js');
 const plugin = require('./plugin.js');
 
 const ADAPTIVE_PLUGIN_KIND = 'adaptive';
@@ -164,6 +165,37 @@ function ComponentSpec(config, { enabled = true } = {}) {
   });
 }
 
+/**
+ * Validate an adaptive config document without constructing a runtime.
+ *
+ * @param {object} config - Adaptive runtime configuration document.
+ * @returns {object} A structured validation report with diagnostics.
+ */
+function validateConfig(config) {
+  return lib.validateAdaptiveConfig(config);
+}
+
+/**
+ * Build one adaptive cache telemetry event from normalized usage.
+ *
+ * @param {object} options - Cache telemetry event inputs.
+ * @returns {object|null} A telemetry event, or `null` when usage lacks prompt tokens.
+ */
+function buildCacheTelemetryEvent(options) {
+  return lib.buildCacheTelemetryEvent(options);
+}
+
+/**
+ * Set manual latency sensitivity on the current scope.
+ *
+ * @param {number} value - Positive sensitivity value to store on the current scope.
+ * @returns {void} Nothing.
+ */
+function setLatencySensitivity(value) {
+  return lib.setLatencySensitivity(value);
+}
+
+exports.AdaptiveRuntime = lib.AdaptiveRuntime;
 exports.ADAPTIVE_PLUGIN_KIND = ADAPTIVE_PLUGIN_KIND;
 exports.defaultConfig = defaultConfig;
 exports.inMemoryBackend = inMemoryBackend;
@@ -173,3 +205,6 @@ exports.adaptiveHintsConfig = adaptiveHintsConfig;
 exports.toolParallelismConfig = toolParallelismConfig;
 exports.acgConfig = acgConfig;
 exports.ComponentSpec = ComponentSpec;
+exports.validateConfig = validateConfig;
+exports.buildCacheTelemetryEvent = buildCacheTelemetryEvent;
+exports.setLatencySensitivity = setLatencySensitivity;

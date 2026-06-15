@@ -110,6 +110,11 @@ enum NemoRelayScopeType {
 typedef int32_t NemoRelayScopeType;
 
 /**
+ * Opaque owned adaptive runtime handle.
+ */
+typedef struct FfiAdaptiveRuntime FfiAdaptiveRuntime;
+
+/**
  * Opaque ATIF exporter handle.
  */
 typedef struct FfiAtifExporter FfiAtifExporter;
@@ -412,6 +417,97 @@ NemoRelayStatus nemo_relay_llm_request_intercepts(const char *name,
  * All pointers must be valid.
  */
 NemoRelayStatus nemo_relay_llm_conditional_execution(const char *native_json);
+
+/**
+ * Validate an adaptive config document and return the diagnostics report as JSON.
+ *
+ * # Safety
+ * `config_json` must be a valid C string and `out_json` must be a valid, non-null pointer.
+ */
+NemoRelayStatus nemo_relay_adaptive_validate_config(const char *config_json, char **out_json);
+
+/**
+ * Create an owned adaptive runtime handle from config JSON.
+ *
+ * # Safety
+ * `config_json` must be a valid C string and `out` must be a valid, non-null pointer.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_create(const char *config_json,
+                                                   struct FfiAdaptiveRuntime **out);
+
+/**
+ * Register configured adaptive runtime features.
+ *
+ * # Safety
+ * `runtime` must be a valid adaptive runtime pointer.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_register(struct FfiAdaptiveRuntime *runtime);
+
+/**
+ * Deregister configured adaptive runtime features.
+ *
+ * # Safety
+ * `runtime` must be a valid adaptive runtime pointer.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_deregister(struct FfiAdaptiveRuntime *runtime);
+
+/**
+ * Shut down the adaptive runtime and consume its Rust runtime state.
+ *
+ * # Safety
+ * `runtime` must be a valid adaptive runtime pointer.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_shutdown(struct FfiAdaptiveRuntime *runtime);
+
+/**
+ * Wait until the adaptive telemetry drain has processed pending events.
+ *
+ * # Safety
+ * `runtime` must be a valid adaptive runtime pointer.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_wait_for_idle(struct FfiAdaptiveRuntime *runtime);
+
+/**
+ * Return the runtime construction report as JSON.
+ *
+ * # Safety
+ * `runtime` and `out_json` must be valid pointers.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_report_json(struct FfiAdaptiveRuntime *runtime,
+                                                        char **out_json);
+
+/**
+ * Bind ACG request rewrites to a scope.
+ *
+ * # Safety
+ * `runtime` and `scope` must be valid pointers.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_bind_scope(struct FfiAdaptiveRuntime *runtime,
+                                                       const struct FfiScopeHandle *scope);
+
+/**
+ * Build cache request facts as JSON.
+ *
+ * # Safety
+ * `runtime`, `options_json`, and `out_json` must be valid pointers.
+ */
+NemoRelayStatus nemo_relay_adaptive_runtime_build_cache_request_facts(struct FfiAdaptiveRuntime *runtime,
+                                                                      const char *options_json,
+                                                                      char **out_json);
+
+/**
+ * Build one cache telemetry event as JSON.
+ *
+ * # Safety
+ * `options_json` and `out_json` must be valid pointers.
+ */
+NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *options_json,
+                                                                char **out_json);
+
+/**
+ * Set manual latency sensitivity on the current scope.
+ */
+NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
 
 /**
  * Begin a manual LLM call lifecycle span.
@@ -2123,6 +2219,15 @@ void nemo_relay_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
  * `nemo_relay_openinference_subscriber_create`, or null.
  */
 void nemo_relay_openinference_subscriber_free(struct FfiOpenInferenceSubscriber *ptr);
+
+/**
+ * Free an adaptive runtime handle previously returned by
+ * `nemo_relay_adaptive_runtime_create`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `nemo_relay_adaptive_runtime_create`, or null.
+ */
+void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
 
 /**
  * Free a codec handle previously returned by one of the codec constructor

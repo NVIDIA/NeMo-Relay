@@ -1425,6 +1425,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-stream",

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Json } from './index';
+import type { Json, ScopeHandle } from './index';
 import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';
 
 export { ConfigPolicy, ConfigDiagnostic, ConfigReport };
@@ -69,6 +69,96 @@ export interface ComponentSpec {
   kind: 'adaptive';
   enabled?: boolean;
   config: Config;
+}
+
+/** Normalized LLM token usage for cache telemetry. */
+export interface CacheUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  cost?: Json;
+}
+
+/** Identity of the agent associated with cache telemetry. */
+export interface AgentIdentity {
+  agent_id: string;
+  template_version: string;
+  toolset_hash: string;
+  model_family: string;
+  tenant_scope: string;
+}
+
+/** Input for building cache request facts. */
+export interface CacheRequestFactsOptions {
+  provider: string;
+  requestId: string;
+  annotatedRequest: Json;
+  agentId: string;
+  timestamp?: string;
+}
+
+/** Request-time facts used to classify cache misses. */
+export interface CacheRequestFacts {
+  provider: string;
+  stable_prefix_length: number;
+  stable_prefix_tokens?: number;
+  required_min_tokens?: number;
+  first_mismatch_span_id?: string;
+  first_mismatch_sequence_index?: number;
+  expected_hash_prefix?: string;
+  actual_hash_prefix?: string;
+  retention_window_secs?: number;
+  observed_gap_secs?: number;
+  missing_facts?: string[];
+}
+
+/** Input for building cache telemetry events. */
+export interface CacheTelemetryEventOptions {
+  provider: 'anthropic' | 'openai' | string;
+  requestId: string;
+  usage?: CacheUsage | null;
+  requestFacts?: CacheRequestFacts | null;
+  agentId: string;
+  templateVersion: string;
+  toolsetHash: string;
+  modelFamily: string;
+  tenantScope: string;
+  timestamp?: string;
+}
+
+/** Normalized adaptive cache telemetry event. */
+export interface CacheTelemetryEvent {
+  request_id: string;
+  agent_identity: AgentIdentity;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_prompt_tokens: number;
+  hit_rate: number;
+  miss_reason?: Record<string, Json>;
+  miss_diagnosis?: Record<string, Json>;
+  provider: string;
+  timestamp: string;
+}
+
+/** Owned adaptive runtime outside the generic plugin system. */
+export declare class AdaptiveRuntime {
+  constructor(config: Config);
+  /** Register all configured adaptive runtime features. */
+  register(): Promise<void>;
+  /** Deregister all previously registered adaptive runtime features. */
+  deregister(): void;
+  /** Shut down the adaptive runtime and consume its Rust runtime state. */
+  shutdown(): Promise<void>;
+  /** Block until adaptive telemetry has processed pending events. */
+  waitForIdle(): void;
+  /** Return the validation report captured during construction. */
+  report(): ConfigReport;
+  /** Bind the runtime's ACG request rewrite to a scope. */
+  bindScope(scopeHandle: ScopeHandle): void;
+  /** Build cache request facts for an annotated LLM request. */
+  buildCacheRequestFacts(options: CacheRequestFactsOptions): CacheRequestFacts | null;
 }
 
 export declare const ADAPTIVE_PLUGIN_KIND: 'adaptive';
@@ -172,3 +262,9 @@ export declare function ComponentSpec(
     enabled?: boolean;
   },
 ): ComponentSpec;
+/** Validate an adaptive config document without constructing a runtime. */
+export declare function validateConfig(config: Config): ConfigReport;
+/** Build one adaptive cache telemetry event from normalized usage. */
+export declare function buildCacheTelemetryEvent(options: CacheTelemetryEventOptions): CacheTelemetryEvent | null;
+/** Set manual latency sensitivity on the current scope. */
+export declare function setLatencySensitivity(value: number): void;

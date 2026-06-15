@@ -63,6 +63,7 @@ use nemo_relay::plugin::{
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;
 
+mod adaptive;
 mod llm;
 mod llm_registry;
 mod observability;
@@ -73,6 +74,7 @@ mod scope_stack;
 mod tool_lifecycle;
 mod tool_registry;
 
+pub use adaptive::*;
 pub use llm::*;
 pub use llm_registry::*;
 pub use observability::*;

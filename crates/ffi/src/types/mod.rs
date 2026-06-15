@@ -26,6 +26,7 @@ use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::api::tool::ToolHandle;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay_adaptive::AdaptiveRuntime;
 
 use crate::convert::{json_to_c_string, str_to_c_string};
 use crate::error::set_last_error;
@@ -61,6 +62,8 @@ pub struct FfiOpenTelemetrySubscriber(pub nemo_relay::observability::otel::OpenT
 pub struct FfiOpenInferenceSubscriber(
     pub nemo_relay::observability::openinference::OpenInferenceSubscriber,
 );
+/// Opaque owned adaptive runtime handle.
+pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
@@ -267,6 +270,18 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_free(ptr: *mut FfiOpenTeleme
 pub unsafe extern "C" fn nemo_relay_openinference_subscriber_free(
     ptr: *mut FfiOpenInferenceSubscriber,
 ) {
+    if !ptr.is_null() {
+        drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free an adaptive runtime handle previously returned by
+/// `nemo_relay_adaptive_runtime_create`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `nemo_relay_adaptive_runtime_create`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveRuntime) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
     }

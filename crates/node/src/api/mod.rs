@@ -18,10 +18,12 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
+use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
@@ -39,6 +41,8 @@ use nemo_relay::api::scope::ScopeAttributes;
 use nemo_relay::api::subscriber as core_subscriber_api;
 use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::codec::request::AnnotatedLlmRequest;
+use nemo_relay::codec::response::Usage;
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
@@ -49,7 +53,12 @@ use nemo_relay::plugin::{
     validate_plugin_config as validate_plugin_config_impl,
 };
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
+use nemo_relay_adaptive::acg::{
+    AgentIdentity, CacheRequestFacts, CacheTelemetryEvent, CacheTelemetryProvider,
+};
+use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_set_latency_sensitivity;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 use crate::callable;
@@ -3269,6 +3278,357 @@ impl OpenInferenceSubscriber {
             .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheTelemetryOptions {
+    provider: String,
+    #[serde(alias = "request_id")]
+    request_id: String,
+    usage: Option<Json>,
+    #[serde(default, alias = "request_facts")]
+    request_facts: Option<Json>,
+    #[serde(alias = "agent_id")]
+    agent_id: String,
+    #[serde(alias = "template_version")]
+    template_version: String,
+    #[serde(alias = "toolset_hash")]
+    toolset_hash: String,
+    #[serde(alias = "model_family")]
+    model_family: String,
+    #[serde(alias = "tenant_scope")]
+    tenant_scope: String,
+    timestamp: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheRequestFactsOptions {
+    provider: String,
+    #[serde(alias = "request_id")]
+    request_id: String,
+    #[serde(alias = "annotated_request")]
+    annotated_request: Json,
+    #[serde(alias = "agent_id")]
+    agent_id: String,
+    timestamp: Option<String>,
+}
+
+enum NodeAdaptiveRuntimeState {
+    Pending {
+        config: AdaptiveConfig,
+        report: nemo_relay::plugin::ConfigReport,
+    },
+    Ready(CoreAdaptiveRuntime),
+}
+
+/// Owned adaptive runtime that can register adaptive features outside the plugin system.
+#[napi]
+pub struct AdaptiveRuntime {
+    inner: Arc<tokio::sync::Mutex<Option<NodeAdaptiveRuntimeState>>>,
+}
+
+#[napi]
+impl AdaptiveRuntime {
+    /// Create an adaptive runtime wrapper from config.
+    ///
+    /// The runtime is constructed lazily when `register()` is awaited.
+    #[napi(constructor)]
+    pub fn new(config: Json) -> napi::Result<Self> {
+        let config: AdaptiveConfig = serde_json::from_value(config)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let report = validate_adaptive_config_or_err(&config)?;
+        Ok(Self {
+            inner: Arc::new(tokio::sync::Mutex::new(Some(
+                NodeAdaptiveRuntimeState::Pending { config, report },
+            ))),
+        })
+    }
+
+    /// Register all configured adaptive runtime features.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn register(&self, env: Env) -> napi::Result<JsObject> {
+        let inner = self.inner.clone();
+        env.execute_tokio_future(
+            async move {
+                let state = {
+                    let mut guard = inner.lock().await;
+                    guard.take().ok_or_else(|| {
+                        napi::Error::from_reason("adaptive runtime already shut down")
+                    })?
+                };
+
+                let (result, next_state) = match state {
+                    NodeAdaptiveRuntimeState::Pending { config, report } => {
+                        match CoreAdaptiveRuntime::new(config.clone()).await {
+                            Ok(mut runtime) => {
+                                let result = runtime
+                                    .register()
+                                    .await
+                                    .map_err(|error| napi::Error::from_reason(error.to_string()));
+                                (result, Some(NodeAdaptiveRuntimeState::Ready(runtime)))
+                            }
+                            Err(error) => (
+                                Err(napi::Error::from_reason(error.to_string())),
+                                Some(NodeAdaptiveRuntimeState::Pending { config, report }),
+                            ),
+                        }
+                    }
+                    NodeAdaptiveRuntimeState::Ready(mut runtime) => {
+                        let result = runtime
+                            .register()
+                            .await
+                            .map_err(|error| napi::Error::from_reason(error.to_string()));
+                        (result, Some(NodeAdaptiveRuntimeState::Ready(runtime)))
+                    }
+                };
+
+                let mut guard = inner.lock().await;
+                *guard = next_state;
+                result
+            },
+            |env, _| env.get_undefined(),
+        )
+    }
+
+    /// Deregister all previously registered adaptive runtime features.
+    #[napi]
+    pub fn deregister(&self) -> napi::Result<()> {
+        let mut guard = self.inner.try_lock().map_err(|_| {
+            napi::Error::from_reason(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| napi::Error::from_reason("adaptive runtime already shut down"))?;
+        match state {
+            NodeAdaptiveRuntimeState::Pending { .. } => Ok(()),
+            NodeAdaptiveRuntimeState::Ready(runtime) => runtime
+                .deregister()
+                .map_err(|error| napi::Error::from_reason(error.to_string())),
+        }
+    }
+
+    /// Shut down the adaptive runtime and consume its Rust runtime state.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn shutdown(&self, env: Env) -> napi::Result<JsObject> {
+        let inner = self.inner.clone();
+        env.execute_tokio_future(
+            async move {
+                let state = {
+                    let mut guard = inner.lock().await;
+                    guard.take().ok_or_else(|| {
+                        napi::Error::from_reason("adaptive runtime already shut down")
+                    })?
+                };
+                match state {
+                    NodeAdaptiveRuntimeState::Pending { .. } => Ok(()),
+                    NodeAdaptiveRuntimeState::Ready(runtime) => runtime
+                        .shutdown()
+                        .await
+                        .map_err(|error| napi::Error::from_reason(error.to_string())),
+                }
+            },
+            |env, _| env.get_undefined(),
+        )
+    }
+
+    /// Block until the telemetry drain has processed pending events.
+    #[napi(js_name = "waitForIdle")]
+    pub fn wait_for_idle(&self) -> napi::Result<()> {
+        let guard = self.inner.try_lock().map_err(|_| {
+            napi::Error::from_reason(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("adaptive runtime already shut down"))?;
+        match state {
+            NodeAdaptiveRuntimeState::Pending { .. } => Ok(()),
+            NodeAdaptiveRuntimeState::Ready(runtime) => {
+                runtime.wait_for_idle();
+                Ok(())
+            }
+        }
+    }
+
+    /// Return the validation report captured during runtime construction.
+    #[napi]
+    pub fn report(&self) -> napi::Result<Json> {
+        let guard = self.inner.try_lock().map_err(|_| {
+            napi::Error::from_reason(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("adaptive runtime already shut down"))?;
+        let report = match state {
+            NodeAdaptiveRuntimeState::Pending { report, .. } => report,
+            NodeAdaptiveRuntimeState::Ready(runtime) => runtime.report(),
+        };
+        serde_json::to_value(report).map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Bind the runtime's ACG request rewrite to a scope.
+    #[napi(js_name = "bindScope")]
+    pub fn bind_scope(&self, scope_handle: &ScopeHandle) -> napi::Result<()> {
+        let mut guard = self.inner.try_lock().map_err(|_| {
+            napi::Error::from_reason(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_mut()
+            .ok_or_else(|| napi::Error::from_reason("adaptive runtime already shut down"))?;
+        match state {
+            NodeAdaptiveRuntimeState::Pending { .. } => Err(napi::Error::from_reason(
+                "adaptive runtime must be registered before binding ACG request intercepts",
+            )),
+            NodeAdaptiveRuntimeState::Ready(runtime) => runtime
+                .bind_scope(scope_handle.inner.uuid)
+                .map_err(|error| napi::Error::from_reason(error.to_string())),
+        }
+    }
+
+    /// Build cache request facts for an annotated LLM request.
+    #[napi(js_name = "buildCacheRequestFacts")]
+    pub fn build_cache_request_facts(&self, options: Json) -> napi::Result<Option<Json>> {
+        let options: CacheRequestFactsOptions = serde_json::from_value(options)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        let _request_id = parse_cache_telemetry_request_id(&options.request_id)?;
+        let _timestamp = parse_cache_telemetry_timestamp(options.timestamp.as_deref())?;
+        let annotated_request: AnnotatedLlmRequest =
+            serde_json::from_value(options.annotated_request).map_err(|error| {
+                napi::Error::from_reason(format!("invalid annotatedRequest: {error}"))
+            })?;
+        let guard = self.inner.try_lock().map_err(|_| {
+            napi::Error::from_reason(
+                "adaptive runtime is locked by an async operation; try again after await completes",
+            )
+        })?;
+        let state = guard
+            .as_ref()
+            .ok_or_else(|| napi::Error::from_reason("adaptive runtime already shut down"))?;
+        match state {
+            NodeAdaptiveRuntimeState::Pending { .. } => Err(napi::Error::from_reason(
+                "adaptive runtime must be registered before building cache request facts",
+            )),
+            NodeAdaptiveRuntimeState::Ready(runtime) => Ok(runtime
+                .build_cache_request_facts(&options.agent_id, &options.provider, &annotated_request)
+                .map(|facts| serde_json::to_value(&facts))
+                .transpose()
+                .map_err(|error| napi::Error::from_reason(error.to_string()))?),
+        }
+    }
+}
+
+fn validate_adaptive_config_or_err(
+    config: &AdaptiveConfig,
+) -> napi::Result<nemo_relay::plugin::ConfigReport> {
+    let report = CoreAdaptiveRuntime::validate_config(config);
+    if report.has_errors() {
+        let joined = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(napi::Error::from_reason(joined));
+    }
+    Ok(report)
+}
+
+fn parse_cache_telemetry_provider(provider: &str) -> napi::Result<CacheTelemetryProvider> {
+    match provider {
+        "anthropic" => Ok(CacheTelemetryProvider::Anthropic),
+        "openai" => Ok(CacheTelemetryProvider::OpenAI),
+        other => Err(napi::Error::from_reason(format!(
+            "unsupported provider: {other}",
+        ))),
+    }
+}
+
+fn parse_cache_telemetry_request_id(request_id: &str) -> napi::Result<uuid::Uuid> {
+    uuid::Uuid::parse_str(request_id)
+        .map_err(|error| napi::Error::from_reason(format!("invalid requestId UUID: {error}")))
+}
+
+fn parse_cache_telemetry_timestamp(timestamp: Option<&str>) -> napi::Result<DateTime<Utc>> {
+    match timestamp {
+        Some(value) => DateTime::parse_from_rfc3339(value)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| napi::Error::from_reason(format!("invalid timestamp: {error}"))),
+        None => Ok(Utc::now()),
+    }
+}
+
+fn parse_cache_request_facts(value: Option<Json>) -> napi::Result<Option<CacheRequestFacts>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|error| napi::Error::from_reason(format!("invalid requestFacts: {error}")))
+}
+
+/// Validate an adaptive config document without constructing a runtime.
+#[napi(js_name = "validateAdaptiveConfig")]
+pub fn validate_adaptive_config(config: Json) -> napi::Result<Json> {
+    let config: AdaptiveConfig = serde_json::from_value(config)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    serde_json::to_value(CoreAdaptiveRuntime::validate_config(&config))
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Build one adaptive cache telemetry event from normalized usage.
+#[napi(js_name = "buildCacheTelemetryEvent")]
+pub fn build_cache_telemetry_event(options: Json) -> napi::Result<Option<Json>> {
+    let options: CacheTelemetryOptions = serde_json::from_value(options)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let provider = parse_cache_telemetry_provider(&options.provider)?;
+    let request_id = parse_cache_telemetry_request_id(&options.request_id)?;
+    let timestamp = parse_cache_telemetry_timestamp(options.timestamp.as_deref())?;
+    let Some(usage_json) = options.usage else {
+        return Ok(None);
+    };
+    let usage: Usage = serde_json::from_value(usage_json)
+        .map_err(|error| napi::Error::from_reason(format!("invalid usage: {error}")))?;
+    let request_facts = parse_cache_request_facts(options.request_facts)?;
+    let agent_identity = AgentIdentity {
+        agent_id: options.agent_id,
+        template_version: options.template_version,
+        toolset_hash: options.toolset_hash,
+        model_family: options.model_family,
+        tenant_scope: options.tenant_scope,
+    };
+    CacheTelemetryEvent::from_usage(
+        request_id,
+        agent_identity,
+        provider,
+        &usage,
+        timestamp,
+        request_facts.as_ref(),
+    )
+    .map(|event| serde_json::to_value(&event))
+    .transpose()
+    .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Set manual latency sensitivity on the current scope.
+#[napi(js_name = "setLatencySensitivity")]
+pub fn set_latency_sensitivity(value: u32) -> napi::Result<()> {
+    if value == 0 {
+        return Err(napi::Error::from_reason(
+            "sensitivity must be positive (> 0)",
+        ));
+    }
+    adaptive_set_latency_sensitivity(value)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
 /// Validate a plugin config document and return a structured diagnostics report.

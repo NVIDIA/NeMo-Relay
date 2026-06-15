@@ -3,6 +3,7 @@
 
 'use strict';
 
+const lib = require('./index.js');
 const plugin = require('./plugin.js');
 
 const ADAPTIVE_PLUGIN_KIND = 'adaptive';
@@ -164,7 +165,38 @@ function ComponentSpec(config, { enabled = true } = {}) {
   });
 }
 
+/**
+ * Validate an adaptive config document without constructing a runtime.
+ *
+ * @param {object} config - Adaptive runtime configuration document.
+ * @returns {object} A structured validation report with diagnostics.
+ */
+function validateConfig(config) {
+  return lib.validateAdaptiveConfig(config);
+}
+
+/**
+ * Build one adaptive cache telemetry event from normalized usage.
+ *
+ * @param {object} options - Cache telemetry event inputs.
+ * @returns {object|null} A telemetry event, or `null` when usage lacks prompt tokens.
+ */
+function buildCacheTelemetryEvent(options) {
+  return lib.buildCacheTelemetryEvent(options) ?? null;
+}
+
+/**
+ * Set manual latency sensitivity on the current scope.
+ *
+ * @param {number} value - Positive sensitivity value to store on the current scope.
+ * @returns {void} Nothing.
+ */
+function setLatencySensitivity(value) {
+  return lib.setLatencySensitivity(value);
+}
+
 module.exports = {
+  AdaptiveRuntime: lib.AdaptiveRuntime,
   ADAPTIVE_PLUGIN_KIND,
   defaultConfig,
   inMemoryBackend,
@@ -174,4 +206,7 @@ module.exports = {
   toolParallelismConfig,
   acgConfig,
   ComponentSpec,
+  validateConfig,
+  buildCacheTelemetryEvent,
+  setLatencySensitivity,
 };
