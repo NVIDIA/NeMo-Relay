@@ -9,7 +9,7 @@ import nemo_relay "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 type Config = nemo_relay.PricingConfig
 
 // SourceConfig is implemented by pricing source config structs.
-type SourceConfig = nemo_relay.PricingSourceConfig
+type SourceConfig = nemo_relay.PricingSourceConfigurer
 
 // InlineSourceConfig embeds a pricing catalog directly in plugin config.
 type InlineSourceConfig = nemo_relay.PricingInlineSourceConfig

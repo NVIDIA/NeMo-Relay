@@ -37,19 +37,19 @@ type ObservabilityAtofEndpoint struct {
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
 type ObservabilityAtifConfig struct {
-	Enabled          bool                             `json:"enabled,omitempty"`
-	AgentName        string                           `json:"agent_name,omitempty"`
-	AgentVersion     string                           `json:"agent_version,omitempty"`
-	ModelName        string                           `json:"model_name,omitempty"`
-	ToolDefinitions  []map[string]any                 `json:"tool_definitions,omitempty"`
-	Extra            map[string]any                   `json:"extra,omitempty"`
-	OutputDirectory  string                           `json:"output_directory,omitempty"`
-	FilenameTemplate string                           `json:"filename_template,omitempty"`
-	Storage          []ObservabilityAtifStorageConfig `json:"storage,omitempty"`
+	Enabled          bool                                 `json:"enabled,omitempty"`
+	AgentName        string                               `json:"agent_name,omitempty"`
+	AgentVersion     string                               `json:"agent_version,omitempty"`
+	ModelName        string                               `json:"model_name,omitempty"`
+	ToolDefinitions  []map[string]any                     `json:"tool_definitions,omitempty"`
+	Extra            map[string]any                       `json:"extra,omitempty"`
+	OutputDirectory  string                               `json:"output_directory,omitempty"`
+	FilenameTemplate string                               `json:"filename_template,omitempty"`
+	Storage          []ObservabilityAtifStorageConfigurer `json:"storage,omitempty"`
 }
 
-// ObservabilityAtifStorageConfig is one remote ATIF trajectory storage destination.
-type ObservabilityAtifStorageConfig interface {
+// ObservabilityAtifStorageConfigurer is one remote ATIF trajectory storage destination.
+type ObservabilityAtifStorageConfigurer interface {
 	atifStorageConfig()
 }
 
@@ -65,7 +65,9 @@ type ObservabilityS3StorageConfig struct {
 	AllowHTTP          *bool  `json:"allow_http,omitempty"`
 }
 
-func (ObservabilityS3StorageConfig) atifStorageConfig() {}
+func (ObservabilityS3StorageConfig) atifStorageConfig() {
+	// Marker method: S3 storage is serialized by MarshalJSON.
+}
 
 // MarshalJSON serializes the S3 config with the core plugin's fixed type discriminator.
 func (config ObservabilityS3StorageConfig) MarshalJSON() ([]byte, error) {
@@ -101,7 +103,9 @@ type ObservabilityHttpStorageConfig struct {
 	TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
 }
 
-func (ObservabilityHttpStorageConfig) atifStorageConfig() {}
+func (ObservabilityHttpStorageConfig) atifStorageConfig() {
+	// Marker method: HTTP storage is serialized by MarshalJSON.
+}
 
 // MarshalJSON serializes the HTTP config with the core plugin's fixed type discriminator.
 func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {

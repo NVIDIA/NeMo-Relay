@@ -3,14 +3,13 @@
 
 import * as plugin from './plugin.js';
 import {
-  AdaptiveRuntime,
   buildCacheTelemetryEvent as nativeBuildCacheTelemetryEvent,
   setLatencySensitivity as nativeSetLatencySensitivity,
   validateAdaptiveConfig,
 } from './pkg/index.js';
 
 export const ADAPTIVE_PLUGIN_KIND = 'adaptive';
-export { AdaptiveRuntime };
+export { AdaptiveRuntime } from './pkg/index.js';
 
 /**
  * Create a default adaptive component config.

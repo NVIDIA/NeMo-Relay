@@ -19,7 +19,7 @@ func TestPricingConfigHelpers(t *testing.T) {
 	entry.Rates = &rates
 
 	config := NewPricingConfig()
-	config.Sources = []PricingSourceConfig{
+	config.Sources = []PricingSourceConfigurer{
 		NewPricingInlineSource(NewPricingCatalog(entry)),
 		NewPricingFileSource("/tmp/pricing.json"),
 	}
@@ -91,7 +91,7 @@ func TestValidatePricingConfig(t *testing.T) {
 	entry.Rates = &rates
 
 	report, err := ValidatePricingConfig(PricingConfig{
-		Sources: []PricingSourceConfig{
+		Sources: []PricingSourceConfigurer{
 			NewPricingInlineSource(NewPricingCatalog(entry)),
 		},
 	})
@@ -105,7 +105,7 @@ func TestValidatePricingConfig(t *testing.T) {
 	rates.InputPerMillion = -1
 	entry.Rates = &rates
 	invalid, err := ValidatePricingConfig(PricingConfig{
-		Sources: []PricingSourceConfig{
+		Sources: []PricingSourceConfigurer{
 			NewPricingInlineSource(NewPricingCatalog(entry)),
 		},
 	})

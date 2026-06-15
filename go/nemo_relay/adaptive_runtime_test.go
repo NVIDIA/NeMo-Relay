@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const testAgentID = "go-agent"
+
 func testAdaptiveRuntimeConfig(provider string) AdaptiveConfig {
 	config := NewAdaptiveConfig()
 	config.AgentID = "go-adaptive-" + provider
@@ -62,7 +64,7 @@ func TestBuildCacheTelemetryEvent(t *testing.T) {
 			CompletionTokens: uint64Ptr(10),
 			CacheReadTokens:  uint64Ptr(25),
 		},
-		AgentID:         "go-agent",
+		AgentID:         testAgentID,
 		TemplateVersion: "v1",
 		ToolsetHash:     "tools",
 		ModelFamily:     "gpt",
@@ -78,7 +80,7 @@ func TestBuildCacheTelemetryEvent(t *testing.T) {
 	if event.Provider != "openai" || event.CacheReadTokens != 25 || event.TotalPromptTokens != 100 || event.HitRate != 0.25 {
 		t.Fatalf("unexpected event: %#v", event)
 	}
-	if event.AgentIdentity.AgentID != "go-agent" {
+	if event.AgentIdentity.AgentID != testAgentID {
 		t.Fatalf("unexpected agent identity: %#v", event.AgentIdentity)
 	}
 
@@ -88,7 +90,7 @@ func TestBuildCacheTelemetryEvent(t *testing.T) {
 		Usage: &CacheUsage{
 			CompletionTokens: uint64Ptr(10),
 		},
-		AgentID:         "go-agent",
+		AgentID:         testAgentID,
 		TemplateVersion: "v1",
 		ToolsetHash:     "tools",
 		ModelFamily:     "gpt",
@@ -148,7 +150,7 @@ func TestAdaptiveRuntimeBuildCacheRequestFacts(t *testing.T) {
 }
 
 func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
-	if err := SetLatencySensitivity(0); err == nil {
+	if SetLatencySensitivity(0) == nil {
 		t.Fatal("expected SetLatencySensitivity(0) to fail")
 	}
 }

@@ -18,6 +18,10 @@ const (
 	FirstAgentName                 = "go-first-agent"
 	NestedAgentName                = "go-nested-agent"
 	SecondAgentName                = "go-second-agent"
+	testAccessKeyID                = "test-access-key"
+	testAtifEndpoint               = "https://example.com/atif"
+	testRegion                     = "us-west-2"
+	testStaticHeader               = "x-static"
 	fatalErrorFormat               = "%s: %v"
 	failedSuffix                   = " failed"
 )
@@ -44,50 +48,17 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	allowHTTP := false
 	s3Storage := NewObservabilityS3StorageConfig("archive")
 	s3Storage.KeyPrefix = "runs/"
-	s3Storage.AccessKeyID = "test-access-key"
+	s3Storage.AccessKeyID = testAccessKeyID
 	s3Storage.SecretAccessKeyVar = "NEMO_RELAY_TEST_SECRET"
-	s3Storage.Region = "us-west-2"
+	s3Storage.Region = testRegion
 	s3Storage.AllowHTTP = &allowHTTP
-	httpStorage := NewObservabilityHttpStorageConfig("https://example.com/atif")
-	httpStorage.Headers = map[string]string{"x-static": "value"}
+	httpStorage := NewObservabilityHttpStorageConfig(testAtifEndpoint)
+	httpStorage.Headers = map[string]string{testStaticHeader: "value"}
 	httpStorage.HeaderEnv = map[string]string{"authorization": "NEMO_RELAY_ATIF_HTTP_AUTH"}
 	httpStorage.TimeoutMillis = 1500
-	if s3Storage.Bucket != "archive" ||
-		s3Storage.KeyPrefix != "runs/" ||
-		s3Storage.AccessKeyID != "test-access-key" ||
-		s3Storage.SecretAccessKeyVar != "NEMO_RELAY_TEST_SECRET" ||
-		s3Storage.Region != "us-west-2" ||
-		s3Storage.AllowHTTP == nil ||
-		*s3Storage.AllowHTTP {
-		t.Fatalf("unexpected S3 constructor values: %#v", s3Storage)
-	}
-	if httpStorage.Endpoint != "https://example.com/atif" ||
-		httpStorage.Headers["x-static"] != "value" ||
-		httpStorage.HeaderEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" ||
-		httpStorage.TimeoutMillis != 1500 {
-		t.Fatalf("unexpected HTTP constructor values: %#v", httpStorage)
-	}
-	s3Serialized := marshalStorageConfig(t, s3Storage)
-	if s3Serialized["type"] != "s3" ||
-		s3Serialized["bucket"] != "archive" ||
-		s3Serialized["key_prefix"] != "runs/" ||
-		s3Serialized["access_key_id"] != "test-access-key" ||
-		s3Serialized["secret_access_key_var"] != "NEMO_RELAY_TEST_SECRET" ||
-		s3Serialized["region"] != "us-west-2" ||
-		s3Serialized["allow_http"] != false {
-		t.Fatalf("unexpected serialized S3 storage config: %#v", s3Serialized)
-	}
-	httpSerialized := marshalStorageConfig(t, httpStorage)
-	httpHeaders := httpSerialized["headers"].(map[string]any)
-	httpHeaderEnv := httpSerialized["header_env"].(map[string]any)
-	if httpSerialized["type"] != "http" ||
-		httpSerialized["endpoint"] != "https://example.com/atif" ||
-		httpSerialized["timeout_millis"] != float64(1500) ||
-		httpHeaders["x-static"] != "value" ||
-		httpHeaderEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" {
-		t.Fatalf("unexpected serialized HTTP storage config: %#v", httpSerialized)
-	}
-	atif.Storage = []ObservabilityAtifStorageConfig{
+	assertS3StorageConfig(t, s3Storage)
+	assertHTTPStorageConfig(t, httpStorage)
+	atif.Storage = []ObservabilityAtifStorageConfigurer{
 		s3Storage,
 		httpStorage,
 	}
@@ -109,7 +80,56 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if _, ok := atofConfig["endpoints"].([]any); !ok {
 		t.Fatalf("expected serialized ATOF endpoints, got %#v", atofConfig)
 	}
-	atifConfig := wrapped.Config["atif"].(map[string]any)
+	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
+}
+
+func assertS3StorageConfig(t *testing.T, storage ObservabilityS3StorageConfig) {
+	t.Helper()
+	if storage.Bucket != "archive" ||
+		storage.KeyPrefix != "runs/" ||
+		storage.AccessKeyID != testAccessKeyID ||
+		storage.SecretAccessKeyVar != "NEMO_RELAY_TEST_SECRET" ||
+		storage.Region != testRegion ||
+		storage.AllowHTTP == nil ||
+		*storage.AllowHTTP {
+		t.Fatalf("unexpected S3 constructor values: %#v", storage)
+	}
+
+	serialized := marshalStorageConfig(t, storage)
+	if serialized["type"] != "s3" ||
+		serialized["bucket"] != "archive" ||
+		serialized["key_prefix"] != "runs/" ||
+		serialized["access_key_id"] != testAccessKeyID ||
+		serialized["secret_access_key_var"] != "NEMO_RELAY_TEST_SECRET" ||
+		serialized["region"] != testRegion ||
+		serialized["allow_http"] != false {
+		t.Fatalf("unexpected serialized S3 storage config: %#v", serialized)
+	}
+}
+
+func assertHTTPStorageConfig(t *testing.T, storage ObservabilityHttpStorageConfig) {
+	t.Helper()
+	if storage.Endpoint != testAtifEndpoint ||
+		storage.Headers[testStaticHeader] != "value" ||
+		storage.HeaderEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" ||
+		storage.TimeoutMillis != 1500 {
+		t.Fatalf("unexpected HTTP constructor values: %#v", storage)
+	}
+
+	serialized := marshalStorageConfig(t, storage)
+	headers := serialized["headers"].(map[string]any)
+	headerEnv := serialized["header_env"].(map[string]any)
+	if serialized["type"] != "http" ||
+		serialized["endpoint"] != testAtifEndpoint ||
+		serialized["timeout_millis"] != float64(1500) ||
+		headers[testStaticHeader] != "value" ||
+		headerEnv["authorization"] != "NEMO_RELAY_ATIF_HTTP_AUTH" {
+		t.Fatalf("unexpected serialized HTTP storage config: %#v", serialized)
+	}
+}
+
+func assertWrappedAtifStorageConfig(t *testing.T, atifConfig map[string]any) {
+	t.Helper()
 	storage := atifConfig["storage"].([]any)
 	if len(storage) != 2 {
 		t.Fatalf("expected two ATIF storage destinations, got %#v", storage)
@@ -119,12 +139,12 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("unexpected S3 storage config: %#v", s3)
 	}
 	http := storage[1].(map[string]any)
-	if http["type"] != "http" || http["endpoint"] != "https://example.com/atif" || http["timeout_millis"] != float64(1500) {
+	if http["type"] != "http" || http["endpoint"] != testAtifEndpoint || http["timeout_millis"] != float64(1500) {
 		t.Fatalf("unexpected HTTP storage config: %#v", http)
 	}
 }
 
-func marshalStorageConfig(t *testing.T, config ObservabilityAtifStorageConfig) map[string]any {
+func marshalStorageConfig(t *testing.T, config ObservabilityAtifStorageConfigurer) map[string]any {
 	t.Helper()
 	payload, err := json.Marshal(config)
 	if err != nil {

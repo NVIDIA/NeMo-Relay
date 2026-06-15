@@ -24,11 +24,11 @@ const (
 
 // PricingConfig is the canonical Go shape for the pricing plugin config document.
 type PricingConfig struct {
-	Sources []PricingSourceConfig `json:"sources,omitempty"`
+	Sources []PricingSourceConfigurer `json:"sources,omitempty"`
 }
 
-// PricingSourceConfig is implemented by pricing source config structs.
-type PricingSourceConfig interface {
+// PricingSourceConfigurer is implemented by pricing source config structs.
+type PricingSourceConfigurer interface {
 	pricingSourceConfig()
 }
 
@@ -37,7 +37,9 @@ type PricingInlineSourceConfig struct {
 	Catalog PricingCatalog `json:"catalog"`
 }
 
-func (PricingInlineSourceConfig) pricingSourceConfig() {}
+func (PricingInlineSourceConfig) pricingSourceConfig() {
+	// Marker method: inline sources are serialized by MarshalJSON.
+}
 
 // MarshalJSON serializes the inline source with the canonical type discriminator.
 func (source PricingInlineSourceConfig) MarshalJSON() ([]byte, error) {
@@ -56,7 +58,9 @@ type PricingFileSourceConfig struct {
 	Path string `json:"path"`
 }
 
-func (PricingFileSourceConfig) pricingSourceConfig() {}
+func (PricingFileSourceConfig) pricingSourceConfig() {
+	// Marker method: file sources are serialized by MarshalJSON.
+}
 
 // MarshalJSON serializes the file source with the canonical type discriminator.
 func (source PricingFileSourceConfig) MarshalJSON() ([]byte, error) {
@@ -136,7 +140,7 @@ type PricingComponentSpec struct {
 
 // NewPricingConfig returns an empty pricing config.
 func NewPricingConfig() PricingConfig {
-	return PricingConfig{Sources: []PricingSourceConfig{}}
+	return PricingConfig{Sources: []PricingSourceConfigurer{}}
 }
 
 // NewPricingInlineSource returns an inline pricing catalog source.
