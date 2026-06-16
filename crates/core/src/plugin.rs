@@ -39,6 +39,9 @@ use crate::api::runtime::{
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 
+pub mod dynamic;
+pub use dynamic::*;
+
 type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -52,6 +55,10 @@ pub enum PluginError {
     /// Configuration validation failed.
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+
+    /// The requested mutation conflicts with current plugin state.
+    #[error("conflict: {0}")]
+    Conflict(String),
 
     /// The requested plugin resource was not found.
     #[error("not found: {0}")]
@@ -776,6 +783,7 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
 fn clone_cached_plugin_error(err: &PluginError) -> PluginError {
     match err {
         PluginError::InvalidConfig(message) => PluginError::InvalidConfig(message.clone()),
+        PluginError::Conflict(message) => PluginError::Conflict(message.clone()),
         PluginError::NotFound(message) => PluginError::NotFound(message.clone()),
         PluginError::Serialization(err) => PluginError::Internal(err.to_string()),
         PluginError::Internal(message) => PluginError::Internal(message.clone()),

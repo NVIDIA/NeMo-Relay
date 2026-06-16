@@ -53,6 +53,7 @@ impl From<PluginError> for AdaptiveError {
     fn from(value: PluginError) -> Self {
         match value {
             PluginError::InvalidConfig(message) => Self::InvalidConfig(message),
+            PluginError::Conflict(message) => Self::InvalidConfig(message),
             PluginError::NotFound(message) => Self::NotFound(message),
             PluginError::Serialization(err) => Self::Serialization(err),
             PluginError::Internal(message) => Self::Internal(message),
