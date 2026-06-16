@@ -9,6 +9,7 @@
 //! - [`extract_scope_path`]: collects function names from the scope stack for trie lookup
 //! - [`read_manual_latency_sensitivity`]: walks all scopes for manual `latency_sensitive` annotations
 //! - [`resolve_agent_id`]: returns the first Agent scope name from the scope stack
+//! - [`resolve_agent_context`]: returns the nearest scope-local agent context
 //!
 //! All functions are safe to call from sync contexts (intercepts are sync closures).
 //! They acquire a read lock on the scope stack, which is always fast.
@@ -20,10 +21,14 @@
 
 use nemo_relay::api::runtime::current_scope_stack;
 use nemo_relay::api::scope::ScopeType;
+use serde_json::Value as Json;
 use uuid::Uuid;
 
 /// Metadata key path for manual latency sensitivity annotation.
 pub const LATENCY_SENSITIVITY_POINTER: &str = "/nemo_relay_adaptive/latency_sensitivity";
+
+/// Metadata key path for the canonical agent context object.
+pub const AGENT_CONTEXT_POINTER: &str = "/nemo_relay/agent_context";
 
 /// Session-local scope identity used to coordinate warm-first cohorts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +172,31 @@ pub fn resolve_agent_id() -> Option<String> {
         .skip(1) // skip implicit root
         .find(|s| matches!(s.scope_type, ScopeType::Agent))
         .map(|s| s.name.clone())
+}
+
+/// Resolves the nearest canonical agent context from the current scope stack.
+///
+/// Producers attach this object to scope metadata at
+/// `/nemo_relay/agent_context`. Request intercepts read the nearest active
+/// value, so child agent scopes override their parent turn context.
+///
+/// # Returns
+/// A cloned JSON object when one is visible on the current scope stack.
+/// Returns `None` when no context exists or the scope stack cannot be read.
+pub fn resolve_agent_context() -> Option<Json> {
+    let stack_handle = current_scope_stack();
+    let stack = match stack_handle.read() {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    stack.scopes().iter().rev().find_map(|scope| {
+        scope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.pointer(AGENT_CONTEXT_POINTER))
+            .filter(|value| value.is_object())
+            .cloned()
+    })
 }
 
 /// Resolves the session-local identity used by warm-first cohort coordination.

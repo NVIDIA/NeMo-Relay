@@ -388,15 +388,15 @@ impl SessionManager {
         let config = self.default_config.session_config_from_headers(headers);
         self.resolve_start_alias(&mut start, config.clone()).await?;
         let mut sessions = self.inner.lock().await;
+        let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
         let session_id = start
             .session_id
             .clone()
             .or_else(|| single_active_session_id(&sessions))
-            .unwrap_or_else(|| format!("{}-gateway", AgentKind::Gateway.as_str()));
+            .unwrap_or_else(|| format!("{}-gateway", inferred_agent_kind.as_str()));
         // Match `start_llm`: when this path creates a brand-new session (real agent's gateway
         // request beats its SessionStart hook), label the session by the provider so ATIF and
         // Phoenix scopes carry the agent identity instead of freezing on "gateway".
-        let inferred_agent_kind = alignment::agent_kind_for_gateway_provider(&start.provider);
         let created_session = !sessions.contains_key(&session_id);
         let session = sessions
             .entry(session_id.clone())
@@ -1038,6 +1038,12 @@ impl Session {
                     owner.subagent_id.as_deref(),
                     owner.status,
                 );
+                let call_stack = owner
+                    .subagent_id
+                    .as_ref()
+                    .and_then(|subagent_id| self.subagent_stacks.get(subagent_id))
+                    .cloned()
+                    .unwrap_or_else(|| stack.clone());
                 let metadata = merge_metadata(
                     llm_correlation_metadata(
                         start.metadata,
@@ -1049,7 +1055,7 @@ impl Session {
                     owner.metadata,
                 );
                 Ok(GatewayCallPrep {
-                    scope_stack: stack.clone(),
+                    scope_stack: call_stack,
                     session_id: self.session_id.clone(),
                     provider_name: start.provider,
                     request: start.request,
@@ -1175,6 +1181,7 @@ impl Session {
                 "turn_source": turn_source,
             }),
         );
+        let metadata = self.with_agent_context_metadata(metadata, None);
         let turn_name = self.turn_scope_name();
         let scope = push_scope(
             PushScopeParams::builder()
@@ -1212,6 +1219,54 @@ impl Session {
                 "gateway_mode": self.config.gateway_mode,
             }),
         )
+    }
+
+    fn with_agent_context_metadata(
+        &self,
+        mut metadata: Value,
+        owner_subagent_id: Option<&str>,
+    ) -> Value {
+        let Some(agent_context) = self.agent_context(owner_subagent_id) else {
+            return metadata;
+        };
+        if !metadata.is_object() {
+            metadata = merge_metadata(metadata, json!({}));
+        }
+        let Some(object) = metadata.as_object_mut() else {
+            return merge_metadata(
+                metadata,
+                json!({ "nemo_relay": { "agent_context": agent_context } }),
+            );
+        };
+        let nemo_relay = object.entry("nemo_relay").or_insert_with(|| json!({}));
+        if !nemo_relay.is_object() {
+            *nemo_relay = json!({});
+        }
+        let Some(nemo_relay) = nemo_relay.as_object_mut() else {
+            return metadata;
+        };
+        nemo_relay.insert("agent_context".into(), agent_context);
+        metadata
+    }
+
+    fn agent_context(&self, owner_subagent_id: Option<&str>) -> Option<Value> {
+        // Transparent coding-agent traffic can reach the gateway before, or without, a reliable
+        // SessionStart hook. Provider inference still identifies those sessions; generic gateway
+        // traffic remains context-free.
+        if self.agent_kind == AgentKind::Gateway || self.turn_index == 0 {
+            return None;
+        }
+        let root_trajectory_id = format!("{}:turn:{}", self.session_id, self.turn_index);
+        let mut context = json!({
+            "session_type_id": self.agent_kind.as_str(),
+            "session_id": self.session_id,
+            "trajectory_id": root_trajectory_id.clone(),
+        });
+        if let Some(subagent_id) = owner_subagent_id {
+            context["trajectory_id"] = json!(subagent_id);
+            context["parent_trajectory_id"] = json!(root_trajectory_id);
+        }
+        Some(context)
     }
 
     async fn end_turn(&mut self, event: SessionEvent) -> Result<(), CliError> {
@@ -1385,6 +1440,7 @@ impl Session {
             event.metadata,
             json!({ "nemo_relay_scope_role": "subagent" }),
         );
+        let metadata = self.with_agent_context_metadata(metadata, Some(&subagent_id));
         let subagent_stack = create_scope_stack();
         let scope = TASK_SCOPE_STACK
             .scope(subagent_stack.clone(), async {

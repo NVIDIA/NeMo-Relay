@@ -32,10 +32,11 @@ use crate::acg_component::{
 };
 use crate::acg_learner::AcgLearner;
 use crate::adaptive_hints_intercept::AdaptiveHintsIntercept;
+use crate::agent_context_intercept::AgentContextIntercept;
 use crate::cache_diagnostics::{self, CacheDiagnosticsTracker};
 use crate::config::{
-    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, TelemetryComponentConfig,
-    ToolParallelismComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AgentContextComponentConfig,
+    TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
 use crate::context_helpers::resolve_agent_id;
 use crate::error::{AdaptiveError, Result};
@@ -455,6 +456,9 @@ impl AdaptiveRuntime {
                 self.runtime_id,
             )));
         }
+        if let Some(config) = self.config.agent_context.clone() {
+            pending.push(Box::new(AgentContextFeature::new(config, self.runtime_id)));
+        }
         if let Some(config) = self.config.tool_parallelism.clone() {
             pending.push(Box::new(ToolParallelismFeature::new(
                 config,
@@ -629,6 +633,41 @@ impl AdaptiveFeature for AdaptiveHintsFeature {
                 self.priority,
                 self.break_chain,
                 adaptive_hints.into_request_fn(),
+            )
+        })
+    }
+}
+
+struct AgentContextFeature {
+    name: String,
+    priority: i32,
+    break_chain: bool,
+    config: AgentContextComponentConfig,
+}
+
+impl AgentContextFeature {
+    fn new(config: AgentContextComponentConfig, runtime_id: Uuid) -> Self {
+        Self {
+            name: format!("adaptive_{runtime_id}_agent_context_request"),
+            priority: config.priority,
+            break_chain: config.break_chain,
+            config,
+        }
+    }
+}
+
+impl AdaptiveFeature for AgentContextFeature {
+    fn register<'a>(
+        &'a mut self,
+        ctx: &'a mut RegistrationContext<'_>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let intercept = AgentContextIntercept::new(self.config.clone());
+            ctx.register_llm_request_intercept(
+                &self.name,
+                self.priority,
+                self.break_chain,
+                intercept.into_request_fn(),
             )
         })
     }

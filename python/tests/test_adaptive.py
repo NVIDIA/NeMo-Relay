@@ -17,6 +17,7 @@ from nemo_relay.adaptive import (
     AcgStabilityThresholds,
     AdaptiveConfig,
     AdaptiveHintsConfig,
+    AgentContextConfig,
     BackendSpec,
     ComponentSpec,
     StateConfig,
@@ -59,6 +60,11 @@ class TestAdaptiveConfigHelpers:
     def test_section_helpers(self):
         assert TelemetryConfig(learners=["latency_sensitivity"]).to_dict() == {"learners": ["latency_sensitivity"]}
         assert AdaptiveHintsConfig().to_dict()["priority"] == 100
+        assert AgentContextConfig().to_dict() == {
+            "priority": 100,
+            "break_chain": False,
+            "inject_body_path": "nvext.agent_context",
+        }
         assert ToolParallelismConfig().to_dict()["mode"] == "observe_only"
 
     def test_adaptive_component_wraps_as_plugin_component(self):

@@ -180,6 +180,7 @@ fn validate_adaptive_plugin_config(plugin_config: &Map<String, Json>) -> Vec<Con
             "state",
             "telemetry",
             "adaptive_hints",
+            "agent_context",
             "tool_parallelism",
             "acg",
             "policy",
@@ -253,6 +254,16 @@ fn validate_adaptive_plugin_config(plugin_config: &Map<String, Json>) -> Vec<Con
                 "inject_header",
                 "inject_body_path",
             ],
+        );
+    }
+
+    if let Some(agent_context_json) = plugin_config.get("agent_context").and_then(Json::as_object) {
+        validate_unknown_fields(
+            &mut diagnostics,
+            &config.policy,
+            Some("agent_context".to_string()),
+            agent_context_json,
+            &["priority", "break_chain", "inject_body_path"],
         );
     }
 

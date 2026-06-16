@@ -105,6 +105,26 @@ export function adaptiveHintsConfig(config = {}) {
 }
 
 /**
+ * Create agent-context propagation settings with defaults applied.
+ *
+ * Merges caller-supplied overrides onto the default config used by the
+ * agent-context request intercept.
+ *
+ * @param {object} [config={}] - Partial agent-context settings to override.
+ * @returns {object} A normalized agent-context config object.
+ * @remarks By default the injector runs at priority `100`, preserves the rest
+ * of the chain, and writes context to `nvext.agent_context`.
+ */
+export function agentContextConfig(config = {}) {
+  return {
+    priority: 100,
+    break_chain: false,
+    inject_body_path: 'nvext.agent_context',
+    ...config,
+  };
+}
+
+/**
  * Create adaptive tool-parallelism settings with defaults applied.
  *
  * Merges caller-supplied overrides onto the scheduler config shape used by the

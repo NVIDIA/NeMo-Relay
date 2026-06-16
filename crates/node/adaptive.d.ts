@@ -31,6 +31,13 @@ export interface AdaptiveHintsConfig {
   inject_body_path?: string;
 }
 
+/** Built-in agent context propagation settings. */
+export interface AgentContextConfig {
+  priority?: number;
+  break_chain?: boolean;
+  inject_body_path?: string;
+}
+
 /** Built-in adaptive tool scheduling settings. */
 export interface ToolParallelismConfig {
   priority?: number;
@@ -59,6 +66,7 @@ export interface Config {
   state?: StateConfig;
   telemetry?: TelemetryConfig;
   adaptive_hints?: AdaptiveHintsConfig;
+  agent_context?: AgentContextConfig;
   tool_parallelism?: ToolParallelismConfig;
   acg?: AcgConfig;
   policy?: ConfigPolicy;
@@ -220,6 +228,18 @@ export declare function telemetryConfig(config?: TelemetryConfig): TelemetryConf
  * of the chain, and writes hints to `nvext.agent_hints`.
  */
 export declare function adaptiveHintsConfig(config?: AdaptiveHintsConfig): AdaptiveHintsConfig;
+/**
+ * Create agent-context propagation settings with defaults applied.
+ *
+ * Merges caller-supplied overrides onto the default config used by the
+ * agent-context request intercept.
+ *
+ * @param config - Partial agent-context settings to override.
+ * @returns A normalized agent-context config object.
+ * @remarks By default the injector runs at priority `100`, preserves the rest
+ * of the chain, and writes context to `nvext.agent_context`.
+ */
+export declare function agentContextConfig(config?: AgentContextConfig): AgentContextConfig;
 /**
  * Create adaptive tool-parallelism settings with defaults applied.
  *

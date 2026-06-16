@@ -5,6 +5,7 @@
 
 use super::*;
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 
 #[test]
 fn test_latency_sensitivity_pointer_is_valid_json_pointer() {
@@ -74,7 +75,61 @@ fn test_helpers_return_defaults_when_scope_stack_lock_is_poisoned() {
     assert!(extract_scope_path().is_empty());
     assert_eq!(read_manual_latency_sensitivity(), None);
     assert_eq!(resolve_agent_id(), None);
+    assert_eq!(resolve_agent_context(), None);
 
+    set_thread_scope_stack(create_scope_stack());
+}
+
+#[test]
+fn test_resolve_agent_context_uses_nearest_scope_metadata() {
+    set_thread_scope_stack(create_scope_stack());
+    let parent = push_scope(
+        PushScopeParams::builder()
+            .name("parent")
+            .scope_type(ScopeType::Agent)
+            .metadata(serde_json::json!({
+                "nemo_relay": {
+                    "agent_context": {
+                        "session_type_id": "codex",
+                        "session_id": "session-1",
+                        "trajectory_id": "session-1:turn:1"
+                    }
+                }
+            }))
+            .build(),
+    )
+    .unwrap();
+    let child = push_scope(
+        PushScopeParams::builder()
+            .name("child")
+            .scope_type(ScopeType::Agent)
+            .parent(&parent)
+            .metadata(serde_json::json!({
+                "nemo_relay": {
+                    "agent_context": {
+                        "session_type_id": "codex",
+                        "session_id": "session-1",
+                        "trajectory_id": "worker-1",
+                        "parent_trajectory_id": "session-1:turn:1"
+                    }
+                }
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolve_agent_context(),
+        Some(serde_json::json!({
+            "session_type_id": "codex",
+            "session_id": "session-1",
+            "trajectory_id": "worker-1",
+            "parent_trajectory_id": "session-1:turn:1"
+        }))
+    );
+
+    pop_scope(PopScopeParams::builder().handle_uuid(&child.uuid).build()).unwrap();
+    pop_scope(PopScopeParams::builder().handle_uuid(&parent.uuid).build()).unwrap();
     set_thread_scope_stack(create_scope_stack());
 }
 

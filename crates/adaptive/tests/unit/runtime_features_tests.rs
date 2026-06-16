@@ -28,7 +28,6 @@ use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
 use nemo_relay::plugin::{clear_plugin_configuration, rollback_registrations};
 use serde_json::json;
-use tokio::sync::Mutex;
 
 use crate::acg::profile::{BlockStabilityScore, StabilityClass};
 use crate::acg::prompt_ir::SpanId;
@@ -41,8 +40,6 @@ use crate::types::metadata::{AgentHints, MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};
 use crate::types::records::RunRecord;
 use tokio_stream::StreamExt;
-
-static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
 
 fn reset_global() {
     let _ = clear_plugin_configuration();
@@ -427,7 +424,7 @@ async fn adaptive_runtime_new_rejects_invalid_configs_with_joined_errors() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn registration_context_take_event_receiver_only_allows_one_consumer() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
@@ -444,7 +441,7 @@ async fn registration_context_take_event_receiver_only_allows_one_consumer() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn telemetry_feature_registers_subscriber_and_starts_drain_task() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
@@ -484,7 +481,7 @@ async fn telemetry_feature_registers_subscriber_and_starts_drain_task() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn telemetry_feature_requires_backend() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
@@ -506,7 +503,7 @@ async fn telemetry_feature_requires_backend() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_hints_feature_registers_request_intercept() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
@@ -561,8 +558,72 @@ async fn adaptive_hints_feature_registers_request_intercept() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn agent_context_feature_registers_request_intercept() {
+    let _lock = crate::test_support::lock_global_runtime().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let mut feature = AgentContextFeature::new(
+        AgentContextComponentConfig {
+            priority: 7,
+            break_chain: true,
+            ..AgentContextComponentConfig::default()
+        },
+        Uuid::now_v7(),
+    );
+    let name = feature.name.clone();
+
+    let mut ctx = RegistrationContext::new(&mut runtime);
+    feature.register(&mut ctx).await.unwrap();
+    assert_llm_request_intercept_registered(&name);
+
+    let scope = nemo_relay::api::scope::push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("turn")
+            .scope_type(nemo_relay::api::scope::ScopeType::Agent)
+            .metadata(json!({
+                "nemo_relay": {
+                    "agent_context": {
+                        "session_type_id": "codex",
+                        "session_id": "session-1",
+                        "trajectory_id": "session-1:turn:1"
+                    }
+                }
+            }))
+            .build(),
+    )
+    .unwrap();
+
+    let request = llm_request_intercepts(
+        "model",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({}),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        request.content["nvext"]["agent_context"]["trajectory_id"],
+        json!("session-1:turn:1")
+    );
+
+    nemo_relay::api::scope::pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let mut registrations = ctx.finish();
+    rollback_registrations(&mut registrations);
+    assert_llm_request_intercept_absent(&name);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn tool_parallelism_feature_registers_execution_intercept() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
@@ -611,7 +672,7 @@ async fn tool_parallelism_feature_registers_execution_intercept() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let config = AdaptiveConfig {
@@ -653,7 +714,7 @@ async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_register_is_idempotent_for_active_features() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
@@ -678,7 +739,7 @@ async fn adaptive_runtime_register_is_idempotent_for_active_features() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_register_rolls_back_when_telemetry_receiver_is_missing() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
@@ -702,7 +763,7 @@ async fn adaptive_runtime_register_rolls_back_when_telemetry_receiver_is_missing
 
 #[tokio::test(flavor = "current_thread")]
 async fn registration_context_registers_all_supported_callback_types() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
@@ -811,7 +872,7 @@ async fn adaptive_runtime_helper_methods_cover_report_wait_for_idle_and_feature_
 
 #[tokio::test(flavor = "current_thread")]
 async fn acg_feature_registers_execution_and_stream_intercepts() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
@@ -918,7 +979,7 @@ async fn acg_feature_registers_execution_and_stream_intercepts() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_abort_handle() {
-    let _lock = TEST_MUTEX.lock().await;
+    let _lock = crate::test_support::lock_global_runtime().await;
     reset_global();
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())

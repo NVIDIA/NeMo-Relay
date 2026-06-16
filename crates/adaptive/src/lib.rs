@@ -14,6 +14,7 @@ pub mod acg_component;
 pub mod acg_learner;
 pub mod acg_profile;
 pub mod adaptive_hints_intercept;
+pub mod agent_context_intercept;
 pub mod cache_diagnostics;
 pub mod config;
 pub mod context_helpers;
@@ -36,12 +37,13 @@ pub mod trie;
 pub mod types;
 
 pub use config::{
-    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig,
-    TelemetryComponentConfig, ToolParallelismComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AgentContextComponentConfig,
+    BackendSpec, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
 };
 pub use context_helpers::{
-    LATENCY_SENSITIVITY_POINTER, extract_scope_path, read_manual_latency_sensitivity,
-    resolve_agent_id, resolve_shared_parent_scope_identity, set_latency_sensitivity,
+    AGENT_CONTEXT_POINTER, LATENCY_SENSITIVITY_POINTER, extract_scope_path,
+    read_manual_latency_sensitivity, resolve_agent_context, resolve_agent_id,
+    resolve_shared_parent_scope_identity, set_latency_sensitivity,
 };
 pub use error::{AdaptiveError, Result};
 #[cfg(feature = "redis-backend")]
@@ -50,3 +52,18 @@ pub use runtime::features::AdaptiveRuntime;
 pub use storage::erased::AnyBackend;
 pub use storage::memory::InMemoryBackend;
 pub use storage::traits::{StorageBackend, StorageBackendDyn};
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use tokio::sync::{Mutex, MutexGuard};
+
+    static GLOBAL_RUNTIME_MUTEX: Mutex<()> = Mutex::const_new(());
+
+    pub(crate) async fn lock_global_runtime() -> MutexGuard<'static, ()> {
+        GLOBAL_RUNTIME_MUTEX.lock().await
+    }
+
+    pub(crate) fn blocking_lock_global_runtime() -> MutexGuard<'static, ()> {
+        GLOBAL_RUNTIME_MUTEX.blocking_lock()
+    }
+}

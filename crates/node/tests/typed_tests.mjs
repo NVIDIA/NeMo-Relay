@@ -209,6 +209,7 @@ describe('adaptive typed helpers', () => {
       learners: ['latency_sensitivity'],
     });
     config.adaptive_hints = adaptive.adaptiveHintsConfig();
+    config.agent_context = adaptive.agentContextConfig();
     config.tool_parallelism = adaptive.toolParallelismConfig();
     config.acg = adaptive.acgConfig();
 
@@ -232,6 +233,7 @@ describe('adaptive typed helpers', () => {
             learners: ['latency_sensitivity'],
           }),
           adaptive_hints: adaptive.adaptiveHintsConfig(),
+          agent_context: adaptive.agentContextConfig(),
           tool_parallelism: adaptive.toolParallelismConfig(),
           acg: adaptive.acgConfig({
             provider: 'openai',

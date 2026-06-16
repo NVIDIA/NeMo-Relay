@@ -272,6 +272,17 @@ fn active_turn_scope(session: &Session) -> &ScopeHandle {
         .expect("expected active turn scope")
 }
 
+fn prep_agent_context(prep: &GatewayCallPrep) -> Option<Value> {
+    prep.scope_stack
+        .read()
+        .unwrap()
+        .top()
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.pointer("/nemo_relay/agent_context"))
+        .cloned()
+}
+
 async fn alignment_alias(manager: &SessionManager, session_id: &str) -> Option<SessionAlias> {
     manager.alignment.lock().await.alias_for_session(session_id)
 }
@@ -753,6 +764,130 @@ async fn codex_turn_is_agent_scope_with_turn_role_metadata() {
         turn.metadata.as_ref().unwrap()["nemo_relay_scope_role"],
         json!("turn")
     );
+}
+
+#[tokio::test]
+async fn gateway_call_prep_records_agent_context_on_scope_metadata() {
+    let gateway_only_manager = SessionManager::new(session_test_config());
+    let gateway_only = gateway_only_manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                ..llm_start_with_responses_task("ignored", "Inspect the repo.")
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        gateway_only.session_id, "codex-gateway",
+        "provider-inferred coding-agent sessions should not use the generic gateway id"
+    );
+    assert_eq!(
+        prep_agent_context(&gateway_only),
+        Some(json!({
+            "session_type_id": "codex",
+            "session_id": "codex-gateway",
+            "trajectory_id": "codex-gateway:turn:1"
+        }))
+    );
+    gateway_only_manager
+        .finish_gateway_call(&gateway_only.session_id, false)
+        .await;
+
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(codex_session_event(
+                "codex-context",
+                "SessionStart",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+
+    let root = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            llm_start_with_responses_task("codex-context", "Inspect the repo."),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        prep_agent_context(&root),
+        Some(json!({
+            "session_type_id": "codex",
+            "session_id": "codex-context",
+            "trajectory_id": "codex-context:turn:1"
+        }))
+    );
+    {
+        let sessions = manager.inner.lock().await;
+        let turn = active_turn_scope(sessions.get("codex-context").unwrap());
+        assert_eq!(
+            turn.metadata
+                .as_ref()
+                .unwrap()
+                .pointer("/nemo_relay/agent_context"),
+            Some(&json!({
+                "session_type_id": "codex",
+                "session_id": "codex-context",
+                "trajectory_id": "codex-context:turn:1"
+            }))
+        );
+    }
+    manager.finish_gateway_call("codex-context", false).await;
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::SubagentStarted(SubagentEvent {
+                session_id: "codex-context".into(),
+                agent_kind: AgentKind::Codex,
+                event_name: "SubagentStart".into(),
+                subagent_id: "worker-1".into(),
+                payload: json!({}),
+                metadata: json!({}),
+            })],
+        )
+        .await
+        .unwrap();
+    let child = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                subagent_id: Some("worker-1".into()),
+                ..llm_start_with_responses_task("codex-context", "Inspect the repo.")
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        prep_agent_context(&child),
+        Some(json!({
+            "session_type_id": "codex",
+            "session_id": "codex-context",
+            "trajectory_id": "worker-1",
+            "parent_trajectory_id": "codex-context:turn:1"
+        }))
+    );
+    manager.finish_gateway_call("codex-context", false).await;
+
+    let synthetic_manager = SessionManager::new(session_test_config());
+    let synthetic = synthetic_manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                provider: "custom".into(),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(prep_agent_context(&synthetic), None);
 }
 
 #[test]
@@ -3801,7 +3936,7 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
         .await
         .unwrap();
     assert_eq!(
-        next.session_id, "gateway-gateway",
+        next.session_id, "codex-gateway",
         "probe-only sessions must not become the single-active fallback"
     );
 }

@@ -140,6 +140,7 @@ describe('core plugins', () => {
               backend: adaptive.inMemoryBackend(),
             },
             adaptive_hints: adaptive.adaptiveHintsConfig(),
+            agent_context: adaptive.agentContextConfig(),
           }),
           plugin.ComponentSpec(pluginKind, {
             priority: 17,
@@ -159,6 +160,14 @@ describe('core plugins', () => {
       plugin.clear();
       plugin.deregister(pluginKind);
     }
+  });
+
+  it('builds an agent context config with defaults', () => {
+    assert.deepEqual(adaptive.agentContextConfig(), {
+      priority: 100,
+      break_chain: false,
+      inject_body_path: 'nvext.agent_context',
+    });
   });
 });
 

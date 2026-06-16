@@ -20,6 +20,8 @@ func TestConfigBuilders(t *testing.T) {
 	config.Telemetry = &telemetry
 	adaptiveHints := NewAdaptiveHintsConfig()
 	config.AdaptiveHints = &adaptiveHints
+	agentContext := NewAgentContextConfig()
+	config.AgentContext = &agentContext
 	toolParallelism := NewToolParallelismConfig()
 	config.ToolParallelism = &toolParallelism
 	acg := NewAcgConfig()

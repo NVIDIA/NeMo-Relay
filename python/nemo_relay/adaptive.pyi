@@ -126,6 +126,25 @@ class AdaptiveHintsConfig:
         ...
 
 @dataclass(slots=True)
+class AgentContextConfig:
+    """Built-in agent context propagation settings.
+
+    Args:
+        priority: Intercept priority. Lower values run first.
+        break_chain: Whether to stop later request intercepts after this one.
+        inject_body_path: JSON body path used when injecting request-body
+            agent context.
+    """
+
+    priority: int = ...
+    break_chain: bool = ...
+    inject_body_path: str = ...
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this agent-context config to the canonical JSON object shape."""
+        ...
+
+@dataclass(slots=True)
 class ToolParallelismConfig:
     """Built-in adaptive tool scheduling settings.
 
@@ -191,6 +210,7 @@ class AdaptiveConfig:
         state: Adaptive state backend configuration.
         telemetry: Built-in adaptive telemetry subscriber settings.
         adaptive_hints: Built-in adaptive request-hints configuration.
+        agent_context: Built-in agent context propagation settings.
         tool_parallelism: Built-in adaptive tool-scheduling configuration.
         acg: Adaptive Cache Governor configuration.
         policy: Policy for unsupported adaptive configuration.
@@ -201,6 +221,7 @@ class AdaptiveConfig:
     state: StateConfig | None = ...
     telemetry: TelemetryConfig | None = ...
     adaptive_hints: AdaptiveHintsConfig | None = ...
+    agent_context: AgentContextConfig | None = ...
     tool_parallelism: ToolParallelismConfig | None = ...
     acg: AcgConfig | None = ...
     policy: ConfigPolicy = ...

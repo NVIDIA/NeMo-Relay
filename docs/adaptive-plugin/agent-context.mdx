@@ -1,0 +1,60 @@
+---
+title: "Agent Context"
+description: "Propagate scope-local agent identity into managed LLM requests."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use Agent Context when managed LLM requests need the active agent/session
+identity copied from NeMo Relay scope metadata into a provider-compatible
+request body.
+
+Agent Context registers as an LLM request intercept. Producers attach the
+canonical context object to scope metadata at
+`/nemo_relay/agent_context`; the intercept copies the nearest active value to
+the configured request body path when the request does not already contain a
+value there.
+
+The canonical context object uses these fields:
+
+| Field | Notes |
+|---|---|
+| `session_type_id` | Agent or harness kind, such as `codex` or `cursor`. |
+| `session_id` | Stable root session identifier. |
+| `trajectory_id` | Active turn or child trajectory identifier. |
+| `parent_trajectory_id` | Optional parent trajectory for subagents. |
+
+## `plugins.toml` Example
+
+```toml
+version = 1
+
+[[components]]
+kind = "adaptive"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.agent_context]
+priority = 100
+break_chain = false
+inject_body_path = "nvext.agent_context"
+```
+
+This configuration copies scope-local agent context into outgoing managed LLM
+requests while allowing later request intercepts to continue running.
+
+## Fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `priority` | `100` | Request intercept priority. Lower values run earlier. |
+| `break_chain` | `false` | Whether this intercept stops later request intercepts. |
+| `inject_body_path` | `nvext.agent_context` | JSON body path for request-body context injection. |
+
+Enable this only on provider paths that can consume or safely ignore the
+configured body field. For Dynamo OpenAI-compatible endpoints, use
+`nvext.agent_context`.

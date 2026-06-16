@@ -19,7 +19,7 @@ func TestNewAdaptiveConfigDefaults(t *testing.T) {
 	if config.Version != 1 {
 		t.Fatalf("expected version 1, got %d", config.Version)
 	}
-	if config.Telemetry != nil || config.AdaptiveHints != nil || config.ToolParallelism != nil || config.Acg != nil {
+	if config.Telemetry != nil || config.AdaptiveHints != nil || config.AgentContext != nil || config.ToolParallelism != nil || config.Acg != nil {
 		t.Fatal("expected adaptive feature sections to default to nil")
 	}
 }
@@ -33,6 +33,9 @@ func TestAdaptiveHelperConstructors(t *testing.T) {
 
 	hints := NewAdaptiveHintsConfig()
 	assertAdaptiveHintsDefaults(t, hints)
+
+	agentContext := NewAgentContextConfig()
+	assertAgentContextDefaults(t, agentContext)
 
 	parallelism := NewToolParallelismConfig()
 	assertToolParallelismDefaults(t, parallelism)
@@ -77,6 +80,13 @@ func assertAdaptiveHintsDefaults(t *testing.T, hints AdaptiveHintsConfig) {
 	t.Helper()
 	if hints.Priority != 100 || !hints.InjectHeader || hints.InjectBodyPath != "nvext.agent_hints" {
 		t.Fatalf("unexpected adaptive hints defaults: %#v", hints)
+	}
+}
+
+func assertAgentContextDefaults(t *testing.T, config AgentContextConfig) {
+	t.Helper()
+	if config.Priority != 100 || config.InjectBodyPath != "nvext.agent_context" {
+		t.Fatalf("unexpected agent context defaults: %#v", config)
 	}
 }
 

@@ -26,6 +26,9 @@ pub struct AdaptiveConfig {
     /// Built-in LLM hint injection settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_hints: Option<AdaptiveHintsComponentConfig>,
+    /// Built-in agent context propagation settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_context: Option<AgentContextComponentConfig>,
     /// Built-in tool scheduling settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_parallelism: Option<ToolParallelismComponentConfig>,
@@ -45,6 +48,7 @@ impl Default for AdaptiveConfig {
             state: None,
             telemetry: None,
             adaptive_hints: None,
+            agent_context: None,
             tool_parallelism: None,
             acg: None,
             policy: ConfigPolicy::default(),
@@ -136,6 +140,30 @@ impl Default for AdaptiveHintsComponentConfig {
     }
 }
 
+/// Typed helper for agent context propagation settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentContextComponentConfig {
+    /// Intercept priority. Lower values run first.
+    #[serde(default = "default_priority")]
+    pub priority: i32,
+    /// Whether later request intercepts should be skipped after this one runs.
+    #[serde(default)]
+    pub break_chain: bool,
+    /// JSON path used when injecting request-body agent context.
+    #[serde(default = "default_agent_context_path")]
+    pub inject_body_path: String,
+}
+
+impl Default for AgentContextComponentConfig {
+    fn default() -> Self {
+        Self {
+            priority: default_priority(),
+            break_chain: false,
+            inject_body_path: default_agent_context_path(),
+        }
+    }
+}
+
 /// Typed helper for tool parallelism settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolParallelismComponentConfig {
@@ -200,6 +228,10 @@ fn default_adaptive_hints_path() -> String {
     "nvext.agent_hints".to_string()
 }
 
+fn default_agent_context_path() -> String {
+    "nvext.agent_context".to_string()
+}
+
 fn default_tool_parallelism_mode() -> String {
     "observe_only".to_string()
 }
@@ -239,6 +271,13 @@ nemo_relay::editor_config! {
             optional: true,
             nested: AdaptiveHintsComponentConfig,
             default: AdaptiveHintsComponentConfig,
+        },
+        agent_context => {
+            label: "agent_context",
+            kind: Section,
+            optional: true,
+            nested: AgentContextComponentConfig,
+            default: AgentContextComponentConfig,
         },
         tool_parallelism => {
             label: "tool_parallelism",
@@ -293,6 +332,14 @@ nemo_relay::editor_config! {
         priority => { label: "priority", kind: Integer },
         break_chain => { label: "break_chain", kind: Boolean },
         inject_header => { label: "inject_header", kind: Boolean },
+        inject_body_path => { label: "inject_body_path", kind: String },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl AgentContextComponentConfig {
+        priority => { label: "priority", kind: Integer },
+        break_chain => { label: "break_chain", kind: Boolean },
         inject_body_path => { label: "inject_body_path", kind: String },
     }
 }

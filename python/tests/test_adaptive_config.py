@@ -12,6 +12,7 @@ from nemo_relay.adaptive import (
     AcgConfig,
     AcgStabilityThresholds,
     AdaptiveConfig,
+    AgentContextConfig,
     BackendSpec,
     ComponentSpec,
     ConfigPolicy,
@@ -125,6 +126,7 @@ class TestDynamicConfigContract:
                         AdaptiveConfig(
                             state=StateConfig(backend=BackendSpec.in_memory()),
                             telemetry=TelemetryConfig(),
+                            agent_context=AgentContextConfig(),
                         )
                     )
                 ]

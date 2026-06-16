@@ -43,6 +43,9 @@ type TelemetryConfig = nemo_relay.TelemetryConfig
 // AdaptiveHintsConfig configures built-in adaptive hint injection.
 type AdaptiveHintsConfig = nemo_relay.AdaptiveHintsConfig
 
+// AgentContextConfig configures built-in agent context propagation.
+type AgentContextConfig = nemo_relay.AgentContextConfig
+
 // ToolParallelismConfig configures built-in adaptive tool scheduling.
 type ToolParallelismConfig = nemo_relay.ToolParallelismConfig
 
@@ -96,6 +99,11 @@ func NewTelemetryConfig() TelemetryConfig {
 // NewAdaptiveHintsConfig returns default adaptive hints injection settings.
 func NewAdaptiveHintsConfig() AdaptiveHintsConfig {
 	return nemo_relay.NewAdaptiveHintsConfig()
+}
+
+// NewAgentContextConfig returns default agent context propagation settings.
+func NewAgentContextConfig() AgentContextConfig {
+	return nemo_relay.NewAgentContextConfig()
 }
 
 // NewToolParallelismConfig returns default adaptive tool scheduling settings.

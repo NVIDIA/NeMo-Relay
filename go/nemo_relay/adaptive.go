@@ -15,6 +15,7 @@ type AdaptiveConfig struct {
 	State           *AdaptiveStateConfig   `json:"state,omitempty"`
 	Telemetry       *TelemetryConfig       `json:"telemetry,omitempty"`
 	AdaptiveHints   *AdaptiveHintsConfig   `json:"adaptive_hints,omitempty"`
+	AgentContext    *AgentContextConfig    `json:"agent_context,omitempty"`
 	ToolParallelism *ToolParallelismConfig `json:"tool_parallelism,omitempty"`
 	Acg             *AcgConfig             `json:"acg,omitempty"`
 	Policy          *ConfigPolicy          `json:"policy,omitempty"`
@@ -42,6 +43,13 @@ type AdaptiveHintsConfig struct {
 	Priority       int32  `json:"priority,omitempty"`
 	BreakChain     bool   `json:"break_chain,omitempty"`
 	InjectHeader   bool   `json:"inject_header,omitempty"`
+	InjectBodyPath string `json:"inject_body_path,omitempty"`
+}
+
+// AgentContextConfig configures built-in agent context propagation.
+type AgentContextConfig struct {
+	Priority       int32  `json:"priority,omitempty"`
+	BreakChain     bool   `json:"break_chain,omitempty"`
 	InjectBodyPath string `json:"inject_body_path,omitempty"`
 }
 
@@ -107,6 +115,14 @@ func NewAdaptiveHintsConfig() AdaptiveHintsConfig {
 		Priority:       100,
 		InjectHeader:   true,
 		InjectBodyPath: "nvext.agent_hints",
+	}
+}
+
+// NewAgentContextConfig returns default agent context propagation settings.
+func NewAgentContextConfig() AgentContextConfig {
+	return AgentContextConfig{
+		Priority:       100,
+		InjectBodyPath: "nvext.agent_context",
 	}
 }
 

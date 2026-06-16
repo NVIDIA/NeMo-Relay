@@ -11,6 +11,11 @@ test('WebAssembly adaptive wrappers expose default config and helper defaults', 
     version: 1,
   });
   assert.equal(adaptive.adaptiveHintsConfig().priority, 100);
+  assert.deepEqual(adaptive.agentContextConfig(), {
+    priority: 100,
+    break_chain: false,
+    inject_body_path: 'nvext.agent_context',
+  });
   assert.equal(adaptive.toolParallelismConfig().mode, 'observe_only');
   assert.deepEqual(adaptive.acgConfig(), {
     provider: 'passthrough',

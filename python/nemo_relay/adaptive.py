@@ -179,6 +179,32 @@ class AdaptiveHintsConfig:
 
 
 @dataclass(slots=True)
+class AgentContextConfig:
+    """Built-in agent context propagation settings.
+
+    Args:
+        priority: Intercept priority. Lower values run first.
+        break_chain: Whether to stop later request intercepts after this one.
+        inject_body_path: JSON body path used when injecting request-body
+            agent context.
+    """
+
+    priority: int = 100
+    break_chain: bool = False
+    inject_body_path: str = "nvext.agent_context"
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this agent-context config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "priority": self.priority,
+                "break_chain": self.break_chain,
+                "inject_body_path": self.inject_body_path,
+            }
+        )
+
+
+@dataclass(slots=True)
 class ToolParallelismConfig:
     """Built-in adaptive tool scheduling settings.
 
@@ -261,6 +287,7 @@ class AdaptiveConfig:
         state: Adaptive state backend configuration.
         telemetry: Built-in adaptive telemetry settings.
         adaptive_hints: Built-in LLM hint-injection settings.
+        agent_context: Built-in agent context propagation settings.
         tool_parallelism: Built-in tool scheduling settings.
         acg: Adaptive Cache Governor settings.
         policy: Unsupported-config policy applied within the adaptive config.
@@ -275,6 +302,7 @@ class AdaptiveConfig:
     state: StateConfig | None = None
     telemetry: TelemetryConfig | None = None
     adaptive_hints: AdaptiveHintsConfig | None = None
+    agent_context: AgentContextConfig | None = None
     tool_parallelism: ToolParallelismConfig | None = None
     acg: AcgConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
@@ -287,6 +315,7 @@ class AdaptiveConfig:
             "state": _normalize(self.state),
             "telemetry": _normalize(self.telemetry),
             "adaptive_hints": _normalize(self.adaptive_hints),
+            "agent_context": _normalize(self.agent_context),
             "tool_parallelism": _normalize(self.tool_parallelism),
             "acg": _normalize(self.acg),
             "policy": self.policy.to_dict(),
@@ -379,6 +408,7 @@ __all__ = [
     "AcgStabilityThresholds",
     "AdaptiveConfig",
     "AdaptiveHintsConfig",
+    "AgentContextConfig",
     "ADAPTIVE_PLUGIN_KIND",
     "BackendSpec",
     "ConfigDiagnostic",

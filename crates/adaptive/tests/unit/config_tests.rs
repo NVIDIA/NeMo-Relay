@@ -13,6 +13,7 @@ fn test_adaptive_config_defaults() {
     assert_eq!(config.version, 1);
     assert!(config.telemetry.is_none());
     assert!(config.adaptive_hints.is_none());
+    assert!(config.agent_context.is_none());
     assert!(config.tool_parallelism.is_none());
     assert_eq!(
         config.policy.unknown_component,
@@ -25,6 +26,11 @@ fn test_typed_section_helpers_default() {
     let adaptive_hints = AdaptiveHintsComponentConfig::default();
     assert_eq!(adaptive_hints.priority, 100);
     assert!(adaptive_hints.inject_header);
+
+    let agent_context = AgentContextComponentConfig::default();
+    assert_eq!(agent_context.priority, 100);
+    assert!(!agent_context.break_chain);
+    assert_eq!(agent_context.inject_body_path, "nvext.agent_context");
 
     let tool_parallelism = ToolParallelismComponentConfig::default();
     assert_eq!(tool_parallelism.mode, "observe_only");
@@ -56,6 +62,7 @@ fn test_adaptive_config_deserialization_applies_field_defaults() {
     assert!(config.state.is_none());
     assert!(config.telemetry.is_none());
     assert!(config.adaptive_hints.is_none());
+    assert!(config.agent_context.is_none());
     assert!(config.tool_parallelism.is_none());
 }
 
@@ -66,6 +73,11 @@ fn test_component_configs_deserialize_with_default_helpers() {
     assert!(!adaptive_hints.break_chain);
     assert!(adaptive_hints.inject_header);
     assert_eq!(adaptive_hints.inject_body_path, "nvext.agent_hints");
+
+    let agent_context: AgentContextComponentConfig = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(agent_context.priority, 100);
+    assert!(!agent_context.break_chain);
+    assert_eq!(agent_context.inject_body_path, "nvext.agent_context");
 
     let tool_parallelism: ToolParallelismComponentConfig =
         serde_json::from_value(json!({})).unwrap();
@@ -88,6 +100,7 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
             "state",
             "telemetry",
             "adaptive_hints",
+            "agent_context",
             "tool_parallelism",
             "acg",
             "policy",

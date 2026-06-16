@@ -30,13 +30,15 @@ The top-level adaptive object contains:
 | `state` | Adaptive state backend. |
 | `telemetry` | Adaptive subscriber and learner settings. |
 | `adaptive_hints` | Request hint-injection behavior. |
+| `agent_context` | Scope-local agent context propagation behavior. |
 | `tool_parallelism` | Tool scheduling observation or scheduling behavior. |
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
-The requested area pages cover [Adaptive Cache Governor (ACG)](/adaptive-plugin/acg) and
-[Adaptive Hints](/adaptive-plugin/adaptive-hints). State, telemetry, tool parallelism, and
-policy remain whole-plugin settings:
+The requested area pages cover [Adaptive Cache Governor (ACG)](/adaptive-plugin/acg),
+[Adaptive Hints](/adaptive-plugin/adaptive-hints), and
+[Agent Context](/adaptive-plugin/agent-context). State, telemetry, tool
+parallelism, and policy remain whole-plugin settings:
 
 - Use `state.backend.kind = "in_memory"` for local experiments.
 - Use Redis state when learned state must survive restarts or be shared across
@@ -75,6 +77,11 @@ priority = 100
 break_chain = false
 inject_header = true
 inject_body_path = "nvext.agent_hints"
+
+[components.config.agent_context]
+priority = 100
+break_chain = false
+inject_body_path = "nvext.agent_context"
 
 [components.config.acg]
 provider = "passthrough"
@@ -116,6 +123,9 @@ adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
     ),
+    agent_context=nemo_relay.adaptive.AgentContextConfig(
+        inject_body_path="nvext.agent_context",
+    ),
     acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
 )
 
@@ -147,6 +157,9 @@ adaptiveConfig.tool_parallelism = adaptive.toolParallelismConfig({ mode: "observ
 adaptiveConfig.adaptive_hints = adaptive.adaptiveHintsConfig({
   inject_body_path: "nvext.agent_hints",
 });
+adaptiveConfig.agent_context = adaptive.agentContextConfig({
+  inject_body_path: "nvext.agent_context",
+});
 adaptiveConfig.acg = adaptive.acgConfig({ provider: "passthrough" });
 
 const pluginConfig = plugin.defaultConfig();
@@ -172,6 +185,7 @@ use nemo_relay_adaptive::{
     TelemetryComponentConfig,
     ToolParallelismComponentConfig,
     AdaptiveHintsComponentConfig,
+    AgentContextComponentConfig,
     AcgComponentConfig,
 };
 
@@ -188,6 +202,10 @@ adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
 adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
     inject_body_path: "nvext.agent_hints".into(),
     ..AdaptiveHintsComponentConfig::default()
+});
+adaptive.agent_context = Some(AgentContextComponentConfig {
+    inject_body_path: "nvext.agent_context".into(),
+    ..AgentContextComponentConfig::default()
 });
 adaptive.acg = Some(AcgComponentConfig {
     provider: "passthrough".into(),
@@ -229,6 +247,9 @@ adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
     adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
     ),
+    agent_context=nemo_relay.adaptive.AgentContextConfig(
+        inject_body_path="nvext.agent_context",
+    ),
     acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
 )
 
@@ -252,7 +273,8 @@ activating adaptive behavior from Node.js.
 ```rust
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
-    BackendSpec, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
+    AgentContextComponentConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
+    ToolParallelismComponentConfig,
 };
 
 let mut adaptive = AdaptiveConfig::default();
@@ -268,6 +290,10 @@ adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
 adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
     inject_body_path: "nvext.agent_hints".into(),
     ..AdaptiveHintsComponentConfig::default()
+});
+adaptive.agent_context = Some(AgentContextComponentConfig {
+    inject_body_path: "nvext.agent_context".into(),
+    ..AgentContextComponentConfig::default()
 });
 adaptive.acg = Some(AcgComponentConfig {
     provider: "passthrough".into(),
