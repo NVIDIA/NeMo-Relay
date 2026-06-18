@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Literal, Optional, TypeAlias
 
 from nemo_relay import adaptive as adaptive
+from nemo_relay import adaptive_topology as adaptive_topology
 from nemo_relay import codecs as codecs
 from nemo_relay import guardrails as guardrails
 from nemo_relay import intercepts as intercepts

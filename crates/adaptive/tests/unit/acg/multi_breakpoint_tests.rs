@@ -82,6 +82,7 @@ fn layered_stability(observation_count: u32, layers: usize) -> StabilityAnalysis
             .collect(),
         stable_prefix_length: layers,
         total_observations: observation_count,
+        converged: false,
     }
 }
 

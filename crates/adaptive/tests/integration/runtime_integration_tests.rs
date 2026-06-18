@@ -675,6 +675,7 @@ async fn test_adaptive_plugin_rejects_unsupported_mode_with_strict_policy() {
                 tool_parallelism: Some(ToolParallelismComponentConfig {
                     priority: 100,
                     mode: "broken".into(),
+                    drift: None,
                 }),
                 ..AdaptiveConfig::default()
             })

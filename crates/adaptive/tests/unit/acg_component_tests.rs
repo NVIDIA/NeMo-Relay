@@ -49,6 +49,7 @@ fn sample_hot_cache() -> Arc<RwLock<HotCache>> {
             ],
             stable_prefix_length: 2,
             total_observations: 8,
+            converged: false,
         }),
         acg_observation_count: 8,
     }))
@@ -233,6 +234,7 @@ fn stability_with_prefix(prefix_len: u32, observations: u32) -> StabilityAnalysi
             .collect(),
         stable_prefix_length: prefix_len as usize,
         total_observations: observations,
+        converged: false,
     }
 }
 
@@ -263,6 +265,7 @@ fn layered_stability_result(observation_count: u32) -> StabilityAnalysisResult {
         ],
         stable_prefix_length: 3,
         total_observations: observation_count,
+        converged: false,
     }
 }
 
@@ -692,6 +695,7 @@ fn acg_component_build_intent_bundle_requires_at_least_two_observations() {
         ],
         stable_prefix_length: 2,
         total_observations: 1,
+        converged: false,
     };
 
     let intent_bundle = build_intent_bundle(

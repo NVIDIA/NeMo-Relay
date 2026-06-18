@@ -13,18 +13,18 @@ from typing import Literal, TypedDict
 
 from nemo_relay import JsonObject, ScopeHandle, UnsupportedBehavior
 
-class ConfigDiagnostic(TypedDict, total=False):
-    """One adaptive configuration diagnostic.
+__all__: list[str]
 
-    Fields mirror the runtime validation report produced by the Rust adaptive
-    validator.
-    """
-
+class _ConfigDiagnosticRequired(TypedDict):
     level: Literal["warning", "error"]
     code: str
+    message: str
+
+class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
+    """One adaptive configuration diagnostic."""
+
     component: str
     field: str
-    message: str
 
 class ConfigReport(TypedDict):
     """Validation report returned by adaptive configuration helpers."""
@@ -106,6 +106,40 @@ class TelemetryConfig:
         ...
 
 @dataclass(slots=True)
+class GovernorConfig:
+    """Topology-aware load-shedding settings for adaptive hints."""
+
+    enabled: bool = ...
+    epsilon: float = ...
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this governor config to the canonical JSON object shape."""
+        ...
+
+@dataclass(slots=True)
+class DriftConfig:
+    """Topology-aware drift detection settings for tool plans."""
+
+    enabled: bool = ...
+    threshold: float = ...
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this drift config to the canonical JSON object shape."""
+        ...
+
+@dataclass(slots=True)
+class ConvergenceConfig:
+    """Topological convergence detection settings."""
+
+    enabled: bool = ...
+    epsilon: float = ...
+    stability_window: int = ...
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this convergence config to the canonical JSON object shape."""
+        ...
+
+@dataclass(slots=True)
 class AdaptiveHintsConfig:
     """Built-in adaptive hints injection settings.
 
@@ -114,12 +148,14 @@ class AdaptiveHintsConfig:
         break_chain: Whether to stop later request intercepts after this one.
         inject_header: Whether to inject the adaptive hints HTTP header.
         inject_body_path: JSON body path used when injecting request-body hints.
+        governor: Optional topology-aware load-shedding settings.
     """
 
     priority: int = ...
     break_chain: bool = ...
     inject_header: bool = ...
     inject_body_path: str = ...
+    governor: GovernorConfig | None = ...
 
     def to_dict(self) -> JsonObject:
         """Serialize this adaptive-hints config to the canonical JSON object shape."""
@@ -133,10 +169,12 @@ class ToolParallelismConfig:
         priority: Intercept priority. Lower values run first.
         mode: Scheduling mode. ``"observe_only"`` records signals without
             changing behavior, while stronger modes allow adaptive scheduling.
+        drift: Optional topology-aware stale-plan invalidation settings.
     """
 
     priority: int = ...
     mode: Literal["observe_only", "inject_hints", "schedule"] = ...
+    drift: DriftConfig | None = ...
 
     def to_dict(self) -> JsonObject:
         """Serialize this tool-parallelism config to the canonical JSON object shape."""
@@ -168,14 +206,16 @@ class AcgConfig:
     Args:
         provider: Provider cache plugin name.
         observation_window: Rolling PromptIR observation window size.
-        priority: Request-intercept priority used by ACG.
+        priority: LLM execution intercept priority used by ACG.
         stability_thresholds: Prompt-stability classification thresholds.
+        convergence: Optional component-scoped topological convergence settings.
     """
 
     provider: Literal["anthropic", "openai", "passthrough"] = ...
     observation_window: int = ...
     priority: int = ...
     stability_thresholds: AcgStabilityThresholds | None = ...
+    convergence: ConvergenceConfig | None = ...
 
     def to_dict(self) -> JsonObject:
         """Serialize this ACG config to the canonical JSON object shape."""
@@ -193,6 +233,7 @@ class AdaptiveConfig:
         adaptive_hints: Built-in adaptive request-hints configuration.
         tool_parallelism: Built-in adaptive tool-scheduling configuration.
         acg: Adaptive Cache Governor configuration.
+        convergence: Global topological convergence settings.
         policy: Policy for unsupported adaptive configuration.
     """
 
@@ -203,6 +244,7 @@ class AdaptiveConfig:
     adaptive_hints: AdaptiveHintsConfig | None = ...
     tool_parallelism: ToolParallelismConfig | None = ...
     acg: AcgConfig | None = ...
+    convergence: ConvergenceConfig | None = ...
     policy: ConfigPolicy = ...
 
     def to_dict(self) -> JsonObject:

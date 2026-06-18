@@ -30,6 +30,8 @@ mod convert;
 #[doc(hidden)]
 pub mod py_adaptive;
 #[doc(hidden)]
+pub mod py_adaptive_topology;
+#[doc(hidden)]
 pub mod py_api;
 mod py_callable;
 mod py_context;
@@ -63,6 +65,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py_api::register(m)?;
     py_plugin::register(m)?;
     py_adaptive::register(m)?;
+    py_adaptive_topology::register(m)?;
     Ok(())
 }
 

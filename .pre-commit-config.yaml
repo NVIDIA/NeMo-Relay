@@ -52,7 +52,7 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check . --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
+        entry: uv run ty check . --force-exclude --exclude docs/ --exclude fern/ --exclude third_party/ --exclude examples/ --exclude .cache/ --exclude .claude/
         language: system
         types: [python]
         pass_filenames: false

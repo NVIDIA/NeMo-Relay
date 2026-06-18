@@ -41,6 +41,9 @@ pub struct StabilityAnalysisResult {
     pub stable_prefix_length: usize,
     /// Total number of observations included in the analysis.
     pub total_observations: u32,
+    /// Whether topological convergence has been declared for this profile.
+    #[serde(default)]
+    pub converged: bool,
 }
 
 struct SpanObservations {
@@ -70,6 +73,7 @@ pub fn analyze_stability(
             scores: Vec::new(),
             stable_prefix_length: 0,
             total_observations: 0,
+            converged: false,
         };
     }
 
@@ -94,6 +98,7 @@ pub fn analyze_stability(
         scores,
         stable_prefix_length,
         total_observations,
+        converged: false,
     }
 }
 

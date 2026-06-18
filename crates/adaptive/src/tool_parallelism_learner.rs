@@ -10,9 +10,11 @@ use std::sync::{Arc, RwLock};
 
 use crate::acg::canonicalize::sha256_hex;
 use chrono::{DateTime, Utc};
+use nemo_relay_adaptive_topology::DriftDetector;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::config::DriftConfig;
 use crate::error::{AdaptiveError, Result};
 use crate::learner::traits::Learner;
 use crate::storage::traits::StorageBackendDyn;
@@ -24,6 +26,8 @@ use crate::types::records::{CallKind, RunRecord};
 /// Learner that discovers tool fan-out groups from run telemetry.
 pub struct ToolParallelismLearner {
     agent_id: String,
+    drift: Option<DriftConfig>,
+    drift_detector: Arc<RwLock<DriftDetector<4>>>,
 }
 
 impl ToolParallelismLearner {
@@ -35,9 +39,39 @@ impl ToolParallelismLearner {
     /// # Returns
     /// A configured [`ToolParallelismLearner`].
     pub fn new(agent_id: impl Into<String>) -> Self {
+        Self::new_with_drift(agent_id, None)
+    }
+
+    /// Create a new tool-parallelism learner with optional drift detection.
+    ///
+    /// # Parameters
+    /// - `agent_id`: Agent identifier whose execution plan should be updated.
+    /// - `drift`: Optional topology-aware drift detection settings.
+    ///
+    /// # Returns
+    /// A configured [`ToolParallelismLearner`].
+    pub fn new_with_drift(agent_id: impl Into<String>, drift: Option<DriftConfig>) -> Self {
         Self {
             agent_id: agent_id.into(),
+            drift,
+            drift_detector: Arc::new(RwLock::new(DriftDetector::new())),
         }
+    }
+
+    fn record_cohort_drift(&self, observed_cohorts: &[Vec<String>]) -> Result<bool> {
+        let Some(config) = &self.drift else {
+            return Ok(false);
+        };
+        if !config.enabled {
+            return Ok(false);
+        }
+
+        let centroid = cohort_feature_vector(observed_cohorts);
+        let mut detector = self.drift_detector.write().map_err(|error| {
+            AdaptiveError::Internal(format!("tool drift detector lock poisoned: {error}"))
+        })?;
+        let drift = detector.update(&centroid);
+        Ok(drift > config.threshold)
     }
 }
 
@@ -54,10 +88,15 @@ impl Learner for ToolParallelismLearner {
                 return Ok(());
             }
 
-            let mut plan = backend
-                .load_plan_dyn(&self.agent_id)
-                .await?
-                .unwrap_or_else(|| empty_execution_plan(&self.agent_id, run.id));
+            let drifted = self.record_cohort_drift(&observed_cohorts)?;
+            let mut plan = if drifted {
+                empty_execution_plan(&self.agent_id, run.id)
+            } else {
+                backend
+                    .load_plan_dyn(&self.agent_id)
+                    .await?
+                    .unwrap_or_else(|| empty_execution_plan(&self.agent_id, run.id))
+            };
             plan.agent_id = self.agent_id.clone();
 
             merge_observed_cohorts(&mut plan, &observed_cohorts, run.id);
@@ -111,6 +150,32 @@ fn derive_observed_cohorts(run: &RunRecord) -> Vec<Vec<String>> {
     let mut observed: Vec<Vec<String>> = cohorts.into_iter().collect();
     observed.sort();
     observed
+}
+
+fn cohort_feature_vector(observed_cohorts: &[Vec<String>]) -> [f64; 4] {
+    if observed_cohorts.is_empty() {
+        return [0.0; 4];
+    }
+
+    let mut unique_tools = BTreeSet::new();
+    let mut total_tool_refs = 0usize;
+    let mut max_cohort_size = 0usize;
+
+    for cohort in observed_cohorts {
+        total_tool_refs += cohort.len();
+        max_cohort_size = max_cohort_size.max(cohort.len());
+        for tool in cohort {
+            unique_tools.insert(tool);
+        }
+    }
+
+    let duplicate_refs = total_tool_refs.saturating_sub(unique_tools.len());
+    [
+        observed_cohorts.len() as f64,
+        unique_tools.len() as f64,
+        duplicate_refs as f64 / total_tool_refs.max(1) as f64,
+        max_cohort_size as f64,
+    ]
 }
 
 fn merge_observed_cohorts(

@@ -51,6 +51,7 @@ fn make_hot_cache(
             scores: vec![],
             stable_prefix_length,
             total_observations: observation_count,
+            converged: false,
         }),
         acg_observation_count: observation_count,
     }))

@@ -83,6 +83,7 @@ fn make_hot_cache(stable_prefix_length: Option<usize>) -> HotCache {
                 .collect(),
             stable_prefix_length,
             total_observations: 4,
+            converged: false,
         }),
         acg_observation_count: 4,
     }

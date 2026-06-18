@@ -221,6 +221,9 @@ runtime.shutdown().await?;
 | `provider` | `passthrough` | `passthrough`, `anthropic`, or `openai`. |
 | `observation_window` | `100` | Rolling Prompt IR sample window for stability analysis. |
 | `priority` | `50` | LLM execution intercept priority. Lower values run earlier. |
+| `convergence.enabled` | `false` | Optional topology-aware convergence detection for ACG learning. |
+| `convergence.epsilon` | `0.001` | Positive finite error threshold used by convergence detection. |
+| `convergence.stability_window` | `3` | Minimum epochs required before convergence can be declared. |
 | `stability_thresholds.stable_threshold` | `0.95` | Minimum effective score classified as stable. |
 | `stability_thresholds.semi_stable_threshold` | `0.50` | Minimum effective score classified as semi-stable. |
 | `stability_thresholds.min_observations_for_full_confidence` | `20` | Observation count required for full confidence. |
@@ -228,6 +231,10 @@ runtime.shutdown().await?;
 Use `passthrough` when you want ACG observations without provider-specific hint
 translation. Set `provider` to the backend API surface the agent actually calls
 when you are ready to apply cache planning.
+
+ACG convergence uses deterministic topology-inspired stability signals derived
+from observed prompt structure. It is an adaptive early-stop control for
+learning, not an exact persistent-homology calculation.
 
 ## Expected Output
 
@@ -244,5 +251,7 @@ production.
 
 - `provider` is not one of `passthrough`, `anthropic`, or `openai`.
 - Stability thresholds are outside the supported numeric range.
+- `convergence.epsilon` is not positive and finite, or
+  `convergence.stability_window` is less than `3`.
 - ACG is enabled before the application emits managed LLM events.
 - The configured provider does not match the real model API surface.

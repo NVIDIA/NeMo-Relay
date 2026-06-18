@@ -90,6 +90,7 @@ fn sample_stability(agent_id: &str) -> StabilityAnalysisResult {
         }],
         stable_prefix_length: 1,
         total_observations: 3,
+        converged: false,
     }
 }
 

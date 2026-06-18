@@ -85,6 +85,7 @@ fn sample_stability_record() -> StabilityAnalysisResult {
         }],
         stable_prefix_length: 1,
         total_observations: 1,
+        converged: false,
     }
 }
 

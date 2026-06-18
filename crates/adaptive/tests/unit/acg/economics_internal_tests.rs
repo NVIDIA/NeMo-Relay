@@ -122,6 +122,7 @@ fn economics_internal_build_prefix_stats_stops_at_first_non_stable_block() {
         ],
         stable_prefix_length: 2,
         total_observations: 6,
+        converged: false,
     };
 
     let stats = build_prefix_stats(

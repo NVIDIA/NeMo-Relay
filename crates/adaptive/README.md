@@ -42,7 +42,8 @@ framework.
 - ✅ **`AdaptiveConfig`**: A canonical config contract for the top-level
   `adaptive` plugin component.
 - ✅ **Built-in component settings**: Typed config helpers for telemetry,
-  adaptive hints, tool parallelism, and the Adaptive Cache Governor.
+  adaptive hints, tool parallelism, the Adaptive Cache Governor, and
+  topology-aware convergence, drift, and hint-governor controls.
 - ✅ **State backends**: In-memory state by default and Redis-backed state behind
   the `redis-backend` feature.
 - ✅ **Learning primitives**: Runtime helpers and learners built on NeMo Relay
@@ -50,6 +51,9 @@ framework.
 - ✅ **Adaptive Cache Governor (ACG) module surface**: The canonical
   `nemo_relay_adaptive::acg` module for PromptIR, provider plugins, stability
   analysis, and cache telemetry normalization.
+- ✅ **Topology-aware adaptive controls**: Optional deterministic signals for
+  ACG convergence, stale tool-plan invalidation, and learned hint load
+  shedding.
 
 ## Installation
 

@@ -151,6 +151,65 @@ class TelemetryConfig:
 
 
 @dataclass(slots=True)
+class GovernorConfig:
+    """Topology-aware load-shedding settings for adaptive hints.
+
+    Args:
+        enabled: Whether the governor is active.
+        epsilon: Initial sensitivity threshold.
+    """
+
+    enabled: bool = False
+    epsilon: float = 1.0
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this governor config to the canonical JSON object shape."""
+        return _normalize_object({"enabled": self.enabled, "epsilon": self.epsilon})
+
+
+@dataclass(slots=True)
+class DriftConfig:
+    """Topology-aware drift detection settings for tool plans.
+
+    Args:
+        enabled: Whether drift detection is active.
+        threshold: Drift distance above which existing plans are invalidated.
+    """
+
+    enabled: bool = False
+    threshold: float = 0.75
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this drift config to the canonical JSON object shape."""
+        return _normalize_object({"enabled": self.enabled, "threshold": self.threshold})
+
+
+@dataclass(slots=True)
+class ConvergenceConfig:
+    """Topological convergence detection settings.
+
+    Args:
+        enabled: Whether convergence detection is active.
+        epsilon: Error threshold below which convergence can be declared.
+        stability_window: Minimum number of epochs required for stability.
+    """
+
+    enabled: bool = False
+    epsilon: float = 0.001
+    stability_window: int = 3
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this convergence config to the canonical JSON object shape."""
+        return _normalize_object(
+            {
+                "enabled": self.enabled,
+                "epsilon": self.epsilon,
+                "stability_window": self.stability_window,
+            }
+        )
+
+
+@dataclass(slots=True)
 class AdaptiveHintsConfig:
     """Built-in adaptive hints injection settings.
 
@@ -159,12 +218,14 @@ class AdaptiveHintsConfig:
         break_chain: Whether to stop later request intercepts after this one.
         inject_header: Whether to inject the adaptive hints HTTP header.
         inject_body_path: JSON body path used when injecting request-body hints.
+        governor: Optional topology-aware load-shedding settings.
     """
 
     priority: int = 100
     break_chain: bool = False
     inject_header: bool = True
     inject_body_path: str = "nvext.agent_hints"
+    governor: GovernorConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this adaptive-hints config to the canonical JSON object shape."""
@@ -174,6 +235,7 @@ class AdaptiveHintsConfig:
                 "break_chain": self.break_chain,
                 "inject_header": self.inject_header,
                 "inject_body_path": self.inject_body_path,
+                "governor": _normalize(self.governor),
             }
         )
 
@@ -187,14 +249,16 @@ class ToolParallelismConfig:
         mode: Scheduling mode. ``"observe_only"`` records signals without
             changing behavior, while other modes enable stronger adaptive
             scheduling behavior.
+        drift: Optional topology-aware stale-plan invalidation settings.
     """
 
     priority: int = 100
     mode: Literal["observe_only", "inject_hints", "schedule"] = "observe_only"
+    drift: DriftConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this tool-parallelism config to the canonical JSON object shape."""
-        return _normalize_object({"priority": self.priority, "mode": self.mode})
+        return _normalize_object({"priority": self.priority, "mode": self.mode, "drift": _normalize(self.drift)})
 
 
 @dataclass(slots=True)
@@ -232,12 +296,14 @@ class AcgConfig:
         observation_window: Rolling PromptIR observation window size.
         priority: LLM execution intercept priority.
         stability_thresholds: Prompt-stability classification thresholds.
+        convergence: Optional component-scoped topological convergence settings.
     """
 
     provider: Literal["anthropic", "openai", "passthrough"] = "passthrough"
     observation_window: int = 100
     priority: int = 50
     stability_thresholds: AcgStabilityThresholds | None = field(default_factory=AcgStabilityThresholds)
+    convergence: ConvergenceConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ACG config to the canonical JSON object shape."""
@@ -247,6 +313,7 @@ class AcgConfig:
                 "observation_window": self.observation_window,
                 "priority": self.priority,
                 "stability_thresholds": _normalize(self.stability_thresholds),
+                "convergence": _normalize(self.convergence),
             }
         )
 
@@ -263,6 +330,7 @@ class AdaptiveConfig:
         adaptive_hints: Built-in LLM hint-injection settings.
         tool_parallelism: Built-in tool scheduling settings.
         acg: Adaptive Cache Governor settings.
+        convergence: Global topological convergence settings.
         policy: Unsupported-config policy applied within the adaptive config.
 
     Behavior:
@@ -277,6 +345,7 @@ class AdaptiveConfig:
     adaptive_hints: AdaptiveHintsConfig | None = None
     tool_parallelism: ToolParallelismConfig | None = None
     acg: AcgConfig | None = None
+    convergence: ConvergenceConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
 
     def to_dict(self) -> JsonObject:
@@ -289,6 +358,7 @@ class AdaptiveConfig:
             "adaptive_hints": _normalize(self.adaptive_hints),
             "tool_parallelism": _normalize(self.tool_parallelism),
             "acg": _normalize(self.acg),
+            "convergence": _normalize(self.convergence),
             "policy": self.policy.to_dict(),
         }
 
@@ -379,15 +449,21 @@ __all__ = [
     "AcgStabilityThresholds",
     "AdaptiveConfig",
     "AdaptiveHintsConfig",
+    "AdaptiveRuntime",
     "ADAPTIVE_PLUGIN_KIND",
     "BackendSpec",
+    "build_cache_telemetry_event",
     "ConfigDiagnostic",
     "ConfigPolicy",
     "ConfigReport",
     "ComponentSpec",
+    "ConvergenceConfig",
+    "DriftConfig",
+    "GovernorConfig",
     "StateConfig",
     "TelemetryConfig",
     "ToolParallelismConfig",
     "set_latency_sensitivity",
     "UnsupportedBehavior",
+    "validate_config",
 ]

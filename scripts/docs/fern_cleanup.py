@@ -30,9 +30,9 @@ SUPPORT_API_REFERENCE_TEXT = (
     "[Node.js Library Reference](/reference/api/nodejs-library-reference), and\n"
     "[Rust Library Reference](/reference/api/rust-library-reference) for generated\n"
     "symbol-level documentation. The Rust reference includes `nemo-relay`,\n"
-    "`nemo-relay-adaptive`, `nemo-relay-pii-redaction`, and `nemo-relay-ffi`.\n"
-    "For Go and WebAssembly surfaces, use the source directories, tests, and\n"
-    "task-focused guides when you need exact behavior."
+    "`nemo-relay-adaptive`, and `nemo-relay-ffi`. For Go and WebAssembly surfaces, use\n"
+    "the source directories, tests, and task-focused guides when you need exact\n"
+    "behavior."
 )
 ASSISTANT_SYMBOL_REFERENCE_TEXT = (
     "For symbol-level work, assistants should use the source directories, tests, and\n"

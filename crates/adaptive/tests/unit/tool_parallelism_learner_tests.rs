@@ -10,6 +10,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
+use crate::config::DriftConfig;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackend;
 use crate::types::cache::HotCache;
@@ -297,6 +298,64 @@ async fn process_run_merges_new_cohorts_into_existing_plan() {
             .iter()
             .any(|group| group.tool_names == vec!["fetch".to_string(), "search".to_string()])
     );
+}
+
+#[tokio::test]
+async fn process_run_invalidates_existing_plan_when_tool_cohort_topology_drifts() {
+    let backend = InMemoryBackend::new();
+    let hot_cache = make_hot_cache();
+    let learner = ToolParallelismLearner::new_with_drift(
+        "agent-drift",
+        Some(DriftConfig {
+            enabled: true,
+            threshold: 0.01,
+        }),
+    );
+    let base = Utc::now();
+    let first_run = make_run(
+        "agent-drift",
+        vec![
+            make_tool_call("search", base, 0, Some(90)),
+            make_tool_call("fetch", base, 10, Some(100)),
+        ],
+    );
+    let drifted_run = make_run(
+        "agent-drift",
+        vec![
+            make_tool_call("compile", base, 0, Some(120)),
+            make_tool_call("test", base, 10, Some(130)),
+            make_tool_call("lint", base, 20, Some(140)),
+        ],
+    );
+
+    backend
+        .store_plan(&make_existing_plan("agent-drift"))
+        .unwrap();
+    learner
+        .process_run(&first_run, &backend, &hot_cache)
+        .await
+        .unwrap();
+    learner
+        .process_run(&drifted_run, &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    let plan = backend.load_plan("agent-drift").await.unwrap().unwrap();
+    assert!(
+        !plan
+            .parallel_groups
+            .iter()
+            .any(|group| group.group_id == "fanout:existing"),
+        "drifted cohort topology should invalidate stale plan groups"
+    );
+    assert!(plan.parallel_groups.iter().any(|group| {
+        group.tool_names
+            == vec![
+                "compile".to_string(),
+                "lint".to_string(),
+                "test".to_string(),
+            ]
+    }));
 }
 
 #[tokio::test]

@@ -20,6 +20,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 nemo-relay = { workspace = true, features = ["atof-streaming", "otel", "openinference"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
+nemo-relay-adaptive-topology = { workspace = true, features = ["std", "serde"] }
 nemo-relay-pii-redaction.workspace = true
 pyo3 = { version = "0.28.2", features = ["abi3", "abi3-py311", "experimental-inspect", "macros"] }
 pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }

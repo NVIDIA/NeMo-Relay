@@ -23,14 +23,10 @@ from reference_common import escape_mdx_text, frontmatter, reset_output_dir
 CRATES = (
     ("nemo-relay", "nemo_relay", "Core Rust runtime APIs for NeMo Relay."),
     ("nemo-relay-adaptive", "nemo_relay_adaptive", "Adaptive runtime primitives and plugin components."),
-    ("nemo-relay-pii-redaction", "nemo_relay_pii_redaction", "PII redaction plugin components for NeMo Relay."),
     ("nemo-relay-ffi", "nemo_relay_ffi", "C-compatible FFI surface for NeMo Relay."),
 )
 BASE_URL = "/reference/api/rust-library-reference"
-GENERATED_BY = (
-    "Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive "
-    "-p nemo-relay-pii-redaction -p nemo-relay-ffi`."
-)
+GENERATED_BY = "Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`."
 TRANSLATION_TABLE = str.maketrans(
     {
         "\xa0": " ",
@@ -160,8 +156,6 @@ def _run_cargo_doc(repo_root: Path) -> None:
             "nemo-relay",
             "-p",
             "nemo-relay-adaptive",
-            "-p",
-            "nemo-relay-pii-redaction",
             "-p",
             "nemo-relay-ffi",
         ],

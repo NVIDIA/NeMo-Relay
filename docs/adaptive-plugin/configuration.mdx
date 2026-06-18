@@ -32,6 +32,7 @@ The top-level adaptive object contains:
 | `adaptive_hints` | Request hint-injection behavior. |
 | `tool_parallelism` | Tool scheduling observation or scheduling behavior. |
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
+| `convergence` | Optional global topology-aware convergence settings used by adaptive learners. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
 The requested area pages cover [Adaptive Cache Governor (ACG)](/adaptive-plugin/acg) and
@@ -70,21 +71,39 @@ learners = ["tool_parallelism"]
 mode = "observe_only"
 priority = 100
 
+[components.config.tool_parallelism.drift]
+enabled = false
+threshold = 0.75
+
 [components.config.adaptive_hints]
 priority = 100
 break_chain = false
 inject_header = true
 inject_body_path = "nvext.agent_hints"
 
+[components.config.adaptive_hints.governor]
+enabled = false
+epsilon = 1.0
+
 [components.config.acg]
 provider = "passthrough"
 observation_window = 100
 priority = 50
 
+[components.config.acg.convergence]
+enabled = false
+epsilon = 0.001
+stability_window = 3
+
 [components.config.acg.stability_thresholds]
 stable_threshold = 0.95
 semi_stable_threshold = 0.50
 min_observations_for_full_confidence = 20
+
+[components.config.convergence]
+enabled = false
+epsilon = 0.001
+stability_window = 3
 
 [components.config.policy]
 unknown_component = "warn"
@@ -112,11 +131,19 @@ adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
         subscriber_name="adaptive.telemetry",
         learners=["tool_parallelism"],
     ),
-    tool_parallelism=nemo_relay.adaptive.ToolParallelismConfig(mode="observe_only"),
+    tool_parallelism=nemo_relay.adaptive.ToolParallelismConfig(
+        mode="observe_only",
+        drift=nemo_relay.adaptive.DriftConfig(enabled=False),
+    ),
     adaptive_hints=nemo_relay.adaptive.AdaptiveHintsConfig(
         inject_body_path="nvext.agent_hints",
+        governor=nemo_relay.adaptive.GovernorConfig(enabled=False),
     ),
-    acg=nemo_relay.adaptive.AcgConfig(provider="passthrough"),
+    acg=nemo_relay.adaptive.AcgConfig(
+        provider="passthrough",
+        convergence=nemo_relay.adaptive.ConvergenceConfig(enabled=False),
+    ),
+    convergence=nemo_relay.adaptive.ConvergenceConfig(enabled=False),
 )
 
 plugin_config = nemo_relay.plugin.PluginConfig(
@@ -144,10 +171,16 @@ adaptiveConfig.telemetry = adaptive.telemetryConfig({
   learners: ["tool_parallelism"],
 });
 adaptiveConfig.tool_parallelism = adaptive.toolParallelismConfig({ mode: "observe_only" });
+adaptiveConfig.tool_parallelism.drift = adaptive.driftConfig({ enabled: false });
 adaptiveConfig.adaptive_hints = adaptive.adaptiveHintsConfig({
   inject_body_path: "nvext.agent_hints",
+  governor: adaptive.governorConfig({ enabled: false }),
 });
-adaptiveConfig.acg = adaptive.acgConfig({ provider: "passthrough" });
+adaptiveConfig.acg = adaptive.acgConfig({
+  provider: "passthrough",
+  convergence: adaptive.convergenceConfig({ enabled: false }),
+});
+adaptiveConfig.convergence = adaptive.convergenceConfig({ enabled: false });
 
 const pluginConfig = plugin.defaultConfig();
 pluginConfig.components = [adaptive.ComponentSpec(adaptiveConfig)];
@@ -166,13 +199,14 @@ const active = await plugin.initialize(pluginConfig);
 use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
 use nemo_relay_adaptive::plugin_component::ComponentSpec;
 use nemo_relay_adaptive::{
-    AdaptiveConfig,
+    AcgComponentConfig,
+    AdaptiveConfig, AdaptiveHintsComponentConfig,
     BackendSpec,
+    ConvergenceConfig,
+    GovernorConfig,
     StateConfig,
     TelemetryComponentConfig,
     ToolParallelismComponentConfig,
-    AdaptiveHintsComponentConfig,
-    AcgComponentConfig,
 };
 
 let mut adaptive = AdaptiveConfig::default();
@@ -187,12 +221,15 @@ adaptive.telemetry = Some(TelemetryComponentConfig {
 adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
 adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
     inject_body_path: "nvext.agent_hints".into(),
+    governor: Some(GovernorConfig::default()),
     ..AdaptiveHintsComponentConfig::default()
 });
 adaptive.acg = Some(AcgComponentConfig {
     provider: "passthrough".into(),
+    convergence: Some(ConvergenceConfig::default()),
     ..AcgComponentConfig::default()
 });
+adaptive.convergence = Some(ConvergenceConfig::default());
 
 let mut plugin_config = PluginConfig::default();
 plugin_config.components.push(ComponentSpec::new(adaptive).into());
@@ -205,6 +242,23 @@ let active = initialize_plugins(plugin_config).await?;
 </Tab>
 
 </Tabs>
+
+## Topology-Aware Controls
+
+Adaptive topology settings are optional and disabled by default. They provide
+deterministic topology-inspired signals for convergence, stale-plan drift, and
+hint load shedding; they do not claim exact persistent homology.
+
+| Field | Default | Notes |
+|---|---|---|
+| `convergence.enabled` | `false` | Enables global convergence detection for compatible adaptive learners. |
+| `convergence.epsilon` | `0.001` | Positive finite error threshold. |
+| `convergence.stability_window` | `3` | Minimum number of epochs required before convergence can be declared. Must be at least `3`. |
+| `acg.convergence` | unset | Component-scoped convergence settings for ACG. Overrides the global convergence settings for ACG when present. |
+| `tool_parallelism.drift.enabled` | `false` | Enables topology-aware invalidation of stale tool parallelism plans. |
+| `tool_parallelism.drift.threshold` | `0.75` | Positive finite drift distance above which existing plans are discarded. |
+| `adaptive_hints.governor.enabled` | `false` | Enables topology-aware load shedding for learned hint injection. |
+| `adaptive_hints.governor.epsilon` | `1.0` | Positive finite initial sensitivity threshold. Manual latency-sensitivity overrides still take precedence. |
 
 ## Manual API
 

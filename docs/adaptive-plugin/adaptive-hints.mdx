@@ -224,10 +224,16 @@ runtime.shutdown().await?;
 | `break_chain` | `false` | Whether this intercept stops later request intercepts. |
 | `inject_header` | `true` | Whether to add adaptive hints as request header metadata. |
 | `inject_body_path` | `nvext.agent_hints` | JSON body path for request-body hint injection. |
+| `governor.enabled` | `false` | Enables topology-aware load shedding for learned hint injection. |
+| `governor.epsilon` | `1.0` | Positive finite initial sensitivity threshold. |
 
 Disable `break_chain` unless the adaptive hint should be the final request
 transform. Adjust `priority` only when adaptive hints need to run before or
 after known application middleware.
+
+When the governor is enabled, low-sensitivity learned hints may be skipped
+under load. Manual latency-sensitivity overrides still force hint injection for
+that request.
 
 ## Expected Output
 
@@ -239,6 +245,7 @@ interpret the metadata before behavior changes.
 ## Common Validation Failures
 
 - Unknown adaptive hint fields when unknown fields are treated as errors.
+- `governor.epsilon` is not positive and finite.
 - `inject_body_path` does not match the request shape expected by downstream
   provider adapters.
 - Hint injection is enabled before downstream model paths can consume or ignore
