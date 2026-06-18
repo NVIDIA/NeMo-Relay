@@ -1,0 +1,28 @@
+---
+title: "Module component"
+sidebar-title: "component"
+description: "PII redaction plugin component contract."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+PII redaction plugin component contract.
+
+## Structs
+
+- [BuiltinBackendConfig](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/struct-builtinbackendconfig): Built-in redaction backend settings.
+- [ComponentSpec](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/struct-componentspec): Top-level PII redaction component wrapper.
+- [LocalBackendConfig](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/struct-localbackendconfig): Local-backend settings for a future in-process local-model runtime.
+- [PiiRedactionConfig](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/struct-piiredactionconfig): Canonical config document for the PII redaction component.
+
+## Constants
+
+- [PII_REDACTION_PLUGIN_KIND](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/constant-pii-redaction-plugin-kind): The plugin kind reserved for the built-in privacy component.
+
+## Functions
+
+- [deregister_pii_redaction_component](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/fn-deregister-pii-redaction-component): Deregisters the `pii_redaction` component kind from the plugin registry.
+- [register_pii_redaction_component](/reference/api/rust-library-reference/nemo-relay-pii-redaction/component/fn-register-pii-redaction-component): Registers the `pii_redaction` component kind in the plugin registry.

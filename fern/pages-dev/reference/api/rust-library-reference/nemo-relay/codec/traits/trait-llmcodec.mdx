@@ -7,7 +7,7 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-ffi`.
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmCodec: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required methods\n    fn decode(&amp;self, request: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;;\n    fn encode(\n        &amp;self,\n        annotated: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n        original: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>,\n    ) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>&gt;;\n&#125;"}} /></pre>
 
