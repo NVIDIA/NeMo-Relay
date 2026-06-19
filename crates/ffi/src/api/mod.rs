@@ -123,6 +123,12 @@ pub unsafe extern "C" fn nemo_relay_tool_request_intercepts(
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = std::ptr::null_mut() };
+
     let name = match c_str_to_string(name) {
         Ok(s) => s,
         Err(status) => return status,
@@ -201,6 +207,12 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
     out: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = std::ptr::null_mut() };
+
     let name_str = if name.is_null() {
         ""
     } else {

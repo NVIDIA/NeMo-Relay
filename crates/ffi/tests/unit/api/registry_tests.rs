@@ -321,20 +321,31 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
         let invalid_json = cstring("{");
         let tool_name = cstring("tool");
         let llm_name = cstring("llm");
-        let mut null_llm_out = ptr::null_mut();
+        let mut tool_out = ptr::null_mut();
+        let mut llm_error_out = ptr::null_mut();
 
         assert_eq!(
-            nemo_relay_tool_request_intercepts(ptr::null(), args.as_ptr(), ptr::null_mut()),
+            nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert!(
+            read_last_error()
+                .unwrap_or_default()
+                .contains("out pointer is null")
+        );
+        assert_eq!(
+            nemo_relay_tool_request_intercepts(ptr::null(), args.as_ptr(), &mut tool_out),
             NemoRelayStatus::NullPointer
         );
         assert_eq!(
             nemo_relay_tool_request_intercepts(
                 tool_name.as_ptr(),
                 invalid_json.as_ptr(),
-                ptr::null_mut()
+                &mut tool_out
             ),
             NemoRelayStatus::InvalidJson
         );
+        assert!(tool_out.is_null());
         assert_eq!(
             nemo_relay_tool_conditional_execution(ptr::null(), args.as_ptr()),
             NemoRelayStatus::NullPointer
@@ -373,13 +384,23 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
         assert_eq!(llm_json["content"]["model"], json!("ffi-model"));
 
         assert_eq!(
+            nemo_relay_llm_request_intercepts(llm_name.as_ptr(), request.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert!(
+            read_last_error()
+                .unwrap_or_default()
+                .contains("out pointer is null")
+        );
+        assert_eq!(
             nemo_relay_llm_request_intercepts(
                 llm_name.as_ptr(),
                 invalid_json.as_ptr(),
-                &mut null_llm_out
+                &mut llm_error_out
             ),
             NemoRelayStatus::InvalidJson
         );
+        assert!(llm_error_out.is_null());
         assert_eq!(
             nemo_relay_llm_conditional_execution(invalid_json.as_ptr()),
             NemoRelayStatus::InvalidJson
