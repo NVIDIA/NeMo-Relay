@@ -24,11 +24,23 @@ fn non_finite_metrics_do_not_converge() {
 }
 
 #[test]
-fn error_below_epsilon_converges() {
+fn stability_window_is_clamped_to_history_capacity() {
+    let detector = ConvergenceDetector::new(0.001, MAX_HISTORY + 1);
+
+    assert_eq!(detector.stability_window, MAX_HISTORY);
+}
+
+#[test]
+fn low_error_requires_full_window_before_converging() {
     let mut detector = ConvergenceDetector::new(0.01, 3);
 
     detector.record_epoch(BettiNumbers::new(1, 0), 0.5, 0.005);
+    assert!(!detector.is_converged());
 
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.1, 0.005);
+    assert!(!detector.is_converged());
+
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.005);
     assert!(detector.is_converged());
 }
 
@@ -36,9 +48,9 @@ fn error_below_epsilon_converges() {
 fn stable_betti_and_decreasing_drift_converges() {
     let mut detector = ConvergenceDetector::new(0.001, 3);
 
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.1, 0.05);
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.05, 0.04);
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.03);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.1, 0.0005);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.05, 0.0004);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.0003);
 
     assert!(detector.is_converged());
 }
@@ -47,9 +59,9 @@ fn stable_betti_and_decreasing_drift_converges() {
 fn unstable_betti_does_not_converge() {
     let mut detector = ConvergenceDetector::new(0.001, 3);
 
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.05, 0.04);
-    detector.record_epoch(BettiNumbers::new(2, 0), 0.03, 0.03);
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.02);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.05, 0.0005);
+    detector.record_epoch(BettiNumbers::new(2, 0), 0.03, 0.0004);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.0003);
 
     assert!(!detector.is_converged());
 }
@@ -58,9 +70,9 @@ fn unstable_betti_does_not_converge() {
 fn increasing_drift_does_not_converge() {
     let mut detector = ConvergenceDetector::new(0.001, 3);
 
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.01, 0.04);
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.05, 0.03);
-    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.02);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.01, 0.0005);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.05, 0.0004);
+    detector.record_epoch(BettiNumbers::new(1, 0), 0.001, 0.0003);
 
     assert!(!detector.is_converged());
 }
@@ -77,6 +89,18 @@ fn drift_detector_tracks_sudden_centroid_change() {
 
     assert!(drift > 1.0);
     assert!(detector.velocity[0] > 1.0);
+}
+
+#[test]
+fn drift_detector_resets_on_non_finite_centroid() {
+    let mut detector = DriftDetector::<3>::new();
+
+    detector.update(&[0.0, 0.0, 0.0]);
+    detector.update(&[1.0, 0.0, 0.0]);
+
+    assert_eq!(detector.update(&[f64::NAN, 0.0, 0.0]), f64::INFINITY);
+    assert!(!detector.has_previous);
+    assert_eq!(detector.update(&[2.0, 0.0, 0.0]), 0.0);
 }
 
 #[test]

@@ -78,13 +78,6 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         }
     }
 
-    fn last(&self) -> Option<T> {
-        if self.len == 0 {
-            return None;
-        }
-        Some(self.data[(self.pos + N - 1) % N])
-    }
-
     fn len(&self) -> usize {
         self.len
     }
@@ -110,7 +103,7 @@ pub(crate) struct ConvergenceDetector {
     error_history: RingBuffer<f64, MAX_HISTORY>,
     stability_window: usize,
     epsilon: f64,
-    epoch: u32,
+    epoch: u64,
 }
 
 impl ConvergenceDetector {
@@ -119,7 +112,7 @@ impl ConvergenceDetector {
             betti_history: RingBuffer::new(),
             drift_history: RingBuffer::new(),
             error_history: RingBuffer::new(),
-            stability_window: stability_window.max(MIN_STABILITY_WINDOW),
+            stability_window: stability_window.clamp(MIN_STABILITY_WINDOW, MAX_HISTORY),
             epsilon: sanitize_positive(epsilon, DEFAULT_EPSILON),
             epoch: 0,
         }
@@ -133,18 +126,25 @@ impl ConvergenceDetector {
     }
 
     pub(crate) fn is_converged(&self) -> bool {
-        self.is_error_converged() || (self.is_betti_stable() && self.is_drift_decreasing())
+        self.is_betti_stable() && self.is_drift_decreasing() && self.is_error_window_converged()
     }
 
-    pub(crate) fn epoch(&self) -> u32 {
+    pub(crate) fn epoch(&self) -> u64 {
         self.epoch
     }
 
-    fn is_error_converged(&self) -> bool {
-        self.error_history
-            .last()
-            .map(|error| error < self.epsilon)
-            .unwrap_or(false)
+    fn is_error_window_converged(&self) -> bool {
+        if self.error_history.len() < self.stability_window {
+            return false;
+        }
+
+        let mut window = [0.0; MAX_HISTORY];
+        let count = self
+            .error_history
+            .copy_window(self.stability_window, &mut window);
+        window[..count]
+            .iter()
+            .all(|error| error.is_finite() && *error < self.epsilon)
     }
 
     fn is_betti_stable(&self) -> bool {
@@ -169,6 +169,9 @@ impl ConvergenceDetector {
         let count = self
             .drift_history
             .copy_window(self.stability_window, &mut window);
+        if window[..count].iter().any(|drift| !drift.is_finite()) {
+            return false;
+        }
 
         for pair in window[..count].windows(2) {
             if pair[1] > pair[0] {
@@ -199,6 +202,11 @@ impl<const D: usize> DriftDetector<D> {
     }
 
     pub(crate) fn update(&mut self, centroid: &[f64; D]) -> f64 {
+        if centroid.iter().any(|coord| !coord.is_finite()) {
+            self.reset();
+            return f64::INFINITY;
+        }
+
         let drift = if self.has_previous {
             l2_distance(&self.expected, centroid)
         } else {
@@ -219,6 +227,10 @@ impl<const D: usize> DriftDetector<D> {
         self.has_previous = true;
 
         drift
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
     }
 }
 
