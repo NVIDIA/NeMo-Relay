@@ -263,8 +263,11 @@ hint load shedding; they do not claim exact persistent homology.
 | `adaptive_hints.governor.enabled` | `false` | Enables topology-aware load shedding for learned hint injection. |
 | `adaptive_hints.governor.epsilon` | `1.0` | Positive finite initial sensitivity threshold. Manual latency-sensitivity overrides still take precedence. |
 
-See [Topology-Aware Controls Design](/adaptive-plugin/topology-aware-controls-design)
-for the internal design, measurable outcomes, and observable validation signals.
+Use these controls only after baseline adaptive telemetry exists. Keep each
+control disabled unless representative workloads show a measurable benefit:
+fewer ACG observations before convergence, stale tool-parallelism plans being
+rebuilt after cohort drift, or low-value learned hints being omitted without
+suppressing manual overrides.
 
 ## Manual API
 
