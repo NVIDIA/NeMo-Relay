@@ -16,13 +16,13 @@ use std::time::Instant;
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::LlmRequestInterceptFn;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay_adaptive_topology::GeometricGovernor;
 
 use crate::config::GovernorConfig;
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
 };
 use crate::intercepts::AGENT_HINTS_HEADER_KEY;
+use crate::topology::GeometricGovernor;
 use crate::trie::builder::SensitivityConfig;
 use crate::trie::lookup::PredictionTrieLookup;
 use crate::types::cache::HotCache;

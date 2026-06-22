@@ -15,7 +15,6 @@ workspace = true
 
 [dependencies]
 nemo-relay.workspace = true
-nemo-relay-adaptive-topology.workspace = true
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

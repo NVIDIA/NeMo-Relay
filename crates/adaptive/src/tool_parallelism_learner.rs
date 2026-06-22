@@ -10,7 +10,6 @@ use std::sync::{Arc, RwLock};
 
 use crate::acg::canonicalize::sha256_hex;
 use chrono::{DateTime, Utc};
-use nemo_relay_adaptive_topology::DriftDetector;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -18,6 +17,7 @@ use crate::config::DriftConfig;
 use crate::error::{AdaptiveError, Result};
 use crate::learner::traits::Learner;
 use crate::storage::traits::StorageBackendDyn;
+use crate::topology::DriftDetector;
 use crate::types::cache::HotCache;
 use crate::types::metadata::{MetadataEnvelope, ParallelHint};
 use crate::types::plan::{ExecutionPlan, ParallelGroup};

@@ -31,6 +31,7 @@ pub mod storage;
 pub mod subscriber;
 /// Learner that derives tool fan-out plans from observed runs.
 pub mod tool_parallelism_learner;
+pub(crate) mod topology;
 pub mod trie;
 /// Serializable adaptive data models shared across runtime components.
 pub mod types;

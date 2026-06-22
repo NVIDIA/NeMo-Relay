@@ -8,8 +8,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
-use nemo_relay_adaptive_topology::{BettiNumbers, ConvergenceDetector};
-
 use crate::acg::ir_builder::build_prompt_ir;
 use crate::acg::prompt_ir::PromptIR;
 use crate::acg::stability::{StabilityThresholds, analyze_stability};
@@ -19,6 +17,7 @@ use crate::acg_profile::derive_acg_learning_key;
 use crate::error::{AdaptiveError, Result};
 use crate::learner::traits::Learner;
 use crate::storage::traits::StorageBackendDyn;
+use crate::topology::{BettiNumbers, ConvergenceDetector};
 use crate::types::cache::HotCache;
 use crate::types::records::{CallKind, RunRecord};
 

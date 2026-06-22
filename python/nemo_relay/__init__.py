@@ -15,7 +15,6 @@ The main entry points are:
 - ``nemo_relay.typed`` for codec-based typed wrappers
 - ``nemo_relay.plugin`` for global plugin configuration and custom plugin registration
 - ``nemo_relay.adaptive`` for adaptive component configuration helpers
-- ``nemo_relay.adaptive_topology`` for adaptive topology primitives
 - ``nemo_relay.observability`` for observability component configuration helpers
 - ``nemo_relay.pii_redaction`` for PII redaction component configuration helpers
 - ``nemo_relay.pricing`` for pricing component configuration helpers
@@ -188,7 +187,6 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
 # intentionally not importing utils.py to avoid overhead of creating the ThreadPoolExecutor unless it is needed
 from nemo_relay import (  # noqa: E402
     adaptive,
-    adaptive_topology,
     codecs,
     guardrails,
     intercepts,
@@ -438,7 +436,6 @@ __all__ = [
     "typed",
     "plugin",
     "adaptive",
-    "adaptive_topology",
     "observability",
     "pii_redaction",
     "pricing",

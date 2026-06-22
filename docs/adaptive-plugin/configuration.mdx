@@ -202,7 +202,7 @@ use nemo_relay_adaptive::{
     AcgComponentConfig,
     AdaptiveConfig, AdaptiveHintsComponentConfig,
     BackendSpec,
-    ConvergenceConfig,
+    ConvergenceConfig, DriftConfig,
     GovernorConfig,
     StateConfig,
     TelemetryComponentConfig,
@@ -218,7 +218,10 @@ adaptive.telemetry = Some(TelemetryComponentConfig {
     subscriber_name: Some("adaptive.telemetry".into()),
     learners: vec!["tool_parallelism".into()],
 });
-adaptive.tool_parallelism = Some(ToolParallelismComponentConfig::default());
+adaptive.tool_parallelism = Some(ToolParallelismComponentConfig {
+    drift: Some(DriftConfig::default()),
+    ..ToolParallelismComponentConfig::default()
+});
 adaptive.adaptive_hints = Some(AdaptiveHintsComponentConfig {
     inject_body_path: "nvext.agent_hints".into(),
     governor: Some(GovernorConfig::default()),
@@ -246,7 +249,7 @@ let active = initialize_plugins(plugin_config).await?;
 ## Topology-Aware Controls
 
 Adaptive topology settings are optional and disabled by default. They provide
-deterministic topology-inspired signals for convergence, stale-plan drift, and
+deterministic topology-aware signals for convergence, stale-plan drift, and
 hint load shedding; they do not claim exact persistent homology.
 
 | Field | Default | Notes |
@@ -259,6 +262,9 @@ hint load shedding; they do not claim exact persistent homology.
 | `tool_parallelism.drift.threshold` | `0.75` | Positive finite drift distance above which existing plans are discarded. |
 | `adaptive_hints.governor.enabled` | `false` | Enables topology-aware load shedding for learned hint injection. |
 | `adaptive_hints.governor.epsilon` | `1.0` | Positive finite initial sensitivity threshold. Manual latency-sensitivity overrides still take precedence. |
+
+See [Topology-Aware Controls Design](/adaptive-plugin/topology-aware-controls-design)
+for the internal design, measurable outcomes, and observable validation signals.
 
 ## Manual API
 
