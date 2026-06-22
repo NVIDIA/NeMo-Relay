@@ -61,6 +61,12 @@ fn test_plugin_error_conversion_maps_all_variants() {
     let invalid = AdaptiveError::from(PluginError::InvalidConfig("bad config".into()));
     assert_eq!(format!("{invalid}"), "invalid config: bad config");
 
+    let conflict = AdaptiveError::from(PluginError::Conflict("duplicate plugin".into()));
+    assert_eq!(
+        format!("{conflict}"),
+        "registration failed: duplicate plugin"
+    );
+
     let missing = AdaptiveError::from(PluginError::NotFound("missing plugin".into()));
     assert_eq!(format!("{missing}"), "not found: missing plugin");
 

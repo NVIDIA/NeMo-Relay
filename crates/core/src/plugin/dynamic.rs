@@ -219,21 +219,34 @@ pub struct DynamicPluginCompatibility {
 }
 
 /// Runtime entry contract for the resolved plugin.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct DynamicPluginLoadContract {
-    /// Managed worker runtime when `kind = worker`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_runtime: Option<WorkerRuntime>,
+#[serde(rename_all = "snake_case")]
+pub enum DynamicPluginLoadContract {
+    /// Worker-based plugin registration target.
+    Worker(DynamicPluginWorkerLoadContract),
+    /// Native shared-library registration target.
+    RustDynamic(DynamicPluginRustLoadContract),
+}
+
+/// Lane-specific load contract for worker plugins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicPluginWorkerLoadContract {
+    /// Managed worker runtime identity.
+    pub runtime: WorkerRuntime,
     /// Worker entrypoint or registration target.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entrypoint: Option<String>,
+    pub entrypoint: String,
+}
+
+/// Lane-specific load contract for native shared libraries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicPluginRustLoadContract {
     /// Native dynamic library path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub library: Option<String>,
+    pub library: String,
     /// Native exported registration symbol.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
+    pub symbol: String,
 }
 
 /// One structured recent failure summary.
@@ -366,7 +379,6 @@ pub struct DynamicPluginRecord {
     #[serde(default)]
     pub compatibility: DynamicPluginCompatibility,
     /// Resolved runtime entry contract.
-    #[serde(default)]
     pub load: DynamicPluginLoadContract,
     /// Observed state.
     #[serde(default)]

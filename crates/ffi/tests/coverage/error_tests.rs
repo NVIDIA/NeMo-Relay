@@ -97,6 +97,11 @@ fn test_status_from_plugin_error_maps_variants_and_sets_message() {
             "bad config",
         ),
         (
+            PluginError::Conflict("duplicate plugin".into()),
+            NemoRelayStatus::AlreadyExists,
+            "duplicate plugin",
+        ),
+        (
             PluginError::Serialization(serialization_error),
             NemoRelayStatus::InvalidArg,
             "serialization error",

@@ -50,12 +50,10 @@ fn sample_record() -> DynamicPluginRecord {
             native_api: None,
             worker_protocol: Some("1".into()),
         },
-        load: DynamicPluginLoadContract {
-            worker_runtime: Some(WorkerRuntime::Python),
-            entrypoint: Some("acme_guardrails.plugin:register".into()),
-            library: None,
-            symbol: None,
-        },
+        load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            runtime: WorkerRuntime::Python,
+            entrypoint: "acme_guardrails.plugin:register".into(),
+        }),
         status: DynamicPluginStatus {
             validation: DynamicPluginValidationStatus {
                 manifest: DynamicPluginCheckState::Valid,
@@ -139,6 +137,7 @@ fn registry_adds_record_and_lists_live_entries_only_by_default() {
     let live = registry.list(false);
     assert_eq!(live.len(), 1);
     assert_eq!(live[0].metadata.id, "acme.guardrails.pii");
+    assert_eq!(live[0].metadata.created_at, live[0].metadata.updated_at);
 
     let all = registry.list(true);
     assert_eq!(all.len(), 1);
@@ -181,7 +180,10 @@ fn registry_rejects_invalid_raw_record_shapes() {
 fn registry_rejects_invalid_raw_record_load_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
-    record.load.entrypoint = None;
+    record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Python,
+        entrypoint: String::new(),
+    });
 
     let err = registry
         .add(record)
@@ -209,6 +211,91 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
         }
         other => panic!("unexpected invalid raw compatibility error: {other}"),
     }
+}
+
+#[test]
+fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
+    let mut registry = DynamicPluginRegistry::new();
+    let mut worker_record = sample_record();
+    worker_record.compatibility.worker_protocol = Some("   ".into());
+
+    let err = registry
+        .add(worker_record)
+        .expect_err("empty worker_protocol should fail");
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("compatibility shape"), "{message}");
+        }
+        other => panic!("unexpected empty worker compatibility error: {other}"),
+    }
+
+    let mut rust_record = sample_record();
+    rust_record.metadata.kind = DynamicPluginKind::RustDynamic;
+    rust_record.capabilities = vec![
+        DynamicPluginCapability::PluginNative,
+        DynamicPluginCapability::MiddlewareInterceptor,
+    ];
+    rust_record.compatibility.native_api = Some("   ".into());
+    rust_record.compatibility.worker_protocol = None;
+    rust_record.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
+        library: "target/release/libswitchyard.dylib".into(),
+        symbol: "nemo_relay_register_plugin".into(),
+    });
+
+    let err = registry
+        .add(rust_record)
+        .expect_err("empty native_api should fail");
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("compatibility shape"), "{message}");
+        }
+        other => panic!("unexpected empty native compatibility error: {other}"),
+    }
+}
+
+#[test]
+fn registry_rejects_missing_raw_record_relay_compatibility() {
+    let mut registry = DynamicPluginRegistry::new();
+    let mut record = sample_record();
+    record.compatibility.relay = None;
+
+    let err = registry
+        .add(record)
+        .expect_err("missing compat.relay should fail");
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("compat.relay"), "{message}");
+        }
+        other => panic!("unexpected missing-relay compatibility error: {other}"),
+    }
+}
+
+#[test]
+fn registry_add_canonicalizes_required_record_strings_before_storage() {
+    let mut registry = DynamicPluginRegistry::new();
+    let mut record = sample_record();
+    record.metadata.id = " acme.guardrails.pii ".into();
+    record.compatibility.relay = Some(" >=0.1.0,<0.2.0 ".into());
+    record.compatibility.worker_protocol = Some(" 1 ".into());
+    record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Python,
+        entrypoint: " acme_guardrails.plugin:register ".into(),
+    });
+
+    let stored = registry.add(record).expect("register canonicalized plugin");
+    assert_eq!(stored.metadata.id, "acme.guardrails.pii");
+    assert_eq!(
+        stored.compatibility.relay.as_deref(),
+        Some(">=0.1.0,<0.2.0")
+    );
+    assert_eq!(stored.compatibility.worker_protocol.as_deref(), Some("1"));
+    assert_eq!(
+        stored.load,
+        DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            runtime: WorkerRuntime::Python,
+            entrypoint: "acme_guardrails.plugin:register".into(),
+        })
+    );
 }
 
 #[test]
@@ -428,7 +515,13 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     let manifest =
         DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).expect("parse manifest");
     assert_eq!(manifest.plugin.kind, DynamicPluginKind::Worker);
-    assert_eq!(manifest.load.runtime, Some(WorkerRuntime::Python));
+    assert_eq!(
+        manifest.load,
+        DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+            runtime: Some(WorkerRuntime::Python),
+            entrypoint: Some("acme_guardrails.plugin:register".into()),
+        })
+    );
 
     let record = manifest
         .into_record(Some("/plugins/pii/relay-plugin.toml".into()))
@@ -436,7 +529,13 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
     assert_eq!(record.metadata.id, "acme.guardrails.pii");
     assert_eq!(record.metadata.version.as_deref(), Some("0.1.0"));
     assert!(!record.spec.enabled);
-    assert_eq!(record.load.worker_runtime, Some(WorkerRuntime::Python));
+    assert_eq!(
+        record.load,
+        DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            runtime: WorkerRuntime::Python,
+            entrypoint: "acme_guardrails.plugin:register".into()
+        })
+    );
     assert_eq!(
         record.source.manifest_ref.as_deref(),
         Some("/plugins/pii/relay-plugin.toml")
@@ -464,6 +563,51 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
 }
 
 #[test]
+fn manifest_conversion_canonicalizes_required_strings_in_record_state() {
+    let manifest = DynamicPluginManifest::parse_toml(
+        r#"
+manifest_version = 1
+
+[plugin]
+id = " acme.guardrails.trimmed "
+kind = "worker"
+
+[compat]
+relay = " >=0.1.0,<0.2.0 "
+worker_protocol = " 1 "
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = " acme_guardrails.plugin:register "
+"#,
+    )
+    .expect("parse manifest");
+
+    let record = manifest
+        .into_record(None)
+        .expect("manifest converts into record");
+    assert_eq!(record.metadata.id, "acme.guardrails.trimmed");
+    assert_eq!(
+        record.compatibility.relay.as_deref(),
+        Some(">=0.1.0,<0.2.0")
+    );
+    assert_eq!(record.compatibility.worker_protocol.as_deref(), Some("1"));
+    assert_eq!(
+        record.load,
+        DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+            runtime: WorkerRuntime::Python,
+            entrypoint: "acme_guardrails.plugin:register".into(),
+        })
+    );
+}
+
+#[test]
 fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
     let manifest =
         DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).expect("parse manifest");
@@ -479,8 +623,11 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
         ]
     );
     assert_eq!(
-        record.load.library.as_deref(),
-        Some("target/release/libswitchyard.dylib")
+        record.load,
+        DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
+            library: "target/release/libswitchyard.dylib".into(),
+            symbol: "nemo_relay_register_plugin".into(),
+        })
     );
     assert_eq!(record.compatibility.native_api.as_deref(), Some("1"));
 }
@@ -657,7 +804,9 @@ symbol = "nemo_relay_register_plugin"
     match err {
         PluginError::InvalidConfig(message) => {
             assert!(
-                message.contains("load.runtime") || message.contains("load.entrypoint"),
+                message.contains("invalid relay-plugin.toml")
+                    || message.contains("load.runtime")
+                    || message.contains("load.entrypoint"),
                 "{message}"
             );
         }

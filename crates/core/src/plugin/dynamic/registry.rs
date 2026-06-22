@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::{
     DynamicPluginFailure, DynamicPluginId, DynamicPluginManifest, DynamicPluginMetadata,
     DynamicPluginRecord, DynamicPluginRuntimeStatus, DynamicPluginValidationStatus,
-    bump_generation, stamp_creation_metadata, touch_metadata,
+    bump_generation, stamp_creation_metadata,
 };
 use crate::plugin::{PluginError, Result};
 
@@ -41,6 +41,7 @@ impl DynamicPluginRegistry {
     /// authored `relay-plugin.toml` manifest should prefer [`Self::add_manifest`]
     /// so the manifest contract is enforced before record creation.
     pub fn add(&mut self, mut record: DynamicPluginRecord) -> Result<&DynamicPluginRecord> {
+        normalize_record_shape(&mut record);
         validate_record_shape(&record)?;
 
         let plugin_id = record.metadata.id.clone();
@@ -57,7 +58,6 @@ impl DynamicPluginRegistry {
         }
 
         stamp_creation_metadata(&mut record.metadata);
-        touch_metadata(&mut record.metadata);
 
         self.records.insert(plugin_id.clone(), record);
         Ok(self
@@ -174,10 +174,43 @@ fn inherit_tombstoned_lineage(
     metadata.generation = next_generation;
 }
 
+fn normalize_record_shape(record: &mut DynamicPluginRecord) {
+    record.metadata.id = record.metadata.id.trim().to_owned();
+    trim_optional_string(&mut record.compatibility.relay);
+    trim_optional_string(&mut record.compatibility.native_api);
+    trim_optional_string(&mut record.compatibility.worker_protocol);
+
+    match &mut record.load {
+        super::DynamicPluginLoadContract::Worker(load) => {
+            load.entrypoint = load.entrypoint.trim().to_owned();
+        }
+        super::DynamicPluginLoadContract::RustDynamic(load) => {
+            load.library = load.library.trim().to_owned();
+            load.symbol = load.symbol.trim().to_owned();
+        }
+    }
+}
+
+fn trim_optional_string(value: &mut Option<String>) {
+    if let Some(value) = value {
+        *value = value.trim().to_owned();
+    }
+}
+
 fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
     if record.metadata.id.trim().is_empty() {
         return Err(PluginError::InvalidConfig(
             "dynamic plugin id must not be empty".into(),
+        ));
+    }
+    if record
+        .compatibility
+        .relay
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        return Err(PluginError::InvalidConfig(
+            "dynamic plugin record must declare compat.relay".into(),
         ));
     }
 
@@ -195,29 +228,25 @@ fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
                     "dynamic rust_dynamic record has invalid capability shape".into(),
                 ));
             }
-            if record.compatibility.native_api.is_none()
+            if record
+                .compatibility
+                .native_api
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
                 || record.compatibility.worker_protocol.is_some()
             {
                 return Err(PluginError::InvalidConfig(
                     "dynamic rust_dynamic record has invalid compatibility shape".into(),
                 ));
             }
-            if record
-                .load
-                .library
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
-                || record
-                    .load
-                    .symbol
-                    .as_deref()
-                    .is_none_or(|value| value.trim().is_empty())
-                || record.load.worker_runtime.is_some()
-                || record.load.entrypoint.is_some()
-            {
-                return Err(PluginError::InvalidConfig(
-                    "dynamic rust_dynamic record has invalid load shape".into(),
-                ));
+            match &record.load {
+                super::DynamicPluginLoadContract::RustDynamic(load)
+                    if !load.library.trim().is_empty() && !load.symbol.trim().is_empty() => {}
+                _ => {
+                    return Err(PluginError::InvalidConfig(
+                        "dynamic rust_dynamic record has invalid load shape".into(),
+                    ));
+                }
             }
         }
         super::DynamicPluginKind::Worker => {
@@ -226,25 +255,25 @@ fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
                     "dynamic worker record has invalid capability shape".into(),
                 ));
             }
-            if record.compatibility.worker_protocol.is_none()
+            if record
+                .compatibility
+                .worker_protocol
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
                 || record.compatibility.native_api.is_some()
             {
                 return Err(PluginError::InvalidConfig(
                     "dynamic worker record has invalid compatibility shape".into(),
                 ));
             }
-            if record
-                .load
-                .entrypoint
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
-                || record.load.worker_runtime.is_none()
-                || record.load.library.is_some()
-                || record.load.symbol.is_some()
-            {
-                return Err(PluginError::InvalidConfig(
-                    "dynamic worker record has invalid load shape".into(),
-                ));
+            match &record.load {
+                super::DynamicPluginLoadContract::Worker(load)
+                    if !load.entrypoint.trim().is_empty() => {}
+                _ => {
+                    return Err(PluginError::InvalidConfig(
+                        "dynamic worker record has invalid load shape".into(),
+                    ));
+                }
             }
         }
     }
