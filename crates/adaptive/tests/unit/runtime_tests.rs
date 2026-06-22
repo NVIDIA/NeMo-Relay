@@ -357,19 +357,22 @@ fn validate_config_reports_invalid_topology_numeric_fields() {
     });
 
     assert!(report.has_errors());
-    for component in [
-        "adaptive_hints.governor",
-        "tool_parallelism.drift",
-        "acg.convergence",
-        "convergence",
+    for (component, field) in [
+        ("adaptive_hints.governor", "epsilon"),
+        ("tool_parallelism.drift", "threshold"),
+        ("acg.convergence", "epsilon"),
+        ("acg.convergence", "stability_window"),
+        ("convergence", "epsilon"),
+        ("convergence", "stability_window"),
     ] {
         assert!(
             report
                 .diagnostics
                 .iter()
                 .any(|diag| diag.code == "adaptive.unsupported_value"
-                    && diag.component.as_deref() == Some(component)),
-            "expected unsupported value diagnostic for {component}"
+                    && diag.component.as_deref() == Some(component)
+                    && diag.field.as_deref() == Some(field)),
+            "expected unsupported value diagnostic for {component}.{field}"
         );
     }
 }

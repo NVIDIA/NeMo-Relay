@@ -183,12 +183,14 @@ impl Learner for AcgLearner {
 
                 // If the profile has already converged, reuse the cached
                 // stability result and skip adding new observations.
-                if existing_stability
-                    .as_ref()
-                    .map(|stability| stability.converged)
-                    .unwrap_or(false)
-                {
-                    let cached = existing_stability.unwrap();
+                if let (Some(cached), Some(observations)) = (
+                    existing_stability
+                        .as_ref()
+                        .filter(|stability| stability.converged),
+                    existing
+                        .as_ref()
+                        .filter(|observations| !observations.is_empty()),
+                ) {
                     profile_counts.insert(profile_key.clone(), cached.total_observations);
                     profile_stability.insert(profile_key.clone(), cached.clone());
 
@@ -200,8 +202,7 @@ impl Learner for AcgLearner {
                         })
                         .unwrap_or(true);
                     if replace_best {
-                        let observations = existing.unwrap_or_default();
-                        best_profile_seed = Some((observations, cached));
+                        best_profile_seed = Some((observations.clone(), cached.clone()));
                     }
                     continue;
                 }
@@ -219,13 +220,7 @@ impl Learner for AcgLearner {
                 let observations_vec: Vec<PromptIR> = window.into_iter().collect();
                 let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
 
-                if self.record_stability_epoch(&profile_key, &stability_result)? {
-                    stability_result.converged = true;
-                }
-
-                backend
-                    .store_stability(&profile_key, &stability_result)
-                    .await?;
+                let converged_now = self.record_stability_epoch(&profile_key, &stability_result)?;
 
                 // Store the observations that produced this stability result.
                 // On the epoch that first declares convergence these
@@ -233,6 +228,14 @@ impl Learner for AcgLearner {
                 // converged result is reused and this path is skipped.
                 backend
                     .store_observations(&profile_key, &observations_vec)
+                    .await?;
+
+                if converged_now {
+                    stability_result.converged = true;
+                }
+
+                backend
+                    .store_stability(&profile_key, &stability_result)
                     .await?;
 
                 profile_counts.insert(profile_key.clone(), stability_result.total_observations);

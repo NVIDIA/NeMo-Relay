@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -93,17 +94,41 @@ fn empty_cache() -> Arc<RwLock<HotCache>> {
 struct SeedObservationBackend {
     observations: std::sync::RwLock<HashMap<String, Vec<PromptIR>>>,
     stability: std::sync::RwLock<HashMap<String, crate::acg::stability::StabilityAnalysisResult>>,
+    fail_observation_store: AtomicBool,
 }
 
 impl SeedObservationBackend {
-    fn new(seed_key: &str, observations: Vec<PromptIR>) -> Self {
+    fn empty() -> Self {
         Self {
-            observations: std::sync::RwLock::new(HashMap::from([(
-                seed_key.to_string(),
-                observations,
-            )])),
+            observations: std::sync::RwLock::new(HashMap::new()),
             stability: std::sync::RwLock::new(HashMap::new()),
+            fail_observation_store: AtomicBool::new(false),
         }
+    }
+
+    fn new(seed_key: &str, observations: Vec<PromptIR>) -> Self {
+        let backend = Self::empty();
+        backend
+            .observations
+            .write()
+            .unwrap()
+            .insert(seed_key.to_string(), observations);
+        backend
+    }
+
+    fn fail_observation_stores(&self) {
+        self.fail_observation_store.store(true, Ordering::SeqCst);
+    }
+
+    fn seed_stability(
+        &self,
+        agent_id: &str,
+        stability: crate::acg::stability::StabilityAnalysisResult,
+    ) {
+        self.stability
+            .write()
+            .unwrap()
+            .insert(agent_id.to_string(), stability);
     }
 }
 
@@ -166,6 +191,11 @@ impl StorageBackendDyn for SeedObservationBackend {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let observations = observations.to_vec();
         Box::pin(async move {
+            if self.fail_observation_store.load(Ordering::SeqCst) {
+                return Err(AdaptiveError::Storage(
+                    "forced observation storage failure".to_string(),
+                ));
+            }
             self.observations
                 .write()
                 .unwrap()
@@ -304,6 +334,142 @@ async fn acg_learner_prefers_profile_with_longer_stable_prefix_and_handles_poiso
     assert!(
         matches!(error, AdaptiveError::Internal(message) if message.contains("hot cache lock poisoned"))
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_does_not_persist_converged_stability_when_observation_store_fails() {
+    let stability_window = 3;
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let backend = SeedObservationBackend::empty();
+    let hot_cache = empty_cache();
+
+    for _ in 0..stability_window - 1 {
+        learner
+            .process_run(&sample_run(vec![request.clone()]), &backend, &hot_cache)
+            .await
+            .unwrap();
+    }
+
+    let before_failure = backend
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .expect("stability should be stored before the failing epoch");
+    assert!(!before_failure.converged);
+
+    backend.fail_observation_stores();
+    let error = learner
+        .process_run(&sample_run(vec![request]), &backend, &hot_cache)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, AdaptiveError::Storage(message) if message.contains("forced observation storage failure"))
+    );
+
+    let after_failure = backend
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .expect("previous non-converged stability should remain stored");
+    assert!(
+        !after_failure.converged,
+        "converged stability must not be persisted before observations are stored"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_repairs_converged_stability_without_observations() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let seed_observation = build_prompt_ir(&request).unwrap();
+    let mut stale_stability = analyze_stability(
+        std::slice::from_ref(&seed_observation),
+        &StabilityThresholds::default(),
+    );
+    stale_stability.converged = true;
+
+    let backend = SeedObservationBackend::empty();
+    backend.seed_stability(&learning_key, stale_stability);
+
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &empty_cache())
+        .await
+        .unwrap();
+
+    let repaired_observations = backend
+        .load_observations(&learning_key)
+        .await
+        .unwrap()
+        .expect("missing observations should be repaired instead of trusting converged stability");
+    assert_eq!(repaired_observations.len(), 1);
+
+    let repaired_stability = backend
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .expect("repaired stability should be stored");
+    assert!(
+        !repaired_stability.converged,
+        "a repaired single-observation profile should re-enter normal convergence"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_repairs_converged_stability_with_empty_observations() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let seed_observation = build_prompt_ir(&request).unwrap();
+    let mut stale_stability = analyze_stability(
+        std::slice::from_ref(&seed_observation),
+        &StabilityThresholds::default(),
+    );
+    stale_stability.converged = true;
+
+    let backend = SeedObservationBackend::new(&learning_key, Vec::new());
+    backend.seed_stability(&learning_key, stale_stability);
+
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &empty_cache())
+        .await
+        .unwrap();
+
+    let repaired_observations = backend
+        .load_observations(&learning_key)
+        .await
+        .unwrap()
+        .expect("empty observations should be repaired instead of trusting converged stability");
+    assert_eq!(repaired_observations.len(), 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
