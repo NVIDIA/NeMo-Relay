@@ -60,6 +60,18 @@ Adaptive hints use the governor only for learned hints. A manual
 `set_latency_sensitivity()` override still forces hint injection for the current
 request.
 
+## Sample Evidence
+
+These samples use the deterministic fixtures in this change set. They are not
+general performance guarantees; they show the expected decision points and the
+state a reviewer or operator can inspect.
+
+| Control | Sample Workload | Baseline | With Topology-Aware Control | Observable Result |
+|---|---|---|---|---|
+| ACG convergence | `50` repeated stable prompt observations, `observation_window = 100`, `stability_window = 3`, and `epsilon = 0.001`. | The learner consumes the full fixture before the benchmark decision path ends. | Convergence is declared after the third stable epoch. | `cargo bench -p nemo-relay-adaptive --bench convergence_bench -- --sample-size 10` prints `observations-to-decision: without=50, with=3`. |
+| Tool drift | First run observes overlapping `search` and `fetch`; next run observes overlapping `compile`, `test`, and `lint`. | The old stored plan can keep stale `fanout:existing` groups. | The centroid moves from `[1, 2, 0.0, 2]` to `[2, 3, 0.4, 3]`, producing drift above the `0.01` test threshold and rebuilding from an empty plan. | The rebuilt `ExecutionPlan` no longer contains `fanout:existing`. |
+| Hint governor | Learned default hints have `latency_sensitivity = 2.0`; governor `epsilon = 10.0`. | Learned hints would be injected whenever defaults exist. | The low-sensitivity learned hint is shed, while a manual `set_latency_sensitivity(11)` override still forces injection. | The shed request has no `nvext.agent_hints` header or body field; the manual request emits `latency_sensitivity = 11.0`. |
+
 ## Measurable Outcomes
 
 | Control | Improvement | Observable Signal | Validation |
