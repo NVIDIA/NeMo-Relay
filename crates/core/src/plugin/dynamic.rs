@@ -203,19 +203,35 @@ impl Default for DynamicPluginSpec {
     }
 }
 
-/// Compatibility declarations and resolved compatibility facts.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Lane-specific compatibility declarations and resolved compatibility facts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct DynamicPluginCompatibility {
+#[serde(rename_all = "snake_case")]
+pub enum DynamicPluginCompatibility {
+    /// Native shared-library compatibility contract.
+    RustDynamic(DynamicPluginRustCompatibility),
+    /// Worker runtime compatibility contract.
+    Worker(DynamicPluginWorkerCompatibility),
+}
+
+/// Compatibility contract for worker plugins.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicPluginWorkerCompatibility {
     /// Compatible NeMo Relay version or version range.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay: Option<String>,
-    /// Native host API/ABI contract version for `rust_dynamic`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_api: Option<String>,
+    pub relay: String,
     /// Worker protocol version for `worker`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_protocol: Option<String>,
+    pub worker_protocol: String,
+}
+
+/// Compatibility contract for native shared libraries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicPluginRustCompatibility {
+    /// Compatible NeMo Relay version or version range.
+    pub relay: String,
+    /// Native host API/ABI contract version for `rust_dynamic`.
+    pub native_api: String,
 }
 
 /// Runtime entry contract for the resolved plugin.
@@ -376,7 +392,6 @@ pub struct DynamicPluginRecord {
     #[serde(default)]
     pub spec: DynamicPluginSpec,
     /// Compatibility declarations and resolved compatibility facts.
-    #[serde(default)]
     pub compatibility: DynamicPluginCompatibility,
     /// Resolved runtime entry contract.
     pub load: DynamicPluginLoadContract,

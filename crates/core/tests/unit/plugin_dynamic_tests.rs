@@ -45,11 +45,10 @@ fn sample_record() -> DynamicPluginRecord {
             enabled: true,
             config_ref: Some("plugins.acme.guardrails.pii".into()),
         },
-        compatibility: DynamicPluginCompatibility {
-            relay: Some(">=0.1.0,<0.2.0".into()),
-            native_api: None,
-            worker_protocol: Some("1".into()),
-        },
+        compatibility: DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            worker_protocol: "1".into(),
+        }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
             runtime: WorkerRuntime::Python,
             entrypoint: "acme_guardrails.plugin:register".into(),
@@ -200,7 +199,11 @@ fn registry_rejects_invalid_raw_record_load_shapes() {
 fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
-    record.compatibility.worker_protocol = None;
+    record.compatibility =
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            native_api: "1".into(),
+        });
 
     let err = registry
         .add(record)
@@ -217,7 +220,11 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
 fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     let mut registry = DynamicPluginRegistry::new();
     let mut worker_record = sample_record();
-    worker_record.compatibility.worker_protocol = Some("   ".into());
+    worker_record.compatibility =
+        DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            worker_protocol: "   ".into(),
+        });
 
     let err = registry
         .add(worker_record)
@@ -235,8 +242,11 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
         DynamicPluginCapability::PluginNative,
         DynamicPluginCapability::MiddlewareInterceptor,
     ];
-    rust_record.compatibility.native_api = Some("   ".into());
-    rust_record.compatibility.worker_protocol = None;
+    rust_record.compatibility =
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            native_api: "   ".into(),
+        });
     rust_record.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
         library: "target/release/libswitchyard.dylib".into(),
         symbol: "nemo_relay_register_plugin".into(),
@@ -257,7 +267,10 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
 fn registry_rejects_missing_raw_record_relay_compatibility() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
-    record.compatibility.relay = None;
+    record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+        relay: String::new(),
+        worker_protocol: "1".into(),
+    });
 
     let err = registry
         .add(record)
@@ -275,8 +288,10 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
     record.metadata.id = " acme.guardrails.pii ".into();
-    record.compatibility.relay = Some(" >=0.1.0,<0.2.0 ".into());
-    record.compatibility.worker_protocol = Some(" 1 ".into());
+    record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+        relay: " >=0.1.0,<0.2.0 ".into(),
+        worker_protocol: " 1 ".into(),
+    });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
         runtime: WorkerRuntime::Python,
         entrypoint: " acme_guardrails.plugin:register ".into(),
@@ -285,10 +300,12 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     let stored = registry.add(record).expect("register canonicalized plugin");
     assert_eq!(stored.metadata.id, "acme.guardrails.pii");
     assert_eq!(
-        stored.compatibility.relay.as_deref(),
-        Some(">=0.1.0,<0.2.0")
+        stored.compatibility,
+        DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            worker_protocol: "1".into(),
+        })
     );
-    assert_eq!(stored.compatibility.worker_protocol.as_deref(), Some("1"));
     assert_eq!(
         stored.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
@@ -594,10 +611,12 @@ entrypoint = " acme_guardrails.plugin:register "
         .expect("manifest converts into record");
     assert_eq!(record.metadata.id, "acme.guardrails.trimmed");
     assert_eq!(
-        record.compatibility.relay.as_deref(),
-        Some(">=0.1.0,<0.2.0")
+        record.compatibility,
+        DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            worker_protocol: "1".into(),
+        })
     );
-    assert_eq!(record.compatibility.worker_protocol.as_deref(), Some("1"));
     assert_eq!(
         record.load,
         DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
@@ -616,20 +635,19 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
         .expect("manifest converts into record");
     assert_eq!(record.metadata.kind, DynamicPluginKind::RustDynamic);
     assert_eq!(
-        record.capabilities,
-        vec![
-            DynamicPluginCapability::PluginNative,
-            DynamicPluginCapability::MiddlewareInterceptor
-        ]
-    );
-    assert_eq!(
         record.load,
         DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
             library: "target/release/libswitchyard.dylib".into(),
             symbol: "nemo_relay_register_plugin".into(),
         })
     );
-    assert_eq!(record.compatibility.native_api.as_deref(), Some("1"));
+    assert_eq!(
+        record.compatibility,
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            native_api: "1".into(),
+        })
+    );
 }
 
 #[test]

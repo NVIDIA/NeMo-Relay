@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use super::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginCapability, DynamicPluginCheckState,
     DynamicPluginCompatibility, DynamicPluginId, DynamicPluginKind, DynamicPluginLoadContract,
-    DynamicPluginMetadata, DynamicPluginRecord, DynamicPluginRustLoadContract, DynamicPluginSource,
-    DynamicPluginSpec, DynamicPluginStatus, DynamicPluginValidationStatus,
+    DynamicPluginMetadata, DynamicPluginRecord, DynamicPluginRustCompatibility,
+    DynamicPluginRustLoadContract, DynamicPluginSource, DynamicPluginSpec, DynamicPluginStatus,
+    DynamicPluginValidationStatus, DynamicPluginWorkerCompatibility,
     DynamicPluginWorkerLoadContract, WorkerRuntime, current_timestamp,
 };
 use crate::plugin::{PluginError, Result};
@@ -367,10 +368,35 @@ impl DynamicPluginManifest {
                 enabled: false,
                 config_ref: None,
             },
-            compatibility: DynamicPluginCompatibility {
-                relay: compat.relay.map(|value| value.trim().to_owned()),
-                native_api: compat.native_api.map(|value| value.trim().to_owned()),
-                worker_protocol: compat.worker_protocol.map(|value| value.trim().to_owned()),
+            compatibility: match plugin.kind {
+                DynamicPluginKind::RustDynamic => {
+                    DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+                        relay: compat
+                            .relay
+                            .expect("validated manifest must carry compat.relay")
+                            .trim()
+                            .to_owned(),
+                        native_api: compat
+                            .native_api
+                            .expect("validated rust_dynamic manifest must carry compat.native_api")
+                            .trim()
+                            .to_owned(),
+                    })
+                }
+                DynamicPluginKind::Worker => {
+                    DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+                        relay: compat
+                            .relay
+                            .expect("validated manifest must carry compat.relay")
+                            .trim()
+                            .to_owned(),
+                        worker_protocol: compat
+                            .worker_protocol
+                            .expect("validated worker manifest must carry compat.worker_protocol")
+                            .trim()
+                            .to_owned(),
+                    })
+                }
             },
             load: load.into_record_load_contract(),
             status: DynamicPluginStatus {
