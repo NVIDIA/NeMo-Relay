@@ -359,6 +359,13 @@ fn test_adaptive_hints_governor_sheds_low_sensitivity_hints_but_keeps_manual_ove
     )
     .unwrap();
     assert!(request.headers.get(AGENT_HINTS_HEADER_KEY).is_none());
+    assert!(
+        request
+            .content
+            .get("nvext")
+            .and_then(|nvext| nvext.get("agent_hints"))
+            .is_none()
+    );
 
     crate::context_helpers::set_latency_sensitivity(11).unwrap();
     let manual_req_fn = AdaptiveHintsIntercept::with_governor(
