@@ -1,0 +1,146 @@
+---
+title: "Struct Dynamic Plugin Manifest"
+sidebar-title: "DynamicPluginManifest"
+description: "Authored `relay-plugin.toml` manifest."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginManifest &#123;\n    pub manifest_version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub plugin: <a href=\"struct-dynamicpluginmanifestplugin\">DynamicPluginManifestPlugin</a>,\n    pub compat: <a href=\"struct-dynamicpluginmanifestcompat\">DynamicPluginManifestCompat</a>,\n    pub defaults: <a href=\"struct-dynamicpluginmanifestdefaults\">DynamicPluginManifestDefaults</a>,\n    pub capabilities: <a href=\"struct-dynamicpluginmanifestcapabilities\">DynamicPluginManifestCapabilities</a>,\n    pub load: <a href=\"enum-dynamicpluginmanifestload\">DynamicPluginManifestLoad</a>,\n    pub source: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestsource\">DynamicPluginManifestSource</a>&gt;,\n    pub integrity: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestintegrity\">DynamicPluginManifestIntegrity</a>&gt;,\n    pub description: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
+
+Authored `relay-plugin.toml` manifest.
+
+## Fields
+
+### `manifest_version: u32`
+
+Relay plugin manifest schema version.
+
+### `plugin: DynamicPluginManifestPlugin`
+
+Plugin identity and lane declaration.
+
+### `compat: DynamicPluginManifestCompat`
+
+Relay compatibility declarations.
+
+### `defaults: DynamicPluginManifestDefaults`
+
+Default desired-state settings.
+
+### `capabilities: DynamicPluginManifestCapabilities`
+
+Required capability declarations.
+
+### `load: DynamicPluginManifestLoad`
+
+Runtime load contract.
+
+### `source: Option<DynamicPluginManifestSource>`
+
+Optional source-oriented author metadata.
+
+### `integrity: Option<DynamicPluginManifestIntegrity>`
+
+Optional integrity/authenticity evidence references.
+
+### `description: Option<String>`
+
+Optional human-oriented description.
+
+## Implementations
+
+### `impl DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `parse_toml`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn parse_toml(toml_source: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"../type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Parses a `relay-plugin.toml` manifest from TOML text.
+
+#### `load_from_path`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn load_from_path(path: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.AsRef.html\">AsRef</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.Path.html\">Path</a>&gt;) -&gt; <a href=\"../type-result\">Result</a>&lt;(Self, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)&gt;"}} /></pre>
+
+Loads and validates a `relay-plugin.toml` manifest from a file path or directory.
+
+#### `validate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate(&amp;self) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Validates the authored manifest against the v1 contract.
+
+#### `into_record`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn into_record(\n    self,\n    manifest_ref: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Converts the authored manifest into a durable control-plane record.
+
+#### `validation_status`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validation_status(&amp;self) -&gt; <a href=\"struct-dynamicpluginvalidationstatus\">DynamicPluginValidationStatus</a>"}} /></pre>
+
+Produces the initial validation status for a successfully validated manifest.
+
+## Trait Implementations
+
+### `impl Clone for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Eq for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DynamicPluginManifest`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-dynamicpluginmanifest\">DynamicPluginManifest</a>"}} /></pre>
