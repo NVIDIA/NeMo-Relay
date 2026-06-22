@@ -10,6 +10,18 @@ of the published Fern documentation because it records internal implementation
 tradeoffs, benefit gates, and validation samples rather than user-facing usage
 instructions.
 
+## Evidence Boundaries
+
+The samples in this note are deterministic fixtures and targeted tests. They
+prove control behavior at specific decision points, not general production
+frequency or end-to-end performance. Claims in this note use these meanings:
+
+- Proven by test: executable tests assert the before/after state.
+- Shown by fixture: deterministic samples or benchmarks show a bounded result.
+- Plausible but unproven: the mechanism follows from the implementation, but
+  this PR does not provide representative workload data.
+- Not claimed: outside this PR's evidence.
+
 ## Problem
 
 The Adaptive plugin learns from repeated runtime observations. Before this
@@ -78,6 +90,33 @@ Adaptive hints use the governor only for learned hints. A manual
 `set_latency_sensitivity()` override still forces hint injection for the current
 request.
 
+## Architecture Flow
+
+```mermaid
+flowchart TD
+  A["Managed runtime call completes"] --> B["Adaptive telemetry receives RunRecord"]
+  B --> C{"Enabled learner/control?"}
+  C -->|"ACG convergence enabled"| D["Map prompt stability to Betti-like signature, drift, and error"]
+  D --> E{"Stable for configured window?"}
+  E -->|"yes"| F["Persist StabilityAnalysisResult.converged = true"]
+  E -->|"no"| G["Continue normal ACG observation window"]
+  F --> H["Later runs reuse cached stability and skip observation growth"]
+
+  C -->|"tool drift enabled"| I["Map observed tool cohorts to centroid"]
+  I --> J{"Centroid movement >= threshold?"}
+  J -->|"yes"| K["Discard stale stored plan and rebuild from current cohorts"]
+  J -->|"no"| L["Merge current cohorts into existing plan"]
+
+  C -->|"hint governor enabled"| M["Build learned AgentHints"]
+  M --> N{"Manual latency override?"}
+  N -->|"yes"| O["Inject manual hint"]
+  N -->|"no"| P{"learned sensitivity >= epsilon?"}
+  P -->|"yes"| Q["Inject learned hint"]
+  P -->|"no"| R["Omit learned hint metadata"]
+
+  C -->|"disabled or unset"| S["Existing adaptive behavior"]
+```
+
 ## Benefit Gates
 
 Each control must satisfy a concrete benefit gate before it is enabled for a
@@ -98,9 +137,9 @@ state a reviewer or operator can inspect.
 
 | Control | Sample Workload | Baseline | With Control | Observable Result |
 |---|---|---|---|---|
-| ACG convergence | `50` repeated stable prompt observations, `observation_window = 100`, `stability_window = 3`, and `epsilon = 0.001`. | The learner consumes the full fixture before the benchmark decision path ends. | Convergence is declared after the third stable epoch. | `cargo bench -p nemo-relay-adaptive --bench convergence_bench -- --sample-size 10` prints `observations-to-decision: without=50, with=3`. |
-| Tool drift | First run observes overlapping `search` and `fetch`; next run observes overlapping `compile`, `test`, and `lint`. | The old stored plan can keep stale `fanout:existing` groups. | The centroid moves from `[1, 2, 0.0, 2]` to `[2, 3, 0.4, 3]`, producing drift above the `0.01` test threshold and rebuilding from an empty plan. | The rebuilt `ExecutionPlan` no longer contains `fanout:existing`. |
-| Hint governor | Learned default hints have `latency_sensitivity = 2.0`; governor `epsilon = 10.0`. | Learned hints would be injected whenever defaults exist. | The low-sensitivity learned hint is shed, while a manual `set_latency_sensitivity(11)` override still forces injection. | The shed request has no `nvext.agent_hints` header or body field; the manual request emits `latency_sensitivity = 11.0`. |
+| ACG convergence | `50` repeated stable prompt observations, `observation_window = 100`, `stability_window = 3`, and `epsilon = 0.001`. | The benchmark fixture processes all 50 observations before the decision path ends. | Convergence is declared after the third stable epoch. | Shown by deterministic fixture: `cargo bench -p nemo-relay-adaptive --bench convergence_bench -- --sample-size 10` prints `observations-to-decision: without=50, with=3`. This does not claim provider token savings, real workload latency gains, or cache-hit economics. |
+| Tool drift | First run observes overlapping `search` and `fetch`; next run observes overlapping `compile`, `test`, and `lint`. | The no-drift fixture retains the old `fanout:existing` group while merging newly observed groups. | The drift-enabled fixture starts from an empty plan when centroid movement crosses the test threshold, then stores only current observed groups. | Proven by targeted tests: `process_run_merges_new_cohorts_into_existing_plan` shows retained `fanout:existing`; `process_run_invalidates_existing_plan_when_tool_cohort_topology_drifts` shows `fanout:existing` removed. This does not quantify how often stale plans occur in production. |
+| Hint governor | Learned default hints have `latency_sensitivity = 2.0`; governor `epsilon = 10.0`. | Without a governor, learned defaults are injected whenever defaults exist. | The low-sensitivity learned hint is omitted from both header and body; a manual `set_latency_sensitivity(11)` override still forces injection. | Proven by targeted test: `test_adaptive_hints_governor_sheds_low_sensitivity_hints_but_keeps_manual_override`. This claims request metadata hygiene, not measured model latency improvement. |
 
 ## Rollout
 
