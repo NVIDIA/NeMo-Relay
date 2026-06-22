@@ -30,7 +30,6 @@ fn sample_record() -> DynamicPluginRecord {
             created_at: Some("2026-06-16T00:00:00Z".into()),
             updated_at: Some("2026-06-16T00:00:00Z".into()),
         },
-        capabilities: vec![DynamicPluginCapability::PluginWorker],
         source: DynamicPluginSource {
             manifest_ref: Some("/plugins/pii/relay-plugin.toml".into()),
             artifact_ref: Some("/plugins/pii/dist/pii.whl".into()),
@@ -159,14 +158,18 @@ fn registry_rejects_duplicate_live_plugin_ids() {
 fn registry_rejects_invalid_raw_record_shapes() {
     let mut registry = DynamicPluginRegistry::new();
     let mut record = sample_record();
-    record.capabilities = vec![DynamicPluginCapability::PluginNative];
+    record.compatibility =
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            native_api: "1".into(),
+        });
 
     let err = registry
         .add(record)
         .expect_err("invalid raw record shape should fail");
     match err {
         PluginError::InvalidConfig(message) => {
-            assert!(message.contains("capability shape"), "{message}");
+            assert!(message.contains("compatibility shape"), "{message}");
         }
         other => panic!("unexpected invalid raw record error: {other}"),
     }
@@ -235,7 +238,6 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
 
     let mut rust_record = sample_record();
     rust_record.metadata.kind = DynamicPluginKind::RustDynamic;
-    rust_record.capabilities = vec![DynamicPluginCapability::PluginNative];
     rust_record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
             relay: ">=0.1.0,<0.2.0".into(),

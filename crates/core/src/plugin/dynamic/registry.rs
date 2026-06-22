@@ -205,20 +205,8 @@ fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
         ));
     }
 
-    let has_native = record
-        .capabilities
-        .contains(&super::DynamicPluginCapability::PluginNative);
-    let has_worker = record
-        .capabilities
-        .contains(&super::DynamicPluginCapability::PluginWorker);
-
     match record.metadata.kind {
         super::DynamicPluginKind::RustDynamic => {
-            if !has_native || has_worker {
-                return Err(PluginError::InvalidConfig(
-                    "dynamic rust_dynamic record has invalid capability shape".into(),
-                ));
-            }
             match &record.compatibility {
                 super::DynamicPluginCompatibility::RustDynamic(compatibility) => {
                     if compatibility.relay.trim().is_empty() {
@@ -249,11 +237,6 @@ fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
             }
         }
         super::DynamicPluginKind::Worker => {
-            if !has_worker || has_native {
-                return Err(PluginError::InvalidConfig(
-                    "dynamic worker record has invalid capability shape".into(),
-                ));
-            }
             match &record.compatibility {
                 super::DynamicPluginCompatibility::Worker(compatibility) => {
                     if compatibility.relay.trim().is_empty() {

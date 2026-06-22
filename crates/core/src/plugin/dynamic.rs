@@ -376,9 +376,6 @@ pub struct DynamicPluginStatus {
 pub struct DynamicPluginRecord {
     /// Stable plugin metadata.
     pub metadata: DynamicPluginMetadata,
-    /// Declared capability set.
-    #[serde(default)]
-    pub capabilities: Vec<DynamicPluginCapability>,
     /// Source and artifact facts.
     #[serde(default)]
     pub source: DynamicPluginSource,

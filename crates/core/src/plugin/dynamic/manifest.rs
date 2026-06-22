@@ -350,7 +350,6 @@ impl DynamicPluginManifest {
                 created_at: None,
                 updated_at: None,
             },
-            capabilities: self.capabilities.items,
             source: DynamicPluginSource {
                 manifest_ref,
                 artifact_ref: self
