@@ -75,24 +75,29 @@ pub(crate) fn run_request_intercepts_with_codec(
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<(LlmRequest, Option<Arc<AnnotatedLlmRequest>>)> {
-    let scope_stack = current_scope_stack();
-    let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-    let scope_locals =
-        scope_guard.collect_scope_local_registries(|registries| &registries.llm_request_intercepts);
-
-    let context = global_context();
-    let state = context
-        .read()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-
     let original = request.clone();
     let annotated = match &codec {
         Some(codec) => Some(codec.decode(&request)?),
         None => None,
     };
 
+    let entries = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_locals = scope_guard
+            .collect_scope_local_registries(|registries| &registries.llm_request_intercepts);
+
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        state.llm_request_intercept_entries(&scope_locals)
+    };
+
     let (intercepted_request, intercepted_annotated) =
-        state.llm_request_intercepts_chain(name, request, annotated, &scope_locals)?;
+        crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+            name, request, annotated, &entries,
+        )?;
 
     match (codec, intercepted_annotated) {
         (Some(codec), Some(annotated)) => {

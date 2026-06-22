@@ -151,7 +151,7 @@ impl LlmStreamWrapper {
             None => Json::Null,
         };
 
-        let event_snapshot = {
+        let snapshot = {
             let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
             let sl =
                 ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
@@ -161,32 +161,42 @@ impl LlmStreamWrapper {
             match state {
                 Ok(state) => {
                     let subscribers = state.collect_event_subscribers(&sl_subs);
-                    let sanitized = state.llm_sanitize_response_chain(aggregated, &sl);
-                    let data = if sanitized.is_null() {
-                        self.handle.data.clone()
-                    } else {
-                        Some(sanitized)
-                    };
-                    let annotated_response: Option<Arc<AnnotatedLlmResponse>> = self
-                        .response_codec
-                        .as_ref()
-                        .and_then(|codec| {
-                            let mut decoded = codec.decode_response(data.as_ref()?).ok()?;
-                            attach_estimated_cost_for_provider(
-                                &mut decoded,
-                                Some(&self.handle.name),
-                            );
-                            Some(decoded)
-                        })
-                        .map(Arc::new);
-                    let event =
-                        state.end_llm_handle(&self.handle, data, metadata, annotated_response);
-                    Some((event, subscribers))
+                    let entries = state.llm_sanitize_response_entries(&sl);
+                    Some((entries, subscribers))
                 }
                 Err(_) => None,
             }
         };
-        if let Some((event, subscribers)) = event_snapshot {
+        let Some((entries, subscribers)) = snapshot else {
+            return;
+        };
+        let sanitized =
+            NemoRelayContextState::llm_sanitize_response_snapshot_chain(aggregated, &entries);
+        let data = if sanitized.is_null() {
+            self.handle.data.clone()
+        } else {
+            Some(sanitized)
+        };
+        let annotated_response: Option<Arc<AnnotatedLlmResponse>> = self
+            .response_codec
+            .as_ref()
+            .and_then(|codec| {
+                let mut decoded = codec.decode_response(data.as_ref()?).ok()?;
+                attach_estimated_cost_for_provider(&mut decoded, Some(&self.handle.name));
+                Some(decoded)
+            })
+            .map(Arc::new);
+        let event_snapshot = {
+            let ctx = global_context();
+            let state = ctx.read();
+            match state {
+                Ok(state) => {
+                    Some(state.end_llm_handle(&self.handle, data, metadata, annotated_response))
+                }
+                Err(_) => None,
+            }
+        };
+        if let Some(event) = event_snapshot {
             NemoRelayContextState::emit_event(&event, &subscribers);
         }
     }

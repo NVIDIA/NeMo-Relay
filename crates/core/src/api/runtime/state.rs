@@ -592,23 +592,39 @@ impl NemoRelayContextState {
         Self::emit_event(&event, subscribers);
     }
 
-    /// Run tool request sanitizers across global and scope-local registries.
+    /// Snapshot tool request sanitizers in priority order.
     ///
     /// # Parameters
-    /// - `name`: Tool name associated with the request.
-    /// - `args`: Raw tool arguments to sanitize for observability.
     /// - `scope_locals`: Scope-local sanitizer registries collected from the
     ///   active scope stack.
     ///
     /// # Returns
-    /// The sanitized JSON payload after every matching guardrail has run.
-    pub(crate) fn tool_sanitize_request_chain(
+    /// Named sanitizer snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn tool_sanitize_request_entries(
         &self,
+        scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
+    ) -> Vec<Guardrail<ToolSanitizeFn>> {
+        merge_guardrail_entries(&self.tool_sanitize_request_guardrails, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Run a snapshot of tool request sanitizers in priority order.
+    ///
+    /// # Parameters
+    /// - `name`: Tool name associated with the request.
+    /// - `args`: Raw tool arguments to sanitize for observability.
+    /// - `entries`: Sanitizer snapshots to evaluate.
+    ///
+    /// # Returns
+    /// The sanitized JSON payload after every provided guardrail has run.
+    pub(crate) fn tool_sanitize_request_snapshot_chain(
         name: &str,
         args: Json,
-        scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
+        entries: &[Guardrail<ToolSanitizeFn>],
     ) -> Json {
-        let entries = merge_guardrail_entries(&self.tool_sanitize_request_guardrails, scope_locals);
         let mut value = args;
         for entry in entries {
             value = (entry.payload)(name, value);
@@ -616,24 +632,39 @@ impl NemoRelayContextState {
         value
     }
 
-    /// Run tool response sanitizers across global and scope-local registries.
+    /// Snapshot tool response sanitizers in priority order.
     ///
     /// # Parameters
-    /// - `name`: Tool name associated with the response.
-    /// - `result`: Raw tool result to sanitize for observability.
     /// - `scope_locals`: Scope-local sanitizer registries collected from the
     ///   active scope stack.
     ///
     /// # Returns
-    /// The sanitized JSON payload after every matching guardrail has run.
-    pub(crate) fn tool_sanitize_response_chain(
+    /// Named sanitizer snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn tool_sanitize_response_entries(
         &self,
+        scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
+    ) -> Vec<Guardrail<ToolSanitizeFn>> {
+        merge_guardrail_entries(&self.tool_sanitize_response_guardrails, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Run a snapshot of tool response sanitizers in priority order.
+    ///
+    /// # Parameters
+    /// - `name`: Tool name associated with the response.
+    /// - `result`: Raw tool result to sanitize for observability.
+    /// - `entries`: Sanitizer snapshots to evaluate.
+    ///
+    /// # Returns
+    /// The sanitized JSON payload after every provided guardrail has run.
+    pub(crate) fn tool_sanitize_response_snapshot_chain(
         name: &str,
         result: Json,
-        scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
+        entries: &[Guardrail<ToolSanitizeFn>],
     ) -> Json {
-        let entries =
-            merge_guardrail_entries(&self.tool_sanitize_response_guardrails, scope_locals);
         let mut value = result;
         for entry in entries {
             value = (entry.payload)(name, value);
@@ -729,13 +760,31 @@ impl NemoRelayContextState {
         Ok(None)
     }
 
-    /// Run tool request intercepts in priority order.
+    /// Snapshot tool request intercepts in priority order.
+    ///
+    /// # Parameters
+    /// - `scope_locals`: Scope-local request intercept registries collected
+    ///   from the active scope stack.
+    ///
+    /// # Returns
+    /// Named intercept snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn tool_request_intercept_entries(
+        &self,
+        scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
+    ) -> Vec<Intercept<ToolInterceptFn>> {
+        merge_intercept_entries(&self.tool_request_intercepts, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Run a snapshot of tool request intercepts in priority order.
     ///
     /// # Parameters
     /// - `name`: Tool name associated with the request.
     /// - `args`: Tool arguments to pass through the intercept chain.
-    /// - `scope_locals`: Scope-local request intercept registries collected
-    ///   from the active scope stack.
+    /// - `entries`: Intercept snapshots to evaluate.
     ///
     /// # Returns
     /// A [`Result`] containing the final JSON argument payload.
@@ -746,13 +795,11 @@ impl NemoRelayContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub(crate) fn tool_request_intercepts_chain(
-        &self,
+    pub(crate) fn tool_request_intercepts_snapshot_chain(
         name: &str,
         args: Json,
-        scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
+        entries: &[Intercept<ToolInterceptFn>],
     ) -> crate::error::Result<Json> {
-        let entries = merge_intercept_entries(&self.tool_request_intercepts, scope_locals);
         let mut value = args;
         for entry in entries {
             value = (entry.payload.callable)(name, value)?;
@@ -792,21 +839,37 @@ impl NemoRelayContextState {
         next
     }
 
-    /// Run LLM request sanitizers across global and scope-local registries.
+    /// Snapshot LLM request sanitizers in priority order.
     ///
     /// # Parameters
-    /// - `request`: Raw LLM request to sanitize for observability.
     /// - `scope_locals`: Scope-local sanitizer registries collected from the
     ///   active scope stack.
     ///
     /// # Returns
-    /// The sanitized [`LlmRequest`] after every matching guardrail has run.
-    pub(crate) fn llm_sanitize_request_chain(
+    /// Named sanitizer snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn llm_sanitize_request_entries(
         &self,
-        request: LlmRequest,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestFn>>],
+    ) -> Vec<Guardrail<LlmSanitizeRequestFn>> {
+        merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Run a snapshot of LLM request sanitizers in priority order.
+    ///
+    /// # Parameters
+    /// - `request`: Raw LLM request to sanitize for observability.
+    /// - `entries`: Sanitizer snapshots to evaluate.
+    ///
+    /// # Returns
+    /// The sanitized [`LlmRequest`] after every provided guardrail has run.
+    pub(crate) fn llm_sanitize_request_snapshot_chain(
+        request: LlmRequest,
+        entries: &[Guardrail<LlmSanitizeRequestFn>],
     ) -> LlmRequest {
-        let entries = merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals);
         let mut value = request;
         for entry in entries {
             value = (entry.payload)(value);
@@ -814,21 +877,37 @@ impl NemoRelayContextState {
         value
     }
 
-    /// Run LLM response sanitizers across global and scope-local registries.
+    /// Snapshot LLM response sanitizers in priority order.
     ///
     /// # Parameters
-    /// - `response`: Raw response payload to sanitize for observability.
     /// - `scope_locals`: Scope-local sanitizer registries collected from the
     ///   active scope stack.
     ///
     /// # Returns
-    /// The sanitized response payload after every matching guardrail has run.
-    pub(crate) fn llm_sanitize_response_chain(
+    /// Named sanitizer snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn llm_sanitize_response_entries(
         &self,
-        response: Json,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseFn>>],
+    ) -> Vec<Guardrail<LlmSanitizeResponseFn>> {
+        merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Run a snapshot of LLM response sanitizers in priority order.
+    ///
+    /// # Parameters
+    /// - `response`: Raw response payload to sanitize for observability.
+    /// - `entries`: Sanitizer snapshots to evaluate.
+    ///
+    /// # Returns
+    /// The sanitized response payload after every provided guardrail has run.
+    pub(crate) fn llm_sanitize_response_snapshot_chain(
+        response: Json,
+        entries: &[Guardrail<LlmSanitizeResponseFn>],
     ) -> Json {
-        let entries = merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals);
         let mut value = response;
         for entry in entries {
             value = (entry.payload)(value);
@@ -921,15 +1000,33 @@ impl NemoRelayContextState {
         Ok(None)
     }
 
-    /// Run LLM request intercepts in priority order.
+    /// Snapshot LLM request intercepts in priority order.
+    ///
+    /// # Parameters
+    /// - `scope_locals`: Scope-local request intercept registries collected
+    ///   from the active scope stack.
+    ///
+    /// # Returns
+    /// Named intercept snapshots that can be evaluated after registry locks
+    /// are released.
+    pub(crate) fn llm_request_intercept_entries(
+        &self,
+        scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
+    ) -> Vec<Intercept<LlmRequestInterceptFn>> {
+        merge_intercept_entries(&self.llm_request_intercepts, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Run a snapshot of LLM request intercepts in priority order.
     ///
     /// # Parameters
     /// - `name`: Logical provider or model family name.
     /// - `request`: LLM request to pass through the intercept chain.
     /// - `annotated`: Optional normalized request annotation to carry through
     ///   the chain.
-    /// - `scope_locals`: Scope-local request intercept registries collected
-    ///   from the active scope stack.
+    /// - `entries`: Intercept snapshots to evaluate.
     ///
     /// # Returns
     /// A [`Result`] containing the final request and annotation pair.
@@ -940,14 +1037,12 @@ impl NemoRelayContextState {
     /// # Notes
     /// If an intercept entry has `break_chain` enabled, later intercepts are
     /// skipped after that entry runs.
-    pub(crate) fn llm_request_intercepts_chain(
-        &self,
+    pub(crate) fn llm_request_intercepts_snapshot_chain(
         name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
-        scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
+        entries: &[Intercept<LlmRequestInterceptFn>],
     ) -> crate::error::Result<(LlmRequest, Option<AnnotatedLlmRequest>)> {
-        let entries = merge_intercept_entries(&self.llm_request_intercepts, scope_locals);
         let mut request_value = request;
         let mut annotated_value = annotated;
         for entry in entries {

@@ -279,7 +279,9 @@ fn context_state_supports_extensions_events_and_builders() {
         headers: Map::new(),
         content: json!({"messages": []}),
     };
-    let sanitized = state.llm_sanitize_request_chain(request.clone(), &[]);
+    let entries = state.llm_sanitize_request_entries(&[]);
+    let sanitized =
+        NemoRelayContextState::llm_sanitize_request_snapshot_chain(request.clone(), &entries);
     assert!(sanitized.headers.is_empty());
 
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
