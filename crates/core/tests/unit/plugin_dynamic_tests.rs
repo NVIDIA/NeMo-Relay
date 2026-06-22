@@ -30,10 +30,7 @@ fn sample_record() -> DynamicPluginRecord {
             created_at: Some("2026-06-16T00:00:00Z".into()),
             updated_at: Some("2026-06-16T00:00:00Z".into()),
         },
-        capabilities: vec![
-            DynamicPluginCapability::PluginWorker,
-            DynamicPluginCapability::MiddlewareGuardrail,
-        ],
+        capabilities: vec![DynamicPluginCapability::PluginWorker],
         source: DynamicPluginSource {
             manifest_ref: Some("/plugins/pii/relay-plugin.toml".into()),
             artifact_ref: Some("/plugins/pii/dist/pii.whl".into()),
@@ -238,10 +235,7 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
 
     let mut rust_record = sample_record();
     rust_record.metadata.kind = DynamicPluginKind::RustDynamic;
-    rust_record.capabilities = vec![
-        DynamicPluginCapability::PluginNative,
-        DynamicPluginCapability::MiddlewareInterceptor,
-    ];
+    rust_record.capabilities = vec![DynamicPluginCapability::PluginNative];
     rust_record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
             relay: ">=0.1.0,<0.2.0".into(),
@@ -488,7 +482,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker", "middleware_guardrail", "config_schema"]
+items = ["plugin_worker", "config_schema"]
 
 [load]
 runtime = "python"
@@ -519,7 +513,7 @@ native_api = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_native", "middleware_interceptor"]
+items = ["plugin_native"]
 
 [load]
 library = "target/release/libswitchyard.dylib"

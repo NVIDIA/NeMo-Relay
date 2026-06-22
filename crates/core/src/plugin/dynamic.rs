@@ -52,12 +52,6 @@ pub enum DynamicPluginCapability {
     PluginNative,
     /// Isolated worker-based extension capability.
     PluginWorker,
-    /// Guardrail-style middleware registration capability.
-    MiddlewareGuardrail,
-    /// Interceptor-style middleware registration capability.
-    MiddlewareInterceptor,
-    /// Telemetry exporter registration capability.
-    TelemetryExporter,
     /// Typed configuration schema contribution capability.
     ConfigSchema,
 }
