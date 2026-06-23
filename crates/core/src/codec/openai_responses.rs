@@ -192,6 +192,11 @@ fn collect_output_item(
         .unwrap_or("")
     {
         "message" => collect_message_text_parts(item, text_parts),
+        "output_text" => {
+            if let Some(text) = output_text_block(item) {
+                text_parts.push(text);
+            }
+        }
         "function_call" => tool_calls.push(parse_function_call(item)),
         _ => {}
     }
@@ -242,6 +247,14 @@ fn message_from_text_parts(text_parts: Vec<String>) -> Option<MessageContent> {
         [text] => Some(MessageContent::Text(text.clone())),
         _ => Some(MessageContent::Text(text_parts.join("\n"))),
     }
+}
+
+fn top_level_output_text(response: &Json) -> Option<MessageContent> {
+    response
+        .get("output_text")
+        .and_then(|value| value.as_str())
+        .filter(|text| !text.is_empty())
+        .map(|text| MessageContent::Text(text.to_string()))
 }
 
 fn optional_vec<T>(items: Vec<T>) -> Option<Vec<T>> {
@@ -456,7 +469,8 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
 
         let all_output_items = raw.output.clone();
         let (text_parts, tool_calls) = collect_output_parts(raw.output.as_deref());
-        let message = message_from_text_parts(text_parts);
+        let message =
+            message_from_text_parts(text_parts).or_else(|| top_level_output_text(response));
         let tool_calls = optional_vec(tool_calls);
 
         // Map finish reason from status + incomplete_details.

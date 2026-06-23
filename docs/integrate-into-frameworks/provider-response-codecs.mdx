@@ -479,6 +479,12 @@ registerSubscriber('response-debugger', (event) => {
 
 </Tabs>
 
+## When No Annotation Is Present
+
+An `annotated_response` is attached only when a response codec was supplied for the managed call and decoding succeeded. Prefer the annotation whenever it is present — it is the single normalized view of the response.
+
+For events without one — manual lifecycle spans, replayed payloads, or unrecognized shapes — consumers fall back to the raw end-event payload. Built-in exporters follow this rule rather than re-parsing provider schemas by hand: they read `annotated_response` first, and otherwise recover a provider-neutral view (model, tokens, cost) from the raw payload. Reserve raw-payload extraction for these no-annotation cases; use the annotation for normal provider responses.
+
 ## Custom Response Codecs
 
 Use a custom response codec when the provider or framework response does not match a built-in shape.

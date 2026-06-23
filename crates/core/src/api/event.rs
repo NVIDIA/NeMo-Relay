@@ -15,6 +15,7 @@
 
 //! Event types for Agent Trajectory Observability Format (ATOF) runtime events.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -23,10 +24,11 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-use crate::api::llm::LlmAttributes;
+use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
 use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::resolve;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::json::Json;
 
@@ -607,6 +609,27 @@ impl Event {
     pub fn annotated_response(&self) -> Option<&Arc<AnnotatedLlmResponse>> {
         self.category_profile()
             .and_then(|profile| profile.annotated_response.as_ref())
+    }
+
+    /// Normalized LLM request: the codec annotation when present, otherwise a
+    /// best-effort decode of the start-event input payload.
+    #[must_use]
+    pub fn normalized_llm_request(&self) -> Option<Cow<'_, AnnotatedLlmRequest>> {
+        if let Some(annotated) = self.annotated_request() {
+            return Some(Cow::Borrowed(annotated.as_ref()));
+        }
+        let request: LlmRequest = serde_json::from_value(self.input()?.clone()).ok()?;
+        resolve::normalize_request(&request, None).map(Cow::Owned)
+    }
+
+    /// Normalized LLM response: the codec annotation when present, otherwise a
+    /// best-effort decode of the end-event output payload.
+    #[must_use]
+    pub fn normalized_llm_response(&self) -> Option<Cow<'_, AnnotatedLlmResponse>> {
+        if let Some(annotated) = self.annotated_response() {
+            return Some(Cow::Borrowed(annotated.as_ref()));
+        }
+        resolve::normalize_response(self.output()?, None).map(Cow::Owned)
     }
 
     /// Return true for scope-start events.

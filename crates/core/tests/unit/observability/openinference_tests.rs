@@ -954,9 +954,62 @@ fn llm_input_value_omits_request_headers() {
     assert!(!attributes.contains_key("nemo_relay.start.input_json"));
     assert!(!attributes["input.value"].contains("authorization"));
     assert!(!attributes["input.value"].contains("secret-token"));
-    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    // The provider-shaped request is decoded through the codec layer, so
+    // structured messages are emitted — without leaking transport headers.
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "user");
+    assert_attr(&attributes, "llm.input_messages.0.message.content", "hi");
     assert_no_attr_contains(&attributes, "headers");
     assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn un_annotated_provider_response_decoded_through_codec() {
+    // No annotation and no OpenClaw envelope: the raw provider response is
+    // detected and decoded through the codec layer (tier 3), so OpenInference
+    // emits structured output messages instead of nothing.
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "hello there"},
+                "finish_reason": "stop"
+            }]
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "hello there",
+    );
 }
 
 #[test]
@@ -2077,9 +2130,7 @@ fn helper_functions_cover_additional_openinference_branches() {
         ),
         Some("Requested tools: read".to_string())
     );
-    assert_eq!(normalize_total_tokens(Some(5), None, None), Some(5));
-
-    let alias_usage = usage_from_manual_llm_output(Some(&json!({
+    let alias_usage = crate::observability::manual::usage_from_manual_llm_output(Some(&json!({
         "usage": {"inputTokens": 11, "outputTokens": 7, "totalTokens": 18, "cacheReadInputTokens": 5}
     })))
     .unwrap();
