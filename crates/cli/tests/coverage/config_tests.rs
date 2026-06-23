@@ -634,6 +634,37 @@ mode = "strict"
 }
 
 #[test]
+fn plugins_toml_resolves_dynamic_plugin_refs_from_absolute_manifest_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &plugins_path,
+        format!(
+            r#"
+[[plugins.dynamic]]
+manifest = "{}"
+"#,
+            manifest_path.display()
+        ),
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(resolved.dynamic_plugins.len(), 1);
+    assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.worker");
+    assert_eq!(
+        resolved.dynamic_plugins[0].manifest_ref,
+        manifest_path.canonicalize().unwrap().to_string_lossy()
+    );
+}
+
+#[test]
 fn plugins_toml_rejects_duplicate_dynamic_plugin_ids_across_sources() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
@@ -667,6 +698,36 @@ manifest = "plugins/acme"
 }
 
 #[test]
+fn plugins_toml_rejects_duplicate_dynamic_plugin_ids_within_one_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_a = temp.path().join("plugins/a");
+    let plugin_b = temp.path().join("plugins/b");
+    std::fs::create_dir_all(&plugin_a).unwrap();
+    std::fs::create_dir_all(&plugin_b).unwrap();
+    write_dynamic_manifest(&plugin_a, "acme.worker");
+    write_dynamic_manifest(&plugin_b, "acme.worker");
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &plugins_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/a/relay-plugin.toml"
+
+[[plugins.dynamic]]
+manifest = "plugins/b/relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+
+    let error = load_plugin_toml_config_from_paths(vec![plugins_path])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("duplicate dynamic plugin id"));
+    assert!(error.contains("acme.worker"));
+}
+
+#[test]
 fn plugins_toml_rejects_dynamic_plugin_lifecycle_fields() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
@@ -689,6 +750,60 @@ enabled = true
 
     assert!(error.contains("invalid dynamic plugin config"));
     assert!(error.contains("enabled"));
+}
+
+#[test]
+fn plugins_toml_layers_runtime_plugin_config_and_dynamic_only_sources_independently() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let lower_priority = temp.path().join("lower-plugins.toml");
+    let higher_priority = temp.path().join("higher-plugins.toml");
+    std::fs::write(
+        &lower_priority,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &higher_priority,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![lower_priority, higher_priority])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        resolved.value,
+        Some(json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "version": 1
+                    }
+                }
+            ]
+        }))
+    );
+    assert_eq!(resolved.dynamic_plugins.len(), 1);
+    assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.worker");
 }
 
 #[test]

@@ -625,6 +625,10 @@ fn format_human_reports_discovered_dynamic_plugins_in_configuration() {
     assert!(rendered.contains("acme.worker (/tmp/plugins/acme/relay-plugin.toml); host config"));
     assert!(rendered.contains("acme.native (/tmp/plugins/native/relay-plugin.toml)"));
     assert!(rendered.contains("acme.worker resolved from /tmp/plugins/acme/relay-plugin.toml"));
+    assert!(
+        rendered
+            .contains("acme.native discovered via host config only; not enabled by config alone")
+    );
     assert!(rendered.contains("not enabled by config alone"));
 }
 
