@@ -197,6 +197,12 @@ pub(crate) struct PluginsCommand {
     pub(crate) command: PluginsSubcommand,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PluginJsonContext<'a> {
+    pub(crate) command: &'static str,
+    pub(crate) target: Option<&'a str>,
+}
+
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
@@ -216,6 +222,26 @@ pub(crate) enum PluginsSubcommand {
     Disable(PluginsDisableCommand),
     /// Tombstone a registered dynamic plugin and remove its host discovery reference.
     Remove(PluginsRemoveCommand),
+}
+
+impl PluginsSubcommand {
+    pub(crate) fn json_context(&self) -> Option<PluginJsonContext<'_>> {
+        match self {
+            Self::Validate(command) if command.json => Some(PluginJsonContext {
+                command: "plugins validate",
+                target: Some(command.target.as_str()),
+            }),
+            Self::List(command) if command.json => Some(PluginJsonContext {
+                command: "plugins list",
+                target: None,
+            }),
+            Self::Inspect(command) if command.json => Some(PluginJsonContext {
+                command: "plugins inspect",
+                target: Some(command.id.as_str()),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Args for `nemo-relay pricing`.
@@ -345,17 +371,30 @@ pub(crate) struct PluginsAddCommand {
 pub(crate) struct PluginsValidateCommand {
     /// Canonical plugin ID or a local plugin directory / `relay-plugin.toml` path.
     pub(crate) target: String,
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 /// Args for `nemo-relay plugins list`.
 #[derive(Debug, Clone, Default, Args)]
-pub(crate) struct PluginsListCommand {}
+pub(crate) struct PluginsListCommand {
+    /// Include tombstoned dynamic plugin records in the output.
+    #[arg(long)]
+    pub(crate) all: bool,
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
 
 /// Args for `nemo-relay plugins inspect`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PluginsInspectCommand {
     /// Canonical plugin ID.
     pub(crate) id: String,
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 /// Args for `nemo-relay plugins enable`.

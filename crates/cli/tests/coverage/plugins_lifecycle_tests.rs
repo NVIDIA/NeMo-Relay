@@ -8,6 +8,7 @@ use crate::config::{
     PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand, PluginsInspectCommand,
     PluginsListCommand, PluginsRemoveCommand, PluginsScopeArgs, PluginsValidateCommand, ServerArgs,
 };
+use crate::error::PluginLifecycleFailureKind;
 
 struct CurrentDirGuard {
     original: PathBuf,
@@ -178,6 +179,9 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     assert!(inspect.contains("id: acme.guardrail"));
     assert!(inspect.contains("kind: worker"));
     assert!(inspect.contains("host_config: absent"));
+    assert!(inspect.contains("source.manifest_ref:"));
+    assert!(inspect.contains("source.artifact_ref: <none>"));
+    assert!(inspect.contains("source.environment_ref: <none>"));
     assert!(inspect.contains("load.entrypoint: acme.guardrail.plugin:register"));
 }
 
@@ -229,6 +233,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
     let missing_validate = validate(
         PluginsValidateCommand {
             target: "missing.plugin".into(),
+            json: false,
         },
         &crate::config::ServerArgs::default(),
     )
@@ -239,6 +244,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
     let missing_inspect = inspect(
         PluginsInspectCommand {
             id: "missing.plugin".into(),
+            json: false,
         },
         &crate::config::ServerArgs::default(),
     )
@@ -323,6 +329,11 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
         .unwrap()
         .expect("removed record");
     assert!(removed.record.is_tombstoned());
+
+    let all_records = collect_records(&scopes, true);
+    let all_list = render_list(&all_records, &host_config_by_id(&resolved));
+    assert!(all_list.contains("acme.guardrail"));
+    assert!(all_list.contains("tombstoned"));
 }
 
 #[test]
@@ -407,4 +418,138 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
         entry.record.source.manifest_ref.as_deref(),
         Some(canonical_manifest_path.to_string_lossy().as_ref())
     );
+}
+
+#[test]
+fn add_can_revive_tombstoned_records() {
+    let _lock = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.revive");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir.clone(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    remove(
+        PluginsRemoveCommand {
+            id: "acme.revive".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let revived = find_record_by_id(&scopes, "acme.revive")
+        .unwrap()
+        .expect("revived record");
+    assert!(!revived.record.is_tombstoned());
+    assert!(revived.record.spec.present);
+}
+
+#[test]
+fn json_helpers_emit_stable_success_and_failure_shapes() {
+    let _lock = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.json");
+    let server = ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let host_config_by_id = host_config_by_id(&resolved);
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let records = collect_records(&scopes, false);
+    let entry = find_record_by_id(&scopes, "acme.json")
+        .unwrap()
+        .expect("json record");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+        .map_err(|error| CliError::Config(error.to_string()))
+        .unwrap();
+
+    let list_value =
+        json::list_success_envelope("plugins list", None, &records, &host_config_by_id);
+    assert_eq!(list_value["schema_version"], serde_json::json!(1));
+    assert_eq!(list_value["ok"], serde_json::json!(true));
+    assert_eq!(list_value["data"][0]["id"], serde_json::json!("acme.json"));
+
+    let inspect_value = json::inspect_success_envelope(
+        "plugins inspect",
+        "acme.json",
+        &entry,
+        &manifest,
+        &manifest_ref,
+        host_config_by_id.get("acme.json"),
+    );
+    assert_eq!(inspect_value["data"]["id"], serde_json::json!("acme.json"));
+    assert_eq!(
+        inspect_value["data"]["source"]["manifest_ref"],
+        serde_json::json!(manifest_ref)
+    );
+
+    let validate_value = json::validate_success_envelope(json::ValidateJsonContext {
+        command: "plugins validate",
+        target: Some("acme.json"),
+        target_kind: "plugin_id",
+        resolved_plugin_id: Some("acme.json"),
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        entry: Some(&entry),
+        host_config: host_config_by_id.get("acme.json"),
+    });
+    assert_eq!(
+        validate_value["data"]["target_kind"],
+        serde_json::json!("plugin_id")
+    );
+    assert_eq!(validate_value["data"]["valid"], serde_json::json!(true));
+
+    let failure = json::failure_envelope(
+        "plugins inspect",
+        Some("missing.plugin"),
+        PluginLifecycleFailureKind::NotFound,
+        "missing plugin",
+    );
+    assert_eq!(failure["ok"], serde_json::json!(false));
+    assert_eq!(failure["error"]["code"], serde_json::json!("not_found"));
 }

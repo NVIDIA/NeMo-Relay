@@ -30,7 +30,7 @@ pub(super) fn render_list(
             entry.record.metadata.id,
             entry.scope.label(),
             bool_label(entry.record.spec.enabled),
-            runtime_state_label(entry.record.status.runtime.state),
+            lifecycle_state_label(&entry.record),
             check_state_label(entry.record.status.validation.manifest),
             host_config_status
         ));
@@ -60,6 +60,18 @@ pub(super) fn render_inspect(
         format!("manifest: {manifest_ref}"),
         format!("plugins_toml: {}", entry.plugins_toml_path.display()),
         format!("state_path: {}", entry.state_path.display()),
+        format!(
+            "source.manifest_ref: {}",
+            record.source.manifest_ref.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "source.artifact_ref: {}",
+            record.source.artifact_ref.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "source.environment_ref: {}",
+            record.source.environment_ref.as_deref().unwrap_or("<none>")
+        ),
         format!("desired.present: {}", bool_label(record.spec.present)),
         format!("desired.enabled: {}", bool_label(record.spec.enabled)),
         format!("generation: {}", record.metadata.generation),
@@ -224,7 +236,7 @@ fn host_config_status_label(status: DynamicPluginHostConfigStatus) -> &'static s
     }
 }
 
-fn check_state_label(state: DynamicPluginCheckState) -> &'static str {
+pub(super) fn check_state_label(state: DynamicPluginCheckState) -> &'static str {
     match state {
         DynamicPluginCheckState::Unknown => "unknown",
         DynamicPluginCheckState::Valid => "valid",
@@ -232,7 +244,7 @@ fn check_state_label(state: DynamicPluginCheckState) -> &'static str {
     }
 }
 
-fn runtime_state_label(state: DynamicPluginRuntimeState) -> &'static str {
+pub(super) fn runtime_state_label(state: DynamicPluginRuntimeState) -> &'static str {
     match state {
         DynamicPluginRuntimeState::Stopped => "stopped",
         DynamicPluginRuntimeState::Starting => "starting",
@@ -241,7 +253,15 @@ fn runtime_state_label(state: DynamicPluginRuntimeState) -> &'static str {
     }
 }
 
-fn manifest_kind_label(kind: DynamicPluginKind) -> &'static str {
+fn lifecycle_state_label(record: &DynamicPluginRecord) -> &'static str {
+    if record.is_tombstoned() {
+        "tombstoned"
+    } else {
+        runtime_state_label(record.status.runtime.state)
+    }
+}
+
+pub(super) fn manifest_kind_label(kind: DynamicPluginKind) -> &'static str {
     match kind {
         DynamicPluginKind::RustDynamic => "rust_dynamic",
         DynamicPluginKind::Worker => "worker",

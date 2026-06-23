@@ -33,6 +33,38 @@ fn toml_basic_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("relay-plugin.toml"),
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = {plugin_id}
+kind = "worker"
+
+[compat]
+relay = "0.5"
+worker_protocol = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = {entrypoint}
+"#,
+            plugin_id = toml_basic_string(plugin_id),
+            entrypoint = toml_basic_string(&format!("{plugin_id}.plugin:register")),
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn toml_basic_string_escapes_toml_control_characters() {
     assert_eq!(
@@ -96,6 +128,34 @@ fn cli_doctor_json_emits_versioned_report() {
     assert!(parsed["environment"].is_object());
     assert!(parsed["configuration"].is_object());
     assert!(parsed["agents"].is_array());
+}
+
+#[test]
+fn cli_plugins_validate_json_emits_versioned_success_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-json");
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "plugins validate");
+    assert_eq!(parsed["data"]["target_kind"], "path");
+    assert_eq!(parsed["data"]["resolved_plugin_id"], "acme.cli-json");
 }
 
 #[test]

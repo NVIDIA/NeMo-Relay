@@ -55,29 +55,78 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
         ExitCode::SUCCESS
     );
 
-    let inspect_error = run_plugins(
-        PluginsCommand {
-            command: PluginsSubcommand::Inspect(PluginsInspectCommand {
-                id: "missing.plugin".into(),
-            }),
-        },
-        &ServerArgs::default(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(inspect_error.contains("not registered"));
+    assert_eq!(
+        run_plugins(
+            PluginsCommand {
+                command: PluginsSubcommand::Inspect(PluginsInspectCommand {
+                    id: "missing.plugin".into(),
+                    json: false,
+                }),
+            },
+            &ServerArgs::default(),
+        )
+        .unwrap(),
+        ExitCode::from(2)
+    );
 
-    let validate_error = run_plugins(
-        PluginsCommand {
-            command: PluginsSubcommand::Validate(PluginsValidateCommand {
-                target: "missing.plugin".into(),
-            }),
-        },
-        &ServerArgs::default(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(validate_error.contains("not registered"));
+    assert_eq!(
+        run_plugins(
+            PluginsCommand {
+                command: PluginsSubcommand::Validate(PluginsValidateCommand {
+                    target: "missing.plugin".into(),
+                    json: false,
+                }),
+            },
+            &ServerArgs::default(),
+        )
+        .unwrap(),
+        ExitCode::from(2)
+    );
+
+    assert_eq!(
+        run_plugins(
+            PluginsCommand {
+                command: PluginsSubcommand::List(PluginsListCommand {
+                    all: false,
+                    json: false,
+                }),
+            },
+            &ServerArgs::default()
+        )
+        .unwrap(),
+        ExitCode::SUCCESS
+    );
+}
+
+#[test]
+fn safe_dispatch_plugin_json_errors_return_exit_codes() {
+    assert_eq!(
+        run_plugins(
+            PluginsCommand {
+                command: PluginsSubcommand::Inspect(PluginsInspectCommand {
+                    id: "missing.plugin".into(),
+                    json: true,
+                }),
+            },
+            &ServerArgs::default(),
+        )
+        .unwrap(),
+        ExitCode::from(2)
+    );
+
+    assert_eq!(
+        run_plugins(
+            PluginsCommand {
+                command: PluginsSubcommand::Validate(PluginsValidateCommand {
+                    target: "missing.plugin".into(),
+                    json: true,
+                }),
+            },
+            &ServerArgs::default(),
+        )
+        .unwrap(),
+        ExitCode::from(2)
+    );
 }
 
 #[tokio::test]
