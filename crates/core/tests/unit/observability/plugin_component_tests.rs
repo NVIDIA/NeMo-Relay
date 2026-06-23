@@ -477,7 +477,8 @@ fn atof_endpoint_validation_rejects_bad_values() {
                 {"url": "", "transport": "http_post"},
                 {"url": "http://localhost/events", "transport": "bogus"},
                 {"url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
-                {"url": "not a url", "transport": "http_post"}
+                {"url": "not a url", "transport": "http_post"},
+                {"url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"}
             ]
         }
     })));
@@ -508,6 +509,12 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("endpoints[3].url") })
     );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[4].field_name_policy") })
+    );
 }
 
 #[test]
@@ -521,6 +528,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             transport: "websocket".into(),
             headers: headers.clone(),
             timeout_millis: 123,
+            field_name_policy: "replace_dots".into(),
         },
     )
     .unwrap();
@@ -532,6 +540,10 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
     );
     assert_eq!(config.headers, headers);
     assert_eq!(config.timeout_millis, 123);
+    assert_eq!(
+        config.field_name_policy,
+        crate::observability::atof::AtofEndpointFieldNamePolicy::ReplaceDots
+    );
 
     let error = build_atof_endpoint_config(
         3,
@@ -540,6 +552,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
             timeout_millis: 3_000,
+            field_name_policy: "preserve".into(),
         },
     )
     .unwrap_err();

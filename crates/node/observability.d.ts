@@ -19,6 +19,7 @@ export interface AtofEndpointConfig {
   transport?: 'http_post' | 'websocket' | 'ndjson' | string;
   headers?: Record<string, string>;
   timeout_millis?: number;
+  field_name_policy?: 'preserve' | 'replace_dots' | string;
 }
 
 export interface S3StorageConfig {

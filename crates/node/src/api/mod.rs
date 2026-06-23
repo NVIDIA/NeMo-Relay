@@ -204,6 +204,18 @@ fn build_atof_config(
         if let Some(timeout_millis) = endpoint.timeout_millis {
             endpoint_config = endpoint_config.with_timeout_millis(timeout_millis.into());
         }
+        if let Some(field_name_policy) = endpoint.field_name_policy {
+            let Some(field_name_policy) =
+                nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                    &field_name_policy,
+                )
+            else {
+                return Err(napi::Error::from_reason(
+                    "endpoint field_name_policy must be 'preserve' or 'replace_dots'",
+                ));
+            };
+            endpoint_config = endpoint_config.with_field_name_policy(field_name_policy);
+        }
         for (key, value) in parse_string_map(endpoint.headers, "endpoint.headers")? {
             endpoint_config = endpoint_config.with_header(key, value);
         }
@@ -3072,6 +3084,8 @@ pub struct AtofEndpointConfig {
     pub headers: Option<Json>,
     /// Per-endpoint timeout in milliseconds.
     pub timeout_millis: Option<u32>,
+    /// Field name policy applied before sending events.
+    pub field_name_policy: Option<String>,
 }
 
 /// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.

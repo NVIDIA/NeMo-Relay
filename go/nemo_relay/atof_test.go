@@ -30,12 +30,14 @@ func TestNewAtofExporterConfigDefaults(t *testing.T) {
 		t.Fatalf("expected no streaming endpoints by default, got %#v", config.Endpoints)
 	}
 	config.Endpoints = []AtofEndpointConfig{{
-		URL:           "http://localhost:8080/events",
-		Transport:     AtofEndpointTransportHTTPPost,
-		Headers:       map[string]string{"X-Test": "yes"},
-		TimeoutMillis: 1000,
+		URL:             "http://localhost:8080/events",
+		Transport:       AtofEndpointTransportHTTPPost,
+		Headers:         map[string]string{"X-Test": "yes"},
+		TimeoutMillis:   1000,
+		FieldNamePolicy: AtofEndpointFieldNamePolicyReplaceDots,
 	}}
-	if config.Endpoints[0].Transport != AtofEndpointTransportHTTPPost {
+	if config.Endpoints[0].Transport != AtofEndpointTransportHTTPPost ||
+		config.Endpoints[0].FieldNamePolicy != AtofEndpointFieldNamePolicyReplaceDots {
 		t.Fatalf("unexpected endpoint config: %#v", config.Endpoints[0])
 	}
 }
