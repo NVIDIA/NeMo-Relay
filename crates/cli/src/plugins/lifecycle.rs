@@ -21,16 +21,16 @@ use super::config_io::{
     append_dynamic_plugin_reference, remove_dynamic_plugin_reference, target_scope,
 };
 
-mod json;
 mod render;
+mod responses;
 mod state;
 mod target;
 
-use self::json::{
-    ValidateJsonContext, failure_envelope, generic_failure_envelope, inspect_success_envelope,
-    list_success_envelope, print_json, validate_success_envelope,
-};
 use self::render::{render_inspect, render_list, render_validation_summary};
+use self::responses::{
+    ValidateResponseInput, failure, generic_failure, inspect_success, list_success,
+    print_response_json, validate_success,
+};
 use self::state::{
     RegistryScope, ScopedRegistry, collect_records, find_record_by_id, load_scoped_registries,
     scoped_paths_for_add,
@@ -101,7 +101,7 @@ pub(crate) fn validate(
             }
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &path)?;
             if command.json {
-                print_json(&validate_success_envelope(ValidateJsonContext {
+                print_response_json(&validate_success(ValidateResponseInput {
                     command: "plugins validate",
                     target: Some(command.target.as_str()),
                     target_kind: "path",
@@ -146,7 +146,7 @@ pub(crate) fn validate(
             let refreshed = find_record_by_id(&scopes, &plugin_id)?
                 .expect("validated registry record should still exist");
             if command.json {
-                print_json(&validate_success_envelope(ValidateJsonContext {
+                print_response_json(&validate_success(ValidateResponseInput {
                     command: "plugins validate",
                     target: Some(plugin_id.as_str()),
                     target_kind: "plugin_id",
@@ -179,7 +179,7 @@ pub(crate) fn list(command: PluginsListCommand, server: &ServerArgs) -> Result<(
     let records = collect_records(&scopes, command.all);
     if records.is_empty() {
         if command.json {
-            print_json(&list_success_envelope(
+            print_response_json(&list_success(
                 "plugins list",
                 None,
                 &records,
@@ -191,7 +191,7 @@ pub(crate) fn list(command: PluginsListCommand, server: &ServerArgs) -> Result<(
         return Ok(());
     }
     if command.json {
-        print_json(&list_success_envelope(
+        print_response_json(&list_success(
             "plugins list",
             None,
             &records,
@@ -211,7 +211,7 @@ pub(crate) fn inspect(command: PluginsInspectCommand, server: &ServerArgs) -> Re
     let manifest_ref = manifest_ref_from_record(&entry.record)?;
     let (manifest, manifest_ref) = load_manifest_for_action("inspect", &manifest_ref)?;
     if command.json {
-        print_json(&inspect_success_envelope(
+        print_response_json(&inspect_success(
             "plugins inspect",
             command.id.as_str(),
             &entry,
@@ -461,7 +461,7 @@ pub(crate) fn render_plugin_error(
     };
 
     if json {
-        print_json(&failure_envelope(command, target, kind, message))?;
+        print_response_json(&failure(command, target, kind, message))?;
     } else {
         eprintln!("{message}");
     }
@@ -473,7 +473,7 @@ pub(crate) fn render_generic_plugin_json_error(
     target: Option<&str>,
     message: &str,
 ) -> Result<ExitCode, CliError> {
-    print_json(&generic_failure_envelope(command, target, message))?;
+    print_response_json(&generic_failure(command, target, message))?;
     Ok(ExitCode::from(1))
 }
 

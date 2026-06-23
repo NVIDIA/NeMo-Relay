@@ -524,48 +524,58 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         .map_err(|error| CliError::Config(error.to_string()))
         .unwrap();
 
-    let list_value =
-        json::list_success_envelope("plugins list", None, &records, &host_config_by_id);
+    let list_value = serde_json::to_value(responses::list_success(
+        "plugins list",
+        None,
+        &records,
+        &host_config_by_id,
+    ))
+    .unwrap();
     assert_eq!(list_value["schema_version"], serde_json::json!(1));
     assert_eq!(list_value["ok"], serde_json::json!(true));
     assert_eq!(list_value["data"][0]["id"], serde_json::json!("acme.json"));
 
-    let inspect_value = json::inspect_success_envelope(
+    let inspect_value = serde_json::to_value(responses::inspect_success(
         "plugins inspect",
         "acme.json",
         &entry,
         &manifest,
         &manifest_ref,
         host_config_by_id.get("acme.json"),
-    );
+    ))
+    .unwrap();
     assert_eq!(inspect_value["data"]["id"], serde_json::json!("acme.json"));
     assert_eq!(
         inspect_value["data"]["source"]["manifest_ref"],
         serde_json::json!(manifest_ref)
     );
 
-    let validate_value = json::validate_success_envelope(json::ValidateJsonContext {
-        command: "plugins validate",
-        target: Some("acme.json"),
-        target_kind: "plugin_id",
-        resolved_plugin_id: Some("acme.json"),
-        manifest: &manifest,
-        manifest_ref: &manifest_ref,
-        entry: Some(&entry),
-        host_config: host_config_by_id.get("acme.json"),
-    });
+    let validate_value = serde_json::to_value(responses::validate_success(
+        responses::ValidateResponseInput {
+            command: "plugins validate",
+            target: Some("acme.json"),
+            target_kind: "plugin_id",
+            resolved_plugin_id: Some("acme.json"),
+            manifest: &manifest,
+            manifest_ref: &manifest_ref,
+            entry: Some(&entry),
+            host_config: host_config_by_id.get("acme.json"),
+        },
+    ))
+    .unwrap();
     assert_eq!(
         validate_value["data"]["target_kind"],
         serde_json::json!("plugin_id")
     );
     assert_eq!(validate_value["data"]["valid"], serde_json::json!(true));
 
-    let failure = json::failure_envelope(
+    let failure = serde_json::to_value(responses::failure(
         "plugins inspect",
         Some("missing.plugin"),
         PluginLifecycleFailureKind::NotFound,
         "missing plugin",
-    );
+    ))
+    .unwrap();
     assert_eq!(failure["ok"], serde_json::json!(false));
     assert_eq!(failure["error"]["code"], serde_json::json!("not_found"));
 }
