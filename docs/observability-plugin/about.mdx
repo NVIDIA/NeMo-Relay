@@ -32,8 +32,8 @@ by the downstream system.
 
 Configuration and activation failures are setup failures for the observability
 component. Delivery failures after activation are downstream exporter failures:
-application tool, LLM, and agent execution should continue while the exporter
-reports the problem through its flush, shutdown, log, or backend path. See
+application work continues, and explicit exporter barriers such as flush or
+shutdown can report stored delivery problems. See
 [Observability Configuration](/observability-plugin/configuration) for the
 failure table.
 
