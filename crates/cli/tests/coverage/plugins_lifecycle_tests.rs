@@ -334,6 +334,22 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     let all_list = render_list(&all_records, &host_config_by_id(&resolved));
     assert!(all_list.contains("acme.guardrail"));
     assert!(all_list.contains("tombstoned"));
+
+    let error = enable(
+        PluginsEnableCommand {
+            id: "acme.guardrail".into(),
+        },
+        &server,
+    )
+    .expect_err("tombstoned plugin should not enable");
+    match error {
+        CliError::PluginLifecycle {
+            kind: PluginLifecycleFailureKind::Refused,
+            message,
+            ..
+        } => assert!(message.contains("tombstoned")),
+        other => panic!("unexpected tombstone enable error: {other}"),
+    }
 }
 
 #[test]
