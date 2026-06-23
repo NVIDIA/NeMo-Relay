@@ -138,6 +138,7 @@ pub fn status_from_plugin_error(e: &PluginError) -> NemoRelayStatus {
     set_last_error(&e.to_string());
     match e {
         PluginError::NotFound(_) => NemoRelayStatus::NotFound,
+        PluginError::Conflict(_) => NemoRelayStatus::AlreadyExists,
         PluginError::InvalidConfig(_) | PluginError::Serialization(_) => {
             NemoRelayStatus::InvalidArg
         }

@@ -39,6 +39,9 @@ use crate::api::runtime::{
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 
+pub mod dynamic;
+pub use dynamic::*;
+
 type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -52,6 +55,10 @@ pub enum PluginError {
     /// Configuration validation failed.
     #[error("invalid config: {0}")]
     InvalidConfig(String),
+
+    /// The requested mutation conflicts with current plugin state.
+    #[error("conflict: {0}")]
+    Conflict(String),
 
     /// The requested plugin resource was not found.
     #[error("not found: {0}")]
@@ -776,6 +783,7 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
 fn clone_cached_plugin_error(err: &PluginError) -> PluginError {
     match err {
         PluginError::InvalidConfig(message) => PluginError::InvalidConfig(message.clone()),
+        PluginError::Conflict(message) => PluginError::Conflict(message.clone()),
         PluginError::NotFound(message) => PluginError::NotFound(message.clone()),
         PluginError::Serialization(err) => PluginError::Internal(err.to_string()),
         PluginError::Internal(message) => PluginError::Internal(message.clone()),
@@ -1113,8 +1121,7 @@ pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let mut merged = Json::Object(Map::new());
-    let mut sources = Vec::new();
+    let mut documents = Vec::new();
     for path in paths {
         if !path.exists() {
             continue;
@@ -1125,7 +1132,22 @@ where
         let parsed = raw.parse::<toml::Table>().map_err(|err| {
             PluginError::InvalidConfig(format!("invalid plugin TOML in {}: {err}", path.display()))
         })?;
-        let document = serde_json::to_value(parsed)?;
+        documents.push((path, serde_json::to_value(parsed)?));
+    }
+    merge_plugin_config_documents(documents)
+}
+
+/// Merges pre-parsed `plugins.toml` JSON documents (lowest precedence first) using the canonical
+/// plugin-config layering rules. Internal: `pub` only so the CLI can preprocess dynamic-plugin
+/// refs while still sharing one merge semantics implementation with core.
+#[doc(hidden)]
+pub fn merge_plugin_config_documents<I>(documents: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = (PathBuf, Json)>,
+{
+    let mut merged = Json::Object(Map::new());
+    let mut sources = Vec::new();
+    for (path, document) in documents {
         validate_unique_component_kinds(&path, &document)?;
         layer_config(&mut merged, document);
         sources.push(path);

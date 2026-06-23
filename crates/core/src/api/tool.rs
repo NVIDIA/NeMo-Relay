@@ -214,7 +214,7 @@ pub struct ToolCallEndParams<'a> {
 pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
-    let (handle, event, subscribers) = {
+    let (entries, subscribers) = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
@@ -226,9 +226,19 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-
-        let sanitized_args =
-            state.tool_sanitize_request_chain(params.name, params.args, &scope_locals);
+        let entries = state.tool_sanitize_request_entries(&scope_locals);
+        (entries, subscribers)
+    };
+    let sanitized_args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+        params.name,
+        params.args,
+        &entries,
+    );
+    let (handle, event) = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let handle_params = CreateToolHandleParams::builder()
             .name(params.name)
             .parent_uuid_opt(parent_uuid)
@@ -240,7 +250,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
             .build();
         let handle = state.create_tool_handle(handle_params);
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
-        (handle, event, subscribers)
+        (handle, event)
     };
     NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(handle)
@@ -274,7 +284,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
 /// the caller-owned `result` value.
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
-    let (event, subscribers) = {
+    let (entries, subscribers) = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
@@ -286,23 +296,32 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-
-        let sanitized_result =
-            state.tool_sanitize_response_chain(&params.handle.name, params.result, &scope_locals);
-        let data = if sanitized_result.is_null() {
-            params.data
-        } else {
-            Some(sanitized_result)
-        };
-        let event = state.build_tool_end_event(
+        let entries = state.tool_sanitize_response_entries(&scope_locals);
+        (entries, subscribers)
+    };
+    let sanitized_result = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+        &params.handle.name,
+        params.result,
+        &entries,
+    );
+    let data = if sanitized_result.is_null() {
+        params.data
+    } else {
+        Some(sanitized_result)
+    };
+    let event = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        state.build_tool_end_event(
             EndToolHandleParams::builder()
                 .handle(params.handle)
                 .data_opt(data)
                 .metadata_opt(params.metadata)
                 .timestamp_opt(params.timestamp)
                 .build(),
-        );
-        (event, subscribers)
+        )
     };
     NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
@@ -411,7 +430,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         }
     }
 
-    let intercepted_args = {
+    let intercept_entries = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard
@@ -420,8 +439,13 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.tool_request_intercepts_chain(&name, args, &scope_locals)?
+        state.tool_request_intercept_entries(&scope_locals)
     };
+    let intercepted_args = NemoRelayContextState::tool_request_intercepts_snapshot_chain(
+        &name,
+        args,
+        &intercept_entries,
+    )?;
 
     let handle = tool_call(
         ToolCallParams::builder()
@@ -487,15 +511,18 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
 /// Conditional guardrails and execution intercepts are not run by this helper.
 pub fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     ensure_runtime_owner()?;
-    let scope_stack = current_scope_stack();
-    let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-    let scope_locals = scope_guard
-        .collect_scope_local_registries(|registries| &registries.tool_request_intercepts);
-    let context = global_context();
-    let state = context
-        .read()
-        .map_err(|error| FlowError::Internal(error.to_string()))?;
-    state.tool_request_intercepts_chain(name, args, &scope_locals)
+    let entries = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_locals = scope_guard
+            .collect_scope_local_registries(|registries| &registries.tool_request_intercepts);
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        state.tool_request_intercept_entries(&scope_locals)
+    };
+    NemoRelayContextState::tool_request_intercepts_snapshot_chain(name, args, &entries)
 }
 
 /// Run only the tool conditional-execution guardrail chain.

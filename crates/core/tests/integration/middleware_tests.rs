@@ -22,22 +22,29 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_stream_execution_intercept,
+    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
+    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
     deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
     deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
     register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
     register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
-    scope_register_tool_execution_intercept, scope_register_tool_sanitize_request_guardrail,
+    scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
+    scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
+    scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
+    scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
+    scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
+    scope_register_tool_sanitize_response_guardrail,
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
-use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -83,6 +90,35 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
 fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
     flush_subscribers().unwrap();
     events.lock().unwrap().clone()
+}
+
+fn assert_middleware_callback_locks_are_free() {
+    let context = global_context();
+    assert!(
+        context.try_write().is_ok(),
+        "middleware callback ran while the global registry lock was held"
+    );
+
+    let scope_stack = current_scope_stack();
+    assert!(
+        scope_stack.try_write().is_ok(),
+        "middleware callback ran while the scope stack lock was held"
+    );
+}
+
+fn record_middleware_callback(callbacks: &Arc<Mutex<Vec<&'static str>>>, label: &'static str) {
+    callbacks.lock().unwrap().push(label);
+}
+
+fn assert_middleware_callback_labels(
+    callbacks: &Arc<Mutex<Vec<&'static str>>>,
+    expected: &[&'static str],
+) {
+    let mut actual = callbacks.lock().unwrap().clone();
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
 }
 
 // =========================================================================
@@ -1578,6 +1614,549 @@ fn test_concurrent_register_and_read() {
     for i in 0..4 {
         deregister_tool_sanitize_request_guardrail(&format!("stable_{i}")).unwrap();
     }
+}
+
+// =========================================================================
+// Lock Regression Tests
+// =========================================================================
+
+#[test]
+fn test_tool_request_intercept_registry_mutations_apply_to_later_calls() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let callbacks = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let late_registered = Arc::new(AtomicBool::new(false));
+
+    let tracked = callbacks.clone();
+    let registered = late_registered.clone();
+    register_tool_request_intercept(
+        "snapshot_tool_request_initial",
+        1,
+        false,
+        Arc::new(move |_, args| {
+            record_middleware_callback(&tracked, "tool_request_initial");
+            assert_middleware_callback_locks_are_free();
+
+            if !registered.swap(true, Ordering::SeqCst) {
+                let tracked = tracked.clone();
+                register_tool_request_intercept(
+                    "snapshot_tool_request_late",
+                    2,
+                    false,
+                    Arc::new(move |_, args| {
+                        record_middleware_callback(&tracked, "tool_request_late");
+                        assert_middleware_callback_locks_are_free();
+                        Ok(args)
+                    }),
+                )
+                .unwrap();
+            }
+
+            Ok(args)
+        }),
+    )
+    .unwrap();
+
+    let args = tool_request_intercepts("tool", json!({"round": 1})).unwrap();
+    assert_eq!(args["round"], 1);
+    assert_middleware_callback_labels(&callbacks, &["tool_request_initial"]);
+
+    callbacks.lock().unwrap().clear();
+    let args = tool_request_intercepts("tool", json!({"round": 2})).unwrap();
+    assert_eq!(args["round"], 2);
+    assert_middleware_callback_labels(&callbacks, &["tool_request_initial", "tool_request_late"]);
+
+    deregister_tool_request_intercept("snapshot_tool_request_initial").unwrap();
+    deregister_tool_request_intercept("snapshot_tool_request_late").unwrap();
+}
+
+#[test]
+fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let callbacks = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let late_registered = Arc::new(AtomicBool::new(false));
+
+    let tracked = callbacks.clone();
+    let registered = late_registered.clone();
+    register_llm_request_intercept(
+        "snapshot_llm_request_initial",
+        1,
+        false,
+        Arc::new(move |_, request, annotated| {
+            record_middleware_callback(&tracked, "llm_request_initial");
+            assert_middleware_callback_locks_are_free();
+
+            if !registered.swap(true, Ordering::SeqCst) {
+                let tracked = tracked.clone();
+                register_llm_request_intercept(
+                    "snapshot_llm_request_late",
+                    2,
+                    false,
+                    Arc::new(move |_, request, annotated| {
+                        record_middleware_callback(&tracked, "llm_request_late");
+                        assert_middleware_callback_locks_are_free();
+                        Ok((request, annotated))
+                    }),
+                )
+                .unwrap();
+            }
+
+            Ok((request, annotated))
+        }),
+    )
+    .unwrap();
+
+    let request = llm_request_intercepts(
+        "llm",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"round": 1}),
+        },
+    )
+    .unwrap();
+    assert_eq!(request.content["round"], 1);
+    assert_middleware_callback_labels(&callbacks, &["llm_request_initial"]);
+
+    callbacks.lock().unwrap().clear();
+    let request = llm_request_intercepts(
+        "llm",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"round": 2}),
+        },
+    )
+    .unwrap();
+    assert_eq!(request.content["round"], 2);
+    assert_middleware_callback_labels(&callbacks, &["llm_request_initial", "llm_request_late"]);
+
+    deregister_llm_request_intercept("snapshot_llm_request_initial").unwrap();
+    deregister_llm_request_intercept("snapshot_llm_request_late").unwrap();
+}
+
+#[tokio::test]
+async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let scope = setup_isolated_scope("tool_lock_regression");
+    let callbacks = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+
+    let tracked = callbacks.clone();
+    register_tool_conditional_execution_guardrail(
+        "lock_global_tool_conditional",
+        1,
+        Arc::new(move |_, _| {
+            record_middleware_callback(&tracked, "tool_conditional_global");
+            assert_middleware_callback_locks_are_free();
+            Ok(None)
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_tool_conditional_execution_guardrail(
+        &scope.uuid,
+        "lock_scope_tool_conditional",
+        2,
+        Arc::new(move |_, _| {
+            record_middleware_callback(&tracked, "tool_conditional_scope");
+            assert_middleware_callback_locks_are_free();
+            Ok(None)
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_tool_request_intercept(
+        "lock_global_tool_request",
+        1,
+        false,
+        Arc::new(move |_, args| {
+            record_middleware_callback(&tracked, "tool_request_global");
+            assert_middleware_callback_locks_are_free();
+            Ok(args)
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_tool_request_intercept(
+        &scope.uuid,
+        "lock_scope_tool_request",
+        2,
+        false,
+        Arc::new(move |_, args| {
+            record_middleware_callback(&tracked, "tool_request_scope");
+            assert_middleware_callback_locks_are_free();
+            Ok(args)
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_tool_sanitize_request_guardrail(
+        "lock_global_tool_sanitize_request",
+        1,
+        Arc::new(move |_, args| {
+            record_middleware_callback(&tracked, "tool_sanitize_request_global");
+            assert_middleware_callback_locks_are_free();
+            args
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_tool_sanitize_request_guardrail(
+        &scope.uuid,
+        "lock_scope_tool_sanitize_request",
+        2,
+        Arc::new(move |_, args| {
+            record_middleware_callback(&tracked, "tool_sanitize_request_scope");
+            assert_middleware_callback_locks_are_free();
+            args
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_tool_execution_intercept(
+        "lock_global_tool_execution",
+        1,
+        Arc::new(move |_, args, next| {
+            record_middleware_callback(&tracked, "tool_execution_global");
+            assert_middleware_callback_locks_are_free();
+            Box::pin(async move { next(args).await })
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_tool_execution_intercept(
+        &scope.uuid,
+        "lock_scope_tool_execution",
+        2,
+        Arc::new(move |_, args, next| {
+            record_middleware_callback(&tracked, "tool_execution_scope");
+            assert_middleware_callback_locks_are_free();
+            Box::pin(async move { next(args).await })
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_tool_sanitize_response_guardrail(
+        "lock_global_tool_sanitize_response",
+        1,
+        Arc::new(move |_, result| {
+            record_middleware_callback(&tracked, "tool_sanitize_response_global");
+            assert_middleware_callback_locks_are_free();
+            result
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_tool_sanitize_response_guardrail(
+        &scope.uuid,
+        "lock_scope_tool_sanitize_response",
+        2,
+        Arc::new(move |_, result| {
+            record_middleware_callback(&tracked, "tool_sanitize_response_scope");
+            assert_middleware_callback_locks_are_free();
+            result
+        }),
+    )
+    .unwrap();
+
+    let tracked = callbacks.clone();
+    let func: ToolExecutionNextFn = Arc::new(move |args| {
+        record_middleware_callback(&tracked, "tool_func");
+        assert_middleware_callback_locks_are_free();
+        Box::pin(async move { Ok(args) })
+    });
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("tool")
+            .args(json!({"ok": true}))
+            .func(func)
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["ok"], true);
+    assert_middleware_callback_labels(
+        &callbacks,
+        &[
+            "tool_conditional_global",
+            "tool_conditional_scope",
+            "tool_request_global",
+            "tool_request_scope",
+            "tool_sanitize_request_global",
+            "tool_sanitize_request_scope",
+            "tool_execution_global",
+            "tool_execution_scope",
+            "tool_func",
+            "tool_sanitize_response_global",
+            "tool_sanitize_response_scope",
+        ],
+    );
+
+    deregister_tool_conditional_execution_guardrail("lock_global_tool_conditional").unwrap();
+    deregister_tool_request_intercept("lock_global_tool_request").unwrap();
+    deregister_tool_sanitize_request_guardrail("lock_global_tool_sanitize_request").unwrap();
+    deregister_tool_execution_intercept("lock_global_tool_execution").unwrap();
+    deregister_tool_sanitize_response_guardrail("lock_global_tool_sanitize_response").unwrap();
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let scope = setup_isolated_scope("llm_lock_regression");
+    let callbacks = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+
+    let tracked = callbacks.clone();
+    register_llm_conditional_execution_guardrail(
+        "lock_global_llm_conditional",
+        1,
+        Arc::new(move |_| {
+            record_middleware_callback(&tracked, "llm_conditional_global");
+            assert_middleware_callback_locks_are_free();
+            Ok(None)
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_llm_conditional_execution_guardrail(
+        &scope.uuid,
+        "lock_scope_llm_conditional",
+        2,
+        Arc::new(move |_| {
+            record_middleware_callback(&tracked, "llm_conditional_scope");
+            assert_middleware_callback_locks_are_free();
+            Ok(None)
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_llm_request_intercept(
+        "lock_global_llm_request",
+        1,
+        false,
+        Arc::new(move |_, request, annotated| {
+            record_middleware_callback(&tracked, "llm_request_global");
+            assert_middleware_callback_locks_are_free();
+            Ok((request, annotated))
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_llm_request_intercept(
+        &scope.uuid,
+        "lock_scope_llm_request",
+        2,
+        false,
+        Arc::new(move |_, request, annotated| {
+            record_middleware_callback(&tracked, "llm_request_scope");
+            assert_middleware_callback_locks_are_free();
+            Ok((request, annotated))
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_llm_sanitize_request_guardrail(
+        "lock_global_llm_sanitize_request",
+        1,
+        Arc::new(move |request| {
+            record_middleware_callback(&tracked, "llm_sanitize_request_global");
+            assert_middleware_callback_locks_are_free();
+            request
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_llm_sanitize_request_guardrail(
+        &scope.uuid,
+        "lock_scope_llm_sanitize_request",
+        2,
+        Arc::new(move |request| {
+            record_middleware_callback(&tracked, "llm_sanitize_request_scope");
+            assert_middleware_callback_locks_are_free();
+            request
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_llm_execution_intercept(
+        "lock_global_llm_execution",
+        1,
+        Arc::new(move |_, request, next| {
+            record_middleware_callback(&tracked, "llm_execution_global");
+            assert_middleware_callback_locks_are_free();
+            Box::pin(async move { next(request).await })
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_llm_execution_intercept(
+        &scope.uuid,
+        "lock_scope_llm_execution",
+        2,
+        Arc::new(move |_, request, next| {
+            record_middleware_callback(&tracked, "llm_execution_scope");
+            assert_middleware_callback_locks_are_free();
+            Box::pin(async move { next(request).await })
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_llm_stream_execution_intercept(
+        "lock_global_llm_stream_execution",
+        1,
+        Arc::new(move |_, request, next| {
+            record_middleware_callback(&tracked, "llm_stream_execution_global");
+            assert_middleware_callback_locks_are_free();
+            Box::pin(async move { next(request).await })
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_llm_stream_execution_intercept(
+        &scope.uuid,
+        "lock_scope_llm_stream_execution",
+        2,
+        Arc::new(move |_, request, next| {
+            record_middleware_callback(&tracked, "llm_stream_execution_scope");
+            assert_middleware_callback_locks_are_free();
+            Box::pin(async move { next(request).await })
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    register_llm_sanitize_response_guardrail(
+        "lock_global_llm_sanitize_response",
+        1,
+        Arc::new(move |response| {
+            record_middleware_callback(&tracked, "llm_sanitize_response_global");
+            assert_middleware_callback_locks_are_free();
+            response
+        }),
+    )
+    .unwrap();
+    let tracked = callbacks.clone();
+    scope_register_llm_sanitize_response_guardrail(
+        &scope.uuid,
+        "lock_scope_llm_sanitize_response",
+        2,
+        Arc::new(move |response| {
+            record_middleware_callback(&tracked, "llm_sanitize_response_scope");
+            assert_middleware_callback_locks_are_free();
+            response
+        }),
+    )
+    .unwrap();
+
+    let tracked = callbacks.clone();
+    let func: LlmExecutionNextFn = Arc::new(move |_| {
+        record_middleware_callback(&tracked, "llm_func");
+        assert_middleware_callback_locks_are_free();
+        Box::pin(async move { Ok(json!({"ok": true})) })
+    });
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"messages": []}),
+            })
+            .func(func)
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response["ok"], true);
+
+    let tracked = callbacks.clone();
+    let stream_func: LlmStreamExecutionNextFn = Arc::new(move |_| {
+        record_middleware_callback(&tracked, "llm_stream_func");
+        assert_middleware_callback_locks_are_free();
+        Box::pin(async move {
+            let stream = tokio_stream::iter(vec![Ok(json!({"chunk": true}))]);
+            Ok(Box::pin(stream) as LlmJsonStream)
+        })
+    });
+    let tracked = callbacks.clone();
+    let collector = Box::new(move |_| {
+        record_middleware_callback(&tracked, "llm_collector");
+        assert_middleware_callback_locks_are_free();
+        Ok(())
+    });
+    let tracked = callbacks.clone();
+    let finalizer = Box::new(move || {
+        record_middleware_callback(&tracked, "llm_finalizer");
+        assert_middleware_callback_locks_are_free();
+        json!({"stream": true})
+    });
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("llm-stream")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"messages": []}),
+            })
+            .func(stream_func)
+            .collector(collector)
+            .finalizer(finalizer)
+            .build(),
+    )
+    .await
+    .unwrap();
+    while let Some(chunk) = stream.next().await {
+        chunk.unwrap();
+    }
+    assert_middleware_callback_labels(
+        &callbacks,
+        &[
+            "llm_conditional_global",
+            "llm_conditional_global",
+            "llm_conditional_scope",
+            "llm_conditional_scope",
+            "llm_request_global",
+            "llm_request_global",
+            "llm_request_scope",
+            "llm_request_scope",
+            "llm_sanitize_request_global",
+            "llm_sanitize_request_global",
+            "llm_sanitize_request_scope",
+            "llm_sanitize_request_scope",
+            "llm_execution_global",
+            "llm_execution_scope",
+            "llm_func",
+            "llm_stream_execution_global",
+            "llm_stream_execution_scope",
+            "llm_stream_func",
+            "llm_collector",
+            "llm_finalizer",
+            "llm_sanitize_response_global",
+            "llm_sanitize_response_global",
+            "llm_sanitize_response_scope",
+            "llm_sanitize_response_scope",
+        ],
+    );
+
+    deregister_llm_conditional_execution_guardrail("lock_global_llm_conditional").unwrap();
+    deregister_llm_request_intercept("lock_global_llm_request").unwrap();
+    deregister_llm_sanitize_request_guardrail("lock_global_llm_sanitize_request").unwrap();
+    deregister_llm_execution_intercept("lock_global_llm_execution").unwrap();
+    deregister_llm_stream_execution_intercept("lock_global_llm_stream_execution").unwrap();
+    deregister_llm_sanitize_response_guardrail("lock_global_llm_sanitize_response").unwrap();
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
 }
 
 // =========================================================================
