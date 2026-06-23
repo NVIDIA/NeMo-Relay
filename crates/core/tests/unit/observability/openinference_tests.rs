@@ -954,9 +954,197 @@ fn llm_input_value_omits_request_headers() {
     assert!(!attributes.contains_key("nemo_relay.start.input_json"));
     assert!(!attributes["input.value"].contains("authorization"));
     assert!(!attributes["input.value"].contains("secret-token"));
-    assert!(!attributes.contains_key("llm.input_messages.0.message.role"));
+    // The provider-shaped request is decoded through the codec layer, so
+    // structured messages are emitted — without leaking transport headers.
+    assert_attr(&attributes, "llm.input_messages.0.message.role", "user");
+    assert_attr(&attributes, "llm.input_messages.0.message.content", "hi");
     assert_no_attr_contains(&attributes, "headers");
     assert_no_attr_contains(&attributes, "secret-token");
+}
+
+#[test]
+fn un_annotated_provider_response_decoded_through_codec() {
+    // No annotation and no OpenClaw envelope: the raw provider response is
+    // detected and decoded through the codec layer (tier 3), so OpenInference
+    // emits structured output messages instead of nothing.
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"messages": [{"role": "user", "content": "hi"}], "model": "demo-model"}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "hello there"},
+                "finish_reason": "stop"
+            }]
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.role",
+        "assistant",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.content",
+        "hello there",
+    );
+}
+
+#[test]
+fn un_annotated_anthropic_response_emits_codec_computed_total_tokens() {
+    // Anthropic raw usage carries no total; the codec computes input + output.
+    // The un-annotated path must surface that codec total rather than dropping
+    // it the way the manual scraper does.
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "anthropic",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"model": "claude-3-5-sonnet", "messages": [{"role": "user", "content": "hi"}]}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "anthropic",
+        ScopeType::Llm,
+        Some(json!({
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-5-sonnet",
+            "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20}
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.token_count.prompt", "10");
+    assert_attr(&attributes, "llm.token_count.completion", "20");
+    assert_attr(&attributes, "llm.token_count.total", "30");
+}
+
+#[test]
+fn provider_shaped_empty_usage_falls_back_to_manual_token_usage() {
+    // A provider-shaped response with an empty `usage` object yields an empty
+    // codec usage; that must not mask the manual scraper's `token_usage`.
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "gpt-4o",
+            "choices": [{
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {},
+            "token_usage": {"prompt_tokens": 5, "completion_tokens": 7}
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.token_count.prompt", "5");
+    assert_attr(&attributes, "llm.token_count.completion", "7");
+}
+
+#[test]
+fn provider_shaped_partial_usage_merges_with_manual_token_usage() {
+    // Codec usage covers only prompt; `token_usage` covers completion/total. The
+    // per-field merge must keep all three rather than letting partial codec usage
+    // mask the scraper's fields.
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "headers": {},
+            "content": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({
+            "model": "gpt-4o",
+            "choices": [{
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5},
+            "token_usage": {"completion_tokens": 7, "total_tokens": 12}
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(&attributes, "llm.token_count.prompt", "5");
+    assert_attr(&attributes, "llm.token_count.completion", "7");
+    assert_attr(&attributes, "llm.token_count.total", "12");
 }
 
 #[test]
@@ -2077,9 +2265,7 @@ fn helper_functions_cover_additional_openinference_branches() {
         ),
         Some("Requested tools: read".to_string())
     );
-    assert_eq!(normalize_total_tokens(Some(5), None, None), Some(5));
-
-    let alias_usage = usage_from_manual_llm_output(Some(&json!({
+    let alias_usage = crate::observability::manual::usage_from_manual_llm_output(Some(&json!({
         "usage": {"inputTokens": 11, "outputTokens": 7, "totalTokens": 18, "cacheReadInputTokens": 5}
     })))
     .unwrap();

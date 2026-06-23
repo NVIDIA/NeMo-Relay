@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::manual;
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
@@ -722,16 +723,26 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         attributes.push(KeyValue::new(oi::output::MIME_TYPE, mime_type));
     }
     let fallback_usage = if is_llm {
-        usage_from_manual_llm_output(event.output())
+        manual::usage_from_manual_llm_output(event.output())
     } else {
         None
     };
-    let usage = event
-        .annotated_response()
-        .and_then(|response| response.usage.as_ref())
-        .or(fallback_usage.as_ref());
+    // Combine codec-normalized usage (which carries provider-derived fields such
+    // as Anthropic's computed total) with the manual scraper, preferring codec
+    // values per field so neither source's coverage is lost.
+    let normalized = if is_llm {
+        event.normalized_llm_response()
+    } else {
+        None
+    };
+    let usage = merge_usage(
+        normalized
+            .as_ref()
+            .and_then(|response| response.usage.as_ref()),
+        fallback_usage.as_ref(),
+    );
     if is_llm {
-        push_llm_usage_attributes(&mut attributes, usage);
+        push_llm_usage_attributes(&mut attributes, usage.as_ref());
     }
     if is_llm && let Some(cost_total) = cost_total_from_llm_event(event, fallback_usage.as_ref()) {
         attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
@@ -740,6 +751,24 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         push_llm_response_attributes(&mut attributes, event);
     }
     attributes
+}
+
+// Merge two usage sources field by field, preferring `primary` (codec-normalized)
+// and filling gaps from `secondary` (manual scraper). This keeps provider-derived
+// fields without dropping anything either source alone would have reported.
+fn merge_usage(primary: Option<&Usage>, secondary: Option<&Usage>) -> Option<Usage> {
+    match (primary, secondary) {
+        (None, None) => None,
+        (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
+        (Some(primary), Some(secondary)) => Some(Usage {
+            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
+            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
+            total_tokens: primary.total_tokens.or(secondary.total_tokens),
+            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
+            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
+            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
+        }),
+    }
 }
 
 fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usage>) {
@@ -775,16 +804,22 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         return;
     }
 
-    let Some(input) = event.input().and_then(replay_llm_payload) else {
+    // Match replay before codec detection: replay content can look
+    // provider-shaped (carry `messages`) and would otherwise be misrouted.
+    if let Some(input) = event.input().and_then(replay_llm_payload) {
+        if let Some(provider) = input.get("provider").and_then(Json::as_str) {
+            attributes.push(KeyValue::new(oi::llm::PROVIDER, provider.to_string()));
+        }
+        if let Some(system) = input.get("systemPrompt").and_then(display_text_from_json) {
+            attributes.push(KeyValue::new(oi::llm::SYSTEM, system));
+        }
+        push_replay_input_messages(attributes, input);
         return;
-    };
-    if let Some(provider) = input.get("provider").and_then(Json::as_str) {
-        attributes.push(KeyValue::new(oi::llm::PROVIDER, provider.to_string()));
     }
-    if let Some(system) = input.get("systemPrompt").and_then(display_text_from_json) {
-        attributes.push(KeyValue::new(oi::llm::SYSTEM, system));
+
+    if let Some(request) = event.normalized_llm_request() {
+        push_annotated_request_attributes(attributes, &request);
     }
-    push_replay_input_messages(attributes, input);
 }
 
 fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
@@ -793,10 +828,14 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         return;
     }
 
-    let Some(output) = event.output().and_then(replay_llm_response) else {
+    if let Some(output) = event.output().and_then(replay_llm_response) {
+        push_replay_response_attributes(attributes, output);
         return;
-    };
-    push_replay_response_attributes(attributes, output);
+    }
+
+    if let Some(response) = event.normalized_llm_response() {
+        push_annotated_response_attributes(attributes, &response);
+    }
 }
 
 fn push_annotated_request_attributes(
@@ -1097,17 +1136,10 @@ fn finish_reason_value(reason: &FinishReason) -> String {
     }
 }
 
-fn cost_total_from_manual_llm_output(output: Option<&Json>) -> Option<f64> {
-    let object = output?.as_object()?;
-    let usage = object.get("usage").and_then(Json::as_object);
-    let token_usage = object.get("token_usage").and_then(Json::as_object);
-    usage
-        .and_then(cost_total_from_usage)
-        .or_else(|| token_usage.and_then(cost_total_from_usage))
-}
-
 fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> Option<f64> {
-    if let Some(cost) = cost_total_from_manual_llm_output(event.output()) {
+    if let Some(cost) =
+        manual::cost_from_manual_llm_output(event.output(), true).map(|(total, _)| total)
+    {
         return Some(cost);
     }
 
@@ -1126,176 +1158,9 @@ fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> O
     let usage = fallback_usage?;
     let model_name = event
         .model_name()
-        .or_else(|| model_name_from_manual_llm_output(event.output()))?;
+        .or_else(|| manual::model_name_from_manual_llm_output(event.output()))?;
     estimate_cost_for_provider(Some(event.name()), model_name, usage)
         .and_then(|cost| cost.total_for_currency("USD"))
-}
-
-fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
-    output?.as_object()?.get("model").and_then(Json::as_str)
-}
-
-fn cost_total_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
-    usage.get("cost_usd").and_then(Json::as_f64).or_else(|| {
-        let cost = usage.get("cost")?.as_object()?;
-        let currency = cost.get("currency").and_then(Json::as_str);
-        let is_usd_cost = currency.is_none_or(|currency| currency.eq_ignore_ascii_case("USD"));
-        if !is_usd_cost {
-            return None;
-        }
-        cost.get("total").and_then(Json::as_f64).or_else(|| {
-            let (has_component, component_total) = ["input", "output", "cache_read", "cache_write"]
-                .iter()
-                .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
-                .fold((false, 0.0), |(_, total), value| (true, total + value));
-            has_component.then_some(component_total)
-        })
-    })
-}
-
-fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
-    let object = output?.as_object()?;
-    let usage = object.get("usage").and_then(Json::as_object);
-    let token_usage = object.get("token_usage").and_then(Json::as_object);
-    if usage.is_none() && token_usage.is_none() {
-        return None;
-    }
-
-    let prompt_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &["prompt_tokens", "input_tokens", "inputTokens", "input"],
-    );
-    let completion_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &[
-            "completion_tokens",
-            "output_tokens",
-            "completionTokens",
-            "outputTokens",
-            "output",
-        ],
-    );
-    let reported_total_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &["total_tokens", "totalTokens", "total"],
-    );
-    let cache_read_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &[
-            "cache_read_tokens",
-            "cached_tokens",
-            "cache_read_input_tokens",
-            "cacheReadTokens",
-            "cachedTokens",
-            "cacheReadInputTokens",
-            "cacheRead",
-        ],
-    )
-    .or_else(|| {
-        first_nested_u64_from_manual_usage(
-            usage,
-            token_usage,
-            "input_tokens_details",
-            "cached_tokens",
-        )
-    })
-    .or_else(|| {
-        first_nested_u64_from_manual_usage(
-            usage,
-            token_usage,
-            "prompt_tokens_details",
-            "cached_tokens",
-        )
-    });
-    let cache_write_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &[
-            "cache_write_tokens",
-            "cache_creation_input_tokens",
-            "cacheWriteTokens",
-            "cacheCreationInputTokens",
-            "cacheWrite",
-        ],
-    );
-
-    if prompt_tokens.is_none()
-        && completion_tokens.is_none()
-        && reported_total_tokens.is_none()
-        && cache_read_tokens.is_none()
-        && cache_write_tokens.is_none()
-    {
-        return None;
-    }
-    let total_tokens =
-        normalize_total_tokens(reported_total_tokens, prompt_tokens, completion_tokens);
-
-    Some(Usage {
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
-        cache_read_tokens,
-        cache_write_tokens,
-        cost: None,
-    })
-}
-
-fn normalize_total_tokens(
-    total_tokens: Option<u64>,
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-) -> Option<u64> {
-    let total_tokens = total_tokens?;
-    let minimum_total = prompt_tokens
-        .unwrap_or(0)
-        .saturating_add(completion_tokens.unwrap_or(0));
-    if minimum_total == 0 || total_tokens >= minimum_total {
-        Some(total_tokens)
-    } else {
-        None
-    }
-}
-
-fn first_u64_from_manual_usage(
-    usage: Option<&serde_json::Map<String, Json>>,
-    token_usage: Option<&serde_json::Map<String, Json>>,
-    keys: &[&str],
-) -> Option<u64> {
-    usage
-        .and_then(|value| first_u64(value, keys))
-        .or_else(|| token_usage.and_then(|value| first_u64(value, keys)))
-}
-
-fn first_nested_u64_from_manual_usage(
-    usage: Option<&serde_json::Map<String, Json>>,
-    token_usage: Option<&serde_json::Map<String, Json>>,
-    parent_key: &str,
-    child_key: &str,
-) -> Option<u64> {
-    usage
-        .and_then(|value| nested_u64(value, parent_key, child_key))
-        .or_else(|| token_usage.and_then(|value| nested_u64(value, parent_key, child_key)))
-}
-
-fn nested_u64(
-    usage: &serde_json::Map<String, Json>,
-    parent_key: &str,
-    child_key: &str,
-) -> Option<u64> {
-    usage
-        .get(parent_key)
-        .and_then(Json::as_object)
-        .and_then(|details| details.get(child_key))
-        .and_then(Json::as_u64)
-}
-
-fn first_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| usage.get(*key).and_then(Json::as_u64))
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {

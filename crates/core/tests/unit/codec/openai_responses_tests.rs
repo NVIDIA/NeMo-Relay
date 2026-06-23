@@ -312,6 +312,58 @@ fn test_decode_response_multiple_output_text_items() {
 }
 
 #[test]
+fn test_decode_response_item_level_output_text() {
+    // A top-level `output_text` output item (sibling of `message`/`function_call`).
+    let codec = OpenAIResponsesCodec;
+    let response = json!({
+        "output": [
+            { "type": "output_text", "text": "Item text." }
+        ]
+    });
+    let resp = codec.decode_response(&response).unwrap();
+    assert_eq!(
+        resp.message,
+        Some(MessageContent::Text("Item text.".into()))
+    );
+}
+
+#[test]
+fn test_decode_response_top_level_output_text_fallback() {
+    // The flattened top-level `output_text` is used when `output` yields no text.
+    let codec = OpenAIResponsesCodec;
+    let response = json!({
+        "output": [],
+        "output_text": "Aggregated text."
+    });
+    let resp = codec.decode_response(&response).unwrap();
+    assert_eq!(
+        resp.message,
+        Some(MessageContent::Text("Aggregated text.".into()))
+    );
+}
+
+#[test]
+fn test_decode_response_output_items_take_precedence_over_top_level_output_text() {
+    // Structured `output` message text wins over the flattened `output_text`.
+    let codec = OpenAIResponsesCodec;
+    let response = json!({
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [ { "type": "output_text", "text": "Structured." } ]
+            }
+        ],
+        "output_text": "Aggregate that should be ignored."
+    });
+    let resp = codec.decode_response(&response).unwrap();
+    assert_eq!(
+        resp.message,
+        Some(MessageContent::Text("Structured.".into()))
+    );
+}
+
+#[test]
 fn test_decode_response_only_reasoning_items() {
     let codec = OpenAIResponsesCodec;
     let response = json!({

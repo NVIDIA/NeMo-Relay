@@ -16,6 +16,7 @@ pub(crate) mod openai_responses;
 use std::collections::HashSet;
 
 use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::codec::resolve::{ProviderSurface, detect_request_surface};
 use serde_json::Value;
 
 use crate::acg::prompt_ir::PromptIR;
@@ -40,6 +41,14 @@ pub(crate) trait RequestSurfaceApplier: Send + Sync {
 }
 
 impl RequestSurface {
+    fn from_provider_surface(surface: ProviderSurface) -> Self {
+        match surface {
+            ProviderSurface::OpenAiChat => Self::OpenAIChat,
+            ProviderSurface::OpenAiResponses => Self::OpenAIResponses,
+            ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+        }
+    }
+
     pub(crate) fn supports_provider(self, provider: &str) -> bool {
         match provider {
             "anthropic" => matches!(self, Self::AnthropicMessages),
@@ -71,17 +80,13 @@ impl RequestSurface {
 pub(crate) fn resolve_request_surface_from_request(
     request: &LlmRequest,
 ) -> crate::acg::Result<RequestSurface> {
-    if request.content.get("input").is_some() || request.content.get("instructions").is_some() {
-        Ok(RequestSurface::OpenAIResponses)
-    } else if request.content.get("system").is_some() {
-        Ok(RequestSurface::AnthropicMessages)
-    } else if request.content.get("messages").is_some() {
-        Ok(RequestSurface::OpenAIChat)
-    } else {
-        Err(crate::acg::AcgError::Internal(
-            "unable to resolve request surface from request shape".to_string(),
-        ))
-    }
+    detect_request_surface(&request.content)
+        .map(RequestSurface::from_provider_surface)
+        .ok_or_else(|| {
+            crate::acg::AcgError::Internal(
+                "unable to resolve request surface from request shape".to_string(),
+            )
+        })
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

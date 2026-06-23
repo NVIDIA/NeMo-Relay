@@ -479,6 +479,14 @@ registerSubscriber('response-debugger', (event) => {
 
 </Tabs>
 
+## When No Annotation Is Present
+
+An `annotated_request` / `annotated_response` is attached only when a codec was supplied for the managed call and decoding succeeded. When present, prefer it — it is the single normalized view of the request or response.
+
+For events without one — manual lifecycle spans, replayed payloads, or unrecognized shapes — reach for the normalized helpers before hand-parsing provider JSON. In Rust, `Event::normalized_llm_request` / `normalized_llm_response` return the annotation when present, and otherwise attempt a best-effort detect-then-decode of the raw payload via `codec::resolve`. That decode only succeeds for provider-shaped payloads; manual or unrecognized shapes yield nothing, so you read the raw payload directly.
+
+Built-in exporters apply this to their own needs rather than following one fixed precedence. OpenInference decodes un-annotated provider payloads this way to emit structured messages, and recovers a provider-neutral view (model, tokens, cost) from the raw payload for manual outputs. ATIF reads normalized message text from the annotation when present, but deliberately keeps un-annotated events on the raw extractor so provider-specific tool-call extras and metrics are preserved. Reserve hand-written raw-payload parsing for the fields the normalized path does not provide.
+
 ## Custom Response Codecs
 
 Use a custom response codec when the provider or framework response does not match a built-in shape.
