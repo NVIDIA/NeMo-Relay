@@ -177,6 +177,13 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(atof.output_directory.is_none());
     assert!(atof.filename.is_none());
 
+    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
+        "endpoints": [{"url": "http://localhost/events"}]
+    }))
+    .unwrap();
+    assert_eq!(parsed_atof.endpoints[0].transport, "http_post");
+    assert_eq!(parsed_atof.endpoints[0].field_name_policy, "preserve");
+
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
     assert_eq!(atif.agent_name, "NeMo Relay");
@@ -557,6 +564,19 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("endpoints[3].transport"));
+
+    let error = build_atof_endpoint_config(
+        4,
+        AtofEndpointSectionConfig {
+            url: "http://127.0.0.1:47632/events".into(),
+            transport: "http_post".into(),
+            headers: std::collections::HashMap::new(),
+            timeout_millis: 3_000,
+            field_name_policy: "bogus".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("endpoints[4].field_name_policy"));
 }
 
 #[test]

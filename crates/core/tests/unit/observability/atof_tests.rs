@@ -421,6 +421,43 @@ fn endpoint_field_name_policy_replaces_dots_recursively() {
 }
 
 #[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json() {
+    let preserve =
+        AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost);
+    let raw = "{\"metadata\":{\"otel.status_code\":\"OK\"}}";
+    assert_eq!(endpoint_event_json(&preserve, raw.into()), raw);
+
+    let replace =
+        AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
+            .with_field_name_policy(AtofEndpointFieldNamePolicy::ReplaceDots);
+    assert_eq!(endpoint_event_json(&replace, "not-json".into()), "not-json");
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_http_helper_edges_are_safe() {
+    install_rustls_crypto_provider();
+    assert_eq!(
+        AtofEndpointFieldNamePolicy::parse("unknown"),
+        None,
+        "unknown field name policies should be rejected"
+    );
+    assert_eq!(truncate_log_body("  short body  "), "short body");
+
+    let long_body = "é".repeat(1_025);
+    let truncated = truncate_log_body(&long_body);
+    assert!(truncated.ends_with("... <truncated>"));
+    assert_eq!(
+        truncated
+            .trim_end_matches("... <truncated>")
+            .chars()
+            .count(),
+        1_024
+    );
+}
+
+#[test]
 fn append_mode_preserves_existing_lines() {
     let dir = temp_dir("atof-append");
     let path = dir.join("events.jsonl");

@@ -86,6 +86,13 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if !ok || firstEndpoint["field_name_policy"] != "replace_dots" {
 		t.Fatalf("expected serialized ATOF endpoint field name policy, got %#v", endpoints)
 	}
+	serialized, err := json.Marshal(wrapped)
+	if err != nil {
+		t.Fatalf("marshal observability component failed: %v", err)
+	}
+	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
+		t.Fatalf("expected field_name_policy in serialized component, got %s", serialized)
+	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
 }
 

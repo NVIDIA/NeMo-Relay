@@ -40,6 +40,13 @@ func TestNewAtofExporterConfigDefaults(t *testing.T) {
 		config.Endpoints[0].FieldNamePolicy != AtofEndpointFieldNamePolicyReplaceDots {
 		t.Fatalf("unexpected endpoint config: %#v", config.Endpoints[0])
 	}
+	serialized, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal config failed: %v", err)
+	}
+	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
+		t.Fatalf("expected field_name_policy in serialized config, got %s", serialized)
+	}
 }
 
 func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
