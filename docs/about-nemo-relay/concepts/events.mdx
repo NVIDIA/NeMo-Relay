@@ -96,6 +96,19 @@ annotations are part of the canonical event JSON under `category_profile` when
 they are present, so ATOF JSONL export and in-process subscriber JSON expose the
 same payload shape.
 
+### Event Contract Boundary
+
+The event is the canonical envelope and handoff point for subscribers and
+exporters. Consumers should prefer typed event fields, binding helpers, and
+annotated request or response data before falling back to raw payload
+re-reading.
+
+Events preserve runtime facts. They do not decide which scope owns a call, how
+replay or cost policy is applied, how redaction policy is configured, how
+streams are blocked, or how exporter-specific semantic projection works. Those
+decisions stay in the session, codec, plugin, guardrail, or exporter layer that
+owns them.
+
 ## How Events Are Produced
 
 Scope APIs emit `scope` start and end events and can also emit named `mark`
@@ -104,3 +117,6 @@ events. Managed tool and LLM helpers emit `scope` events with `category` set to
 the runtime record important state transitions even when there is no full nested
 callback to wrap. Subscriber delivery is downstream from event construction and
 does not block the emitting call on native bindings.
+
+ATOF export writes this raw canonical event stream. ATIF, OpenTelemetry, and
+OpenInference are downstream projections over the same events.

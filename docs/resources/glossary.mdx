@@ -103,6 +103,12 @@ An **explicit lifecycle API** is a manual start, end, or mark helper used when a
 
 An **exporter** is a subscriber-oriented component that translates NeMo Relay events into an external artifact or backend format, such as an ATIF trajectory or OTLP trace spans.
 
+**Experimental Binding**
+
+An **experimental binding** exposes runtime behavior for source-first users but
+is not the primary documentation path. Go, WebAssembly, and the raw C FFI
+surface are experimental unless a page says otherwise.
+
 **FFI**
 
 **FFI** means foreign function interface. NeMo Relay's C FFI layer exposes core runtime behavior to non-Rust languages and is used by the Go binding.
@@ -207,6 +213,19 @@ A **plugin context** is the activation-time object that plugin code uses to regi
 
 **Priority** is the ordering value attached to middleware registrations. NeMo Relay runs visible middleware in priority order after merging global and scope-local registrations.
 
+**Primary Binding**
+
+A **primary binding** is one of the documented binding surfaces used for
+first-line examples and generated API references. The primary bindings are Rust,
+Python, and Node.js.
+
+**Projection**
+
+A **projection** translates canonical NeMo Relay events into a downstream format
+such as ATIF, OpenTelemetry, or OpenInference. A projection should preserve the
+meaning of the runtime event stream without redefining ownership, middleware
+ordering, or provider-specific codec policy.
+
 **Prompt IR**
 
 **Prompt IR** is the internal representation ACG uses to model an LLM request as addressable prompt blocks for stability analysis and cache planning.
@@ -217,11 +236,11 @@ A **prompt-cache breakpoint** is a provider-specific location in a prompt where 
 
 **Provider Adapter**
 
-A **provider adapter** is code that translates between a framework's model-call surface and a provider-specific API shape. Provider adapters often use codecs when middleware needs normalized request or response semantics.
+A **provider adapter** is code that translates between a framework's model-call surface and a provider-specific API shape. Provider adapters often use request codecs when request intercepts or request-side middleware need normalized request semantics, and response codecs when events, subscribers, or exporters need normalized response annotations.
 
 **Provider Codec**
 
-A **provider codec** converts provider-specific LLM requests or responses into normalized annotated data. Request codecs decode raw provider requests before request intercepts run and encode edited annotations back into the provider request before execution continues.
+A **provider codec** converts provider-specific LLM requests or responses into normalized annotated data. Request codecs decode raw provider requests before request intercepts run and encode edited annotations back into the provider request before execution continues. Response codecs decode raw provider responses for LLM end-event annotations, subscribers, exporters, and diagnostics.
 
 **Request Intercept**
 

@@ -36,6 +36,10 @@ order:
 
 This order preserves the most runtime semantics with the least distortion.
 
+This order also keeps ownership clear. A framework integration should preserve
+the framework's scheduling, retry, provider routing, and object-lifetime rules
+unless a managed NeMo Relay wrapper explicitly owns that invocation boundary.
+
 ## First Choice: Execution Wrappers
 
 Execution wrappers are the preferred integration boundary when a framework exposes a
@@ -93,6 +97,11 @@ hooks but does not let NeMo Relay wrap the real invocation.
 This fallback preserves lifecycle visibility, but the framework must pair start
 and end calls correctly.
 
+Manual lifecycle calls do not run the full managed execution pipeline by
+themselves. They preserve observability and parentage, but execution intercepts,
+request intercepts, and sanitize guardrails only run when the integration calls
+the corresponding managed or standalone runtime surface.
+
 ### Conditional Execution
 
 Use standalone conditional-execution helpers when the framework only needs an
@@ -137,6 +146,11 @@ Use these rules to decide where NeMo Relay should wrap framework behavior.
 - If you only need a block/allow decision, use conditional-execution helpers.
 - If you only need request transformation, use request-intercept helpers.
 - If you only have milestone visibility, emit mark events.
+
+When provider request or response payloads matter, prefer NeMo Relay codecs and
+annotated request or response data before introducing ad hoc raw-payload parsing
+in the integration. Keep provider-specific round-trip behavior in the codec or
+adapter that owns that provider shape.
 
 ## Practical Guidance
 

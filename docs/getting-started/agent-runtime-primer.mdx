@@ -26,26 +26,37 @@ NeMo Relay gives those boundaries one execution model.
 NeMo Relay does not decide what your agent should do. It describes and manages
 what happens when your agent crosses runtime boundaries.
 
-The core runtime model has five parts:
+The shared runtime model has five parts, with managed calls and codecs acting
+as paths through that model rather than separate model layers:
 
 - **Scopes** describe where work belongs. They preserve parent-child
   relationships across requests, agent runs, tools, LLM calls, background work,
   and nested functions.
-- **Managed tool and LLM calls** attach work to the active scope, run middleware
-  in a consistent order, and emit lifecycle events. The application result is
-  preserved unless registered intercepts or guardrails intentionally change the
-  execution path.
 - **Middleware** runs around managed execution. Intercepts can transform or wrap
   real calls. Guardrails can block execution or sanitize emitted observability
   payloads.
-- **Events** record what happened. NeMo Relay emits Agent Trajectory
-  Observability Format (ATOF) lifecycle records that subscribers and exporters
-  can consume.
 - **Plugins** package reusable runtime behavior so teams can install middleware,
   subscribers, exporters, or adaptive behavior from configuration instead of
   repeating setup code in every application.
+- **Events** record what happened. NeMo Relay emits Agent Trajectory
+  Observability Format (ATOF) lifecycle records that subscribers and exporters
+  can consume.
+- **Subscribers and exporters** consume events in process, write raw ATOF
+  events, or project events into ATIF, OpenTelemetry, OpenInference, or other
+  downstream formats.
 
-The simplest mental model is:
+Managed tool and LLM calls are the main application-owned API path through that
+model: they attach work to the active scope, run middleware in a consistent
+order, and emit lifecycle events. The application result is preserved unless
+registered intercepts or guardrails intentionally change the execution path.
+
+Codecs translate typed application values or provider-native payloads into
+stable runtime shapes when request-side middleware, events, or exporters need
+normalized data. They are boundary translators, not a separate execution model.
+
+The simplest mental model is below. Codecs appear only when a boundary needs
+payload normalization, so they are shown as an optional translator rather than a
+required step for every call.
 
 <MermaidStyles />
 
@@ -54,11 +65,15 @@ flowchart LR
   boundary["App or framework boundary"]
   scope["NeMo Relay scope"]
   managedCall["Managed tool or LLM call"]
+  codec["Codec boundary when needed"]
   middleware["Middleware"]
   event["Lifecycle event"]
   sink["Subscriber or exporter"]
 
   boundary --> scope --> managedCall --> middleware --> event --> sink
+  managedCall -. normalize payloads .-> codec
+  codec -. normalized data .-> middleware
+  codec -. annotations .-> event
 ```
 
 ## What NeMo Relay Does Not Replace
@@ -86,18 +101,25 @@ LLM calls your code owns.
 
 If a framework owns scheduling, retries, callbacks, or provider payloads, use a
 framework integration. The integration should preserve framework behavior while
-adding NeMo Relay scopes, managed calls, codecs, middleware, and events at stable
+adding the appropriate mix of NeMo Relay scopes, managed wrappers when
+available, explicit lifecycle APIs, codecs, middleware, and events at stable
 framework boundaries.
 
 If you need the same behavior across multiple services or teams, package it as a
 plugin. Plugins are the configuration-driven path for reusable middleware,
 subscribers, exporters, and adaptive components.
 
+If your main question is how to observe local coding-agent runs, use the CLI
+path. In that mode, the coding-agent harness owns the invocation boundary, while
+NeMo Relay observes hooks, gateway-routed model traffic, and exporter output.
+
 ## Read Next
 
 The following pages help you choose the next step for your integration.
 
 - Use [Quick Start](/getting-started/quick-start) for the smallest binding-specific example.
+- Use [NeMo Relay CLI](/nemo-relay-cli/about) when a local coding-agent harness
+  owns the invocation boundary.
 - Use [Instrument Applications](/instrument-applications/about) when you
   own the tool or LLM call site.
 - Use [Integrate into Frameworks](/integrate-into-frameworks/about) when a

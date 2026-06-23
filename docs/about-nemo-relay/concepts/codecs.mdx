@@ -1,0 +1,112 @@
+---
+title: "Codecs"
+description: ""
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page explains how codecs fit into the shared NeMo Relay runtime contract.
+
+## What A Codec Is
+
+A codec is a boundary translator. It converts one runtime-facing data shape into
+another without changing who owns execution.
+
+NeMo Relay uses codecs when runtime behavior needs stable, JSON-compatible, or
+annotated data but the application or provider surface starts from a different
+shape.
+
+## Why Codecs Exist
+
+Codecs let NeMo Relay preserve one execution model across different boundaries:
+
+- application-owned typed values
+- framework-owned callback payloads
+- provider-native LLM request and response shapes
+- exporter or subscriber consumers that need normalized data
+
+Without codecs, request-side middleware and observability would need to reason
+about every framework or provider shape directly.
+
+## Two Main Codec Roles
+
+NeMo Relay documentation uses the word `codec` in two related but different
+senses.
+
+### Typed Value Codecs
+
+Typed value codecs translate application-facing values to and from JSON-friendly
+shapes at the public wrapper boundary.
+
+Use them when:
+
+- application code wants native objects
+- framework callbacks expect typed values
+- runtime events and JSON-based middleware still need stable serialized payloads
+
+### Provider Codecs
+
+Provider codecs translate provider-native LLM payloads at two different points.
+Request codecs decode provider requests into annotated request data for request
+intercepts and request-side middleware, then encode edits back into the provider
+shape. Response codecs decode provider responses into annotated response data
+for LLM end events, subscribers, exporters, and diagnostics.
+
+Use them when:
+
+- provider payloads differ structurally
+- request intercepts need normalized request meaning
+- response annotations such as usage, model names, or tool calls should be
+  exposed in one stable shape for downstream consumers
+
+## Request And Response Responsibilities
+
+Request and response codecs do different jobs.
+
+- **Request codecs** decode raw provider requests into annotated request data
+  before request-oriented runtime behavior runs, then encode edited annotations
+  back into the provider-native shape when execution continues.
+- **Response codecs** decode raw provider responses into annotated response data
+  for lifecycle events, subscribers, and exporters.
+
+Response decoding improves observability and downstream consistency. It does not
+automatically change the value returned to the application unless a separate
+typed value boundary also does so.
+
+## Who Consumes Normalized Data
+
+Normalized codec output matters to several runtime layers:
+
+- request intercepts or request-side middleware that need stable request meaning
+- lifecycle events that should expose consistent semantic payloads
+- subscribers that inspect runtime activity in process
+- exporters that write raw ATOF events or project them into ATIF,
+  OpenTelemetry, or OpenInference
+
+Codecs do not replace scopes, middleware, subscribers, or plugins. They make
+those layers easier to apply consistently across heterogeneous inputs.
+
+## What Codecs Do Not Decide
+
+Codecs do not decide:
+
+- ownership boundaries
+- middleware ordering
+- whether execution is allowed to continue
+- which exporter is active
+
+Those responsibilities belong to scopes, middleware, plugins, and exporter or
+subscriber registration.
+
+## Read Next
+
+- Use [Using Codecs](/integrate-into-frameworks/using-codecs) for typed value
+  codecs at framework-facing boundaries.
+- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for
+  provider-native request and response normalization.
+- Use [Provider Response
+  Codecs](/integrate-into-frameworks/provider-response-codecs) when the main
+  need is response-side annotations for subscribers or exporters.
+- Refer to the [Glossary](/resources/glossary) for the stable terminology used
+  across codecs, providers, and observability surfaces.

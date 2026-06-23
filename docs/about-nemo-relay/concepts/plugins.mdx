@@ -59,6 +59,18 @@ behavior.
 Reporting provides structured diagnostics about what activated successfully and
 what did not.
 
+### Failure Boundary
+
+Plugin validation and initialization are setup boundaries. If configuration is
+invalid, a component kind is unavailable, or initialization fails, callers should
+treat the plugin setup as failed before relying on the new runtime behavior.
+Activation reports are the public way to inspect what validated or activated.
+
+Runtime behavior after activation still belongs to the installed component. For
+example, an exporter can report delivery failures without changing tool or LLM
+execution semantics. Keep those component-specific failure rules in the
+component guide rather than redefining them in the plugin concept.
+
 <MermaidStyles />
 
 ```mermaid
@@ -131,6 +143,10 @@ that should activate once for the running process rather than once per request.
 Scope-local behavior still matters after plugin installation, but the plugin
 system itself is a global activation layer.
 
+Plugins install runtime behavior; they do not create a separate execution
+model. Scopes still own parentage and cleanup, middleware still owns execution
+ordering, and events still own the canonical runtime record.
+
 ## Built-In Plugin Examples
 
 Core plugin APIs register built-in components before lookup, validation, and
@@ -171,7 +187,7 @@ The core crate also ships a built-in `nemo_guardrails` plugin component. It is
 the first-party Guardrails integration point that NeMo Relay owns through the
 shared plugin system.
 
-The current shipped user-facing lanes are:
+The current shipped user-facing paths are:
 
 - the remote backend for Guardrails-service integration
 - the Python-backed local backend for `nemoguardrails` integration through a

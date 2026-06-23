@@ -14,6 +14,17 @@ If you are working from a source checkout, validating unpublished changes, or
 contributing to the repository, use
 [Development Setup](/contribute/development-setup) instead.
 
+Choose the package by the boundary you want NeMo Relay to own or observe:
+
+- install the CLI when a local coding-agent harness owns the invocation
+- install a language binding when your application owns the tool or LLM call
+- install an integration package when a supported framework or agent harness
+  owns the boundary
+
+After installation, use [Quick Start](/getting-started/quick-start) to choose
+the matching runtime path. If a supported framework or agent harness owns the
+boundary, start from [Supported Integrations](/supported-integrations/about).
+
 ## CLI
 
 Install the NeMo Relay CLI when you want the `nemo-relay` executable for
@@ -37,7 +48,7 @@ plugin workflow.
 ## Python
 
 Install the Python package when your application uses NeMo Relay through the
-Python wrapper.
+Python wrapper and owns the tool or LLM call boundary.
 
 ```bash
 uv add nemo-relay@0.5.0
@@ -52,7 +63,7 @@ managing the environment with `uv`.
 ## Node.js
 
 Install the Node.js package when your application uses NeMo Relay through the
-JavaScript API.
+JavaScript API and owns the tool or LLM call boundary.
 
 ```bash
 npm install nemo-relay-node
