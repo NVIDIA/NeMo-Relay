@@ -27,7 +27,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
 use crate::config::{
-    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, ServerArgs, resolve_server_config,
+    AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
+    ServerArgs, resolve_server_config,
 };
 use crate::error::CliError;
 
@@ -84,6 +85,15 @@ pub(crate) struct ConfigurationInfo {
     pub resolution: Check,
     pub default_agent: Option<String>,
     pub configured_agents: Vec<String>,
+    pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DynamicPluginReferenceInfo {
+    pub plugin_id: String,
+    pub manifest_ref: String,
+    pub source: PathBuf,
+    pub host_config_status: DynamicPluginHostConfigStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -144,6 +154,7 @@ pub(crate) async fn collect_report(
             home.as_deref(),
             resolution,
             configured_agents,
+            &resolved.dynamic_plugins,
         ),
         agents: collect_agents(target_agent, &resolved).await,
         observability: collect_observability(&resolved.gateway).await,
@@ -179,6 +190,7 @@ fn collect_configuration(
     home: Option<&Path>,
     resolution: Check,
     configured_agents: Vec<String>,
+    dynamic_plugins: &[crate::config::ResolvedDynamicPluginConfig],
 ) -> ConfigurationInfo {
     let workspace_path = cwd
         .map(|p| p.join(".nemo-relay").join("config.toml"))
@@ -200,6 +212,43 @@ fn collect_configuration(
         // out of FileConfig. Doctor reports `None` until that lands.
         default_agent: None,
         configured_agents,
+        dynamic_plugins: dynamic_plugins
+            .iter()
+            .map(|plugin| DynamicPluginReferenceInfo {
+                plugin_id: plugin.plugin_id.clone(),
+                manifest_ref: plugin.manifest_ref.clone(),
+                source: plugin.source.clone(),
+                host_config_status: plugin.host_config_status(),
+            })
+            .collect(),
+    }
+}
+
+fn dynamic_plugin_reference_check(plugin: &DynamicPluginReferenceInfo) -> Check {
+    Check {
+        name: "Dynamic plugin",
+        status: Status::Pass,
+        details: format!("{} resolved from {}", plugin.plugin_id, plugin.manifest_ref),
+    }
+}
+
+fn dynamic_plugin_host_config_check(plugin: &DynamicPluginReferenceInfo) -> Check {
+    let details = match plugin.host_config_status {
+        DynamicPluginHostConfigStatus::Absent => {
+            format!(
+                "{} discovered via host config only; not enabled by config alone",
+                plugin.plugin_id
+            )
+        }
+        DynamicPluginHostConfigStatus::Present => format!(
+            "{} discovered via host config; host-owned config present; not enabled by config alone",
+            plugin.plugin_id
+        ),
+    };
+    Check {
+        name: "Dynamic plugin",
+        status: Status::Info,
+        details,
     }
 }
 
@@ -1345,6 +1394,35 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
             "    Agents     {}\n",
             report.configuration.configured_agents.join(", ")
         ));
+    }
+    if !report.configuration.dynamic_plugins.is_empty() {
+        for (index, plugin) in report.configuration.dynamic_plugins.iter().enumerate() {
+            let label = if index == 0 { "Dynamic" } else { "           " };
+            let config_suffix = if matches!(
+                plugin.host_config_status,
+                DynamicPluginHostConfigStatus::Present
+            ) {
+                "; host config"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "    {label:<10}{} ({}){}\n",
+                plugin.plugin_id, plugin.manifest_ref, config_suffix
+            ));
+        }
+    }
+    for plugin in &report.configuration.dynamic_plugins {
+        for check in [
+            dynamic_plugin_reference_check(plugin),
+            dynamic_plugin_host_config_check(plugin),
+        ] {
+            out.push_str(&format!(
+                "    Dynamic    {} {}\n",
+                format_status(check.status),
+                check.details
+            ));
+        }
     }
     out.push('\n');
 

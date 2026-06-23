@@ -22,6 +22,38 @@ fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
     temp.path().join("config.toml")
 }
 
+fn write_dynamic_manifest(dir: &std::path::Path, plugin_id: &str) -> std::path::PathBuf {
+    let manifest_path = dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"
+manifest_version = 1
+
+[plugin]
+id = "{plugin_id}"
+kind = "worker"
+
+[compat]
+relay = "0.1"
+worker_protocol = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = "{plugin_id}.plugin:register"
+"#
+        ),
+    )
+    .unwrap();
+    manifest_path
+}
+
 #[test]
 fn session_config_prefers_headers_and_parses_json() {
     let mut headers = HeaderMap::new();
@@ -374,7 +406,7 @@ source = "user"
 
     assert_eq!(
         resolved.map(|config| config.value),
-        Some(json!({
+        Some(Some(json!({
             "version": 1,
             "components": [
                 {
@@ -407,7 +439,7 @@ source = "user"
                     }
                 }
             ]
-        }))
+        })))
     );
 }
 
@@ -451,7 +483,7 @@ path = "/home/user/.config/nemo-relay/pricing.json"
 
     assert_eq!(
         resolved.map(|config| config.value),
-        Some(json!({
+        Some(Some(json!({
             "version": 1,
             "components": [
                 {
@@ -471,7 +503,7 @@ path = "/home/user/.config/nemo-relay/pricing.json"
                     }
                 }
             ]
-        }))
+        })))
     );
 }
 
@@ -522,7 +554,7 @@ mode = "append"
 
     assert_eq!(
         resolved.map(|config| config.value),
-        Some(json!({
+        Some(Some(json!({
             "version": 1,
             "components": [
                 {
@@ -538,8 +570,125 @@ mode = "append"
                     }
                 }
             ]
+        })))
+    );
+}
+
+#[test]
+fn plugins_toml_resolves_dynamic_plugin_refs_without_polluting_runtime_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &plugins_path,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+
+[plugins.dynamic.config]
+mode = "strict"
+"#,
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        resolved.value,
+        Some(json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "version": 1
+                    }
+                }
+            ]
         }))
     );
+    assert_eq!(resolved.dynamic_plugins.len(), 1);
+    assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.worker");
+    assert_eq!(
+        resolved.dynamic_plugins[0].manifest_ref,
+        manifest_path.canonicalize().unwrap().to_string_lossy()
+    );
+    assert_eq!(
+        resolved.dynamic_plugins[0].config,
+        serde_json::Map::from_iter([("mode".into(), json!("strict"))])
+    );
+}
+
+#[test]
+fn plugins_toml_rejects_duplicate_dynamic_plugin_ids_across_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let project_plugin = temp.path().join("project-plugins.toml");
+    let user_plugin = temp.path().join("user-plugins.toml");
+    std::fs::write(
+        &project_plugin,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &user_plugin,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme"
+"#,
+    )
+    .unwrap();
+
+    let error = load_plugin_toml_config_from_paths(vec![project_plugin, user_plugin])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("duplicate dynamic plugin id"));
+    assert!(error.contains("acme.worker"));
+}
+
+#[test]
+fn plugins_toml_rejects_dynamic_plugin_lifecycle_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &plugins_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let error = load_plugin_toml_config_from_paths(vec![plugins_path])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("invalid dynamic plugin config"));
+    assert!(error.contains("enabled"));
 }
 
 #[test]
@@ -591,6 +740,44 @@ config = { version = 1, components = [] }
     assert!(error.contains("plugin config is defined in both"));
     assert!(error.contains("config.toml"));
     assert!(error.contains("plugins.toml"));
+}
+
+#[test]
+fn plugins_toml_with_only_dynamic_plugins_preserves_config_toml_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[plugins]
+config = { version = 1, components = [] }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("plugins.toml"),
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({ "version": 1, "components": [] }))
+    );
+    assert_eq!(resolved.dynamic_plugins.len(), 1);
+    assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.worker");
 }
 
 #[test]

@@ -245,6 +245,7 @@ fn prepares_codex_config_overrides() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::Codex,
@@ -321,6 +322,7 @@ fn prepares_codex_with_hooks_when_auth_missing() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -467,6 +469,7 @@ fn prepares_claude_dry_run_without_writing_plugin() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::ClaudeCode,
@@ -492,6 +495,7 @@ fn prepares_claude_dry_inserts_plugin_dir_after_last_agent_executable() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::ClaudeCode,
@@ -537,6 +541,7 @@ fn cursor_patching_can_be_disabled() {
             },
             ..AgentConfigs::default()
         },
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -569,6 +574,7 @@ fn prepares_hermes_hook_environment() {
             },
             ..AgentConfigs::default()
         },
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::Hermes,
@@ -617,6 +623,7 @@ fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -692,6 +699,7 @@ fn hermes_patch_restore_restores_original_file() {
             },
             ..AgentConfigs::default()
         },
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -718,6 +726,7 @@ fn prepares_claude_temp_plugin() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::ClaudeCode,
@@ -760,6 +769,7 @@ fn cursor_patch_restore_restores_original_file() {
             },
             ..AgentConfigs::default()
         },
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -802,6 +812,7 @@ fn cursor_patch_restore_uses_nearest_project_cursor_dir() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -837,6 +848,7 @@ fn cursor_patch_restore_removes_temporary_file() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -1031,6 +1043,7 @@ fn cursor_dry_run_does_not_write_hooks() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
 
     let prepared = PreparedRun::new(
@@ -1149,6 +1162,7 @@ async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
             },
             ..AgentConfigs::default()
         },
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::Hermes,
