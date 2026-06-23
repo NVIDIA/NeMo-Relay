@@ -645,7 +645,7 @@ fn plugins_toml_resolves_dynamic_plugin_refs_from_absolute_manifest_paths() {
         format!(
             r#"
 [[plugins.dynamic]]
-manifest = "{}"
+manifest = '{}'
 "#,
             manifest_path.display()
         ),
