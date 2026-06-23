@@ -748,7 +748,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
     }
     if is_llm {
-        push_llm_response_attributes(&mut attributes, event);
+        push_llm_response_attributes(&mut attributes, event, normalized.as_deref());
     }
     attributes
 }
@@ -822,7 +822,11 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     }
 }
 
-fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+fn push_llm_response_attributes(
+    attributes: &mut Vec<KeyValue>,
+    event: &Event,
+    normalized: Option<&AnnotatedLlmResponse>,
+) {
     if let Some(response) = event.annotated_response() {
         push_annotated_response_attributes(attributes, response);
         return;
@@ -833,8 +837,10 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         return;
     }
 
-    if let Some(response) = event.normalized_llm_response() {
-        push_annotated_response_attributes(attributes, &response);
+    // Reuse the response decoded once in `end_attributes` (annotation-first;
+    // falls through to codec detection) instead of decoding the payload again.
+    if let Some(response) = normalized {
+        push_annotated_response_attributes(attributes, response);
     }
 }
 
