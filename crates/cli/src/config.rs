@@ -202,6 +202,20 @@ pub(crate) struct PluginsCommand {
 pub(crate) enum PluginsSubcommand {
     /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
     Edit(PluginsEditCommand),
+    /// Register a manifest-backed dynamic plugin in `plugins.toml`.
+    Add(PluginsAddCommand),
+    /// Validate a manifest-backed dynamic plugin by path or installed ID.
+    Validate(PluginsValidateCommand),
+    /// List discovered dynamic plugins from the resolved host config.
+    List(PluginsListCommand),
+    /// Inspect one discovered dynamic plugin by canonical ID.
+    Inspect(PluginsInspectCommand),
+    /// Mark a registered dynamic plugin enabled in desired state.
+    Enable(PluginsEnableCommand),
+    /// Mark a registered dynamic plugin disabled in desired state.
+    Disable(PluginsDisableCommand),
+    /// Tombstone a registered dynamic plugin and remove its host discovery reference.
+    Remove(PluginsRemoveCommand),
 }
 
 /// Args for `nemo-relay pricing`.
@@ -298,7 +312,7 @@ pub(crate) struct PricingResolveCommand {
         .args(["user", "project", "global"])
         .multiple(false)
 ))]
-pub(crate) struct PluginsEditCommand {
+pub(crate) struct PluginsScopeArgs {
     /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) user: bool,
@@ -308,6 +322,61 @@ pub(crate) struct PluginsEditCommand {
     /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) global: bool,
+}
+
+/// Args for `nemo-relay plugins edit`.
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct PluginsEditCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
+}
+
+/// Args for `nemo-relay plugins add`.
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct PluginsAddCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
+    /// Path to a plugin directory or explicit `relay-plugin.toml`.
+    pub(crate) path: PathBuf,
+}
+
+/// Args for `nemo-relay plugins validate`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsValidateCommand {
+    /// Canonical plugin ID or a local plugin directory / `relay-plugin.toml` path.
+    pub(crate) target: String,
+}
+
+/// Args for `nemo-relay plugins list`.
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct PluginsListCommand {}
+
+/// Args for `nemo-relay plugins inspect`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsInspectCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+}
+
+/// Args for `nemo-relay plugins enable`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsEnableCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+}
+
+/// Args for `nemo-relay plugins disable`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsDisableCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+}
+
+/// Args for `nemo-relay plugins remove`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsRemoveCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
 }
 
 #[derive(Debug, Clone, Default, Args)]
@@ -621,6 +690,13 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
     let mut resolved = load_shared_config(args.config.as_ref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     Ok(resolved)
+}
+
+/// Resolves shared config for plugin-facing CLI commands without mutating gateway runtime fields.
+pub(crate) fn resolve_plugins_config(
+    explicit: Option<&PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
+    load_shared_config(explicit)
 }
 
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.

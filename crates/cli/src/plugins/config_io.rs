@@ -6,13 +6,15 @@
 use std::path::{Path, PathBuf};
 
 use console::style;
+use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::config::{
-    PluginsEditCommand, global_plugin_config_path, project_plugin_config_path,
+    PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
     user_plugin_config_path,
 };
 use crate::error::CliError;
@@ -24,7 +26,7 @@ pub(crate) enum TargetScope {
     Global,
 }
 
-pub(crate) fn target_scope(command: &PluginsEditCommand) -> Result<TargetScope, CliError> {
+pub(crate) fn target_scope(command: &PluginsScopeArgs) -> Result<TargetScope, CliError> {
     let selected = [command.user, command.project, command.global]
         .into_iter()
         .filter(|selected| *selected)
@@ -41,6 +43,13 @@ pub(crate) fn target_scope(command: &PluginsEditCommand) -> Result<TargetScope, 
     } else {
         Ok(TargetScope::User)
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DynamicPluginReferenceEntry {
+    manifest: String,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    config: Map<String, Value>,
 }
 
 pub(crate) fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
@@ -93,6 +102,146 @@ pub(crate) fn write_plugin_config(path: &Path, config: &PluginConfig) -> Result<
     }
     std::fs::write(path, rendered)?;
     Ok(())
+}
+
+pub(crate) fn append_dynamic_plugin_reference(
+    path: &Path,
+    manifest_ref: &str,
+) -> Result<(), CliError> {
+    let mut root = read_plugin_toml_root(path)?;
+
+    let root_table = root
+        .as_table_mut()
+        .expect("root plugin TOML is always a table");
+    let plugins = root_table
+        .entry("plugins")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or_else(|| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: [plugins] must be a table",
+                path.display()
+            ))
+        })?;
+    let dynamic = plugins
+        .entry("dynamic")
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| {
+            CliError::Config(format!(
+                "invalid plugin TOML in {}: plugins.dynamic must be an array of tables",
+                path.display()
+            ))
+        })?;
+    dynamic.push(
+        toml::Value::try_from(DynamicPluginReferenceEntry {
+            manifest: manifest_ref.to_owned(),
+            config: Map::new(),
+        })
+        .map_err(|error| {
+            CliError::Config(format!(
+                "could not serialize dynamic plugin reference for {}: {error}",
+                path.display()
+            ))
+        })?,
+    );
+
+    write_plugin_toml_root(path, &root)?;
+    Ok(())
+}
+
+pub(crate) fn remove_dynamic_plugin_reference(
+    path: &Path,
+    plugin_id: &str,
+) -> Result<bool, CliError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let mut root = read_plugin_toml_root(path)?;
+    let Some(root_table) = root.as_table_mut() else {
+        return Ok(false);
+    };
+    let Some(toml::Value::Table(plugins)) = root_table.get_mut("plugins") else {
+        return Ok(false);
+    };
+    let Some(toml::Value::Array(dynamic_entries)) = plugins.get_mut("dynamic") else {
+        return Ok(false);
+    };
+
+    let original_len = dynamic_entries.len();
+    let mut retained = Vec::with_capacity(original_len);
+    for entry in dynamic_entries.drain(..) {
+        let manifest_ref = entry
+            .as_table()
+            .and_then(|entry| entry.get("manifest"))
+            .and_then(toml::Value::as_str)
+            .map(|manifest| resolve_manifest_ref(path, manifest));
+
+        let keep = match manifest_ref {
+            Some(manifest_ref) => {
+                let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_ref)
+                    .map_err(|error| CliError::Config(error.to_string()))?;
+                manifest.plugin.id.trim() != plugin_id
+            }
+            None => true,
+        };
+
+        if keep {
+            retained.push(entry);
+        }
+    }
+
+    let removed = retained.len() != original_len;
+    *dynamic_entries = retained;
+    if dynamic_entries.is_empty() {
+        plugins.remove("dynamic");
+    }
+    if plugins.is_empty() {
+        root_table.remove("plugins");
+    }
+    if removed {
+        write_plugin_toml_root(path, &root)?;
+    }
+    Ok(removed)
+}
+
+fn read_plugin_toml_root(path: &Path) -> Result<toml::Value, CliError> {
+    if path.exists() {
+        let raw = std::fs::read_to_string(path)?;
+        raw.parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .map_err(|error| {
+                CliError::Config(format!(
+                    "invalid plugin TOML in {}: {error}",
+                    path.display()
+                ))
+            })
+    } else {
+        Ok(toml::Value::Table(toml::map::Map::new()))
+    }
+}
+
+fn write_plugin_toml_root(path: &Path, root: &toml::Value) -> Result<(), CliError> {
+    let rendered = toml::to_string_pretty(root)
+        .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, rendered)?;
+    Ok(())
+}
+
+fn resolve_manifest_ref(source: &Path, manifest: &str) -> PathBuf {
+    let manifest = PathBuf::from(manifest);
+    if manifest.is_absolute() {
+        manifest
+    } else {
+        source
+            .parent()
+            .map(|parent| parent.join(&manifest))
+            .unwrap_or(manifest)
+    }
 }
 
 pub(super) fn print_preview(config: &PluginConfig) -> Result<(), CliError> {

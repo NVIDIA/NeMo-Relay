@@ -1,0 +1,253 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+use std::collections::HashMap;
+
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginKind,
+    DynamicPluginLoadContract, DynamicPluginManifest, DynamicPluginRecord,
+    DynamicPluginRuntimeState,
+};
+use serde_json::Value;
+
+use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
+
+use super::state::ScopedDynamicPluginRecord;
+
+pub(super) fn render_list(
+    records: &[ScopedDynamicPluginRecord],
+    host_config_by_id: &HashMap<String, ResolvedDynamicPluginConfig>,
+) -> String {
+    let mut lines = Vec::with_capacity(records.len() + 1);
+    lines.push("ID\tSCOPE\tENABLED\tSTATE\tVALIDATION\tHOST CONFIG".into());
+    for entry in records {
+        let host_config_status = host_config_by_id
+            .get(&entry.record.metadata.id)
+            .map(|plugin| host_config_status_label(plugin.host_config_status()))
+            .unwrap_or("missing");
+        lines.push(format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            entry.record.metadata.id,
+            entry.scope.label(),
+            bool_label(entry.record.spec.enabled),
+            runtime_state_label(entry.record.status.runtime.state),
+            check_state_label(entry.record.status.validation.manifest),
+            host_config_status
+        ));
+    }
+    lines.join("\n")
+}
+
+pub(super) fn render_inspect(
+    entry: &ScopedDynamicPluginRecord,
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+    host_config: Option<&ResolvedDynamicPluginConfig>,
+) -> String {
+    let record = &entry.record;
+    let mut lines = vec![
+        format!("id: {}", record.metadata.id),
+        format!("scope: {}", entry.scope.label()),
+        format!("kind: {}", manifest_kind_label(record.metadata.kind)),
+        format!(
+            "name: {}",
+            record.metadata.name.as_deref().unwrap_or("<none>")
+        ),
+        format!(
+            "version: {}",
+            record.metadata.version.as_deref().unwrap_or("<none>")
+        ),
+        format!("manifest: {manifest_ref}"),
+        format!("plugins_toml: {}", entry.plugins_toml_path.display()),
+        format!("state_path: {}", entry.state_path.display()),
+        format!("desired.present: {}", bool_label(record.spec.present)),
+        format!("desired.enabled: {}", bool_label(record.spec.enabled)),
+        format!("generation: {}", record.metadata.generation),
+        format!("reconciled: {}", bool_label(record.is_reconciled())),
+        format!(
+            "host_config: {}",
+            host_config
+                .map(|plugin| host_config_status_label(plugin.host_config_status()))
+                .unwrap_or("missing")
+        ),
+    ];
+
+    match &record.compatibility {
+        DynamicPluginCompatibility::Worker(compatibility) => {
+            lines.push(format!("compat.relay: {}", compatibility.relay));
+            lines.push(format!(
+                "compat.worker_protocol: {}",
+                compatibility.worker_protocol
+            ));
+        }
+        DynamicPluginCompatibility::RustDynamic(compatibility) => {
+            lines.push(format!("compat.relay: {}", compatibility.relay));
+            lines.push(format!("compat.native_api: {}", compatibility.native_api));
+        }
+    }
+
+    match &record.load {
+        DynamicPluginLoadContract::Worker(load) => {
+            lines.push(format!("load.runtime: {:?}", load.runtime).to_lowercase());
+            lines.push(format!("load.entrypoint: {}", load.entrypoint));
+        }
+        DynamicPluginLoadContract::RustDynamic(load) => {
+            lines.push(format!("load.library: {}", load.library));
+            lines.push(format!("load.symbol: {}", load.symbol));
+        }
+    }
+
+    lines.extend(render_status(record));
+    lines.push(format!(
+        "capabilities: {}",
+        manifest
+            .capabilities
+            .items
+            .iter()
+            .map(|item| format!("{item:?}").to_lowercase())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    lines.push(format!(
+        "host_config_json: {}",
+        host_config
+            .map(|plugin| plugin.config.clone())
+            .filter(|config| !config.is_empty())
+            .map(|config| {
+                serde_json::to_string_pretty(&Value::Object(config))
+                    .expect("host config serializes")
+            })
+            .unwrap_or_else(|| "<none>".into())
+    ));
+    lines.join("\n")
+}
+
+pub(super) fn render_validation_summary(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+    entry: Option<&ScopedDynamicPluginRecord>,
+    host_config: Option<&ResolvedDynamicPluginConfig>,
+) -> String {
+    let mut lines = vec![
+        format!("Dynamic plugin '{}' is valid.", manifest.plugin.id),
+        format!("kind: {}", manifest_kind_label(manifest.plugin.kind)),
+        format!("manifest: {manifest_ref}"),
+    ];
+    if let Some(entry) = entry {
+        lines.push(format!("scope: {}", entry.scope.label()));
+        lines.push(format!("state_path: {}", entry.state_path.display()));
+        lines.push(format!(
+            "desired.enabled: {}",
+            bool_label(entry.record.spec.enabled)
+        ));
+        lines.push(format!(
+            "host_config: {}",
+            host_config
+                .map(|plugin| host_config_status_label(plugin.host_config_status()))
+                .unwrap_or("missing")
+        ));
+    }
+    lines.join("\n")
+}
+
+fn render_status(record: &DynamicPluginRecord) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "status.validation.manifest: {}",
+            check_state_label(record.status.validation.manifest)
+        ),
+        format!(
+            "status.validation.compatibility: {}",
+            check_state_label(record.status.validation.compatibility)
+        ),
+        format!(
+            "status.validation.integrity: {}",
+            check_state_label(record.status.validation.integrity)
+        ),
+        format!(
+            "status.validation.environment: {}",
+            check_state_label(record.status.validation.environment)
+        ),
+        format!(
+            "status.validation.authenticity: {}",
+            check_state_label(record.status.validation.authenticity)
+        ),
+        format!(
+            "status.validation.policy_satisfied: {}",
+            check_state_label(record.status.validation.policy_satisfied)
+        ),
+        format!(
+            "status.runtime.state: {}",
+            runtime_state_label(record.status.runtime.state)
+        ),
+        format!(
+            "status.runtime.observed_generation: {}",
+            record.status.runtime.observed_generation
+        ),
+    ];
+    if let Some(value) = record.status.validation.checked_at.as_deref() {
+        lines.push(format!("status.validation.checked_at: {value}"));
+    }
+    if let Some(value) = record.status.validation.message.as_deref() {
+        lines.push(format!("status.validation.message: {value}"));
+    }
+    if let Some(value) = record.status.runtime.started_at.as_deref() {
+        lines.push(format!("status.runtime.started_at: {value}"));
+    }
+    if let Some(value) = record.status.runtime.updated_at.as_deref() {
+        lines.push(format!("status.runtime.updated_at: {value}"));
+    }
+    if let Some(value) = record.status.runtime.message.as_deref() {
+        lines.push(format!("status.runtime.message: {value}"));
+    }
+    if let Some(value) = record.status.startup_class {
+        lines.push(format!("status.startup_class: {:?}", value).to_lowercase());
+    }
+    if let Some(value) = record.status.attestation_mode {
+        lines.push(format!("status.attestation_mode: {:?}", value).to_lowercase());
+    }
+    if let Some(error) = record.status.last_error.as_ref() {
+        lines.push(format!(
+            "status.last_error: {}:{} {}",
+            format!("{:?}", error.phase).to_lowercase(),
+            error.code,
+            error.message
+        ));
+    }
+    lines
+}
+
+fn host_config_status_label(status: DynamicPluginHostConfigStatus) -> &'static str {
+    match status {
+        DynamicPluginHostConfigStatus::Absent => "absent",
+        DynamicPluginHostConfigStatus::Present => "present",
+    }
+}
+
+fn check_state_label(state: DynamicPluginCheckState) -> &'static str {
+    match state {
+        DynamicPluginCheckState::Unknown => "unknown",
+        DynamicPluginCheckState::Valid => "valid",
+        DynamicPluginCheckState::Invalid => "invalid",
+    }
+}
+
+fn runtime_state_label(state: DynamicPluginRuntimeState) -> &'static str {
+    match state {
+        DynamicPluginRuntimeState::Stopped => "stopped",
+        DynamicPluginRuntimeState::Starting => "starting",
+        DynamicPluginRuntimeState::Running => "running",
+        DynamicPluginRuntimeState::Failed => "failed",
+    }
+}
+
+fn manifest_kind_label(kind: DynamicPluginKind) -> &'static str {
+    match kind {
+        DynamicPluginKind::RustDynamic => "rust_dynamic",
+        DynamicPluginKind::Worker => "worker",
+    }
+}
+
+fn bool_label(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}

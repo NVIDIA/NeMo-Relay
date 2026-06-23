@@ -5,8 +5,9 @@ use clap::Parser;
 
 use super::*;
 use crate::config::{
-    CompletionsCommand, PluginsCommand, PluginsEditCommand, PluginsSubcommand, PricingSubcommand,
-    PricingValidateCommand,
+    CompletionsCommand, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
+    PluginsListCommand, PluginsSubcommand, PluginsValidateCommand, PricingSubcommand,
+    PricingValidateCommand, ServerArgs,
 };
 
 #[test]
@@ -33,12 +34,50 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
         ExitCode::SUCCESS
     );
 
-    let error = run_plugins(PluginsCommand {
-        command: PluginsSubcommand::Edit(PluginsEditCommand::default()),
-    })
+    let error = run_plugins(
+        PluginsCommand {
+            command: PluginsSubcommand::Edit(PluginsEditCommand::default()),
+        },
+        &ServerArgs::default(),
+    )
     .unwrap_err()
     .to_string();
     assert!(error.contains("interactive terminal") || error.contains("TTY"));
+
+    assert_eq!(
+        run_plugins(
+            PluginsCommand {
+                command: PluginsSubcommand::List(PluginsListCommand::default()),
+            },
+            &ServerArgs::default()
+        )
+        .unwrap(),
+        ExitCode::SUCCESS
+    );
+
+    let inspect_error = run_plugins(
+        PluginsCommand {
+            command: PluginsSubcommand::Inspect(PluginsInspectCommand {
+                id: "missing.plugin".into(),
+            }),
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(inspect_error.contains("not registered"));
+
+    let validate_error = run_plugins(
+        PluginsCommand {
+            command: PluginsSubcommand::Validate(PluginsValidateCommand {
+                target: "missing.plugin".into(),
+            }),
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(validate_error.contains("not registered"));
 }
 
 #[tokio::test]
