@@ -306,8 +306,20 @@ fn test_request_surface_resolution_and_passthrough_support_cover_matrix() {
         Err(crate::acg::AcgError::Internal(message))
             if message.contains("unable to resolve request surface")
     ));
+    // A messages-only request is ambiguous; with the Anthropic provider it
+    // resolves to Anthropic Messages rather than failing.
+    assert_eq!(
+        super::resolve_request_surface("anthropic", &chat_request).unwrap(),
+        RequestSurface::AnthropicMessages
+    );
+    // Cross-provider shapes that are not merely messages-only still error.
     assert!(matches!(
-        super::resolve_request_surface("anthropic", &chat_request),
+        super::resolve_request_surface("openai", &anthropic_request),
+        Err(crate::acg::AcgError::Internal(message))
+            if message.contains("does not support resolved request surface")
+    ));
+    assert!(matches!(
+        super::resolve_request_surface("anthropic", &responses_request),
         Err(crate::acg::AcgError::Internal(message))
             if message.contains("does not support resolved request surface")
     ));
