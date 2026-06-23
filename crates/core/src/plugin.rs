@@ -1121,8 +1121,7 @@ pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let mut merged = Json::Object(Map::new());
-    let mut sources = Vec::new();
+    let mut documents = Vec::new();
     for path in paths {
         if !path.exists() {
             continue;
@@ -1133,7 +1132,22 @@ where
         let parsed = raw.parse::<toml::Table>().map_err(|err| {
             PluginError::InvalidConfig(format!("invalid plugin TOML in {}: {err}", path.display()))
         })?;
-        let document = serde_json::to_value(parsed)?;
+        documents.push((path, serde_json::to_value(parsed)?));
+    }
+    merge_plugin_config_documents(documents)
+}
+
+/// Merges pre-parsed `plugins.toml` JSON documents (lowest precedence first) using the canonical
+/// plugin-config layering rules. Internal: `pub` only so the CLI can preprocess dynamic-plugin
+/// refs while still sharing one merge semantics implementation with core.
+#[doc(hidden)]
+pub fn merge_plugin_config_documents<I>(documents: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = (PathBuf, Json)>,
+{
+    let mut merged = Json::Object(Map::new());
+    let mut sources = Vec::new();
+    for (path, document) in documents {
         validate_unique_component_kinds(&path, &document)?;
         layer_config(&mut merged, document);
         sources.push(path);

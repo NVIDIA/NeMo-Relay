@@ -120,6 +120,7 @@ fn empty_report() -> DoctorReport {
             },
             default_agent: None,
             configured_agents: vec![],
+            dynamic_plugins: vec![],
         },
         agents: vec![],
         observability: vec![],
@@ -301,6 +302,30 @@ fn format_json_is_stable_and_versioned() {
     assert!(parsed["target_agent"].is_null());
     assert!(parsed["environment"]["os"].is_string());
     assert!(parsed["agents"].is_array());
+    assert!(parsed["configuration"]["dynamic_plugins"].is_array());
+}
+
+#[test]
+fn format_json_reports_discovered_dynamic_plugin_fields() {
+    let mut report = empty_report();
+    report.configuration.dynamic_plugins = vec![DynamicPluginReferenceInfo {
+        plugin_id: "acme.worker".into(),
+        manifest_ref: "/tmp/plugins/acme/relay-plugin.toml".into(),
+        source: PathBuf::from("/tmp/plugins.toml"),
+        host_config_status: DynamicPluginHostConfigStatus::Present,
+    }];
+
+    let json = format_json(&report).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let plugin = &parsed["configuration"]["dynamic_plugins"][0];
+
+    assert_eq!(plugin["plugin_id"], "acme.worker");
+    assert_eq!(
+        plugin["manifest_ref"],
+        "/tmp/plugins/acme/relay-plugin.toml"
+    );
+    assert_eq!(plugin["source"], "/tmp/plugins.toml");
+    assert_eq!(plugin["host_config_status"], "present");
 }
 
 #[test]
@@ -375,6 +400,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
             details: "using fallback layer".into(),
         },
         vec!["codex".into(), "hermes".into()],
+        &[],
     );
 
     assert_eq!(configuration.workspace.status, Status::Pass);
@@ -559,6 +585,7 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             details: "valid".into(),
         },
         vec!["codex".into()],
+        &[],
     );
     assert_eq!(info.workspace.status, Status::Pass);
     assert!(info.global.path.starts_with(&home));
@@ -572,6 +599,37 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         which_command(binary.to_str().unwrap()).as_deref(),
         Some(binary.as_path())
     );
+}
+
+#[test]
+fn format_human_reports_discovered_dynamic_plugins_in_configuration() {
+    let mut report = empty_report();
+    report.configuration.dynamic_plugins = vec![
+        DynamicPluginReferenceInfo {
+            plugin_id: "acme.worker".into(),
+            manifest_ref: "/tmp/plugins/acme/relay-plugin.toml".into(),
+            source: PathBuf::from("/tmp/plugins.toml"),
+            host_config_status: DynamicPluginHostConfigStatus::Present,
+        },
+        DynamicPluginReferenceInfo {
+            plugin_id: "acme.native".into(),
+            manifest_ref: "/tmp/plugins/native/relay-plugin.toml".into(),
+            source: PathBuf::from("/tmp/plugins.toml"),
+            host_config_status: DynamicPluginHostConfigStatus::Absent,
+        },
+    ];
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Dynamic"));
+    assert!(rendered.contains("acme.worker (/tmp/plugins/acme/relay-plugin.toml); host config"));
+    assert!(rendered.contains("acme.native (/tmp/plugins/native/relay-plugin.toml)"));
+    assert!(rendered.contains("acme.worker resolved from /tmp/plugins/acme/relay-plugin.toml"));
+    assert!(
+        rendered
+            .contains("acme.native discovered via host config only; not enabled by config alone")
+    );
+    assert!(rendered.contains("not enabled by config alone"));
 }
 
 #[test]

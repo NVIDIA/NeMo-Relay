@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use nemo_relay::plugin::{PluginError, load_plugin_config_files};
-use serde::Deserialize;
-use serde_json::Value;
+use nemo_relay::plugin::dynamic::DynamicPluginManifest;
+use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::error::CliError;
 use crate::plugin_shim::PluginShimCommand;
@@ -478,6 +480,32 @@ impl GatewayConfig {
 pub(crate) struct ResolvedConfig {
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
+    pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedDynamicPluginConfig {
+    pub(crate) plugin_id: String,
+    pub(crate) manifest_ref: String,
+    pub(crate) config: Map<String, Value>,
+    pub(crate) source: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DynamicPluginHostConfigStatus {
+    Absent,
+    Present,
+}
+
+impl ResolvedDynamicPluginConfig {
+    pub(crate) fn host_config_status(&self) -> DynamicPluginHostConfigStatus {
+        if self.config.is_empty() {
+            DynamicPluginHostConfigStatus::Absent
+        } else {
+            DynamicPluginHostConfigStatus::Present
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -734,7 +762,7 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
     };
     apply_file_config(&mut resolved, merged)?;
     apply_plugin_toml_config(
-        &mut resolved.gateway,
+        &mut resolved,
         config_toml_plugin_sources.first(),
         plugin_toml,
     )?;
@@ -893,8 +921,23 @@ fn apply_file_plugins_config(gateway: &mut GatewayConfig, plugins: Option<FilePl
 
 #[derive(Debug, Clone)]
 struct PluginTomlConfig {
-    value: Value,
+    value: Option<Value>,
+    dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     sources: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PluginTomlPluginsSection {
+    #[serde(default)]
+    dynamic: Vec<FileDynamicPluginConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileDynamicPluginConfig {
+    manifest: String,
+    #[serde(default)]
+    config: Map<String, Value>,
 }
 
 fn load_plugin_toml_config(
@@ -907,31 +950,160 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    // Delegate read/parse/merge to the shared core primitive (file precedence unchanged).
-    let resolved = load_plugin_config_files(paths).map_err(|err| match err {
+    let paths = paths.into_iter().collect::<Vec<_>>();
+    let mut dynamic_plugins = Vec::new();
+    let mut seen_plugin_ids = HashSet::new();
+    let mut runtime_documents = Vec::new();
+
+    for path in &paths {
+        if !path.exists() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(path)?;
+        let mut parsed = raw
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .map_err(|error| {
+                CliError::Config(format!(
+                    "invalid plugin TOML in {}: {error}",
+                    path.display()
+                ))
+            })?;
+        dynamic_plugins.extend(resolve_dynamic_plugin_refs(
+            path,
+            &mut parsed,
+            &mut seen_plugin_ids,
+        )?);
+        runtime_documents.push((
+            path.clone(),
+            serde_json::to_value(remove_dynamic_plugin_section(parsed))
+                .expect("toml value serializes to JSON"),
+        ));
+    }
+
+    // Delegate merged runtime plugin config to the shared core primitive after dynamic refs have
+    // been validated independently. File precedence stays unchanged for the generic runtime path.
+    let resolved = merge_plugin_config_documents(runtime_documents).map_err(|err| match err {
         PluginError::InvalidConfig(message) => CliError::Config(message),
         other => CliError::Config(other.to_string()),
     })?;
-    Ok(resolved.map(|(value, sources)| PluginTomlConfig { value, sources }))
+    match resolved {
+        Some((value, sources)) => Ok(Some(PluginTomlConfig {
+            value: plugin_toml_runtime_value(value),
+            dynamic_plugins,
+            sources,
+        })),
+        None => Ok((!dynamic_plugins.is_empty()).then_some(PluginTomlConfig {
+            value: None,
+            dynamic_plugins,
+            sources: Vec::new(),
+        })),
+    }
 }
 
 fn apply_plugin_toml_config(
-    gateway: &mut GatewayConfig,
+    resolved: &mut ResolvedConfig,
     config_toml_plugin_source: Option<&PathBuf>,
     plugin_toml: Option<PluginTomlConfig>,
 ) -> Result<(), CliError> {
     let Some(plugin_toml) = plugin_toml else {
         return Ok(());
     };
-    if let Some(config_source) = config_toml_plugin_source {
+    if let Some(config_source) = config_toml_plugin_source
+        && plugin_toml.value.is_some()
+    {
         return Err(CliError::Config(format!(
             "plugin config is defined in both {} and {}; choose one source",
             config_source.display(),
             format_paths(&plugin_toml.sources)
         )));
     }
-    gateway.plugin_config = Some(plugin_toml.value);
+    if let Some(value) = plugin_toml.value {
+        resolved.gateway.plugin_config = Some(value);
+    }
+    resolved.dynamic_plugins = plugin_toml.dynamic_plugins;
     Ok(())
+}
+
+fn resolve_dynamic_plugin_refs(
+    source: &Path,
+    value: &mut toml::Value,
+    seen_plugin_ids: &mut HashSet<String>,
+) -> Result<Vec<ResolvedDynamicPluginConfig>, CliError> {
+    let Some(root) = value.as_table_mut() else {
+        return Ok(Vec::new());
+    };
+
+    let plugins_value = root.get("plugins").cloned();
+    let Some(plugins_value) = plugins_value else {
+        return Ok(Vec::new());
+    };
+
+    let plugins: PluginTomlPluginsSection = plugins_value.try_into().map_err(|error| {
+        CliError::Config(format!(
+            "invalid dynamic plugin config in {}: {error}",
+            source.display()
+        ))
+    })?;
+
+    if let Some(toml::Value::Table(plugins_table)) = root.get_mut("plugins") {
+        plugins_table.remove("dynamic");
+        if plugins_table.is_empty() {
+            root.remove("plugins");
+        }
+    }
+
+    let mut resolved = Vec::with_capacity(plugins.dynamic.len());
+    for dynamic in plugins.dynamic {
+        let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
+        let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        let plugin_id = manifest.plugin.id.trim().to_owned();
+        if !seen_plugin_ids.insert(plugin_id.clone()) {
+            return Err(CliError::Config(format!(
+                "duplicate dynamic plugin id '{}' across plugins.toml sources",
+                plugin_id
+            )));
+        }
+        resolved.push(ResolvedDynamicPluginConfig {
+            plugin_id,
+            manifest_ref,
+            config: dynamic.config,
+            source: source.to_path_buf(),
+        });
+    }
+    Ok(resolved)
+}
+
+fn resolve_dynamic_manifest_path(source: &Path, manifest: &str) -> PathBuf {
+    let manifest = PathBuf::from(manifest);
+    if manifest.is_absolute() {
+        manifest
+    } else {
+        source
+            .parent()
+            .map(|parent| parent.join(&manifest))
+            .unwrap_or(manifest)
+    }
+}
+
+fn plugin_toml_runtime_value(value: Value) -> Option<Value> {
+    match value {
+        Value::Object(ref object) if object.is_empty() => None,
+        other => Some(other),
+    }
+}
+
+fn remove_dynamic_plugin_section(mut value: toml::Value) -> toml::Value {
+    if let Some(root) = value.as_table_mut()
+        && let Some(toml::Value::Table(plugins)) = root.get_mut("plugins")
+    {
+        plugins.remove("dynamic");
+        if plugins.is_empty() {
+            root.remove("plugins");
+        }
+    }
+    value
 }
 
 fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<(), CliError> {
