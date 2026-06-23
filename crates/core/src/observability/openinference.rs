@@ -1451,7 +1451,17 @@ fn display_text_from_tool_calls(value: &Json) -> Option<String> {
 }
 
 fn tool_call_name(value: &Json) -> Option<String> {
-    manual_tool_call_name(value).map(str::to_string)
+    value
+        .get("name")
+        .and_then(Json::as_str)
+        .or_else(|| value.get("toolName").and_then(Json::as_str))
+        .or_else(|| {
+            value
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Json::as_str)
+        })
+        .map(str::to_string)
 }
 
 fn to_json_string<T: Serialize>(value: &T) -> Option<String> {

@@ -2111,6 +2111,21 @@ fn helper_functions_cover_additional_openinference_branches() {
 }
 
 #[test]
+fn display_text_from_tool_calls_prefers_top_level_name() {
+    let text = display_text_from_chat_choices(&json!([{
+        "message": {
+            "tool_calls": [{
+                "name": "display_name",
+                "toolName": "camel_name",
+                "function": {"name": "nested_name"}
+            }]
+        }
+    }]));
+
+    assert_eq!(text, Some("Requested tools: display_name".to_string()));
+}
+
+#[test]
 fn provider_builders_cover_success_paths() {
     let http_provider = build_tracer_provider(
         &OpenInferenceConfig::new()

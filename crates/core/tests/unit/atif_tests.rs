@@ -802,6 +802,47 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
 }
 
 #[test]
+fn test_extract_metrics_preserves_cache_token_precedence() {
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "cached_tokens": 2,
+                "prompt_tokens_details": {"cached_tokens": 3},
+                "input_tokens_details": {"cached_tokens": 4},
+                "cache_read_input_tokens": 5,
+                "cache_read_tokens": 6,
+                "cache_creation_input_tokens": 7,
+                "cache_write_tokens": 8
+            }
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(metrics.cached_tokens, Some(9));
+
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "prompt_tokens_details": {"cached_tokens": 3},
+                "input_tokens_details": {"cached_tokens": 4},
+                "cache_read_input_tokens": 5
+            }
+        }),
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(metrics.cached_tokens, Some(3));
+}
+
+#[test]
 fn test_reported_cost_object_blocks_model_pricing_estimation() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_test_pricing("priced-model");
@@ -882,6 +923,26 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
     .unwrap();
 
     assert_eq!(component_metrics.cost_usd, Some(0.875));
+
+    let component_missing_currency_metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "cost": {
+                    "input": 0.25,
+                    "output": 0.5,
+                    "cache_read": 0.125
+                }
+            }
+        }),
+        Some("test"),
+        Some("priced-model"),
+    )
+    .unwrap();
+
+    assert_eq!(component_missing_currency_metrics.cost_usd, None);
 }
 
 #[test]

@@ -23,8 +23,8 @@ enum ManualUsagePrecedence {
     /// across both maps before moving to weaker aliases.
     #[cfg(any(feature = "otel", feature = "openinference", test))]
     KeyOrder,
-    /// Preserve ATIF's selected-map preference: search all aliases in
-    /// `token_usage` before using provider-native `usage` for the same field.
+    /// Preserve ATIF's selected-map preference: choose `token_usage` when
+    /// present, otherwise provider-native `usage`, and only search that map.
     PrimaryMap,
 }
 
@@ -64,7 +64,8 @@ pub(crate) fn manual_usage_fields_from_preferred_token_usage(
     let object = output?.as_object()?;
     let usage = object.get("usage").and_then(Json::as_object);
     let token_usage = object.get("token_usage").and_then(Json::as_object);
-    manual_usage_fields_from_maps(token_usage, usage, ManualUsagePrecedence::PrimaryMap)
+    let preferred_usage = token_usage.or(usage);
+    manual_usage_fields_from_maps(preferred_usage, None, ManualUsagePrecedence::PrimaryMap)
 }
 
 fn manual_usage_fields_from_maps(
@@ -100,48 +101,10 @@ fn manual_usage_fields_from_maps(
         &["total_tokens", "totalTokens", "total"],
         precedence,
     );
-    let cache_read_tokens = first_u64_from_manual_usage(
-        primary_usage,
-        secondary_usage,
-        &[
-            "cache_read_tokens",
-            "cached_tokens",
-            "cache_read_input_tokens",
-            "cacheReadTokens",
-            "cachedTokens",
-            "cacheReadInputTokens",
-            "cacheRead",
-        ],
-        precedence,
-    )
-    .or_else(|| {
-        first_nested_u64_from_manual_usage(
-            primary_usage,
-            secondary_usage,
-            "input_tokens_details",
-            "cached_tokens",
-        )
-    })
-    .or_else(|| {
-        first_nested_u64_from_manual_usage(
-            primary_usage,
-            secondary_usage,
-            "prompt_tokens_details",
-            "cached_tokens",
-        )
-    });
-    let cache_write_tokens = first_u64_from_manual_usage(
-        primary_usage,
-        secondary_usage,
-        &[
-            "cache_write_tokens",
-            "cache_creation_input_tokens",
-            "cacheWriteTokens",
-            "cacheCreationInputTokens",
-            "cacheWrite",
-        ],
-        precedence,
-    );
+    let cache_read_tokens =
+        cache_read_tokens_from_manual_usage(primary_usage, secondary_usage, precedence);
+    let cache_write_tokens =
+        cache_write_tokens_from_manual_usage(primary_usage, secondary_usage, precedence);
 
     if prompt_tokens.is_none()
         && completion_tokens.is_none()
@@ -165,7 +128,7 @@ pub(crate) fn manual_model_name_from_llm_output(output: Option<&Json>) -> Option
     output?.as_object()?.get("model").and_then(Json::as_str)
 }
 
-#[cfg(any(feature = "otel", feature = "openinference", test))]
+#[cfg(any(feature = "otel", test))]
 pub(crate) fn manual_cost_estimate_from_llm_output(output: Option<&Json>) -> Option<CostEstimate> {
     let object = output?.as_object()?;
     let usage = object.get("usage").and_then(Json::as_object);
@@ -190,7 +153,7 @@ pub(crate) fn manual_cost_total_for_currency_from_llm_output(
     manual_cost_total_for_currency_from_maps(usage, token_usage, currency)
 }
 
-#[cfg(any(feature = "otel", feature = "openinference", test))]
+#[cfg(any(feature = "otel", test))]
 fn manual_cost_estimate_from_maps(
     primary_usage: Option<&serde_json::Map<String, Json>>,
     secondary_usage: Option<&serde_json::Map<String, Json>>,
@@ -254,34 +217,141 @@ fn cost_estimate_from_manual_usage(usage: &serde_json::Map<String, Json>) -> Opt
     estimate.total_or_component_sum().map(|_| estimate)
 }
 
-fn first_u64_from_manual_usage(
+fn cache_read_tokens_from_manual_usage(
+    primary_usage: Option<&serde_json::Map<String, Json>>,
+    secondary_usage: Option<&serde_json::Map<String, Json>>,
+    precedence: ManualUsagePrecedence,
+) -> Option<u64> {
+    match precedence {
+        #[cfg(any(feature = "otel", feature = "openinference", test))]
+        ManualUsagePrecedence::KeyOrder => first_u64_from_manual_usage(
+            primary_usage,
+            secondary_usage,
+            &[
+                "cache_read_tokens",
+                "cached_tokens",
+                "cache_read_input_tokens",
+                "cacheReadTokens",
+                "cachedTokens",
+                "cacheReadInputTokens",
+                "cacheRead",
+            ],
+            precedence,
+        )
+        .or_else(|| {
+            first_nested_u64_from_manual_usage(
+                primary_usage,
+                secondary_usage,
+                "input_tokens_details",
+                "cached_tokens",
+            )
+        })
+        .or_else(|| {
+            first_nested_u64_from_manual_usage(
+                primary_usage,
+                secondary_usage,
+                "prompt_tokens_details",
+                "cached_tokens",
+            )
+        }),
+        ManualUsagePrecedence::PrimaryMap => cache_read_tokens_from_preferred_usage(primary_usage)
+            .or_else(|| cache_read_tokens_from_preferred_usage(secondary_usage)),
+    }
+}
+
+fn cache_read_tokens_from_preferred_usage(
     usage: Option<&serde_json::Map<String, Json>>,
-    token_usage: Option<&serde_json::Map<String, Json>>,
+) -> Option<u64> {
+    let usage = usage?;
+    first_u64(usage, &["cached_tokens"])
+        .or_else(|| nested_u64(usage, "prompt_tokens_details", "cached_tokens"))
+        .or_else(|| nested_u64(usage, "input_tokens_details", "cached_tokens"))
+        .or_else(|| {
+            first_u64(
+                usage,
+                &[
+                    "cache_read_input_tokens",
+                    "cache_read_tokens",
+                    "cacheReadTokens",
+                    "cachedTokens",
+                    "cacheReadInputTokens",
+                    "cacheRead",
+                ],
+            )
+        })
+}
+
+fn cache_write_tokens_from_manual_usage(
+    primary_usage: Option<&serde_json::Map<String, Json>>,
+    secondary_usage: Option<&serde_json::Map<String, Json>>,
+    precedence: ManualUsagePrecedence,
+) -> Option<u64> {
+    match precedence {
+        #[cfg(any(feature = "otel", feature = "openinference", test))]
+        ManualUsagePrecedence::KeyOrder => first_u64_from_manual_usage(
+            primary_usage,
+            secondary_usage,
+            &[
+                "cache_write_tokens",
+                "cache_creation_input_tokens",
+                "cacheWriteTokens",
+                "cacheCreationInputTokens",
+                "cacheWrite",
+            ],
+            precedence,
+        ),
+        ManualUsagePrecedence::PrimaryMap => cache_write_tokens_from_preferred_usage(primary_usage)
+            .or_else(|| cache_write_tokens_from_preferred_usage(secondary_usage)),
+    }
+}
+
+fn cache_write_tokens_from_preferred_usage(
+    usage: Option<&serde_json::Map<String, Json>>,
+) -> Option<u64> {
+    let usage = usage?;
+    first_u64(
+        usage,
+        &[
+            "cache_creation_input_tokens",
+            "cache_write_tokens",
+            "cacheCreationInputTokens",
+            "cacheWriteTokens",
+            "cacheWrite",
+        ],
+    )
+}
+
+fn first_u64_from_manual_usage(
+    primary_usage: Option<&serde_json::Map<String, Json>>,
+    secondary_usage: Option<&serde_json::Map<String, Json>>,
     keys: &[&str],
     precedence: ManualUsagePrecedence,
 ) -> Option<u64> {
     match precedence {
         #[cfg(any(feature = "otel", feature = "openinference", test))]
         ManualUsagePrecedence::KeyOrder => keys.iter().find_map(|key| {
-            usage
+            primary_usage
                 .and_then(|value| value.get(*key).and_then(Json::as_u64))
-                .or_else(|| token_usage.and_then(|value| value.get(*key).and_then(Json::as_u64)))
+                .or_else(|| {
+                    secondary_usage.and_then(|value| value.get(*key).and_then(Json::as_u64))
+                })
         }),
-        ManualUsagePrecedence::PrimaryMap => usage
+        ManualUsagePrecedence::PrimaryMap => primary_usage
             .and_then(|value| first_u64(value, keys))
-            .or_else(|| token_usage.and_then(|value| first_u64(value, keys))),
+            .or_else(|| secondary_usage.and_then(|value| first_u64(value, keys))),
     }
 }
 
+#[cfg(any(feature = "otel", feature = "openinference", test))]
 fn first_nested_u64_from_manual_usage(
-    usage: Option<&serde_json::Map<String, Json>>,
-    token_usage: Option<&serde_json::Map<String, Json>>,
+    primary_usage: Option<&serde_json::Map<String, Json>>,
+    secondary_usage: Option<&serde_json::Map<String, Json>>,
     parent_key: &str,
     child_key: &str,
 ) -> Option<u64> {
-    usage
+    primary_usage
         .and_then(|value| nested_u64(value, parent_key, child_key))
-        .or_else(|| token_usage.and_then(|value| nested_u64(value, parent_key, child_key)))
+        .or_else(|| secondary_usage.and_then(|value| nested_u64(value, parent_key, child_key)))
 }
 
 fn nested_u64(
@@ -411,6 +481,50 @@ mod tests {
 
         let fields = manual_usage_fields_from_preferred_token_usage(Some(&output)).unwrap();
         assert_eq!(fields.prompt_tokens, Some(2));
+    }
+
+    #[test]
+    fn manual_usage_fields_do_not_merge_atif_usage_maps() {
+        let output = json!({
+            "usage": {"prompt_tokens": 1},
+            "token_usage": {"completion_tokens": 2}
+        });
+
+        let fields = manual_usage_fields_from_preferred_token_usage(Some(&output)).unwrap();
+        assert_eq!(fields.prompt_tokens, None);
+        assert_eq!(fields.completion_tokens, Some(2));
+    }
+
+    #[test]
+    fn manual_usage_fields_preserve_atif_cache_read_precedence() {
+        let output = json!({
+            "token_usage": {
+                "prompt_tokens": 1,
+                "cached_tokens": 2,
+                "prompt_tokens_details": {"cached_tokens": 3},
+                "input_tokens_details": {"cached_tokens": 4},
+                "cache_read_input_tokens": 5,
+                "cache_read_tokens": 6,
+                "cache_creation_input_tokens": 7,
+                "cache_write_tokens": 8
+            }
+        });
+
+        let fields = manual_usage_fields_from_preferred_token_usage(Some(&output)).unwrap();
+        assert_eq!(fields.cache_read_tokens, Some(2));
+        assert_eq!(fields.cache_write_tokens, Some(7));
+
+        let output = json!({
+            "token_usage": {
+                "prompt_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 3},
+                "input_tokens_details": {"cached_tokens": 4},
+                "cache_read_input_tokens": 5
+            }
+        });
+
+        let fields = manual_usage_fields_from_preferred_token_usage(Some(&output)).unwrap();
+        assert_eq!(fields.cache_read_tokens, Some(3));
     }
 
     #[test]

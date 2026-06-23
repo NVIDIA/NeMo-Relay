@@ -722,8 +722,7 @@ fn extract_metrics(
             )
         });
     let cached = sum_options(cache_read, cache_write);
-    let explicit_cost = manual_cost_estimate_from_usage(usage)
-        .and_then(|cost| cost.total_or_component_sum_for_currency("USD"));
+    let explicit_cost = atif_cost_usd_from_usage(usage);
     let has_reported_cost = usage.get("cost").is_some();
     let cost = if has_reported_cost {
         explicit_cost
@@ -784,6 +783,29 @@ fn extract_metrics(
         logprobs,
         extra,
     })
+}
+
+fn atif_cost_usd_from_usage(usage: &serde_json::Map<String, Json>) -> Option<f64> {
+    if let Some(total) = usage.get("cost_usd").and_then(Json::as_f64) {
+        return Some(total);
+    }
+
+    let cost = usage.get("cost")?.as_object()?;
+    let currency = cost.get("currency").and_then(Json::as_str);
+    let is_relay_normalized_cost = cost
+        .get("source")
+        .and_then(Json::as_str)
+        .is_some_and(|source| matches!(source, "provider_reported" | "model_pricing"));
+    let has_legacy_provider_total =
+        currency.is_none() && cost.get("total").and_then(Json::as_f64).is_some();
+    let is_usd_cost = currency.is_some_and(|currency| currency.eq_ignore_ascii_case("USD"))
+        || currency.is_none() && (is_relay_normalized_cost || has_legacy_provider_total);
+    if !is_usd_cost {
+        return None;
+    }
+
+    manual_cost_estimate_from_usage(usage)
+        .and_then(|cost| cost.total_or_component_sum_for_currency("USD"))
 }
 
 fn merge_metrics(
