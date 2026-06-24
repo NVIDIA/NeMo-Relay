@@ -1151,6 +1151,7 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::ClaudeCode,
