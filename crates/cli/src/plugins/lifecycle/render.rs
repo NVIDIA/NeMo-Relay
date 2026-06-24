@@ -123,11 +123,10 @@ pub(super) fn render_inspect(
     lines.push(format!(
         "host_config_json: {}",
         host_config
-            .map(|plugin| plugin.config.clone())
-            .filter(|config| !config.is_empty())
+            .map(redacted_host_config_json)
+            .filter(|config| !config.is_null())
             .map(|config| {
-                serde_json::to_string_pretty(&Value::Object(config))
-                    .expect("host config serializes")
+                serde_json::to_string_pretty(&config).expect("host config serializes")
             })
             .unwrap_or_else(|| "<none>".into())
     ));
@@ -270,4 +269,19 @@ pub(super) fn manifest_kind_label(kind: DynamicPluginKind) -> &'static str {
 
 fn bool_label(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+pub(super) fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfig) -> Value {
+    if host_config.config.is_empty() {
+        return Value::Null;
+    }
+
+    Value::Object(
+        host_config
+            .config
+            .keys()
+            .cloned()
+            .map(|key| (key, Value::String("<redacted>".into())))
+            .collect(),
+    )
 }

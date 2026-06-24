@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::{Path, PathBuf};
+use std::{ffi::OsString, sync::MutexGuard};
 
 use super::*;
 use crate::config::{
@@ -25,6 +26,57 @@ impl CurrentDirGuard {
 impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
         std::env::set_current_dir(&self.original).unwrap();
+    }
+}
+
+struct EnvScope {
+    _guard: MutexGuard<'static, ()>,
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn hermetic(temp: &tempfile::TempDir) -> Self {
+        let xdg = temp.path().join("xdg");
+        std::fs::create_dir_all(&xdg).unwrap();
+        Self::set(&[
+            ("HOME", Some(temp.path().as_os_str())),
+            ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+        ])
+    }
+
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            values: previous,
+        }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 }
 
@@ -62,10 +114,8 @@ entrypoint = "{plugin_id}.plugin:register"
 
 #[test]
 fn add_registers_dynamic_plugin_in_project_plugins_toml() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -95,10 +145,8 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
 
 #[test]
 fn add_rejects_duplicate_dynamic_plugin_ids() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -133,10 +181,8 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 
 #[test]
 fn list_and_inspect_render_discovered_dynamic_plugins() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -187,10 +233,8 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
 
 #[test]
 fn validate_renders_summary_for_path_and_id_targets() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -264,10 +308,8 @@ fn validate_renders_summary_for_path_and_id_targets() {
 
 #[test]
 fn enable_disable_and_remove_persist_lifecycle_state() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -354,10 +396,8 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
 
 #[test]
 fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let plugin_dir = temp.path().join("plugins").join("acme");
     let config_dir = temp.path().join("custom-config");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -398,10 +438,8 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
 
 #[test]
 fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     let config_dir = temp.path().join(".nemo-relay");
@@ -438,10 +476,8 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
 
 #[test]
 fn add_can_revive_tombstoned_records() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -491,10 +527,8 @@ fn add_can_revive_tombstoned_records() {
 
 #[test]
 fn json_helpers_emit_stable_success_and_failure_shapes() {
-    let _lock = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -549,6 +583,10 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         inspect_value["data"]["source"]["manifest_ref"],
         serde_json::json!(manifest_ref)
     );
+    assert_eq!(
+        inspect_value["data"]["host_config"],
+        serde_json::Value::Null
+    );
 
     let validate_value = serde_json::to_value(responses::validate_success(
         responses::ValidateResponseInput {
@@ -578,4 +616,142 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
     .unwrap();
     assert_eq!(failure["ok"], serde_json::json!(false));
     assert_eq!(failure["error"]["code"], serde_json::json!("not_found"));
+}
+
+#[test]
+fn remove_tolerates_unreadable_non_target_manifest_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let broken_dir = temp.path().join("plugins").join("broken");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&broken_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.guardrail");
+    let server = ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n\n[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest_path.to_string_lossy(),
+            broken_dir.join("missing.toml").to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    remove(
+        PluginsRemoveCommand {
+            id: "acme.guardrail".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    let rendered = std::fs::read_to_string(&plugins_toml).unwrap();
+    assert!(!rendered.contains("acme.guardrail"));
+    assert!(rendered.contains("missing.toml"));
+}
+
+#[test]
+fn remove_reports_malformed_dynamic_plugin_containers() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugins_toml = temp.path().join("plugins.toml");
+
+    std::fs::write(&plugins_toml, "[plugins]\ndynamic = \"oops\"\n").unwrap();
+    let error = remove_dynamic_plugin_reference(&plugins_toml, "acme.guardrail", None)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("plugins.dynamic must be an array of tables"));
+
+    std::fs::write(&plugins_toml, "plugins = \"oops\"\n").unwrap();
+    let error = remove_dynamic_plugin_reference(&plugins_toml, "acme.guardrail", None)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("[plugins] must be a table"));
+}
+
+#[test]
+fn inspect_redacts_host_config_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.redacted");
+    let server = ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\nconfig = {{ api_key = \"secret-token\", region = \"us-west-2\" }}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let host_config_by_id = host_config_by_id(&resolved);
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.redacted")
+        .unwrap()
+        .expect("redacted record");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+        .map_err(|error| CliError::Config(error.to_string()))
+        .unwrap();
+
+    let inspect_output = render_inspect(
+        &entry,
+        &manifest,
+        &manifest_ref,
+        host_config_by_id.get("acme.redacted"),
+    );
+    assert!(!inspect_output.contains("secret-token"));
+    assert!(inspect_output.contains("<redacted>"));
+
+    let inspect_value = serde_json::to_value(responses::inspect_success(
+        "plugins inspect",
+        "acme.redacted",
+        &entry,
+        &manifest,
+        &manifest_ref,
+        host_config_by_id.get("acme.redacted"),
+    ))
+    .unwrap();
+    assert_eq!(
+        inspect_value["data"]["host_config"]["api_key"],
+        serde_json::json!("<redacted>")
+    );
+    assert_eq!(
+        inspect_value["data"]["host_config"]["region"],
+        serde_json::json!("<redacted>")
+    );
+    assert_eq!(inspect_value["data"]["host_config_status"], "present");
 }

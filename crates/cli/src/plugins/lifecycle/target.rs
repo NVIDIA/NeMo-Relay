@@ -37,7 +37,7 @@ fn classify_target_syntax(target: &str) -> TargetSyntax {
 // while keeping ordinary canonical IDs like `acme.worker` on the ID branch.
 fn should_treat_target_as_path(target: &str) -> bool {
     let path = Path::new(target);
-    if path.exists() || path.is_absolute() {
+    if path.is_absolute() {
         return true;
     }
 
@@ -113,13 +113,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_treats_existing_filesystem_entries_as_paths() {
+    fn parse_treats_existing_filesystem_entries_with_explicit_path_syntax_as_paths() {
         let temp = tempdir().unwrap();
-        let existing = temp.path().join("acme.worker");
+        let existing = temp.path().join("plugins").join("acme.worker");
         std::fs::create_dir_all(&existing).unwrap();
         assert_eq!(
-            PluginTarget::parse(existing.to_str().unwrap()),
-            PluginTarget::Path(existing)
+            PluginTarget::parse(
+                existing
+                    .strip_prefix(temp.path())
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            ),
+            PluginTarget::Path(PathBuf::from("plugins/acme.worker"))
         );
     }
 }

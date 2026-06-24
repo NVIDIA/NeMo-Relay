@@ -65,6 +65,7 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         scoped_paths_for_add(target_scope(&command.scope)?, server.config.as_ref())?;
     let scope_index = ensure_scope(&mut scopes, scope, plugins_toml_path.clone(), state_path);
     let record = validated_record_from_manifest(manifest, manifest_ref.clone())?;
+    let original_plugins_toml = std::fs::read(&plugins_toml_path).ok();
 
     scopes[scope_index]
         .registry
@@ -72,7 +73,7 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         .map_err(|error| CliError::Config(error.to_string()))?;
     append_dynamic_plugin_reference(&plugins_toml_path, &manifest_ref)?;
     if let Err(error) = scopes[scope_index].save() {
-        let _ = remove_dynamic_plugin_reference(&plugins_toml_path, &plugin_id);
+        let _ = restore_plugins_toml(&plugins_toml_path, original_plugins_toml.as_deref());
         return Err(error);
     }
 
@@ -242,8 +243,11 @@ pub(crate) fn disable(command: PluginsDisableCommand, server: &ServerArgs) -> Re
 }
 
 pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Result<(), CliError> {
-    let resolved = resolve_plugins_config(server.config.as_ref())?;
-    let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+    let mut scopes = load_scoped_registries(server.config.as_ref())?;
+    if find_record_by_id(&scopes, &command.id)?.is_none() {
+        let resolved = resolve_plugins_config(server.config.as_ref())?;
+        scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+    }
     let entry = find_registered_entry(&scopes, "plugins remove", &command.id)?;
     let original_plugins_toml = std::fs::read(&entry.plugins_toml_path).ok();
 
@@ -251,7 +255,11 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
         .registry
         .remove(&command.id)
         .map_err(|error| CliError::Config(error.to_string()))?;
-    let removed_reference = remove_dynamic_plugin_reference(&entry.plugins_toml_path, &command.id)?;
+    let removed_reference = remove_dynamic_plugin_reference(
+        &entry.plugins_toml_path,
+        &command.id,
+        entry.record.source.manifest_ref.as_deref(),
+    )?;
     if let Err(error) = scopes[entry.scope_index].save() {
         let _ = restore_plugins_toml(&entry.plugins_toml_path, original_plugins_toml.as_deref());
         return Err(error);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use clap::Parser;
+use std::ffi::OsString;
 
 use super::*;
 use crate::config::{
@@ -9,6 +10,57 @@ use crate::config::{
     PluginsListCommand, PluginsSubcommand, PluginsValidateCommand, PricingSubcommand,
     PricingValidateCommand, ServerArgs,
 };
+
+struct EnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    values: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl EnvScope {
+    fn hermetic(temp: &tempfile::TempDir) -> Self {
+        let xdg = temp.path().join("xdg");
+        std::fs::create_dir_all(&xdg).unwrap();
+        Self::set(&[
+            ("HOME", Some(temp.path().as_os_str())),
+            ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+        ])
+    }
+
+    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = values
+            .iter()
+            .map(|(key, _)| (*key, std::env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in values {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            values: previous,
+        }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        for (key, value) in self.values.drain(..) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+}
 
 #[test]
 fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
@@ -25,6 +77,9 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 
 #[test]
 fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+
     assert_eq!(
         run_completions(CompletionsCommand {
             shell: Some(clap_complete::Shell::Bash),
@@ -100,6 +155,9 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
 
 #[test]
 fn safe_dispatch_plugin_json_errors_return_exit_codes() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+
     assert_eq!(
         run_plugins(
             PluginsCommand {

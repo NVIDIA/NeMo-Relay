@@ -153,6 +153,7 @@ pub(crate) fn append_dynamic_plugin_reference(
 pub(crate) fn remove_dynamic_plugin_reference(
     path: &Path,
     plugin_id: &str,
+    target_manifest_ref: Option<&str>,
 ) -> Result<bool, CliError> {
     if !path.exists() {
         return Ok(false);
@@ -162,15 +163,28 @@ pub(crate) fn remove_dynamic_plugin_reference(
     let Some(root_table) = root.as_table_mut() else {
         return Ok(false);
     };
-    let Some(toml::Value::Table(plugins)) = root_table.get_mut("plugins") else {
+    let Some(plugins_value) = root_table.get_mut("plugins") else {
         return Ok(false);
     };
-    let Some(toml::Value::Array(dynamic_entries)) = plugins.get_mut("dynamic") else {
+    let plugins = plugins_value.as_table_mut().ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: [plugins] must be a table",
+            path.display()
+        ))
+    })?;
+    let Some(dynamic_value) = plugins.get_mut("dynamic") else {
         return Ok(false);
     };
+    let dynamic_entries = dynamic_value.as_array_mut().ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: plugins.dynamic must be an array of tables",
+            path.display()
+        ))
+    })?;
 
     let original_len = dynamic_entries.len();
     let mut retained = Vec::with_capacity(original_len);
+    let target_manifest_ref = target_manifest_ref.map(PathBuf::from);
     for entry in dynamic_entries.drain(..) {
         let manifest_ref = entry
             .as_table()
@@ -178,16 +192,16 @@ pub(crate) fn remove_dynamic_plugin_reference(
             .and_then(toml::Value::as_str)
             .map(|manifest| resolve_manifest_ref(path, manifest));
 
-        let keep = match manifest_ref {
-            Some(manifest_ref) => {
-                let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_ref)
-                    .map_err(|error| CliError::Config(error.to_string()))?;
-                manifest.plugin.id.trim() != plugin_id
-            }
-            None => true,
-        };
+        let remove = manifest_ref.as_ref().is_some_and(|manifest_ref| {
+            target_manifest_ref
+                .as_ref()
+                .is_some_and(|target_manifest_ref| manifest_ref == target_manifest_ref)
+                || DynamicPluginManifest::load_from_path(manifest_ref)
+                    .map(|(manifest, _)| manifest.plugin.id.trim() == plugin_id)
+                    .unwrap_or(false)
+        });
 
-        if keep {
+        if !remove {
             retained.push(entry);
         }
     }

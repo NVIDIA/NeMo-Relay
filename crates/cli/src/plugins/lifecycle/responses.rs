@@ -17,7 +17,9 @@ use serde_json::{Map, Value};
 use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
 use crate::error::{CliError, PluginLifecycleFailureKind};
 
-use super::render::{check_state_label, manifest_kind_label, runtime_state_label};
+use super::render::{
+    check_state_label, manifest_kind_label, redacted_host_config_json, runtime_state_label,
+};
 use super::state::ScopedDynamicPluginRecord;
 
 #[derive(Debug)]
@@ -206,7 +208,7 @@ pub(super) fn inspect_success(
                 .map(|plugin| host_config_status_label(plugin.host_config_status()))
                 .unwrap_or("missing"),
             host_config: host_config
-                .map(|plugin| Value::Object(plugin.config.clone()))
+                .map(redacted_host_config_json)
                 .unwrap_or(Value::Null),
         },
     )

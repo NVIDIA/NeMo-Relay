@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
@@ -66,7 +68,7 @@ const fn default_state_schema_version() -> u32 {
 
 impl ScopedRegistry {
     pub(super) fn save(&self) -> Result<(), CliError> {
-        let rendered = serde_json::to_vec_pretty(&PersistedDynamicPluginRegistry {
+        let mut rendered = serde_json::to_vec_pretty(&PersistedDynamicPluginRegistry {
             schema_version: DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION,
             records: self.registry.cloned_records(true),
         })
@@ -76,12 +78,38 @@ impl ScopedRegistry {
                 self.state_path.display()
             ))
         })?;
-        if let Some(parent) = self.state_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut rendered = rendered;
         rendered.push(b'\n');
-        std::fs::write(&self.state_path, rendered)?;
+        let parent = self
+            .state_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        std::fs::create_dir_all(&parent)?;
+
+        let temp_path = parent.join(format!(
+            ".{}.{}.tmp",
+            self.state_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("dynamic-plugins"),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock is after unix epoch")
+                .as_nanos()
+        ));
+
+        let write_result = (|| -> Result<(), CliError> {
+            let mut file = std::fs::File::create(&temp_path)?;
+            file.write_all(&rendered)?;
+            file.sync_all()?;
+            std::fs::rename(&temp_path, &self.state_path)?;
+            Ok(())
+        })();
+
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temp_path);
+        }
+        write_result?;
         Ok(())
     }
 }
