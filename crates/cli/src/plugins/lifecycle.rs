@@ -26,7 +26,7 @@ mod responses;
 mod state;
 mod target;
 
-use self::render::{render_inspect, render_list, render_validation_summary};
+use self::render::{render_add_result, render_inspect, render_list, render_validation_summary};
 use self::responses::{
     ValidateResponseInput, failure, generic_failure, inspect_success, list_success,
     print_response_json, validate_success,
@@ -77,13 +77,17 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         return Err(error);
     }
 
-    println!("Added dynamic plugin {}", plugin_id);
-    println!("scope: {}", scope.label());
-    println!("manifest: {}", manifest_ref);
-    println!("plugins_toml: {}", plugins_toml_path.display());
-    println!("state_path: {}", scopes[scope_index].state_path.display());
-    println!("revived: {}", if revived { "true" } else { "false" });
-    println!("desired.enabled: false");
+    println!(
+        "{}",
+        render_add_result(
+            &plugin_id,
+            scope.label(),
+            &manifest_ref,
+            &plugins_toml_path,
+            &scopes[scope_index].state_path,
+            revived,
+        )
+    );
     Ok(())
 }
 

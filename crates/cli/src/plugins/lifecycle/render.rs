@@ -19,23 +19,46 @@ pub(super) fn render_list(
     host_config_by_id: &HashMap<String, ResolvedDynamicPluginConfig>,
 ) -> String {
     let mut lines = Vec::with_capacity(records.len() + 1);
-    lines.push("ID\tSCOPE\tENABLED\tSTATE\tVALIDATION\tHOST CONFIG".into());
+    lines.push(format!(
+        "{:<32} {:<8} {:<7} {:<10} {:<10} {}",
+        "ID", "SCOPE", "ENABLED", "STATE", "VALIDATION", "HOST CONFIG"
+    ));
     for entry in records {
         let host_config_status = host_config_by_id
             .get(&entry.record.metadata.id)
             .map(|plugin| host_config_status_label(plugin.host_config_status()))
             .unwrap_or("missing");
         lines.push(format!(
-            "{}\t{}\t{}\t{}\t{}\t{}",
+            "{:<32} {:<8} {:<7} {:<10} {:<10} {}",
             entry.record.metadata.id,
             entry.scope.label(),
-            bool_label(entry.record.spec.enabled),
+            entry.record.spec.enabled,
             lifecycle_state_label(&entry.record),
             check_state_label(entry.record.status.validation.manifest),
             host_config_status
         ));
     }
     lines.join("\n")
+}
+
+pub(super) fn render_add_result(
+    plugin_id: &str,
+    scope_label: &str,
+    manifest_ref: &str,
+    plugins_toml_path: &std::path::Path,
+    state_path: &std::path::Path,
+    revived: bool,
+) -> String {
+    [
+        format!("Added dynamic plugin {plugin_id}"),
+        format!("scope: {scope_label}"),
+        format!("manifest: {manifest_ref}"),
+        format!("plugins_toml: {}", plugins_toml_path.display()),
+        format!("state_path: {}", state_path.display()),
+        format!("revived: {revived}"),
+        "desired.enabled: false".into(),
+    ]
+    .join("\n")
 }
 
 pub(super) fn render_inspect(
@@ -72,10 +95,10 @@ pub(super) fn render_inspect(
             "source.environment_ref: {}",
             record.source.environment_ref.as_deref().unwrap_or("<none>")
         ),
-        format!("desired.present: {}", bool_label(record.spec.present)),
-        format!("desired.enabled: {}", bool_label(record.spec.enabled)),
+        format!("desired.present: {}", record.spec.present),
+        format!("desired.enabled: {}", record.spec.enabled),
         format!("generation: {}", record.metadata.generation),
-        format!("reconciled: {}", bool_label(record.is_reconciled())),
+        format!("reconciled: {}", record.is_reconciled()),
         format!(
             "host_config: {}",
             host_config
@@ -147,10 +170,7 @@ pub(super) fn render_validation_summary(
     if let Some(entry) = entry {
         lines.push(format!("scope: {}", entry.scope.label()));
         lines.push(format!("state_path: {}", entry.state_path.display()));
-        lines.push(format!(
-            "desired.enabled: {}",
-            bool_label(entry.record.spec.enabled)
-        ));
+        lines.push(format!("desired.enabled: {}", entry.record.spec.enabled));
         lines.push(format!(
             "host_config: {}",
             host_config
@@ -265,10 +285,6 @@ pub(super) fn manifest_kind_label(kind: DynamicPluginKind) -> &'static str {
         DynamicPluginKind::RustDynamic => "rust_dynamic",
         DynamicPluginKind::Worker => "worker",
     }
-}
-
-fn bool_label(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
 }
 
 pub(super) fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfig) -> Value {
