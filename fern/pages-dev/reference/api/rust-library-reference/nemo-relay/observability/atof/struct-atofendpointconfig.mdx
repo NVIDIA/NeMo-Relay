@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtofEndpointConfig &#123;\n    pub url: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub transport: <a href=\"enum-atofendpointtransport\">AtofEndpointTransport</a>,\n    pub headers: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub timeout_millis: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtofEndpointConfig &#123;\n    pub url: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub transport: <a href=\"enum-atofendpointtransport\">AtofEndpointTransport</a>,\n    pub headers: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub timeout_millis: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub field_name_policy: <a href=\"enum-atofendpointfieldnamepolicy\">AtofEndpointFieldNamePolicy</a>,\n&#125;"}} /></pre>
 
 Streaming destination for raw ATOF events.
 
@@ -30,6 +30,10 @@ Headers applied to endpoint requests or handshakes.
 ### `timeout_millis: u64`
 
 Per-endpoint timeout in milliseconds.
+
+### `field_name_policy: AtofEndpointFieldNamePolicy`
+
+Field name transformation policy applied before sending events.
 
 ## Implementations
 
@@ -54,6 +58,12 @@ Add a header to this endpoint config.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_timeout_millis(self, timeout_millis: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>) -&gt; Self"}} /></pre>
 
 Override the endpoint timeout.
+
+#### `with_field_name_policy`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_field_name_policy(\n    self,\n    field_name_policy: <a href=\"enum-atofendpointfieldnamepolicy\">AtofEndpointFieldNamePolicy</a>,\n) -&gt; Self"}} /></pre>
+
+Override the endpoint field name policy.
 
 ## Trait Implementations
 

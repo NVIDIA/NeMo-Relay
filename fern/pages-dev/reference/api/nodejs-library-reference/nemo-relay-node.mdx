@@ -45,6 +45,8 @@ export interface AtofEndpointConfig {
   headers?: Json
   /** Per-endpoint timeout in milliseconds. */
   timeoutMillis?: number
+  /** Field name policy applied before sending events. */
+  fieldNamePolicy?: string
 }
 ```
 
