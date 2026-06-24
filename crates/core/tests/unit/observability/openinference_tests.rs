@@ -1940,6 +1940,200 @@ fn orphan_marks_become_zero_duration_spans() {
 }
 
 #[test]
+fn late_parented_marks_reuse_completed_parent_trace_context() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let tool_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    processor.process(&make_mark_event(
+        Some(tool_uuid),
+        "visor.tool_output_compressed",
+        Some(json!({"estimated_tokens_saved": 42})),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+    let tool_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "terminal")
+        .unwrap();
+    let mark_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:visor.tool_output_compressed")
+        .unwrap();
+
+    assert_eq!(
+        mark_span.span_context.trace_id(),
+        tool_span.span_context.trace_id()
+    );
+    assert_eq!(mark_span.parent_span_id, tool_span.span_context.span_id());
+    assert!(!mark_span.parent_span_is_remote);
+
+    let attributes = attr_map(&mark_span.attributes);
+    assert_eq!(
+        attributes.get("nemo_relay.mark.orphan"),
+        Some(&"true".to_string())
+    );
+    assert_eq!(
+        attributes.get("openinference.span.kind"),
+        Some(&"CHAIN".to_string())
+    );
+}
+
+#[test]
+fn completed_span_context_cache_evicts_oldest_parent_contexts() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let span_count = COMPLETED_SPAN_CONTEXT_LIMIT + 2;
+    let mut completed_uuids = Vec::with_capacity(span_count);
+
+    for index in 0..span_count {
+        let uuid = Uuid::now_v7();
+        completed_uuids.push(uuid);
+        let name = format!("completed-{index}");
+        processor.process(&make_start_event(uuid, None, &name, ScopeType::Tool, None));
+        processor.process(&make_end_event(
+            uuid,
+            None,
+            &name,
+            ScopeType::Tool,
+            Some(json!({"status": "done"})),
+        ));
+    }
+
+    let oldest_uuid = completed_uuids[0];
+    let recent_uuid = completed_uuids[span_count - 1];
+    assert!(!processor.completed_span_contexts.contains_key(&oldest_uuid));
+    assert!(processor.completed_span_contexts.contains_key(&recent_uuid));
+
+    processor.process(&make_mark_event(
+        Some(oldest_uuid),
+        "oldest-after-eviction",
+        Some(json!({"case": "oldest"})),
+    ));
+    processor.process(&make_mark_event(
+        Some(recent_uuid),
+        "recent-after-eviction",
+        Some(json!({"case": "recent"})),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), span_count + 2);
+
+    let oldest_parent = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "completed-0")
+        .unwrap();
+    let recent_parent_name = format!("completed-{}", span_count - 1);
+    let recent_parent = spans
+        .iter()
+        .find(|span| span.name.as_ref() == recent_parent_name.as_str())
+        .unwrap();
+    let oldest_mark = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:oldest-after-eviction")
+        .unwrap();
+    let recent_mark = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:recent-after-eviction")
+        .unwrap();
+
+    assert_ne!(
+        oldest_mark.parent_span_id,
+        oldest_parent.span_context.span_id()
+    );
+    assert_ne!(
+        oldest_mark.span_context.trace_id(),
+        oldest_parent.span_context.trace_id()
+    );
+    assert_eq!(
+        recent_mark.span_context.trace_id(),
+        recent_parent.span_context.trace_id()
+    );
+    assert_eq!(
+        recent_mark.parent_span_id,
+        recent_parent.span_context.span_id()
+    );
+    assert!(!recent_mark.parent_span_is_remote);
+}
+
+#[test]
+fn process_start_removes_completed_span_order_entry() {
+    let (provider, _exporter) = make_provider();
+    let mut processor = OpenInferenceEventProcessor::new(provider, "test-scope".to_string());
+    let tool_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert_eq!(
+        processor
+            .completed_span_order
+            .iter()
+            .filter(|uuid| **uuid == tool_uuid)
+            .count(),
+        1
+    );
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    assert!(!processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert!(!processor.completed_span_order.contains(&tool_uuid));
+
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert_eq!(
+        processor
+            .completed_span_order
+            .iter()
+            .filter(|uuid| **uuid == tool_uuid)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn semantic_scope_type_and_input_value_follow_event_variants() {
     let llm_with_content = make_start_event(
         Uuid::now_v7(),
