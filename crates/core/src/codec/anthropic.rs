@@ -26,6 +26,7 @@ use super::request::{
     AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent, ToolChoice,
     ToolChoiceFunction, ToolChoiceFunctionName, ToolDefinition,
 };
+use super::resolve::{ProviderSurface, SurfaceDescriptor};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
     estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
@@ -38,6 +39,25 @@ use super::traits::{LlmCodec, LlmResponseCodec};
 
 /// Built-in codec for the Anthropic Messages API.
 pub struct AnthropicMessagesCodec;
+
+// ---------------------------------------------------------------------------
+// Built-in surface descriptor (codec-owned detection, registered in resolve)
+// ---------------------------------------------------------------------------
+
+pub(crate) const SURFACE_DESCRIPTOR: SurfaceDescriptor = SurfaceDescriptor {
+    surface: ProviderSurface::AnthropicMessages,
+    detect_request: |obj, hint| {
+        // A system-less Anthropic request is shape-identical to OpenAI Chat;
+        // the "anthropic" hint disambiguates it.
+        obj.contains_key("system") || (hint == Some("anthropic") && obj.contains_key("messages"))
+    },
+    detect_response: |obj| {
+        obj.get("type").and_then(Json::as_str) == Some("message")
+            && obj.get("content").is_some_and(Json::is_array)
+    },
+    decode_request: |request| AnthropicMessagesCodec.decode(request),
+    decode_response: |raw| AnthropicMessagesCodec.decode_response(raw),
+};
 
 // ---------------------------------------------------------------------------
 // Private intermediate serde structs for response decode

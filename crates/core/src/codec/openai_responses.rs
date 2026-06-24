@@ -25,6 +25,7 @@ use super::request::{
     AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice, ToolChoiceFunction,
     ToolChoiceFunctionName, ToolDefinition,
 };
+use super::resolve::{ProviderSurface, SurfaceDescriptor};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
     estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
@@ -37,6 +38,21 @@ use super::traits::{LlmCodec, LlmResponseCodec};
 
 /// Built-in codec for the OpenAI Responses API.
 pub struct OpenAIResponsesCodec;
+
+// ---------------------------------------------------------------------------
+// Built-in surface descriptor (codec-owned detection, registered in resolve)
+// ---------------------------------------------------------------------------
+
+pub(crate) const SURFACE_DESCRIPTOR: SurfaceDescriptor = SurfaceDescriptor {
+    surface: ProviderSurface::OpenAIResponses,
+    detect_request: |obj, _| obj.contains_key("input") || obj.contains_key("instructions"),
+    detect_response: |obj| {
+        obj.get("output").is_some_and(Json::is_array)
+            || obj.get("output_text").is_some_and(Json::is_string)
+    },
+    decode_request: |request| OpenAIResponsesCodec.decode(request),
+    decode_response: |raw| OpenAIResponsesCodec.decode_response(raw),
+};
 
 // ---------------------------------------------------------------------------
 // Private intermediate serde structs for response decode
