@@ -16,7 +16,8 @@ use crate::error::CliError;
 
 use super::super::config_io::TargetScope;
 
-const DYNAMIC_PLUGIN_STATE_FILENAME: &str = "dynamic-plugins.json";
+// Internal CLI-managed lifecycle state. This file is not intended to be user-edited.
+const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
 const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

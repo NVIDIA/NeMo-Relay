@@ -54,7 +54,7 @@ pub(super) fn render_add_result(
         format!("scope: {scope_label}"),
         format!("manifest: {manifest_ref}"),
         format!("plugins_toml: {}", plugins_toml_path.display()),
-        format!("state_path: {}", state_path.display()),
+        format!("lifecycle_state_path: {}", state_path.display()),
         format!("revived: {revived}"),
         "desired.enabled: false".into(),
     ]
@@ -82,7 +82,7 @@ pub(super) fn render_inspect(
         ),
         format!("manifest: {manifest_ref}"),
         format!("plugins_toml: {}", entry.plugins_toml_path.display()),
-        format!("state_path: {}", entry.state_path.display()),
+        format!("lifecycle_state_path: {}", entry.state_path.display()),
         format!(
             "source.manifest_ref: {}",
             record.source.manifest_ref.as_deref().unwrap_or("<none>")
@@ -169,7 +169,10 @@ pub(super) fn render_validation_summary(
     ];
     if let Some(entry) = entry {
         lines.push(format!("scope: {}", entry.scope.label()));
-        lines.push(format!("state_path: {}", entry.state_path.display()));
+        lines.push(format!(
+            "lifecycle_state_path: {}",
+            entry.state_path.display()
+        ));
         lines.push(format!("desired.enabled: {}", entry.record.spec.enabled));
         lines.push(format!(
             "host_config: {}",

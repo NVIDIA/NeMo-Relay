@@ -419,7 +419,7 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     .unwrap();
 
     let plugins_toml = config_dir.join("plugins.toml");
-    let state_path = config_dir.join("dynamic-plugins.json");
+    let state_path = config_dir.join(".dynamic-plugins.json");
     assert!(plugins_toml.exists());
     assert!(state_path.exists());
 

@@ -279,7 +279,7 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
             "<already absent>".into()
         }
     );
-    println!("state_path: {}", entry.state_path.display());
+    println!("lifecycle_state_path: {}", entry.state_path.display());
     println!("status: tombstoned");
     Ok(())
 }
@@ -327,7 +327,7 @@ fn mutate_enabled_state(
         plugin_id
     );
     println!("scope: {}", entry.scope.label());
-    println!("state_path: {}", entry.state_path.display());
+    println!("lifecycle_state_path: {}", entry.state_path.display());
     Ok(())
 }
 
