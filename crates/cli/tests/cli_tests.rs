@@ -396,6 +396,56 @@ fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
 }
 
 #[test]
+fn cli_plugins_enable_tombstoned_plugin_returns_refused_exit_code() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.tombstone-enable");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let remove = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "remove", "acme.tombstone-enable"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let enable = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "enable", "acme.tombstone-enable"])
+        .output()
+        .unwrap();
+    assert_eq!(enable.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&enable.stderr).contains("tombstoned"),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+}
+
+#[test]
 fn cli_completions_prints_script_for_requested_shell() {
     let output = Command::new(gateway_bin())
         .args(["completions", "zsh"])

@@ -180,6 +180,36 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 }
 
 #[test]
+fn add_rejects_scope_flags_when_explicit_config_is_set() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join("custom-config");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.explicit-conflict");
+
+    let server = ServerArgs {
+        config: Some(config_dir.join("gateway.toml")),
+        ..ServerArgs::default()
+    };
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("--config cannot be combined"));
+}
+
+#[test]
 fn list_and_inspect_render_discovered_dynamic_plugins() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -683,6 +713,25 @@ fn remove_reports_malformed_dynamic_plugin_containers() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("[plugins] must be a table"));
+}
+
+#[test]
+fn append_reports_malformed_dynamic_plugin_containers() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugins_toml = temp.path().join("plugins.toml");
+
+    std::fs::write(&plugins_toml, "plugins = \"oops\"\n").unwrap();
+    let error = append_dynamic_plugin_reference(&plugins_toml, "/tmp/plugin/relay-plugin.toml")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("[plugins] must be a table"));
+
+    std::fs::write(&plugins_toml, "[plugins]\ndynamic = \"oops\"\n").unwrap();
+    let error = append_dynamic_plugin_reference(&plugins_toml, "/tmp/plugin/relay-plugin.toml")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("plugins.dynamic must be an array of tables"));
 }
 
 #[test]
