@@ -805,6 +805,64 @@ fn late_parented_marks_reuse_completed_parent_trace_context() {
 }
 
 #[test]
+fn process_start_removes_completed_span_order_entry() {
+    let (provider, _exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider, "test-scope".to_string());
+    let tool_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert_eq!(
+        processor
+            .completed_span_order
+            .iter()
+            .filter(|uuid| **uuid == tool_uuid)
+            .count(),
+        1
+    );
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    assert!(!processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert!(!processor.completed_span_order.contains(&tool_uuid));
+
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert_eq!(
+        processor
+            .completed_span_order
+            .iter()
+            .filter(|uuid| **uuid == tool_uuid)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn semantic_scope_type_and_span_kind_follow_event_variants() {
     let scope_event = make_start_event(
         Uuid::now_v7(),

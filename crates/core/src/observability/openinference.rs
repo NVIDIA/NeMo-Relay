@@ -541,7 +541,7 @@ impl OpenInferenceEventProcessor {
     }
 
     fn process_start(&mut self, event: &Event) {
-        self.completed_span_contexts.remove(&event.uuid());
+        self.remove_completed_span_context(event.uuid());
         let mut span = self
             .tracer
             .span_builder(span_name(event))
@@ -619,6 +619,12 @@ impl OpenInferenceEventProcessor {
     fn find_parent_span_mut(&mut self, event: &Event) -> Option<&mut ActiveSpan> {
         self.parent_span_uuid(event)
             .and_then(|uuid| self.active_spans.get_mut(&uuid))
+    }
+
+    fn remove_completed_span_context(&mut self, uuid: Uuid) {
+        self.completed_span_contexts.remove(&uuid);
+        self.completed_span_order
+            .retain(|completed_uuid| *completed_uuid != uuid);
     }
 
     fn record_completed_span_context(&mut self, uuid: Uuid, span_context: SpanContext) {
