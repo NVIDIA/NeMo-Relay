@@ -149,6 +149,18 @@ func TestAdaptiveRuntimeBuildCacheRequestFacts(t *testing.T) {
 	}
 }
 
+func TestAdaptiveRuntimeBindScopeRejectsNilScope(t *testing.T) {
+	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
+	if err != nil {
+		t.Fatalf("NewAdaptiveRuntime failed: %v", err)
+	}
+	defer runtime.Shutdown()
+
+	if err := runtime.BindScope(nil); err == nil {
+		t.Fatal("expected BindScope to reject nil scope")
+	}
+}
+
 func TestSetLatencySensitivityRejectsInvalidValue(t *testing.T) {
 	if SetLatencySensitivity(0) == nil {
 		t.Fatal("expected SetLatencySensitivity(0) to fail")

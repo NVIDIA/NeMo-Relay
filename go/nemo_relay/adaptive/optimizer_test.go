@@ -4,8 +4,9 @@
 package adaptive
 
 import (
-	nemo_relay "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 	"testing"
+
+	nemo_relay "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 )
 
 func TestConfigBuilders(t *testing.T) {
@@ -75,5 +76,33 @@ func TestRedisBackendAndComponentSpecBuilders(t *testing.T) {
 	}
 	if acgConfig["provider"] != "openai" {
 		t.Fatalf("expected wrapped config to preserve acg provider, got %#v", acgConfig["provider"])
+	}
+}
+
+func TestAdaptivePackageTelemetryAndLatencyHelpers(t *testing.T) {
+	promptTokens := uint64(40)
+	cacheReadTokens := uint64(10)
+	event, err := BuildCacheTelemetryEvent(CacheTelemetryEventInput{
+		Provider:  "openai",
+		RequestID: "00000000-0000-0000-0000-000000000501",
+		Usage: &CacheUsage{
+			PromptTokens:    &promptTokens,
+			CacheReadTokens: &cacheReadTokens,
+		},
+		AgentID:         "go-adaptive-wrapper",
+		TemplateVersion: "v1",
+		ToolsetHash:     "tools",
+		ModelFamily:     "gpt",
+		TenantScope:     "tenant",
+	})
+	if err != nil {
+		t.Fatalf("BuildCacheTelemetryEvent failed: %v", err)
+	}
+	if event == nil || event.HitRate != 0.25 {
+		t.Fatalf("unexpected cache telemetry event: %#v", event)
+	}
+
+	if err := SetLatencySensitivity(0); err == nil {
+		t.Fatal("expected SetLatencySensitivity to reject zero")
 	}
 }

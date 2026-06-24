@@ -2653,3 +2653,483 @@ fn test_ffi_llm_execute_and_stream_additional_input_paths() {
         nemo_relay_scope_stack_free(stack);
     }
 }
+
+#[test]
+fn test_ffi_adaptive_runtime_and_cache_helper_paths() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let config = cstring(
+            &json!({
+                "version": 1,
+                "agent_id": "ffi-adaptive-openai",
+                "state": {
+                    "backend": {
+                        "kind": "in_memory",
+                        "config": {}
+                    }
+                },
+                "acg": {
+                    "provider": "openai"
+                }
+            })
+            .to_string(),
+        );
+        let invalid_json = cstring("{");
+        let mut out_json = ptr::null_mut();
+
+        assert_eq!(
+            nemo_relay_adaptive_validate_config(ptr::null(), &mut out_json),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_adaptive_validate_config(config.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_adaptive_validate_config(invalid_json.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_adaptive_validate_config(config.as_ptr(), &mut out_json),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out_json)["diagnostics"], json!([]));
+
+        let mut runtime = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_adaptive_runtime_create(config.as_ptr(), ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_create(invalid_json.as_ptr(), &mut runtime),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_create(config.as_ptr(), &mut runtime),
+            NemoRelayStatus::Ok
+        );
+        assert!(!runtime.is_null());
+
+        assert_eq!(
+            nemo_relay_adaptive_runtime_report_json(runtime, ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_report_json(runtime, &mut out_json),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out_json)["diagnostics"], json!([]));
+        assert_eq!(
+            nemo_relay_adaptive_runtime_register(runtime),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_wait_for_idle(runtime),
+            NemoRelayStatus::Ok
+        );
+
+        let stack = fresh_scope_stack();
+        let scope_name = cstring("ffi_adaptive_bound_scope");
+        let mut scope = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_bind_scope(runtime, ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_bind_scope(runtime, scope),
+            NemoRelayStatus::Ok
+        );
+
+        let cache_facts_options = cstring(
+            &json!({
+                "provider": "openai",
+                "request_id": "00000000-0000-0000-0000-000000000601",
+                "annotated_request": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "Find cache evidence"
+                        }
+                    ],
+                    "model": "gpt-4.1-mini"
+                },
+                "agent_id": "ffi-adaptive-openai",
+                "timestamp": "2026-06-24T12:00:00Z"
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_build_cache_request_facts(
+                runtime,
+                cache_facts_options.as_ptr(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let facts = returned_json(out_json);
+        assert_eq!(facts["provider"], "openai");
+        assert_eq!(facts["missing_facts"][0], "acg_stability_unavailable");
+
+        for options in [
+            json!({
+                "provider": "openai",
+                "request_id": "not-a-uuid",
+                "annotated_request": {},
+                "agent_id": "ffi-adaptive-openai"
+            }),
+            json!({
+                "provider": "openai",
+                "request_id": "00000000-0000-0000-0000-000000000602",
+                "annotated_request": {},
+                "agent_id": "ffi-adaptive-openai",
+                "timestamp": "not-a-timestamp"
+            }),
+            json!({
+                "provider": "openai",
+                "request_id": "00000000-0000-0000-0000-000000000603",
+                "annotated_request": "bad",
+                "agent_id": "ffi-adaptive-openai"
+            }),
+        ] {
+            let options = cstring(&options.to_string());
+            assert!(
+                matches!(
+                    nemo_relay_adaptive_runtime_build_cache_request_facts(
+                        runtime,
+                        options.as_ptr(),
+                        &mut out_json,
+                    ),
+                    NemoRelayStatus::InvalidArg | NemoRelayStatus::InvalidJson
+                ),
+                "expected invalid cache facts options to fail"
+            );
+        }
+        assert_eq!(
+            nemo_relay_adaptive_runtime_build_cache_request_facts(
+                runtime,
+                invalid_json.as_ptr(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_build_cache_request_facts(
+                runtime,
+                cache_facts_options.as_ptr(),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        let telemetry_options = cstring(
+            &json!({
+                "provider": "openai",
+                "request_id": "00000000-0000-0000-0000-000000000604",
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 8,
+                    "cache_read_tokens": 25
+                },
+                "request_facts": facts,
+                "agent_id": "ffi-adaptive-openai",
+                "template_version": "v1",
+                "toolset_hash": "tools",
+                "model_family": "gpt",
+                "tenant_scope": "tenant",
+                "timestamp": "2026-06-24T12:00:01Z"
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            nemo_relay_adaptive_build_cache_telemetry_event(
+                telemetry_options.as_ptr(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let event = returned_json(out_json);
+        assert_eq!(event["cache_read_tokens"], json!(25));
+        assert_eq!(event["hit_rate"], json!(0.25));
+
+        let no_usage_options = cstring(
+            &json!({
+                "provider": "openai",
+                "request_id": "00000000-0000-0000-0000-000000000605",
+                "agent_id": "ffi-adaptive-openai",
+                "template_version": "v1",
+                "toolset_hash": "tools",
+                "model_family": "gpt",
+                "tenant_scope": "tenant"
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            nemo_relay_adaptive_build_cache_telemetry_event(
+                no_usage_options.as_ptr(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out_json), Json::Null);
+
+        for (options, expected) in [
+            (
+                json!({
+                    "provider": "unsupported",
+                    "request_id": "00000000-0000-0000-0000-000000000606",
+                    "usage": {},
+                    "agent_id": "ffi-adaptive-openai",
+                    "template_version": "v1",
+                    "toolset_hash": "tools",
+                    "model_family": "gpt",
+                    "tenant_scope": "tenant"
+                }),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "not-a-uuid",
+                    "usage": {},
+                    "agent_id": "ffi-adaptive-openai",
+                    "template_version": "v1",
+                    "toolset_hash": "tools",
+                    "model_family": "gpt",
+                    "tenant_scope": "tenant"
+                }),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "00000000-0000-0000-0000-000000000607",
+                    "usage": {},
+                    "agent_id": "ffi-adaptive-openai",
+                    "template_version": "v1",
+                    "toolset_hash": "tools",
+                    "model_family": "gpt",
+                    "tenant_scope": "tenant",
+                    "timestamp": "not-a-timestamp"
+                }),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "00000000-0000-0000-0000-000000000608",
+                    "usage": "bad",
+                    "agent_id": "ffi-adaptive-openai",
+                    "template_version": "v1",
+                    "toolset_hash": "tools",
+                    "model_family": "gpt",
+                    "tenant_scope": "tenant"
+                }),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "00000000-0000-0000-0000-000000000609",
+                    "usage": {},
+                    "request_facts": "bad",
+                    "agent_id": "ffi-adaptive-openai",
+                    "template_version": "v1",
+                    "toolset_hash": "tools",
+                    "model_family": "gpt",
+                    "tenant_scope": "tenant"
+                }),
+                NemoRelayStatus::InvalidJson,
+            ),
+        ] {
+            let options = cstring(&options.to_string());
+            assert_eq!(
+                nemo_relay_adaptive_build_cache_telemetry_event(options.as_ptr(), &mut out_json),
+                expected
+            );
+        }
+        assert_eq!(
+            nemo_relay_adaptive_build_cache_telemetry_event(
+                telemetry_options.as_ptr(),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_adaptive_build_cache_telemetry_event(invalid_json.as_ptr(), &mut out_json),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_adaptive_set_latency_sensitivity(0),
+            NemoRelayStatus::InvalidArg
+        );
+
+        assert_eq!(
+            nemo_relay_adaptive_runtime_deregister(runtime),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_shutdown(runtime),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_shutdown(runtime),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_adaptive_runtime_register(runtime),
+            NemoRelayStatus::InvalidArg
+        );
+
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+        types::nemo_relay_adaptive_runtime_free(runtime);
+    }
+}
+
+#[test]
+fn test_ffi_observability_component_and_constructor_error_paths() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let mut out_json = ptr::null_mut();
+        let invalid_json = cstring("{");
+        let invalid_config = cstring(r#"{"version":"bad"}"#);
+        let explicit_config = cstring(
+            &json!({
+                "version": 1,
+                "atof": {
+                    "enabled": false
+                }
+            })
+            .to_string(),
+        );
+
+        assert_eq!(
+            nemo_relay_observability_default_config_json(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_observability_component_spec_json(ptr::null(), true, ptr::null_mut(),),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_observability_component_spec_json(
+                invalid_json.as_ptr(),
+                true,
+                &mut out_json,
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_observability_component_spec_json(
+                invalid_config.as_ptr(),
+                true,
+                &mut out_json,
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+        assert_eq!(
+            nemo_relay_observability_component_spec_json(
+                explicit_config.as_ptr(),
+                false,
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let component = returned_json(out_json);
+        assert_eq!(component["kind"], "observability");
+        assert_eq!(component["enabled"], false);
+
+        let invalid_utf8 = [0xffu8, 0];
+        let invalid = invalid_utf8.as_ptr() as *const c_char;
+        let append = cstring("append");
+        let filename = cstring("events.jsonl");
+        let bad_mode = cstring("bad-mode");
+        let mut atof = ptr::null_mut();
+
+        assert_eq!(
+            nemo_relay_atof_exporter_create(
+                ptr::null(),
+                append.as_ptr(),
+                filename.as_ptr(),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_create(
+                ptr::null(),
+                bad_mode.as_ptr(),
+                filename.as_ptr(),
+                &mut atof,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_create(invalid, append.as_ptr(), filename.as_ptr(), &mut atof,),
+            NemoRelayStatus::InvalidUtf8
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_create(ptr::null(), invalid, filename.as_ptr(), &mut atof,),
+            NemoRelayStatus::InvalidUtf8
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_create(ptr::null(), append.as_ptr(), invalid, &mut atof,),
+            NemoRelayStatus::InvalidUtf8
+        );
+
+        let invalid_map_shape = cstring(r#"["not-an-object"]"#);
+        let mut otel = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_otel_subscriber_create(
+                ptr::null(),
+                ptr::null(),
+                invalid_map_shape.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                &mut otel,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        let mut openinference = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_openinference_subscriber_create(
+                ptr::null(),
+                ptr::null(),
+                invalid_map_shape.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                &mut openinference,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+    }
+}
