@@ -16,7 +16,7 @@
 //! - [`OpenTelemetrySubscriber`] exposes a NeMo Relay [`EventSubscriberFn`] and
 //!   convenience `register` / `deregister` / `force_flush` / `shutdown` methods
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,8 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span};
 use serde::Serialize;
 use uuid::Uuid;
+
+const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
 
 #[cfg(target_arch = "wasm32")]
 use async_trait::async_trait;
@@ -494,6 +496,8 @@ struct ActiveSpan {
 
 struct OtelEventProcessor {
     active_spans: HashMap<Uuid, ActiveSpan>,
+    completed_span_contexts: HashMap<Uuid, SpanContext>,
+    completed_span_order: VecDeque<Uuid>,
     provider: SdkTracerProvider,
     tracer: SdkTracer,
 }
@@ -503,6 +507,8 @@ impl OtelEventProcessor {
         let tracer = provider.tracer(instrumentation_scope);
         Self {
             active_spans: HashMap::new(),
+            completed_span_contexts: HashMap::new(),
+            completed_span_order: VecDeque::new(),
             provider,
             tracer,
         }
@@ -529,6 +535,7 @@ impl OtelEventProcessor {
     }
 
     fn process_start(&mut self, event: &Event) {
+        self.completed_span_contexts.remove(&event.uuid());
         let mut span = self
             .tracer
             .span_builder(span_name(event))
@@ -545,6 +552,7 @@ impl OtelEventProcessor {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
             return;
         };
+        self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
 
         super::set_span_status_from_event_metadata(&mut active_span.span, event);
         active_span.span.set_attributes(end_attributes(event));
@@ -578,10 +586,13 @@ impl OtelEventProcessor {
     }
 
     fn parent_context(&self, event: &Event) -> Context {
-        self.find_parent_span(event)
-            .map(|active_span| {
-                Context::new().with_remote_span_context(active_span.span_context.clone())
-            })
+        if let Some(active_span) = self.find_parent_span(event) {
+            return Context::new().with_remote_span_context(active_span.span_context.clone());
+        }
+        event
+            .parent_uuid()
+            .and_then(|uuid| self.completed_span_contexts.get(&uuid))
+            .map(|span_context| Context::new().with_remote_span_context(span_context.clone()))
             .unwrap_or_default()
     }
 
@@ -599,6 +610,21 @@ impl OtelEventProcessor {
     fn find_parent_span_mut(&mut self, event: &Event) -> Option<&mut ActiveSpan> {
         self.parent_span_uuid(event)
             .and_then(|uuid| self.active_spans.get_mut(&uuid))
+    }
+
+    fn record_completed_span_context(&mut self, uuid: Uuid, span_context: SpanContext) {
+        if self
+            .completed_span_contexts
+            .insert(uuid, span_context)
+            .is_none()
+        {
+            self.completed_span_order.push_back(uuid);
+        }
+        while self.completed_span_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
+            if let Some(expired) = self.completed_span_order.pop_front() {
+                self.completed_span_contexts.remove(&expired);
+            }
+        }
     }
 }
 
