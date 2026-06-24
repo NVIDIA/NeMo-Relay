@@ -77,8 +77,11 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         return Err(error);
     }
 
-    let _ = (scope, manifest_ref, plugins_toml_path, revived);
-    println!("Added dynamic plugin {}", plugin_id);
+    println!(
+        "{} dynamic plugin {}",
+        if revived { "Revived" } else { "Added" },
+        plugin_id
+    );
     Ok(())
 }
 
@@ -250,7 +253,7 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
         .registry
         .remove(&command.id)
         .map_err(|error| CliError::Config(error.to_string()))?;
-    let removed_reference = remove_dynamic_plugin_reference(
+    remove_dynamic_plugin_reference(
         &entry.plugins_toml_path,
         &command.id,
         entry.record.source.manifest_ref.as_deref(),
@@ -260,7 +263,6 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
         return Err(error);
     }
 
-    let _ = (entry, removed_reference);
     println!("Removed dynamic plugin {}", command.id);
     Ok(())
 }
@@ -302,7 +304,6 @@ fn mutate_enabled_state(
     }
     scopes[entry.scope_index].save()?;
 
-    let _ = entry;
     println!(
         "{} dynamic plugin {}",
         if enabled { "Enabled" } else { "Disabled" },

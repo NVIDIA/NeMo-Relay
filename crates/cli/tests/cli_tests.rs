@@ -300,6 +300,102 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
 }
 
 #[test]
+fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.mutate-output");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&add.stdout).trim(),
+        "Added dynamic plugin acme.mutate-output"
+    );
+
+    let enable = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "enable", "acme.mutate-output"])
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&enable.stdout).trim(),
+        "Enabled dynamic plugin acme.mutate-output"
+    );
+
+    let disable = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "disable", "acme.mutate-output"])
+        .output()
+        .unwrap();
+    assert!(
+        disable.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&disable.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&disable.stdout).trim(),
+        "Disabled dynamic plugin acme.mutate-output"
+    );
+
+    let remove = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "remove", "acme.mutate-output"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&remove.stdout).trim(),
+        "Removed dynamic plugin acme.mutate-output"
+    );
+
+    let revive = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        revive.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&revive.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&revive.stdout).trim(),
+        "Revived dynamic plugin acme.mutate-output"
+    );
+}
+
+#[test]
 fn cli_completions_prints_script_for_requested_shell() {
     let output = Command::new(gateway_bin())
         .args(["completions", "zsh"])
