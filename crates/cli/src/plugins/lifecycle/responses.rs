@@ -19,8 +19,8 @@ use serde_json::{Map, Value};
 use crate::config::ResolvedDynamicPluginConfig;
 use crate::error::{CliError, PluginLifecycleFailureKind};
 
-use super::render::redacted_host_config_json;
 use super::state::ScopedDynamicPluginRecord;
+use super::{host_config_status, redacted_host_config_json};
 
 #[derive(Debug)]
 pub(super) struct ValidateResponseInput<'a> {
@@ -153,10 +153,7 @@ pub(super) fn list_success(
                             code: error.code.clone(),
                             message: error.message.clone(),
                         }),
-                    host_config: host_config_by_id
-                        .get(&record.metadata.id)
-                        .map(|plugin| plugin.host_config_status().to_string())
-                        .unwrap_or_else(|| "missing".into()),
+                    host_config: host_config_status(host_config_by_id.get(&record.metadata.id)),
                 }
             })
             .collect(),
@@ -171,44 +168,50 @@ pub(super) fn inspect_success(
     manifest_ref: &str,
     host_config: Option<&ResolvedDynamicPluginConfig>,
 ) -> ResponseEnvelope<InspectResponse> {
-    let record = &entry.record;
     success(
         command,
         Some(target),
-        InspectResponse {
-            id: record.metadata.id.clone(),
-            name: record.metadata.name.clone(),
-            kind: record.metadata.kind,
-            scope: entry.scope,
-            manifest_ref: manifest_ref.into(),
-            plugins_toml_path: entry.plugins_toml_path.display().to_string(),
-            state_path: entry.state_path.display().to_string(),
-            load: serde_json::to_value(&record.load)
-                .expect("dynamic plugin load contract serializes to JSON"),
-            compat: serde_json::to_value(&record.compatibility)
-                .expect("dynamic plugin compatibility serializes to JSON"),
-            capabilities: manifest
-                .capabilities
-                .items
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-            metadata: serde_json::to_value(&record.metadata)
-                .expect("dynamic plugin metadata serializes to JSON"),
-            source: serde_json::to_value(&record.source)
-                .expect("dynamic plugin source serializes to JSON"),
-            spec: serde_json::to_value(&record.spec)
-                .expect("dynamic plugin spec serializes to JSON"),
-            status: serde_json::to_value(&record.status)
-                .expect("dynamic plugin status serializes to JSON"),
-            host_config_status: host_config
-                .map(|plugin| plugin.host_config_status().to_string())
-                .unwrap_or_else(|| "missing".into()),
-            host_config: host_config
-                .map(redacted_host_config_json)
-                .unwrap_or(Value::Null),
-        },
+        inspect_data(entry, manifest, manifest_ref, host_config),
     )
+}
+
+pub(super) fn inspect_data(
+    entry: &ScopedDynamicPluginRecord,
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+    host_config: Option<&ResolvedDynamicPluginConfig>,
+) -> InspectResponse {
+    let record = &entry.record;
+    InspectResponse {
+        id: record.metadata.id.clone(),
+        name: record.metadata.name.clone(),
+        kind: record.metadata.kind,
+        scope: entry.scope,
+        manifest_ref: manifest_ref.into(),
+        plugins_toml_path: entry.plugins_toml_path.display().to_string(),
+        state_path: entry.state_path.display().to_string(),
+        load: serde_json::to_value(&record.load)
+            .expect("dynamic plugin load contract serializes to JSON"),
+        compat: serde_json::to_value(&record.compatibility)
+            .expect("dynamic plugin compatibility serializes to JSON"),
+        capabilities: manifest
+            .capabilities
+            .items
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        metadata: serde_json::to_value(&record.metadata)
+            .expect("dynamic plugin metadata serializes to JSON"),
+        source: serde_json::to_value(&record.source)
+            .expect("dynamic plugin source serializes to JSON"),
+        spec: serde_json::to_value(&record.spec).expect("dynamic plugin spec serializes to JSON"),
+        status: serde_json::to_value(&record.status)
+            .expect("dynamic plugin status serializes to JSON"),
+        host_config_status: host_config_status(host_config),
+        host_config: host_config
+            .map(redacted_host_config_json)
+            .unwrap_or(Value::Null),
+    }
 }
 
 pub(super) fn validate_success(
@@ -236,10 +239,7 @@ pub(super) fn validate_success(
             manifest_ref: input.manifest_ref.into(),
             kind: input.manifest.plugin.kind,
             desired_enabled: input.entry.map(|entry| entry.record.spec.enabled),
-            host_config_status: input
-                .host_config
-                .map(|plugin| plugin.host_config_status().to_string())
-                .unwrap_or_else(|| "missing".into()),
+            host_config_status: host_config_status(input.host_config),
         },
     )
 }

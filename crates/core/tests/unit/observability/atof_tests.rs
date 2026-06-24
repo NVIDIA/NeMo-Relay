@@ -1273,6 +1273,24 @@ fn invalid_output_path_errors_cleanly() {
 }
 
 #[test]
+fn missing_output_directory_is_created() {
+    let dir = temp_dir("atof-missing-output-dir");
+    let output_dir = dir.join("nested/atof");
+
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&output_dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+
+    let output_path = output_dir.join("events.jsonl");
+    assert_eq!(exporter.path(), output_path.as_path());
+    assert!(output_dir.is_dir());
+    assert!(output_path.exists());
+}
+
+#[test]
 fn invalid_filename_errors_cleanly() {
     let dir = temp_dir("atof-invalid-filename");
 
