@@ -84,7 +84,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
         Command::Config(command) => run_config(command).await,
-        Command::Plugins(command) => run_plugins(command),
+        Command::Plugins(command) => run_plugins(command, server),
         Command::Pricing(command) => run_pricing(command),
         Command::Doctor(command) => run_doctor(command).await,
         Command::Agents(command) => doctor::run_agents(command.json).await,
@@ -101,11 +101,41 @@ async fn run_config(command: ConfigCommand) -> Result<ExitCode, error::CliError>
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_plugins(command: PluginsCommand) -> Result<ExitCode, error::CliError> {
-    match command.command {
-        PluginsSubcommand::Edit(command) => plugins::edit(command)?,
+fn run_plugins(command: PluginsCommand, server: &ServerArgs) -> Result<ExitCode, error::CliError> {
+    let json_context = command
+        .command
+        .json_context()
+        .map(|context| (context.command, context.target.map(str::to_owned)));
+    let json = json_context.is_some();
+    let result = match command.command {
+        PluginsSubcommand::Edit(command) => plugins::edit(command),
+        PluginsSubcommand::Add(command) => plugins::lifecycle::add(command, server),
+        PluginsSubcommand::Validate(command) => plugins::lifecycle::validate(command, server),
+        PluginsSubcommand::List(command) => plugins::lifecycle::list(command, server),
+        PluginsSubcommand::Inspect(command) => plugins::lifecycle::inspect(command, server),
+        PluginsSubcommand::Enable(command) => plugins::lifecycle::enable(command, server),
+        PluginsSubcommand::Disable(command) => plugins::lifecycle::disable(command, server),
+        PluginsSubcommand::Remove(command) => plugins::lifecycle::remove(command, server),
+    };
+    match result {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(error) => {
+            if let Some(exit_code) = plugins::lifecycle::render_plugin_error(&error, json)? {
+                Ok(exit_code)
+            } else if json {
+                let (json_command, json_target) = json_context
+                    .as_ref()
+                    .expect("json plugin command context should exist when json output is enabled");
+                plugins::lifecycle::render_generic_plugin_json_error(
+                    json_command,
+                    json_target.as_deref(),
+                    &error.to_string(),
+                )
+            } else {
+                Err(error)
+            }
+        }
     }
-    Ok(ExitCode::SUCCESS)
 }
 
 fn run_pricing(command: PricingCommand) -> Result<ExitCode, error::CliError> {
