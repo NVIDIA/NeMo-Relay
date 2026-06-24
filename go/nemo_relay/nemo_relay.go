@@ -1658,12 +1658,23 @@ const (
 	AtofEndpointTransportNDJSON AtofEndpointTransport = "ndjson"
 )
 
+// AtofEndpointFieldNamePolicy controls endpoint-local field name transformations.
+type AtofEndpointFieldNamePolicy string
+
+const (
+	// AtofEndpointFieldNamePolicyPreserve sends canonical ATOF field names unchanged.
+	AtofEndpointFieldNamePolicyPreserve AtofEndpointFieldNamePolicy = "preserve"
+	// AtofEndpointFieldNamePolicyReplaceDots replaces dots in JSON object keys with underscores.
+	AtofEndpointFieldNamePolicyReplaceDots AtofEndpointFieldNamePolicy = "replace_dots"
+)
+
 // AtofEndpointConfig configures one streaming destination for raw ATOF events.
 type AtofEndpointConfig struct {
-	URL           string                `json:"url"`
-	Transport     AtofEndpointTransport `json:"transport,omitempty"`
-	Headers       map[string]string     `json:"headers,omitempty"`
-	TimeoutMillis uint64                `json:"timeout_millis,omitempty"`
+	URL             string                      `json:"url"`
+	Transport       AtofEndpointTransport       `json:"transport,omitempty"`
+	Headers         map[string]string           `json:"headers,omitempty"`
+	TimeoutMillis   uint64                      `json:"timeout_millis,omitempty"`
+	FieldNamePolicy AtofEndpointFieldNamePolicy `json:"field_name_policy,omitempty"`
 }
 
 // NewAtofExporterConfig returns a config initialized with native defaults.

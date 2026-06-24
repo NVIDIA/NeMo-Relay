@@ -29,10 +29,11 @@ type ObservabilityAtofConfig struct {
 
 // ObservabilityAtofEndpoint configures one streaming destination for raw ATOF events.
 type ObservabilityAtofEndpoint struct {
-	URL           string            `json:"url"`
-	Transport     string            `json:"transport,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
+	URL             string            `json:"url"`
+	Transport       string            `json:"transport,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
+	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
 }
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
