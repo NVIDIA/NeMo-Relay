@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
+use strum::Display;
 
 use crate::config::{
     PLUGINS_TOML, global_plugin_config_path, project_plugin_config_path, user_config_dir,
@@ -20,23 +21,13 @@ use super::super::config_io::TargetScope;
 const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
 const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Display, Debug, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
 pub(super) enum RegistryScope {
     User,
     Project,
     Global,
     Explicit,
-}
-
-impl RegistryScope {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Project => "project",
-            Self::Global => "global",
-            Self::Explicit => "explicit",
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -213,7 +204,7 @@ pub(super) fn find_record_by_id(
             "dynamic plugin '{}' is configured in multiple lifecycle scopes; inspect {}",
             plugin_id,
             live.iter()
-                .map(|record| record.scope.label())
+                .map(|record| record.scope.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         )));
@@ -227,7 +218,7 @@ pub(super) fn find_record_by_id(
             plugin_id,
             tombstoned
                 .iter()
-                .map(|record| record.scope.label())
+                .map(|record| record.scope.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         )));

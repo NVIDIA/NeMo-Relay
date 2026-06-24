@@ -461,7 +461,7 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     let entry = find_record_by_id(&scopes, "acme.explicit")
         .unwrap()
         .expect("explicit-scope record");
-    assert_eq!(entry.scope.label(), "explicit");
+    assert_eq!(entry.scope.to_string(), "explicit");
     assert_eq!(entry.plugins_toml_path, plugins_toml);
     assert_eq!(entry.state_path, state_path);
 }
@@ -493,7 +493,7 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
     let entry = find_record_by_id(&scopes, "acme.bootstrap")
         .unwrap()
         .expect("hydrated record");
-    assert_eq!(entry.scope.label(), "project");
+    assert_eq!(entry.scope.to_string(), "project");
     assert_eq!(entry.record.metadata.id, "acme.bootstrap");
     assert!(entry.record.spec.present);
     assert!(!entry.record.spec.enabled);

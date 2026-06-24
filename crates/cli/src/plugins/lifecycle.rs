@@ -46,8 +46,7 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         Some(existing) if !existing.record.is_tombstoned() => {
             return Err(CliError::Config(format!(
                 "dynamic plugin '{}' is already registered in the {} lifecycle scope",
-                plugin_id,
-                existing.scope.label()
+                plugin_id, existing.scope
             )));
         }
         Some(_) => true,

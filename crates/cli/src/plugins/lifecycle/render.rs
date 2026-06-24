@@ -30,7 +30,7 @@ pub(super) fn render_list(
         lines.push(format!(
             "{:<32} {:<8} {:<7} {:<10} {:<10} {}",
             entry.record.metadata.id,
-            entry.scope.label(),
+            entry.scope,
             entry.record.spec.enabled,
             lifecycle_state_label(&entry.record),
             <&'static str>::from(entry.record.status.validation.manifest),
@@ -49,7 +49,7 @@ pub(super) fn render_inspect(
     let record = &entry.record;
     let mut lines = vec![
         format!("id: {}", record.metadata.id),
-        format!("scope: {}", entry.scope.label()),
+        format!("scope: {}", entry.scope),
         format!("kind: {}", manifest_kind_label(record.metadata.kind)),
         format!(
             "name: {}",
@@ -147,7 +147,7 @@ pub(super) fn render_validation_summary(
         format!("manifest: {manifest_ref}"),
     ];
     if let Some(entry) = entry {
-        lines.push(format!("scope: {}", entry.scope.label()));
+        lines.push(format!("scope: {}", entry.scope));
         lines.push(format!(
             "lifecycle_state_path: {}",
             entry.state_path.display()
