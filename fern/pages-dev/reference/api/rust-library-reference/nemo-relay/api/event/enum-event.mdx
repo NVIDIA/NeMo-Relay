@@ -251,6 +251,20 @@ Return the runtime-only annotated LLM response.
 
 `Some` annotated response when the event profile includes one.
 
+#### `normalized_llm_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
+
+Normalized LLM request: the codec annotation when present, otherwise a best-effort decode of the start-event input payload.
+
+The fallback decode requires the start-event input to be the serialized [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) wire shape (`{headers, content}`) emitted by the managed LLM pipeline; events whose input is a bare payload or a non-LLM shape yield `None`.
+
+#### `normalized_llm_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
+
+Normalized LLM response: the codec annotation when present, otherwise a best-effort decode of the end-event output payload.
+
 #### `is_scope_start`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_scope_start(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>

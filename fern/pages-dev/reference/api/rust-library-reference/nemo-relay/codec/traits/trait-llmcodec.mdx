@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 A bidirectional translator between opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) content and structured [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest).
 
-Codecs are implemented by integration patches (LangChain, LangChain-NVIDIA, LangGraph, etc.) since each SDK has its own request format. They are registered by name in the global codec registry.
+Codecs are implemented by integration patches (LangChain, LangChain-NVIDIA, LangGraph, etc.) since each SDK has its own request format. A codec is supplied per call by the caller; the built-in provider codecs can also be selected from a raw payload via [`crate::codec::resolve`](/reference/api/rust-library-reference/nemo-relay/codec/resolve).
 
 ## Design
 

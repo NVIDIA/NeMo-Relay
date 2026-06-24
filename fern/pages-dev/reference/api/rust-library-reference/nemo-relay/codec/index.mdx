@@ -13,6 +13,8 @@ LLM codec types, traits, and built-in implementations.
 
 This module provides the type system and traits for bidirectional request codecs ([`traits::LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec) / [`request::AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest)), the decode-only response codec ([`traits::LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec) / [`response::AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse)), and the streaming response codec ([`streaming::StreamingCodec`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec)) used with the managed streaming LLM execution pipeline.
 
+[`resolve`](/reference/api/rust-library-reference/nemo-relay/codec/resolve) is the detect-then-decode entry point for selecting a built-in provider codec from a raw payload when no codec annotation is present.
+
 ## Modules
 
 - [anthropic](/reference/api/rust-library-reference/nemo-relay/codec/anthropic): Built-in codec for the Anthropic Messages API.
@@ -20,6 +22,7 @@ This module provides the type system and traits for bidirectional request codecs
 - [openai_responses](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses): Built-in codec for the OpenAI Responses API.
 - [pricing](/reference/api/rust-library-reference/nemo-relay/codec/pricing): Data-driven LLM model pricing used to layer cost estimates onto usage.
 - [request](/reference/api/rust-library-reference/nemo-relay/codec/request): LLM request codec types and trait.
+- [resolve](/reference/api/rust-library-reference/nemo-relay/codec/resolve): Provider-surface detection and best-effort normalization: the preferred path for turning raw provider JSON into normalized types when no codec annotation is present.
 - [response](/reference/api/rust-library-reference/nemo-relay/codec/response): Normalized LLM response types produced by response codecs.
 - [streaming](/reference/api/rust-library-reference/nemo-relay/codec/streaming): Streaming response codecs for the managed LLM execution pipeline.
 - [traits](/reference/api/rust-library-reference/nemo-relay/codec/traits): LLM codec traits for bidirectional request translation.

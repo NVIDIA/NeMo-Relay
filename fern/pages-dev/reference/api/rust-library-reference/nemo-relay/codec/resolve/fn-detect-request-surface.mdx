@@ -1,0 +1,16 @@
+---
+title: "Function detect_request_surface"
+sidebar-title: "detect_request_surface"
+description: "Detect the request surface from a raw request body by top-level key."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn detect_request_surface(body: &amp;<a href=\"../../json/type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-providersurface\">ProviderSurface</a>&gt;"}} /></pre>
+
+Detect the request surface from a raw request body by top-level key.
+
+Priority: OpenAI Responses (`input`/`instructions`) &gt; Anthropic Messages (`system`) &gt; OpenAI Chat (`messages`). `None` when no key matches or `body` is not an object. This is a best-effort heuristic: an Anthropic request that omits the optional top-level `system` is indistinguishable from OpenAI Chat and classifies as `OpenAIChat`.

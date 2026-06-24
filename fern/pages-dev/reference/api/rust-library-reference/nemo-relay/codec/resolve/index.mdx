@@ -1,0 +1,23 @@
+---
+title: "Module resolve"
+sidebar-title: "resolve"
+description: "Provider-surface detection and best-effort normalization: the preferred path for turning raw provider JSON into normalized types when no codec annotation is present."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+Provider-surface detection and best-effort normalization: the preferred path for turning raw provider JSON into normalized types when no codec annotation is present.
+
+## Enums
+
+- [ProviderSurface](/reference/api/rust-library-reference/nemo-relay/codec/resolve/enum-providersurface): A built-in provider request/response surface.
+
+## Functions
+
+- [detect_request_surface](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-detect-request-surface): Detect the request surface from a raw request body by top-level key.
+- [detect_response_surface](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-detect-response-surface): Detect the response surface from a raw provider response, classifying only when exactly one built-in shape matches (the built-in codecs accept minimal objects, so decode success alone is not a reliable classifier).
+- [normalize_request](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-normalize-request): Best-effort decode of a raw request into [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest) (fail-open).
+- [normalize_response](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-normalize-response): Best-effort decode of a raw response into [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse) (fail-open).
