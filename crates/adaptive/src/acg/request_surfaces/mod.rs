@@ -96,18 +96,12 @@ pub(crate) fn resolve_request_surface(
 ) -> crate::acg::Result<RequestSurface> {
     let surface = resolve_request_surface_from_request(request)?;
     if surface.supports_provider(provider) {
-        return Ok(surface);
+        Ok(surface)
+    } else {
+        Err(crate::acg::AcgError::Internal(format!(
+            "provider '{provider}' does not support resolved request surface {surface:?}"
+        )))
     }
-    // `detect_request_surface` maps a request with `messages` but no
-    // `system`/`input`/`instructions` to OpenAI Chat; such a request is also a
-    // valid Anthropic Messages request (Anthropic's `system` is optional), so
-    // prefer the Anthropic surface when the provider is Anthropic.
-    if provider == "anthropic" && surface == RequestSurface::OpenAIChat {
-        return Ok(RequestSurface::AnthropicMessages);
-    }
-    Err(crate::acg::AcgError::Internal(format!(
-        "provider '{provider}' does not support resolved request surface {surface:?}"
-    )))
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
