@@ -27,6 +27,12 @@ In-memory dynamic plugin registry used by the control plane.
 
 Creates an empty dynamic plugin registry.
 
+#### `from_records`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_records(records: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;) -&gt; <a href=\"../type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Reconstructs a registry from previously persisted durable records.
+
 #### `get`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
@@ -38,6 +44,12 @@ Returns the registered record for `plugin_id`, if present.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn list(&amp;self, include_tombstoned: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;&amp;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
 
 Lists records, hiding tombstones unless requested.
+
+#### `cloned_records`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cloned_records(\n    &amp;self,\n    include_tombstoned: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-dynamicpluginrecord\">DynamicPluginRecord</a>&gt;"}} /></pre>
+
+Clones records for serialization or higher-level projection.
 
 #### `add`
 
