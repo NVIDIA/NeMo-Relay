@@ -158,6 +158,65 @@ fn install_test_pricing(model_id: &str) {
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
+fn install_openai_disambiguation_pricing(model_id: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "other",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 1000.0,
+                        "output_per_million": 1000.0
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                },
+                {
+                    "provider": "openai",
+                    "model_id": model_id,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn openai_chat_provider_response(model_id: &str) -> Json {
+    json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": model_id,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 1_000,
+            "completion_tokens": 500,
+            "total_tokens": 1_500,
+            "prompt_tokens_details": {"cached_tokens": 200}
+        }
+    })
+}
+
 fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
         messages: vec![
@@ -2649,6 +2708,30 @@ fn llm_end_with_known_model_usage_emits_derived_cost_attribute() {
 
     let spans = exporter.get_finished_spans().unwrap();
     let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_unannotated_openai_response_uses_codec_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "other",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("priced-model")),
+    );
+
+    assert!(event.annotated_response().is_none());
+    assert!(event.normalized_llm_response().is_some());
+
+    let attributes = attr_map(&end_attributes(&event));
     assert_eq!(
         attributes.get("llm.cost.total"),
         Some(&"0.000435".to_string())
