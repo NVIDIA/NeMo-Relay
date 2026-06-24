@@ -1134,6 +1134,49 @@ async fn wait_for_health_reports_unready_gateway() {
 }
 
 #[tokio::test]
+async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", listener.local_addr().unwrap());
+    let gateway_config = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atof": {
+                        "enabled": true,
+                        "mode": "invalid"
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let error = execute_live_run(listener, gateway_config, &gateway_url, prepared)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("ATOF mode"));
+    assert!(!error.contains("gateway did not become ready"));
+}
+
+#[tokio::test]
 async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
     let temp = tempfile::tempdir().unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");

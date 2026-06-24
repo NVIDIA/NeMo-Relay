@@ -9,7 +9,7 @@
 //! one JSON object per JSONL line.
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
@@ -263,6 +263,10 @@ impl AtofExporter {
     /// Create a new exporter from config and open its output file.
     pub fn new(config: AtofExporterConfig) -> Result<Self> {
         let path = config.path();
+        create_dir_all(&config.output_directory).map_err(|source| AtofExporterError::OpenFile {
+            path: path.clone(),
+            source,
+        })?;
         let file = open_file(&path, config.mode)?;
         let endpoints = start_endpoint_workers(&config.endpoints)?;
         Ok(Self {
