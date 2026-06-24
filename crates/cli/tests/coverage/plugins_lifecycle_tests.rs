@@ -686,6 +686,49 @@ fn remove_reports_malformed_dynamic_plugin_containers() {
 }
 
 #[test]
+fn remove_matches_relative_target_manifest_refs_without_loading_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let config_dir = temp.path().join(".nemo-relay");
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+
+    let manifest_path = plugin_dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.guardrail"
+kind = "worker"
+"#,
+    )
+    .unwrap();
+
+    let plugins_toml = config_dir.join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        "[[plugins.dynamic]]\nmanifest = \"../plugins/acme/relay-plugin.toml\"\n",
+    )
+    .unwrap();
+
+    std::fs::remove_file(&manifest_path).unwrap();
+
+    let removed = remove_dynamic_plugin_reference(
+        &plugins_toml,
+        "acme.guardrail",
+        Some("../plugins/acme/relay-plugin.toml"),
+    )
+    .unwrap();
+    assert!(removed);
+    let rendered = std::fs::read_to_string(&plugins_toml).unwrap();
+    assert!(!rendered.contains("relay-plugin.toml"));
+}
+
+#[test]
 fn inspect_redacts_host_config_values() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);

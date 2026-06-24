@@ -184,7 +184,8 @@ pub(crate) fn remove_dynamic_plugin_reference(
 
     let original_len = dynamic_entries.len();
     let mut retained = Vec::with_capacity(original_len);
-    let target_manifest_ref = target_manifest_ref.map(PathBuf::from);
+    let target_manifest_ref =
+        target_manifest_ref.map(|manifest_ref| resolve_manifest_ref(path, manifest_ref));
     for entry in dynamic_entries.drain(..) {
         let manifest_ref = entry
             .as_table()
