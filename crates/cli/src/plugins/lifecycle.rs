@@ -26,7 +26,7 @@ mod responses;
 mod state;
 mod target;
 
-use self::render::{render_add_result, render_inspect, render_list, render_validation_summary};
+use self::render::{render_inspect, render_list, render_validation_summary};
 use self::responses::{
     ValidateResponseInput, failure, generic_failure, inspect_success, list_success,
     print_response_json, validate_success,
@@ -77,17 +77,8 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         return Err(error);
     }
 
-    println!(
-        "{}",
-        render_add_result(
-            &plugin_id,
-            scope.label(),
-            &manifest_ref,
-            &plugins_toml_path,
-            &scopes[scope_index].state_path,
-            revived,
-        )
-    );
+    let _ = (scope, manifest_ref, plugins_toml_path, revived);
+    println!("Added dynamic plugin {}", plugin_id);
     Ok(())
 }
 
@@ -269,18 +260,8 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
         return Err(error);
     }
 
+    let _ = (entry, removed_reference);
     println!("Removed dynamic plugin {}", command.id);
-    println!("scope: {}", entry.scope.label());
-    println!(
-        "plugins_toml: {}",
-        if removed_reference {
-            entry.plugins_toml_path.display().to_string()
-        } else {
-            "<already absent>".into()
-        }
-    );
-    println!("lifecycle_state_path: {}", entry.state_path.display());
-    println!("status: tombstoned");
     Ok(())
 }
 
@@ -321,13 +302,12 @@ fn mutate_enabled_state(
     }
     scopes[entry.scope_index].save()?;
 
+    let _ = entry;
     println!(
         "{} dynamic plugin {}",
         if enabled { "Enabled" } else { "Disabled" },
         plugin_id
     );
-    println!("scope: {}", entry.scope.label());
-    println!("lifecycle_state_path: {}", entry.state_path.display());
     Ok(())
 }
 

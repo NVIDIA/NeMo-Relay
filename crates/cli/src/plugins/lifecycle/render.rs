@@ -41,26 +41,6 @@ pub(super) fn render_list(
     lines.join("\n")
 }
 
-pub(super) fn render_add_result(
-    plugin_id: &str,
-    scope_label: &str,
-    manifest_ref: &str,
-    plugins_toml_path: &std::path::Path,
-    state_path: &std::path::Path,
-    revived: bool,
-) -> String {
-    [
-        format!("Added dynamic plugin {plugin_id}"),
-        format!("scope: {scope_label}"),
-        format!("manifest: {manifest_ref}"),
-        format!("plugins_toml: {}", plugins_toml_path.display()),
-        format!("lifecycle_state_path: {}", state_path.display()),
-        format!("revived: {revived}"),
-        "desired.enabled: false".into(),
-    ]
-    .join("\n")
-}
-
 pub(super) fn render_inspect(
     entry: &ScopedDynamicPluginRecord,
     manifest: &DynamicPluginManifest,
