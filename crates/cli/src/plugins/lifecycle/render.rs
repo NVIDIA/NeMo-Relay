@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginCompatibility, DynamicPluginKind, DynamicPluginLoadContract,
-    DynamicPluginManifest, DynamicPluginRecord,
+    DynamicPluginCompatibility, DynamicPluginLoadContract, DynamicPluginManifest,
+    DynamicPluginRecord,
 };
 use serde_json::Value;
 
-use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
+use crate::config::ResolvedDynamicPluginConfig;
 
 use super::state::ScopedDynamicPluginRecord;
 
@@ -25,8 +25,8 @@ pub(super) fn render_list(
     for entry in records {
         let host_config_status = host_config_by_id
             .get(&entry.record.metadata.id)
-            .map(|plugin| host_config_status_label(plugin.host_config_status()))
-            .unwrap_or("missing");
+            .map(|plugin| plugin.host_config_status().to_string())
+            .unwrap_or_else(|| "missing".into());
         lines.push(format!(
             "{:<32} {:<8} {:<7} {:<10} {:<10} {}",
             entry.record.metadata.id,
@@ -50,7 +50,7 @@ pub(super) fn render_inspect(
     let mut lines = vec![
         format!("id: {}", record.metadata.id),
         format!("scope: {}", entry.scope),
-        format!("kind: {}", manifest_kind_label(record.metadata.kind)),
+        format!("kind: {}", record.metadata.kind),
         format!(
             "name: {}",
             record.metadata.name.as_deref().unwrap_or("<none>")
@@ -81,8 +81,8 @@ pub(super) fn render_inspect(
         format!(
             "host_config: {}",
             host_config
-                .map(|plugin| host_config_status_label(plugin.host_config_status()))
-                .unwrap_or("missing")
+                .map(|plugin| plugin.host_config_status().to_string())
+                .unwrap_or_else(|| "missing".into())
         ),
     ];
 
@@ -102,7 +102,7 @@ pub(super) fn render_inspect(
 
     match &record.load {
         DynamicPluginLoadContract::Worker(load) => {
-            lines.push(format!("load.runtime: {:?}", load.runtime).to_lowercase());
+            lines.push(format!("load.runtime: {}", load.runtime));
             lines.push(format!("load.entrypoint: {}", load.entrypoint));
         }
         DynamicPluginLoadContract::RustDynamic(load) => {
@@ -118,7 +118,7 @@ pub(super) fn render_inspect(
             .capabilities
             .items
             .iter()
-            .map(|item| format!("{item:?}").to_lowercase())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
     ));
@@ -143,7 +143,7 @@ pub(super) fn render_validation_summary(
 ) -> String {
     let mut lines = vec![
         format!("Dynamic plugin '{}' is valid.", manifest.plugin.id),
-        format!("kind: {}", manifest_kind_label(manifest.plugin.kind)),
+        format!("kind: {}", manifest.plugin.kind),
         format!("manifest: {manifest_ref}"),
     ];
     if let Some(entry) = entry {
@@ -156,8 +156,8 @@ pub(super) fn render_validation_summary(
         lines.push(format!(
             "host_config: {}",
             host_config
-                .map(|plugin| host_config_status_label(plugin.host_config_status()))
-                .unwrap_or("missing")
+                .map(|plugin| plugin.host_config_status().to_string())
+                .unwrap_or_else(|| "missing".into())
         ));
     }
     lines.join("\n")
@@ -214,27 +214,18 @@ fn render_status(record: &DynamicPluginRecord) -> Vec<String> {
         lines.push(format!("status.runtime.message: {value}"));
     }
     if let Some(value) = record.status.startup_class {
-        lines.push(format!("status.startup_class: {:?}", value).to_lowercase());
+        lines.push(format!("status.startup_class: {}", value));
     }
     if let Some(value) = record.status.attestation_mode {
-        lines.push(format!("status.attestation_mode: {:?}", value).to_lowercase());
+        lines.push(format!("status.attestation_mode: {}", value));
     }
     if let Some(error) = record.status.last_error.as_ref() {
         lines.push(format!(
             "status.last_error: {}:{} {}",
-            format!("{:?}", error.phase).to_lowercase(),
-            error.code,
-            error.message
+            error.phase, error.code, error.message
         ));
     }
     lines
-}
-
-fn host_config_status_label(status: DynamicPluginHostConfigStatus) -> &'static str {
-    match status {
-        DynamicPluginHostConfigStatus::Absent => "absent",
-        DynamicPluginHostConfigStatus::Present => "present",
-    }
 }
 
 fn lifecycle_state_label(record: &DynamicPluginRecord) -> &'static str {
@@ -242,13 +233,6 @@ fn lifecycle_state_label(record: &DynamicPluginRecord) -> &'static str {
         "tombstoned"
     } else {
         record.status.runtime.state.into()
-    }
-}
-
-pub(super) fn manifest_kind_label(kind: DynamicPluginKind) -> &'static str {
-    match kind {
-        DynamicPluginKind::RustDynamic => "rust_dynamic",
-        DynamicPluginKind::Worker => "worker",
     }
 }
 

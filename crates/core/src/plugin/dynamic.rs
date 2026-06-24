@@ -10,7 +10,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use strum::IntoStaticStr;
+use strum::{Display, IntoStaticStr};
 
 /// Canonical identifier for one dynamic plugin record.
 pub type DynamicPluginId = String;
@@ -25,9 +25,10 @@ pub use manifest::*;
 pub use registry::*;
 
 /// Plugin execution lane.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginKind {
     /// Trusted in-process native plugin.
     RustDynamic,
@@ -36,18 +37,20 @@ pub enum DynamicPluginKind {
 }
 
 /// Managed runtime identity for worker-based plugins.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum WorkerRuntime {
     /// Python worker runtime.
     Python,
 }
 
 /// Relay-enforced capability declared by a dynamic plugin.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginCapability {
     /// Trusted in-process native extension capability.
     PluginNative,
@@ -58,9 +61,10 @@ pub enum DynamicPluginCapability {
 }
 
 /// Host policy startup classification for a plugin.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginStartupClass {
     /// Failure is tolerated and the host may start in degraded mode.
     Optional,
@@ -69,9 +73,10 @@ pub enum DynamicPluginStartupClass {
 }
 
 /// Host attestation policy mode.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginAttestationMode {
     /// Integrity verification only.
     IntegrityOnly,
@@ -118,9 +123,10 @@ pub enum DynamicPluginRuntimeState {
 }
 
 /// Recent failure phase for diagnostics and operator UX.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginFailurePhase {
     /// Failure occurred during validation.
     Validation,

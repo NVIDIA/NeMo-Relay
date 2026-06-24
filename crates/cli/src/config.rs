@@ -11,6 +11,7 @@ use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use strum::Display;
 
 use crate::error::CliError;
 use crate::plugin_shim::PluginShimCommand;
@@ -599,8 +600,9 @@ pub(crate) struct ResolvedDynamicPluginConfig {
     pub(crate) source: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum DynamicPluginHostConfigStatus {
     Absent,
     Present,

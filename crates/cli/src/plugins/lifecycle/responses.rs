@@ -10,14 +10,16 @@
 
 use std::collections::HashMap;
 
-use nemo_relay::plugin::dynamic::{DynamicPluginFailurePhase, DynamicPluginManifest};
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginCheckState, DynamicPluginKind, DynamicPluginManifest,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
+use crate::config::ResolvedDynamicPluginConfig;
 use crate::error::{CliError, PluginLifecycleFailureKind};
 
-use super::render::{manifest_kind_label, redacted_host_config_json};
+use super::render::redacted_host_config_json;
 use super::state::ScopedDynamicPluginRecord;
 
 #[derive(Debug)]
@@ -57,14 +59,14 @@ pub(super) struct ResponseError {
 pub(super) struct ListEntryResponse {
     id: String,
     name: Option<String>,
-    kind: &'static str,
+    kind: DynamicPluginKind,
     enabled: bool,
     tombstoned: bool,
-    validation_state: &'static str,
+    validation_state: DynamicPluginCheckState,
     runtime_state: String,
     startup: Option<String>,
     last_error: Option<LastErrorResponse>,
-    host_config: &'static str,
+    host_config: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,8 +80,8 @@ pub(super) struct LastErrorResponse {
 pub(super) struct InspectResponse {
     id: String,
     name: Option<String>,
-    kind: &'static str,
-    scope: String,
+    kind: DynamicPluginKind,
+    scope: super::state::RegistryScope,
     manifest_ref: String,
     plugins_toml_path: String,
     state_path: String,
@@ -90,7 +92,7 @@ pub(super) struct InspectResponse {
     source: Value,
     spec: Value,
     status: Value,
-    host_config_status: &'static str,
+    host_config_status: String,
     host_config: Value,
 }
 
@@ -103,9 +105,9 @@ pub(super) struct ValidateResponse {
     warnings: Vec<String>,
     notes: Vec<String>,
     manifest_ref: String,
-    kind: &'static str,
+    kind: DynamicPluginKind,
     desired_enabled: Option<bool>,
-    host_config_status: &'static str,
+    host_config_status: String,
 }
 
 pub(super) fn print_response_json<T: Serialize>(value: &T) -> Result<(), CliError> {
@@ -132,32 +134,29 @@ pub(super) fn list_success(
                 ListEntryResponse {
                     id: record.metadata.id.clone(),
                     name: record.metadata.name.clone(),
-                    kind: manifest_kind_label(record.metadata.kind),
+                    kind: record.metadata.kind,
                     enabled: record.spec.enabled,
                     tombstoned: record.is_tombstoned(),
-                    validation_state: record.status.validation.manifest.into(),
+                    validation_state: record.status.validation.manifest,
                     runtime_state: if record.is_tombstoned() {
                         "tombstoned".into()
                     } else {
                         <&'static str>::from(record.status.runtime.state).into()
                     },
-                    startup: record
-                        .status
-                        .startup_class
-                        .map(|value| format!("{value:?}").to_lowercase()),
+                    startup: record.status.startup_class.map(|value| value.to_string()),
                     last_error: record
                         .status
                         .last_error
                         .as_ref()
                         .map(|error| LastErrorResponse {
-                            phase: failure_phase_label(error.phase).into(),
+                            phase: error.phase.to_string(),
                             code: error.code.clone(),
                             message: error.message.clone(),
                         }),
                     host_config: host_config_by_id
                         .get(&record.metadata.id)
-                        .map(|plugin| host_config_status_label(plugin.host_config_status()))
-                        .unwrap_or("missing"),
+                        .map(|plugin| plugin.host_config_status().to_string())
+                        .unwrap_or_else(|| "missing".into()),
                 }
             })
             .collect(),
@@ -179,8 +178,8 @@ pub(super) fn inspect_success(
         InspectResponse {
             id: record.metadata.id.clone(),
             name: record.metadata.name.clone(),
-            kind: manifest_kind_label(record.metadata.kind),
-            scope: entry.scope.to_string(),
+            kind: record.metadata.kind,
+            scope: entry.scope,
             manifest_ref: manifest_ref.into(),
             plugins_toml_path: entry.plugins_toml_path.display().to_string(),
             state_path: entry.state_path.display().to_string(),
@@ -192,7 +191,7 @@ pub(super) fn inspect_success(
                 .capabilities
                 .items
                 .iter()
-                .map(|item| format!("{item:?}").to_lowercase())
+                .map(ToString::to_string)
                 .collect(),
             metadata: serde_json::to_value(&record.metadata)
                 .expect("dynamic plugin metadata serializes to JSON"),
@@ -203,8 +202,8 @@ pub(super) fn inspect_success(
             status: serde_json::to_value(&record.status)
                 .expect("dynamic plugin status serializes to JSON"),
             host_config_status: host_config
-                .map(|plugin| host_config_status_label(plugin.host_config_status()))
-                .unwrap_or("missing"),
+                .map(|plugin| plugin.host_config_status().to_string())
+                .unwrap_or_else(|| "missing".into()),
             host_config: host_config
                 .map(redacted_host_config_json)
                 .unwrap_or(Value::Null),
@@ -235,12 +234,12 @@ pub(super) fn validate_success(
             warnings: Vec::new(),
             notes,
             manifest_ref: input.manifest_ref.into(),
-            kind: manifest_kind_label(input.manifest.plugin.kind),
+            kind: input.manifest.plugin.kind,
             desired_enabled: input.entry.map(|entry| entry.record.spec.enabled),
             host_config_status: input
                 .host_config
-                .map(|plugin| host_config_status_label(plugin.host_config_status()))
-                .unwrap_or("missing"),
+                .map(|plugin| plugin.host_config_status().to_string())
+                .unwrap_or_else(|| "missing".into()),
         },
     )
 }
@@ -291,26 +290,10 @@ fn success<T: Serialize>(
     }
 }
 
-fn host_config_status_label(status: DynamicPluginHostConfigStatus) -> &'static str {
-    match status {
-        DynamicPluginHostConfigStatus::Absent => "absent",
-        DynamicPluginHostConfigStatus::Present => "present",
-    }
-}
-
 fn failure_code(kind: PluginLifecycleFailureKind) -> &'static str {
     match kind {
         PluginLifecycleFailureKind::Failed => "operation_failed",
         PluginLifecycleFailureKind::NotFound => "not_found",
         PluginLifecycleFailureKind::Refused => "refused",
-    }
-}
-
-fn failure_phase_label(phase: DynamicPluginFailurePhase) -> &'static str {
-    match phase {
-        DynamicPluginFailurePhase::Validation => "validation",
-        DynamicPluginFailurePhase::Activation => "activation",
-        DynamicPluginFailurePhase::Runtime => "runtime",
-        DynamicPluginFailurePhase::Policy => "policy",
     }
 }

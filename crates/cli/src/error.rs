@@ -7,9 +7,11 @@ use axum::response::{IntoResponse, Response};
 use nemo_relay::error::FlowError;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use strum::Display;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum PluginLifecycleFailureKind {
     Failed,
     NotFound,

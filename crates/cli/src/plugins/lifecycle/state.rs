@@ -21,7 +21,8 @@ use super::super::config_io::TargetScope;
 const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
 const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Display, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Display, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub(super) enum RegistryScope {
     User,
