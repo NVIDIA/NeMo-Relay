@@ -9,7 +9,8 @@ use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    global_plugin_config_path, project_plugin_config_path, user_config_dir, user_plugin_config_path,
+    PLUGINS_TOML, global_plugin_config_path, project_plugin_config_path, user_config_dir,
+    user_plugin_config_path,
 };
 use crate::error::CliError;
 
@@ -142,7 +143,7 @@ pub(super) fn scoped_paths_for_add(
             ))
         })?;
         return Ok((
-            parent.join("plugins.toml"),
+            parent.join(PLUGINS_TOML),
             parent.join(DYNAMIC_PLUGIN_STATE_FILENAME),
             RegistryScope::Explicit,
         ));
@@ -243,7 +244,7 @@ fn scoped_registry_layouts(
                 explicit.display()
             ))
         })?;
-        let plugins_toml_path = parent.join("plugins.toml");
+        let plugins_toml_path = parent.join(PLUGINS_TOML);
         return Ok(vec![(
             RegistryScope::Explicit,
             plugins_toml_path.clone(),
@@ -265,7 +266,7 @@ fn scoped_registry_layouts(
         ));
     }
     if let Some(user_dir) = user_config_dir() {
-        let plugins_toml_path = user_dir.join("plugins.toml");
+        let plugins_toml_path = user_dir.join(PLUGINS_TOML);
         layouts.push((
             RegistryScope::User,
             plugins_toml_path.clone(),

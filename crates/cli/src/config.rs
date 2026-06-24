@@ -830,7 +830,7 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Resu
     Ok(())
 }
 
-const PLUGINS_TOML: &str = "plugins.toml";
+pub(crate) const PLUGINS_TOML: &str = "plugins.toml";
 
 // Loads config from the ordered shared locations, deep-merges TOML tables, maps the typed file
 // shape onto runtime structs, applies a sibling/discovered plugins.toml when present, then lets
