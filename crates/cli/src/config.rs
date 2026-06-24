@@ -597,6 +597,7 @@ pub(crate) struct ResolvedDynamicPluginConfig {
     pub(crate) plugin_id: String,
     pub(crate) manifest_ref: String,
     pub(crate) config: Map<String, Value>,
+    pub(crate) has_explicit_config: bool,
     pub(crate) source: PathBuf,
 }
 
@@ -610,10 +611,10 @@ pub(crate) enum DynamicPluginHostConfigStatus {
 
 impl ResolvedDynamicPluginConfig {
     pub(crate) fn host_config_status(&self) -> DynamicPluginHostConfigStatus {
-        if self.config.is_empty() {
-            DynamicPluginHostConfigStatus::Absent
-        } else {
+        if self.has_explicit_config {
             DynamicPluginHostConfigStatus::Present
+        } else {
+            DynamicPluginHostConfigStatus::Absent
         }
     }
 }
@@ -1054,7 +1055,7 @@ struct PluginTomlPluginsSection {
 struct FileDynamicPluginConfig {
     manifest: String,
     #[serde(default)]
-    config: Map<String, Value>,
+    config: Option<Map<String, Value>>,
 }
 
 fn load_plugin_toml_config(
@@ -1185,7 +1186,8 @@ fn resolve_dynamic_plugin_refs(
         resolved.push(ResolvedDynamicPluginConfig {
             plugin_id,
             manifest_ref,
-            config: dynamic.config,
+            has_explicit_config: dynamic.config.is_some(),
+            config: dynamic.config.unwrap_or_default(),
             source: source.to_path_buf(),
         });
     }

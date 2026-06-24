@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginManifest, DynamicPluginRecord,
-    DynamicPluginValidationStatus,
+    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginLoadContract,
+    DynamicPluginManifest, DynamicPluginRecord, DynamicPluginValidationStatus,
 };
 use serde_json::Value;
 
@@ -660,6 +660,10 @@ fn host_config_status(host_config: Option<&ResolvedDynamicPluginConfig>) -> Stri
 }
 
 fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfig) -> Value {
+    if host_config.config.is_empty() && !host_config.has_explicit_config {
+        return Value::Null;
+    }
+
     Value::Object(
         host_config
             .config
@@ -668,6 +672,32 @@ fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfig) -> Value
             .map(|key| (key, Value::String("<redacted>".into())))
             .collect(),
     )
+}
+
+pub(super) fn inspect_load_data(record: &DynamicPluginRecord) -> Value {
+    match &record.load {
+        DynamicPluginLoadContract::Worker(load) => serde_json::json!({
+            "runtime": load.runtime,
+            "entrypoint": load.entrypoint,
+        }),
+        DynamicPluginLoadContract::RustDynamic(load) => serde_json::json!({
+            "library": load.library,
+            "symbol": load.symbol,
+        }),
+    }
+}
+
+pub(super) fn inspect_compat_data(record: &DynamicPluginRecord) -> Value {
+    match &record.compatibility {
+        DynamicPluginCompatibility::Worker(compatibility) => serde_json::json!({
+            "relay": compatibility.relay,
+            "worker_protocol": compatibility.worker_protocol,
+        }),
+        DynamicPluginCompatibility::RustDynamic(compatibility) => serde_json::json!({
+            "relay": compatibility.relay,
+            "native_api": compatibility.native_api,
+        }),
+    }
 }
 
 #[cfg(test)]

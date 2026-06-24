@@ -20,7 +20,9 @@ use crate::config::ResolvedDynamicPluginConfig;
 use crate::error::{CliError, PluginLifecycleFailureKind};
 
 use super::state::ScopedDynamicPluginRecord;
-use super::{host_config_status, redacted_host_config_json};
+use super::{
+    host_config_status, inspect_compat_data, inspect_load_data, redacted_host_config_json,
+};
 
 #[derive(Debug)]
 pub(super) struct ValidateResponseInput<'a> {
@@ -190,10 +192,8 @@ pub(super) fn inspect_data(
         manifest_ref: manifest_ref.into(),
         plugins_toml_path: entry.plugins_toml_path.display().to_string(),
         state_path: entry.state_path.display().to_string(),
-        load: serde_json::to_value(&record.load)
-            .expect("dynamic plugin load contract serializes to JSON"),
-        compat: serde_json::to_value(&record.compatibility)
-            .expect("dynamic plugin compatibility serializes to JSON"),
+        load: inspect_load_data(record),
+        compat: inspect_compat_data(record),
         capabilities: manifest
             .capabilities
             .items
