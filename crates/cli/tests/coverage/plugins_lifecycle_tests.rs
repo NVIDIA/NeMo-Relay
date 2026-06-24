@@ -234,7 +234,11 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     let host_config_by_id = host_config_by_id(&resolved);
     let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
     let records = collect_records(&scopes, false);
-    let list = render_list(&records, &host_config_by_id);
+    let list = PluginListView {
+        records: &records,
+        host_config_by_id: &host_config_by_id,
+    }
+    .to_string();
     assert!(list.contains("acme.guardrail"));
     assert!(list.contains("absent"));
     assert!(list.contains("false"));
@@ -246,19 +250,30 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
         DynamicPluginManifest::load_from_path(entry.record.source.manifest_ref.clone().unwrap())
             .map_err(|error| CliError::Config(error.to_string()))
             .unwrap();
-    let inspect = render_inspect(
-        &entry,
-        &manifest,
-        &manifest_ref,
-        host_config_by_id.get("acme.guardrail"),
+    let inspect = PluginInspectView {
+        entry: &entry,
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        host_config: host_config_by_id.get("acme.guardrail"),
+    }
+    .to_string();
+    let inspect_value: serde_yaml::Value = serde_yaml::from_str(&inspect).unwrap();
+    assert_eq!(
+        inspect_value["metadata"]["id"].as_str(),
+        Some("acme.guardrail")
     );
-    assert!(inspect.contains("id: acme.guardrail"));
-    assert!(inspect.contains("kind: worker"));
-    assert!(inspect.contains("host_config: absent"));
-    assert!(inspect.contains("source.manifest_ref:"));
-    assert!(inspect.contains("source.artifact_ref: <none>"));
-    assert!(inspect.contains("source.environment_ref: <none>"));
-    assert!(inspect.contains("load.entrypoint: acme.guardrail.plugin:register"));
+    assert_eq!(inspect_value["metadata"]["kind"].as_str(), Some("worker"));
+    assert_eq!(inspect_value["host_config_status"].as_str(), Some("absent"));
+    assert!(
+        inspect_value["source"]["manifest_ref"]
+            .as_str()
+            .unwrap()
+            .contains("relay-plugin.toml")
+    );
+    assert_eq!(
+        inspect_value["load"]["entrypoint"].as_str(),
+        Some("acme.guardrail.plugin:register")
+    );
 }
 
 #[test]
@@ -285,22 +300,28 @@ fn validate_renders_summary_for_path_and_id_targets() {
     let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
         .map_err(|error| CliError::Config(error.to_string()))
         .unwrap();
-    let path_summary = render_validation_summary(&manifest, &manifest_ref, None, None);
+    let path_summary = PluginValidationSummaryView {
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        entry: None,
+        host_config: None,
+    }
+    .to_string();
     assert!(path_summary.contains("Dynamic plugin 'acme.guardrail' is valid."));
 
     let resolved = resolve_plugins_config(None).unwrap();
     let host_config_by_id = host_config_by_id(&resolved);
     let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
-    let id_summary = render_validation_summary(
-        &manifest,
-        &manifest_ref,
-        Some(
-            &find_record_by_id(&scopes, "acme.guardrail")
-                .unwrap()
-                .expect("plugin record"),
-        ),
-        host_config_by_id.get("acme.guardrail"),
-    );
+    let entry = find_record_by_id(&scopes, "acme.guardrail")
+        .unwrap()
+        .expect("plugin record");
+    let id_summary = PluginValidationSummaryView {
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        entry: Some(&entry),
+        host_config: host_config_by_id.get("acme.guardrail"),
+    }
+    .to_string();
     assert!(id_summary.contains("host_config: absent"));
     assert!(id_summary.contains("desired.enabled: false"));
 
@@ -403,7 +424,12 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     assert!(removed.record.is_tombstoned());
 
     let all_records = collect_records(&scopes, true);
-    let all_list = render_list(&all_records, &host_config_by_id(&resolved));
+    let host_config_by_id = host_config_by_id(&resolved);
+    let all_list = PluginListView {
+        records: &all_records,
+        host_config_by_id: &host_config_by_id,
+    }
+    .to_string();
     assert!(all_list.contains("acme.guardrail"));
     assert!(all_list.contains("tombstoned"));
 
@@ -819,14 +845,23 @@ fn inspect_redacts_host_config_values() {
         .map_err(|error| CliError::Config(error.to_string()))
         .unwrap();
 
-    let inspect_output = render_inspect(
-        &entry,
-        &manifest,
-        &manifest_ref,
-        host_config_by_id.get("acme.redacted"),
-    );
+    let inspect_output = PluginInspectView {
+        entry: &entry,
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        host_config: host_config_by_id.get("acme.redacted"),
+    }
+    .to_string();
     assert!(!inspect_output.contains("secret-token"));
-    assert!(inspect_output.contains("<redacted>"));
+    let inspect_output: serde_yaml::Value = serde_yaml::from_str(&inspect_output).unwrap();
+    assert_eq!(
+        inspect_output["host_config"]["api_key"].as_str(),
+        Some("<redacted>")
+    );
+    assert_eq!(
+        inspect_output["host_config"]["region"].as_str(),
+        Some("<redacted>")
+    );
 
     let inspect_value = serde_json::to_value(responses::inspect_success(
         "plugins inspect",
@@ -846,4 +881,85 @@ fn inspect_redacts_host_config_values() {
         serde_json::json!("<redacted>")
     );
     assert_eq!(inspect_value["data"]["host_config_status"], "present");
+}
+
+#[test]
+fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.empty-config");
+    let server = ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\nconfig = {{}}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let host_config_by_id = host_config_by_id(&resolved);
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.empty-config")
+        .unwrap()
+        .expect("empty-config record");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+        .map_err(|error| CliError::Config(error.to_string()))
+        .unwrap();
+
+    let inspect_output = PluginInspectView {
+        entry: &entry,
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        host_config: host_config_by_id.get("acme.empty-config"),
+    }
+    .to_string();
+    let inspect_output: serde_yaml::Value = serde_yaml::from_str(&inspect_output).unwrap();
+    assert_eq!(
+        inspect_output["host_config_status"].as_str(),
+        Some("present")
+    );
+    assert_eq!(
+        inspect_output["host_config"]
+            .as_mapping()
+            .expect("empty host config should render as an object")
+            .len(),
+        0
+    );
+
+    let inspect_value = serde_json::to_value(responses::inspect_success(
+        "plugins inspect",
+        "acme.empty-config",
+        &entry,
+        &manifest,
+        &manifest_ref,
+        host_config_by_id.get("acme.empty-config"),
+    ))
+    .unwrap();
+    assert_eq!(inspect_value["data"]["host_config_status"], "present");
+    assert_eq!(
+        inspect_value["data"]["host_config"]
+            .as_object()
+            .expect("empty host config should serialize as an object")
+            .len(),
+        0
+    );
 }

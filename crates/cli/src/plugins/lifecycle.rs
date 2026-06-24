@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -9,6 +10,7 @@ use nemo_relay::plugin::dynamic::{
     DynamicPluginCheckState, DynamicPluginManifest, DynamicPluginRecord,
     DynamicPluginValidationStatus,
 };
+use serde_json::Value;
 
 use crate::config::{
     PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand, PluginsInspectCommand,
@@ -21,19 +23,17 @@ use super::config_io::{
     append_dynamic_plugin_reference, remove_dynamic_plugin_reference, target_scope,
 };
 
-mod render;
 mod responses;
 mod state;
 mod target;
 
-use self::render::{render_inspect, render_list, render_validation_summary};
 use self::responses::{
-    ValidateResponseInput, failure, generic_failure, inspect_success, list_success,
+    ValidateResponseInput, failure, generic_failure, inspect_data, inspect_success, list_success,
     print_response_json, validate_success,
 };
 use self::state::{
-    RegistryScope, ScopedRegistry, collect_records, find_record_by_id, load_scoped_registries,
-    scoped_paths_for_add,
+    RegistryScope, ScopedDynamicPluginRecord, ScopedRegistry, collect_records, find_record_by_id,
+    load_scoped_registries, scoped_paths_for_add,
 };
 use self::target::PluginTarget;
 
@@ -112,7 +112,12 @@ pub(crate) fn validate(
             } else {
                 println!(
                     "{}",
-                    render_validation_summary(&manifest, &manifest_ref, None, None)
+                    PluginValidationSummaryView {
+                        manifest: &manifest,
+                        manifest_ref: &manifest_ref,
+                        entry: None,
+                        host_config: None,
+                    }
                 );
             }
             Ok(())
@@ -157,12 +162,12 @@ pub(crate) fn validate(
             } else {
                 println!(
                     "{}",
-                    render_validation_summary(
-                        &manifest,
-                        &manifest_ref,
-                        Some(&refreshed),
-                        host_config_by_id.get(&plugin_id),
-                    )
+                    PluginValidationSummaryView {
+                        manifest: &manifest,
+                        manifest_ref: &manifest_ref,
+                        entry: Some(&refreshed),
+                        host_config: host_config_by_id.get(&plugin_id),
+                    }
                 );
             }
             Ok(())
@@ -196,7 +201,13 @@ pub(crate) fn list(command: PluginsListCommand, server: &ServerArgs) -> Result<(
             &host_config_by_id,
         ))?;
     } else {
-        println!("{}", render_list(&records, &host_config_by_id));
+        println!(
+            "{}",
+            PluginListView {
+                records: &records,
+                host_config_by_id: &host_config_by_id,
+            }
+        );
     }
     Ok(())
 }
@@ -220,12 +231,12 @@ pub(crate) fn inspect(command: PluginsInspectCommand, server: &ServerArgs) -> Re
     } else {
         println!(
             "{}",
-            render_inspect(
-                &entry,
-                &manifest,
-                &manifest_ref,
-                host_config_by_id.get(&command.id),
-            )
+            PluginInspectView {
+                entry: &entry,
+                manifest: &manifest,
+                manifest_ref: &manifest_ref,
+                host_config: host_config_by_id.get(&command.id),
+            }
         );
     }
     Ok(())
@@ -493,6 +504,170 @@ fn plugin_refused(
         kind: PluginLifecycleFailureKind::Refused,
         message: message.into(),
     }
+}
+
+struct PluginListView<'a> {
+    records: &'a [ScopedDynamicPluginRecord],
+    host_config_by_id: &'a HashMap<String, ResolvedDynamicPluginConfig>,
+}
+
+impl fmt::Display for PluginListView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let rows = self
+            .records
+            .iter()
+            .map(|entry| PluginListRow {
+                id: entry.record.metadata.id.as_str(),
+                scope: entry.scope.to_string(),
+                enabled: entry.record.spec.enabled.to_string(),
+                state: lifecycle_state_label(&entry.record).into(),
+                validation: <&'static str>::from(entry.record.status.validation.manifest).into(),
+                host_config: host_config_status(
+                    self.host_config_by_id.get(&entry.record.metadata.id),
+                ),
+            })
+            .collect::<Vec<_>>();
+        let widths = PluginListWidths::from_rows(&rows);
+
+        write!(
+            f,
+            "{:<id_width$} {:<scope_width$} {:<enabled_width$} {:<state_width$} {:<validation_width$} HOST CONFIG",
+            "ID",
+            "SCOPE",
+            "ENABLED",
+            "STATE",
+            "VALIDATION",
+            id_width = widths.id,
+            scope_width = widths.scope,
+            enabled_width = widths.enabled,
+            state_width = widths.state,
+            validation_width = widths.validation,
+        )?;
+        for row in rows {
+            write!(
+                f,
+                "\n{:<id_width$} {:<scope_width$} {:<enabled_width$} {:<state_width$} {:<validation_width$} {}",
+                row.id,
+                row.scope,
+                row.enabled,
+                row.state,
+                row.validation,
+                row.host_config,
+                id_width = widths.id,
+                scope_width = widths.scope,
+                enabled_width = widths.enabled,
+                state_width = widths.state,
+                validation_width = widths.validation,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+struct PluginListRow<'a> {
+    id: &'a str,
+    scope: String,
+    enabled: String,
+    state: String,
+    validation: String,
+    host_config: String,
+}
+
+struct PluginListWidths {
+    id: usize,
+    scope: usize,
+    enabled: usize,
+    state: usize,
+    validation: usize,
+}
+
+impl PluginListWidths {
+    fn from_rows(rows: &[PluginListRow<'_>]) -> Self {
+        Self {
+            id: column_width("ID", rows.iter().map(|row| row.id)),
+            scope: column_width("SCOPE", rows.iter().map(|row| row.scope.as_str())),
+            enabled: column_width("ENABLED", rows.iter().map(|row| row.enabled.as_str())),
+            state: column_width("STATE", rows.iter().map(|row| row.state.as_str())),
+            validation: column_width("VALIDATION", rows.iter().map(|row| row.validation.as_str())),
+        }
+    }
+}
+
+fn column_width<'a>(header: &'static str, values: impl Iterator<Item = &'a str>) -> usize {
+    values
+        .map(str::len)
+        .chain(std::iter::once(header.len()))
+        .max()
+        .unwrap_or(header.len())
+}
+
+struct PluginInspectView<'a> {
+    entry: &'a ScopedDynamicPluginRecord,
+    manifest: &'a DynamicPluginManifest,
+    manifest_ref: &'a str,
+    host_config: Option<&'a ResolvedDynamicPluginConfig>,
+}
+
+impl fmt::Display for PluginInspectView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let view = inspect_data(
+            self.entry,
+            self.manifest,
+            self.manifest_ref,
+            self.host_config,
+        );
+        let yaml = serde_yaml::to_string(&view).map_err(|_| fmt::Error)?;
+        write!(f, "{}", yaml.trim_end())
+    }
+}
+
+struct PluginValidationSummaryView<'a> {
+    manifest: &'a DynamicPluginManifest,
+    manifest_ref: &'a str,
+    entry: Option<&'a ScopedDynamicPluginRecord>,
+    host_config: Option<&'a ResolvedDynamicPluginConfig>,
+}
+
+impl fmt::Display for PluginValidationSummaryView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Dynamic plugin '{}' is valid.", self.manifest.plugin.id)?;
+        writeln!(f, "kind: {}", self.manifest.plugin.kind)?;
+        if let Some(entry) = self.entry {
+            writeln!(f, "manifest: {}", self.manifest_ref)?;
+            writeln!(f, "scope: {}", entry.scope)?;
+            writeln!(f, "lifecycle_state_path: {}", entry.state_path.display())?;
+            writeln!(f, "desired.enabled: {}", entry.record.spec.enabled)?;
+            write!(f, "host_config: {}", host_config_status(self.host_config))?;
+        } else {
+            write!(f, "manifest: {}", self.manifest_ref)?;
+        }
+        Ok(())
+    }
+}
+
+fn lifecycle_state_label(record: &DynamicPluginRecord) -> &'static str {
+    if record.is_tombstoned() {
+        "tombstoned"
+    } else {
+        record.status.runtime.state.into()
+    }
+}
+
+fn host_config_status(host_config: Option<&ResolvedDynamicPluginConfig>) -> String {
+    host_config
+        .map(|plugin| plugin.host_config_status().to_string())
+        .unwrap_or_else(|| "missing".into())
+}
+
+fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfig) -> Value {
+    Value::Object(
+        host_config
+            .config
+            .keys()
+            .cloned()
+            .map(|key| (key, Value::String("<redacted>".into())))
+            .collect(),
+    )
 }
 
 #[cfg(test)]
