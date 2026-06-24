@@ -2785,38 +2785,44 @@ fn test_ffi_adaptive_runtime_and_cache_helper_paths() {
         assert_eq!(facts["provider"], "openai");
         assert_eq!(facts["missing_facts"][0], "acg_stability_unavailable");
 
-        for options in [
-            json!({
-                "provider": "openai",
-                "request_id": "not-a-uuid",
-                "annotated_request": {},
-                "agent_id": "ffi-adaptive-openai"
-            }),
-            json!({
-                "provider": "openai",
-                "request_id": "00000000-0000-0000-0000-000000000602",
-                "annotated_request": {},
-                "agent_id": "ffi-adaptive-openai",
-                "timestamp": "not-a-timestamp"
-            }),
-            json!({
-                "provider": "openai",
-                "request_id": "00000000-0000-0000-0000-000000000603",
-                "annotated_request": "bad",
-                "agent_id": "ffi-adaptive-openai"
-            }),
+        for (options, expected) in [
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "not-a-uuid",
+                    "annotated_request": {},
+                    "agent_id": "ffi-adaptive-openai"
+                }),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "00000000-0000-0000-0000-000000000602",
+                    "annotated_request": {},
+                    "agent_id": "ffi-adaptive-openai",
+                    "timestamp": "not-a-timestamp"
+                }),
+                NemoRelayStatus::InvalidArg,
+            ),
+            (
+                json!({
+                    "provider": "openai",
+                    "request_id": "00000000-0000-0000-0000-000000000603",
+                    "annotated_request": "bad",
+                    "agent_id": "ffi-adaptive-openai"
+                }),
+                NemoRelayStatus::InvalidJson,
+            ),
         ] {
             let options = cstring(&options.to_string());
-            assert!(
-                matches!(
-                    nemo_relay_adaptive_runtime_build_cache_request_facts(
-                        runtime,
-                        options.as_ptr(),
-                        &mut out_json,
-                    ),
-                    NemoRelayStatus::InvalidArg | NemoRelayStatus::InvalidJson
+            assert_eq!(
+                nemo_relay_adaptive_runtime_build_cache_request_facts(
+                    runtime,
+                    options.as_ptr(),
+                    &mut out_json,
                 ),
-                "expected invalid cache facts options to fail"
+                expected
             );
         }
         assert_eq!(

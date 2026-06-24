@@ -1105,6 +1105,50 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let append = cstring("append");
         let bad_mode = cstring("bad-mode");
         let filename = cstring("events.jsonl");
+        let happy_dir = temp_dir("ffi-atof-happy");
+        let happy_dir_text = happy_dir.to_string_lossy().into_owned();
+        let happy_dir = cstring(&happy_dir_text);
+        let happy_filename = cstring("happy-events.jsonl");
+        let happy_name = cstring(&unique_name("ffi_atof_happy"));
+        let mut happy_atof = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_atof_exporter_create(
+                happy_dir.as_ptr(),
+                append.as_ptr(),
+                happy_filename.as_ptr(),
+                &mut happy_atof,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!happy_atof.is_null());
+        let mut path_ptr = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_atof_exporter_path(happy_atof, &mut path_ptr),
+            NemoRelayStatus::Ok
+        );
+        let path = take_string(path_ptr).expect("expected ATOF exporter path");
+        assert!(
+            path.ends_with("happy-events.jsonl"),
+            "unexpected ATOF exporter path: {path}"
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_register(happy_atof, happy_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_force_flush(happy_atof),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_shutdown(happy_atof),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_atof_exporter_deregister(happy_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_atof_exporter_free(happy_atof);
+
         let invalid_utf8 = [0xffu8, 0];
         let invalid = invalid_utf8.as_ptr() as *const c_char;
         let mut atof = ptr::null_mut();

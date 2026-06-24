@@ -53,8 +53,10 @@ func TestPricingPackageSourceAndRateHelpers(t *testing.T) {
 	}
 
 	minTokens := uint64(256)
+	maxTokens := uint64(1024)
 	tier := NewTokenRateTier(NewTokenRates(3, 4))
 	tier.MinPromptTokens = &minTokens
+	tier.MaxPromptTokens = &maxTokens
 	schedule := NewPromptTokenThresholdRateSchedule(tier)
 	schedulePayload, err := json.Marshal(schedule)
 	if err != nil {
@@ -66,6 +68,24 @@ func TestPricingPackageSourceAndRateHelpers(t *testing.T) {
 	}
 	if parsedSchedule["type"] != "prompt_token_threshold" || parsedSchedule["applies_to"] != "full_request" {
 		t.Fatalf("unexpected rate schedule: %#v", parsedSchedule)
+	}
+	tiers, ok := parsedSchedule["tiers"].([]any)
+	if !ok || len(tiers) != 1 {
+		t.Fatalf("unexpected rate schedule tiers: %#v", parsedSchedule["tiers"])
+	}
+	parsedTier, ok := tiers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected rate schedule tier: %#v", tiers[0])
+	}
+	if parsedTier["min_prompt_tokens"] != float64(minTokens) || parsedTier["max_prompt_tokens"] != float64(maxTokens) {
+		t.Fatalf("unexpected token bounds: %#v", parsedTier)
+	}
+	rates, ok := parsedTier["rates"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected tier rates: %#v", parsedTier["rates"])
+	}
+	if rates["input_per_million"] != float64(3) || rates["output_per_million"] != float64(4) {
+		t.Fatalf("unexpected tier rate values: %#v", rates)
 	}
 
 	config := NewConfig()

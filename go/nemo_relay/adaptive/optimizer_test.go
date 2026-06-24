@@ -102,7 +102,7 @@ func TestAdaptivePackageTelemetryAndLatencyHelpers(t *testing.T) {
 		t.Fatalf("unexpected cache telemetry event: %#v", event)
 	}
 
-	if err := SetLatencySensitivity(0); err == nil {
+	if SetLatencySensitivity(0) == nil {
 		t.Fatal("expected SetLatencySensitivity to reject zero")
 	}
 }
