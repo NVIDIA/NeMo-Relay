@@ -4,9 +4,8 @@
 use std::collections::HashMap;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginKind,
-    DynamicPluginLoadContract, DynamicPluginManifest, DynamicPluginRecord,
-    DynamicPluginRuntimeState,
+    DynamicPluginCompatibility, DynamicPluginKind, DynamicPluginLoadContract,
+    DynamicPluginManifest, DynamicPluginRecord,
 };
 use serde_json::Value;
 
@@ -34,7 +33,7 @@ pub(super) fn render_list(
             entry.scope.label(),
             entry.record.spec.enabled,
             lifecycle_state_label(&entry.record),
-            check_state_label(entry.record.status.validation.manifest),
+            <&'static str>::from(entry.record.status.validation.manifest),
             host_config_status
         ));
     }
@@ -168,31 +167,31 @@ fn render_status(record: &DynamicPluginRecord) -> Vec<String> {
     let mut lines = vec![
         format!(
             "status.validation.manifest: {}",
-            check_state_label(record.status.validation.manifest)
+            <&'static str>::from(record.status.validation.manifest)
         ),
         format!(
             "status.validation.compatibility: {}",
-            check_state_label(record.status.validation.compatibility)
+            <&'static str>::from(record.status.validation.compatibility)
         ),
         format!(
             "status.validation.integrity: {}",
-            check_state_label(record.status.validation.integrity)
+            <&'static str>::from(record.status.validation.integrity)
         ),
         format!(
             "status.validation.environment: {}",
-            check_state_label(record.status.validation.environment)
+            <&'static str>::from(record.status.validation.environment)
         ),
         format!(
             "status.validation.authenticity: {}",
-            check_state_label(record.status.validation.authenticity)
+            <&'static str>::from(record.status.validation.authenticity)
         ),
         format!(
             "status.validation.policy_satisfied: {}",
-            check_state_label(record.status.validation.policy_satisfied)
+            <&'static str>::from(record.status.validation.policy_satisfied)
         ),
         format!(
             "status.runtime.state: {}",
-            runtime_state_label(record.status.runtime.state)
+            <&'static str>::from(record.status.runtime.state)
         ),
         format!(
             "status.runtime.observed_generation: {}",
@@ -238,28 +237,11 @@ fn host_config_status_label(status: DynamicPluginHostConfigStatus) -> &'static s
     }
 }
 
-pub(super) fn check_state_label(state: DynamicPluginCheckState) -> &'static str {
-    match state {
-        DynamicPluginCheckState::Unknown => "unknown",
-        DynamicPluginCheckState::Valid => "valid",
-        DynamicPluginCheckState::Invalid => "invalid",
-    }
-}
-
-pub(super) fn runtime_state_label(state: DynamicPluginRuntimeState) -> &'static str {
-    match state {
-        DynamicPluginRuntimeState::Stopped => "stopped",
-        DynamicPluginRuntimeState::Starting => "starting",
-        DynamicPluginRuntimeState::Running => "running",
-        DynamicPluginRuntimeState::Failed => "failed",
-    }
-}
-
 fn lifecycle_state_label(record: &DynamicPluginRecord) -> &'static str {
     if record.is_tombstoned() {
         "tombstoned"
     } else {
-        runtime_state_label(record.status.runtime.state)
+        record.status.runtime.state.into()
     }
 }
 

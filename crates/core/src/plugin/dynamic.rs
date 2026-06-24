@@ -10,6 +10,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use strum::IntoStaticStr;
 
 /// Canonical identifier for one dynamic plugin record.
 pub type DynamicPluginId = String;
@@ -81,9 +82,12 @@ pub enum DynamicPluginAttestationMode {
 }
 
 /// High-level verification state for one validation axis.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash, IntoStaticStr,
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginCheckState {
     /// No verification result is currently known.
     #[default]
@@ -95,9 +99,12 @@ pub enum DynamicPluginCheckState {
 }
 
 /// Observed runtime state for a dynamic plugin.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash, IntoStaticStr,
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginRuntimeState {
     /// Not currently active.
     #[default]

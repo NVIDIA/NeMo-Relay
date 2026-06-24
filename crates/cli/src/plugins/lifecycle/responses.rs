@@ -17,9 +17,7 @@ use serde_json::{Map, Value};
 use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
 use crate::error::{CliError, PluginLifecycleFailureKind};
 
-use super::render::{
-    check_state_label, manifest_kind_label, redacted_host_config_json, runtime_state_label,
-};
+use super::render::{manifest_kind_label, redacted_host_config_json};
 use super::state::ScopedDynamicPluginRecord;
 
 #[derive(Debug)]
@@ -137,11 +135,11 @@ pub(super) fn list_success(
                     kind: manifest_kind_label(record.metadata.kind),
                     enabled: record.spec.enabled,
                     tombstoned: record.is_tombstoned(),
-                    validation_state: check_state_label(record.status.validation.manifest),
+                    validation_state: record.status.validation.manifest.into(),
                     runtime_state: if record.is_tombstoned() {
                         "tombstoned".into()
                     } else {
-                        runtime_state_label(record.status.runtime.state).into()
+                        <&'static str>::from(record.status.runtime.state).into()
                     },
                     startup: record
                         .status
