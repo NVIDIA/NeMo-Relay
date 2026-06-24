@@ -177,6 +177,8 @@ pub struct PyAtofEndpointConfig {
     pub(crate) headers: HashMap<String, String>,
     #[pyo3(get, set)]
     pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) field_name_policy: String,
 }
 
 impl PyAtofEndpointConfig {
@@ -191,6 +193,16 @@ impl PyAtofEndpointConfig {
         let mut config =
             nemo_relay::observability::atof::AtofEndpointConfig::new(self.url.clone(), transport)
                 .with_timeout_millis(self.timeout_millis);
+        let Some(field_name_policy) =
+            nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                &self.field_name_policy,
+            )
+        else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "endpoint field_name_policy must be 'preserve' or 'replace_dots'",
+            ));
+        };
+        config = config.with_field_name_policy(field_name_policy);
         for (key, value) in &self.headers {
             config = config.with_header(key.clone(), value.clone());
         }
@@ -201,12 +213,13 @@ impl PyAtofEndpointConfig {
 #[pymethods]
 impl PyAtofEndpointConfig {
     #[new]
-    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, timeout_millis=3000))]
+    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, timeout_millis=3000, field_name_policy="preserve".to_string()))]
     pub(crate) fn new(
         url: String,
         transport: String,
         headers: Option<&Bound<'_, PyAny>>,
         timeout_millis: u64,
+        field_name_policy: String,
     ) -> PyResult<Self> {
         let headers = match headers {
             Some(headers) if !headers.is_none() => py_string_map(headers, "headers")?,
@@ -217,6 +230,7 @@ impl PyAtofEndpointConfig {
             transport,
             headers,
             timeout_millis,
+            field_name_policy,
         })
     }
 

@@ -17,43 +17,53 @@ SPDX-License-Identifier: Apache-2.0
 
 # NVIDIA NeMo Relay
 
-NVIDIA NeMo Relay helps you see and control what happens inside agent runs
-without rewriting the agent stack you already have. It gives coding agents,
+NVIDIA NeMo Relay helps see and control what happens inside agent runs
+without rewriting the agent stack already made. It gives coding agents,
 applications, framework integrations, middleware, and observability backends a
 shared runtime for scopes, policy, plugins, and lifecycle events.
 
-The best first step is to get one real run on disk. Once Relay is writing raw
-events and a trajectory file, you have something concrete to inspect, debug, and
+## Where To Start
+
+| Goal | Start With... |
+|---|---|
+| Observe Codex, Claude Code, Cursor, or Hermes locally via CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
+| Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
+| Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
+| Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
+| Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/observability-plugin/about) |
+| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
+| Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+
+## Quick Start CLI
+
+A good first step is to record a real agent run on disk. Once Relay is writing raw
+events and a trajectory file, there is something concrete to inspect, debug, and
 build from.
 
-## Start Here: Capture One Local Agent Run
+### Local Agent Trajectory
 
-This walkthrough gives you an end-to-end success signal. You install the
-`nemo-relay` CLI, turn on local exporters, run either Codex or Claude Code
+This walkthrough shows an end-to-end quick success setup. Install the
+`nemo-relay-cli`, turn on local exporters, run either Codex or Claude Code
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
-> [!TIP]
-> Start by trusting the raw Agent Trajectory Observability Format (ATOF) JSONL.
-> It shows the lifecycle events Relay actually captured before anything is
-> translated into Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
-> OpenInference output.
 
-### 1. Install the CLI
+#### 1. Install the CLI
 
 ```bash
 cargo install nemo-relay-cli
 ```
 
-If you use `cargo-binstall`, the CLI can also be installed with:
+If using `cargo-binstall`, the CLI can also be installed with:
 
 ```bash
 cargo binstall nemo-relay-cli
 ```
 
-### 2. Enable Local Observability Output
+#### 2. Enable Local Observability Output
 
-From the project directory you want to observe, open the project-scoped plugin
+From the project directory ready to be observed, open the project-scoped plugin
 editor:
 
 ```bash
@@ -64,23 +74,27 @@ The editor creates or updates the nearest project plugin file at
 `.nemo-relay/plugins.toml`. In the menu:
 
 1. Enable the `Observability` component.
-2. Open `ATOF`, toggle the section on, and set:
+2. Open `ATOF`, toggle the section `[on]`
+
+   Optionally set:
    - `output_directory` to `.nemo-relay/atof`
    - `filename` to `events.jsonl`
    - `mode` to `overwrite`
-3. Open `ATIF`, toggle the section on, and set:
+3. Open `ATIF`, toggle the section `[on]`
+
+   Optionally set:
    - `output_directory` to `.nemo-relay/atif`
    - `filename_template` to `trajectory-{session_id}.json`
 4. Press `p` to preview the generated TOML.
 5. Press `s` to save.
 
 > [!NOTE]
-> Use `nemo-relay plugins edit` without `--project` only when you want these
-> exporter settings in your user-level Relay config instead of this one project.
+> Use `nemo-relay plugins edit` _without_ `--project` only if needing to use these
+> exporter settings in a user-level Relay config instead of a specific project.
 
-### 3. Run Codex or Claude Code Through Relay
+#### 3. Run Codex or Claude Code Through Relay
 
-Use the host CLI that is installed on your machine.
+Use either host CLI that is installed on a machine. For example:
 
 ```bash
 nemo-relay codex -- exec "Summarize this repository."
@@ -90,18 +104,22 @@ nemo-relay codex -- exec "Summarize this repository."
 nemo-relay claude -- "Summarize this repository."
 ```
 
+Refer to the full [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for more options.
+
 The transparent wrapper starts a local Relay gateway, injects host-specific hook
 and provider settings for that launched process, then shuts the gateway down
 when the agent exits.
 
 > [!WARNING]
 > Codex users may need to review and activate generated hooks before events
-> appear. Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
+> appear. Using the Codex Desktop App also adds further complications.
+> Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
 > current hook activation caveat and troubleshooting steps.
 
-### 4. Verify the Run
+#### 4. Verify the Run
 
-After the run exits, check that raw events and trajectory files were written:
+After the run exits, check that raw events and trajectory files were written.
+If the optionally set output directory and file name were used:
 
 ```bash
 test -s .nemo-relay/atof/events.jsonl
@@ -131,57 +149,57 @@ print(f"validated {len(events)} ATOF event(s)")
 PY
 ```
 
-A successful run gives you two things to inspect:
+A successful run creates several outputs to inspect:
 
-- `.nemo-relay/atof/events.jsonl`, the raw canonical event stream.
+- `.nemo-relay/atof/events.jsonl` as the raw canonical event stream.
 - One or more `.nemo-relay/atif/*.json` trajectory files for analysis and
   evaluation workflows.
 
 > [!TIP]
 > If raw ATOF events exist but LLM spans are missing, provider traffic probably
 > isn't flowing through the Relay gateway. If ATIF is missing, make sure the
-> agent session or turn ended and the output directory is writable. Use
-> [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) when you are ready for
-> persistent host plugin installation, gateway configuration, exporter options,
-> and agent-specific diagnostics.
+> agent session or turn ended and the output directory is writable.
 
-## Choose Your Next Path
+#### Next Steps
 
-Pick the row closest to what you are trying to do next. Refer to the corresponding documentation for more information.
+Go to the full [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for
+persistent host plugin installation, gateway configuration, exporter options,
+and agent-specific diagnostics.
 
-| Goal | Start With |
-|---|---|
-| Observe Codex, Claude Code, Cursor, or Hermes locally | [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
-| Instrument app-owned LLM or tool calls | [Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
-| Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
-| Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
-| Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/observability-plugin/about) |
-| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
-| Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
+> [!TIP]
+> Start by trusting the raw Agent Trajectory Observability Format (ATOF) JSONL.
+> It shows the lifecycle events Relay actually captured before anything is
+> translated into Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
+> OpenInference output.
 
-## Application Quick Starts
+## Quick Start Applications
 
-If you own the code that calls the model or tool, install the binding for your
+If writing the code that calls the model or tool, install the binding for the appropriate
 language and route that boundary through Relay directly.
+
+### Application Trajectory
+
+Install Relay for the application language:
 
 ```bash
 # Python
 uv add nemo-relay
 
 # Node.js
+# Requires Node.js 24 or newer.
 npm install nemo-relay-node
 
 # Rust
 cargo add nemo-relay
 ```
 
-Then run the smallest workflow for that binding:
+Then run a minimal example workflow for that binding:
 
 - [Python Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/python)
 - [Node.js Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/nodejs)
 - [Rust Quick Start](https://docs.nvidia.com/nemo/relay/getting-started/quick-start/rust)
 
-The Node.js package requires Node.js 24 or newer.
+
 
 ## What Relay Adds
 
@@ -205,9 +223,9 @@ Relay gives those systems:
 - **Events and subscribers** so raw ATOF, normalized ATIF, OpenTelemetry, and
   OpenInference output all come from the same runtime stream.
 
-Relay does not replace your framework, model provider, application logic,
+Relay does not replace frameworks, model provider, application logic,
 observability backend, or guardrail authoring system. It gives those systems a
-common boundary to meet at.
+common boundary to meet.
 
 ```mermaid
 flowchart LR

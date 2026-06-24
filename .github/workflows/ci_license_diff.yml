@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -62,6 +63,7 @@ jobs:
           tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
 
       - name: Compare lockfile licenses
+        id: compare
         continue-on-error: true
         env:
           DEFAULT_BRANCH: ${{ inputs.default_branch }}
@@ -83,30 +85,55 @@ jobs:
           fi
 
           echo "Comparing lockfile licenses against ${compare_ref}"
+          printf 'compare_ref=%s\n' "$compare_ref" >> "$GITHUB_OUTPUT"
 
           set +e
           uv run --no-project --python ${{ steps.ci-config.outputs.default_python_version }} python scripts/licensing/license_diff.py --base-ref "$compare_ref" > license-diff.md 2> license-diff.status
           diff_status=$?
           set -e
+          printf 'diff_status=%s\n' "$diff_status" >> "$GITHUB_OUTPUT"
 
           if [[ "$diff_status" -ne 0 ]]; then
-            echo "::warning title=License diff failed::license_diff.py exited with status ${diff_status}; see the step summary for captured output."
+            echo "::warning title=License diff failed::license_diff.py exited with status ${diff_status}; see the PR comment for captured output."
           fi
 
           cat license-diff.status >&2
           cat license-diff.md
 
+      - name: Upsert PR comment
+        if: ${{ steps.compare.outcome == 'success' }}
+        env:
+          COMPARE_REF: ${{ steps.compare.outputs.compare_ref }}
+          DIFF_STATUS: ${{ steps.compare.outputs.diff_status }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          pr_number="${GITHUB_REF_NAME#pull-request/}"
+          if [[ "$pr_number" == "$GITHUB_REF_NAME" || -z "$pr_number" ]]; then
+            echo "::warning title=License diff comment skipped::Unable to derive a PR number from ref '${GITHUB_REF_NAME}'."
+            exit 0
+          fi
+
+          marker="<!-- nemo-relay-license-diff -->"
           {
+            echo "$marker"
             echo "## License Diff"
             echo
-            echo "Compared against \`${compare_ref}\`."
+            echo "Compared against \`${COMPARE_REF}\`."
             echo
-            if [[ "$diff_status" -ne 0 ]]; then
-              echo "> License diff failed with exit code \`${diff_status}\`; this informational check does not block CI."
+            if [[ "$DIFF_STATUS" != "0" ]]; then
+              echo "> License diff failed with exit code \`${DIFF_STATUS}\`; this informational check does not block CI."
               echo
             fi
             if [[ -s license-diff.md ]]; then
+              echo "<details>"
+              echo "<summary>Lockfile license changes</summary>"
+              echo
               cat license-diff.md
+              echo
+              echo "</details>"
             else
               echo "No license diff output was produced."
             fi
@@ -117,4 +144,26 @@ jobs:
             cat license-diff.status
             echo '```'
             echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > license-diff-comment.md
+
+          comment_id=""
+          if ! comment_id="$(
+            gh api "repos/{owner}/{repo}/issues/${pr_number}/comments" --paginate \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body // "" | contains("<!-- nemo-relay-license-diff -->"))) | .id' \
+              | tail -n 1
+          )"; then
+            echo "::warning title=License diff comment failed::Unable to list comments on PR #${pr_number}."
+            exit 0
+          fi
+
+          if [[ -n "$comment_id" ]]; then
+            if gh api --method PATCH "repos/{owner}/{repo}/issues/comments/${comment_id}" --field body=@license-diff-comment.md --silent; then
+              echo "Updated license diff comment on PR #${pr_number}."
+            else
+              echo "::warning title=License diff comment failed::Unable to update license diff comment on PR #${pr_number}."
+            fi
+          elif gh api --method POST "repos/{owner}/{repo}/issues/${pr_number}/comments" --field body=@license-diff-comment.md --silent; then
+            echo "Created license diff comment on PR #${pr_number}."
+          else
+            echo "::warning title=License diff comment failed::Unable to create license diff comment on PR #${pr_number}."
+          fi

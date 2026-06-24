@@ -134,6 +134,7 @@ jobs:
       }}
     permissions:
       contents: read
+      pull-requests: write
     with:
       base: ${{ needs.ci_changes.outputs.base }}
       default_branch: ${{ github.event.repository.default_branch }}

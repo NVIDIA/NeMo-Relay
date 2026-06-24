@@ -38,6 +38,14 @@ describe('AtofExporter', () => {
         }),
       /endpoint transport/i,
     );
+    assert.throws(
+      () =>
+        new AtofExporter({
+          outputDirectory: tempDir('node-atof-invalid-field-policy'),
+          endpoints: [{ url: 'http://localhost:8080/events', fieldNamePolicy: 'bogus' }],
+        }),
+      /field_name_policy/i,
+    );
   });
 
   it('writes raw ATOF JSONL events and supports lifecycle methods', () => {

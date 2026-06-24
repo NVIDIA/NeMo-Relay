@@ -177,6 +177,13 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(atof.output_directory.is_none());
     assert!(atof.filename.is_none());
 
+    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
+        "endpoints": [{"url": "http://localhost/events"}]
+    }))
+    .unwrap();
+    assert_eq!(parsed_atof.endpoints[0].transport, "http_post");
+    assert_eq!(parsed_atof.endpoints[0].field_name_policy, "preserve");
+
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
     assert_eq!(atif.agent_name, "NeMo Relay");
@@ -477,7 +484,8 @@ fn atof_endpoint_validation_rejects_bad_values() {
                 {"url": "", "transport": "http_post"},
                 {"url": "http://localhost/events", "transport": "bogus"},
                 {"url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
-                {"url": "not a url", "transport": "http_post"}
+                {"url": "not a url", "transport": "http_post"},
+                {"url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"}
             ]
         }
     })));
@@ -508,6 +516,12 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("endpoints[3].url") })
     );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[4].field_name_policy") })
+    );
 }
 
 #[test]
@@ -521,6 +535,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             transport: "websocket".into(),
             headers: headers.clone(),
             timeout_millis: 123,
+            field_name_policy: "replace_dots".into(),
         },
     )
     .unwrap();
@@ -532,6 +547,10 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
     );
     assert_eq!(config.headers, headers);
     assert_eq!(config.timeout_millis, 123);
+    assert_eq!(
+        config.field_name_policy,
+        crate::observability::atof::AtofEndpointFieldNamePolicy::ReplaceDots
+    );
 
     let error = build_atof_endpoint_config(
         3,
@@ -540,10 +559,24 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
             timeout_millis: 3_000,
+            field_name_policy: "preserve".into(),
         },
     )
     .unwrap_err();
     assert!(error.to_string().contains("endpoints[3].transport"));
+
+    let error = build_atof_endpoint_config(
+        4,
+        AtofEndpointSectionConfig {
+            url: "http://127.0.0.1:47632/events".into(),
+            transport: "http_post".into(),
+            headers: std::collections::HashMap::new(),
+            timeout_millis: 3_000,
+            field_name_policy: "bogus".into(),
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("endpoints[4].field_name_policy"));
 }
 
 #[test]
