@@ -19,9 +19,9 @@ use super::traits::{LlmCodec, LlmResponseCodec};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderSurface {
     /// OpenAI Chat Completions.
-    OpenAiChat,
+    OpenAIChat,
     /// OpenAI Responses.
-    OpenAiResponses,
+    OpenAIResponses,
     /// Anthropic Messages.
     AnthropicMessages,
 }
@@ -32,16 +32,16 @@ pub enum ProviderSurface {
 /// (`system`) > OpenAI Chat (`messages`). `None` when no key matches or `body`
 /// is not an object. This is a best-effort heuristic: an Anthropic request that
 /// omits the optional top-level `system` is indistinguishable from OpenAI Chat
-/// and classifies as `OpenAiChat`.
+/// and classifies as `OpenAIChat`.
 #[must_use]
 pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
     let obj = body.as_object()?;
     if obj.contains_key("input") || obj.contains_key("instructions") {
-        Some(ProviderSurface::OpenAiResponses)
+        Some(ProviderSurface::OpenAIResponses)
     } else if obj.contains_key("system") {
         Some(ProviderSurface::AnthropicMessages)
     } else if obj.contains_key("messages") {
-        Some(ProviderSurface::OpenAiChat)
+        Some(ProviderSurface::OpenAIChat)
     } else {
         None
     }
@@ -60,8 +60,8 @@ pub fn detect_response_surface(raw: &Json) -> Option<ProviderSurface> {
         && obj.get("content").is_some_and(Json::is_array);
 
     match (is_chat, is_responses, is_anthropic) {
-        (true, false, false) => Some(ProviderSurface::OpenAiChat),
-        (false, true, false) => Some(ProviderSurface::OpenAiResponses),
+        (true, false, false) => Some(ProviderSurface::OpenAIChat),
+        (false, true, false) => Some(ProviderSurface::OpenAIResponses),
         (false, false, true) => Some(ProviderSurface::AnthropicMessages),
         _ => None,
     }
@@ -71,8 +71,8 @@ pub fn detect_response_surface(raw: &Json) -> Option<ProviderSurface> {
 #[must_use]
 pub fn normalize_request(request: &LlmRequest) -> Option<AnnotatedLlmRequest> {
     match detect_request_surface(&request.content)? {
-        ProviderSurface::OpenAiChat => OpenAIChatCodec.decode(request),
-        ProviderSurface::OpenAiResponses => OpenAIResponsesCodec.decode(request),
+        ProviderSurface::OpenAIChat => OpenAIChatCodec.decode(request),
+        ProviderSurface::OpenAIResponses => OpenAIResponsesCodec.decode(request),
         ProviderSurface::AnthropicMessages => AnthropicMessagesCodec.decode(request),
     }
     .ok()
@@ -82,8 +82,8 @@ pub fn normalize_request(request: &LlmRequest) -> Option<AnnotatedLlmRequest> {
 #[must_use]
 pub fn normalize_response(raw: &Json) -> Option<AnnotatedLlmResponse> {
     match detect_response_surface(raw)? {
-        ProviderSurface::OpenAiChat => OpenAIChatCodec.decode_response(raw),
-        ProviderSurface::OpenAiResponses => OpenAIResponsesCodec.decode_response(raw),
+        ProviderSurface::OpenAIChat => OpenAIChatCodec.decode_response(raw),
+        ProviderSurface::OpenAIResponses => OpenAIResponsesCodec.decode_response(raw),
         ProviderSurface::AnthropicMessages => AnthropicMessagesCodec.decode_response(raw),
     }
     .ok()

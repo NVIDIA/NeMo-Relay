@@ -22,11 +22,11 @@ fn req(content: serde_json::Value) -> LlmRequest {
 fn detect_request_responses_by_input_or_instructions() {
     assert_eq!(
         detect_request_surface(&json!({"input": []})),
-        Some(ProviderSurface::OpenAiResponses)
+        Some(ProviderSurface::OpenAIResponses)
     );
     assert_eq!(
         detect_request_surface(&json!({"instructions": "x"})),
-        Some(ProviderSurface::OpenAiResponses)
+        Some(ProviderSurface::OpenAIResponses)
     );
 }
 
@@ -42,7 +42,7 @@ fn detect_request_anthropic_by_system() {
 fn detect_request_chat_by_messages() {
     assert_eq!(
         detect_request_surface(&json!({"messages": []})),
-        Some(ProviderSurface::OpenAiChat)
+        Some(ProviderSurface::OpenAIChat)
     );
 }
 
@@ -51,7 +51,7 @@ fn detect_request_priority_responses_then_anthropic_then_chat() {
     // `input` wins even alongside `system` and `messages`.
     assert_eq!(
         detect_request_surface(&json!({"input": [], "system": "x", "messages": []})),
-        Some(ProviderSurface::OpenAiResponses)
+        Some(ProviderSurface::OpenAIResponses)
     );
     // `system` wins over `messages` (Anthropic carries both).
     assert_eq!(
@@ -76,7 +76,7 @@ fn detect_request_none_for_unknown_or_non_object() {
 fn detect_response_chat_by_choices() {
     assert_eq!(
         detect_response_surface(&json!({"choices": []})),
-        Some(ProviderSurface::OpenAiChat)
+        Some(ProviderSurface::OpenAIChat)
     );
 }
 
@@ -84,11 +84,11 @@ fn detect_response_chat_by_choices() {
 fn detect_response_responses_by_output_or_output_text() {
     assert_eq!(
         detect_response_surface(&json!({"output": []})),
-        Some(ProviderSurface::OpenAiResponses)
+        Some(ProviderSurface::OpenAIResponses)
     );
     assert_eq!(
         detect_response_surface(&json!({"output_text": "hi"})),
-        Some(ProviderSurface::OpenAiResponses)
+        Some(ProviderSurface::OpenAIResponses)
     );
 }
 

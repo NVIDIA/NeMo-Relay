@@ -43,8 +43,8 @@ pub(crate) trait RequestSurfaceApplier: Send + Sync {
 impl RequestSurface {
     fn from_provider_surface(surface: ProviderSurface) -> Self {
         match surface {
-            ProviderSurface::OpenAiChat => Self::OpenAIChat,
-            ProviderSurface::OpenAiResponses => Self::OpenAIResponses,
+            ProviderSurface::OpenAIChat => Self::OpenAIChat,
+            ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
         }
     }
