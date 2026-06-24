@@ -8,15 +8,22 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
-use crate::api::llm::LlmAttributes;
+use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
+use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{
-    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, PricingCatalog, PricingResolver, reset_active_pricing_resolver,
+    set_active_pricing_resolver,
 };
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::json;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 struct ResetPricingResolverGuard;
 
@@ -73,6 +80,8 @@ struct TestEventBuilder {
     output: Option<serde_json::Value>,
     model_name: Option<String>,
     tool_call_id: Option<String>,
+    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    annotated_response: Option<Arc<AnnotatedLlmResponse>>,
 }
 
 impl TestEventBuilder {
@@ -118,6 +127,16 @@ impl TestEventBuilder {
 
     fn tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
         self.tool_call_id = Some(tool_call_id.into());
+        self
+    }
+
+    fn annotated_request(mut self, annotated: AnnotatedLlmRequest) -> Self {
+        self.annotated_request = Some(Arc::new(annotated));
+        self
+    }
+
+    fn annotated_response(mut self, annotated: AnnotatedLlmResponse) -> Self {
+        self.annotated_response = Some(Arc::new(annotated));
         self
     }
 
@@ -191,6 +210,7 @@ impl TestEventBuilder {
                 Some(
                     CategoryProfile::builder()
                         .model_name_opt(self.model_name)
+                        .annotated_request_opt(self.annotated_request)
                         .build(),
                 ),
             )),
@@ -211,6 +231,7 @@ impl TestEventBuilder {
                 Some(
                     CategoryProfile::builder()
                         .model_name_opt(self.model_name)
+                        .annotated_response_opt(self.annotated_response)
                         .build(),
                 ),
             )),
@@ -265,6 +286,8 @@ fn event_builder(uuid: Uuid, event_type: EventType) -> TestEventBuilder {
         output: None,
         model_name: None,
         tool_call_id: None,
+        annotated_request: None,
+        annotated_response: None,
     }
 }
 
@@ -1689,6 +1712,217 @@ fn test_exporter_llm_tool_calls_promoted() {
     assert_eq!(step.llm_call_count, Some(1));
     let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
     assert_eq!(extra.llm_response.unwrap()["role"], json!("assistant"));
+}
+
+#[test]
+fn test_exporter_uses_annotated_message_but_raw_tool_calls() {
+    // The annotation supplies the normalized message text (winning over the raw
+    // content), while tool calls stay on the raw path so provider-specific
+    // extras are preserved.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let annotated = OpenAIChatCodec
+        .decode_response(&json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "from annotation"},
+                "finish_reason": "stop"
+            }]
+        }))
+        .unwrap();
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "from RAW",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "provider_data": {"trace_id": "t-1"},
+                        "function": {"name": "search", "arguments": "{\"q\":\"x\"}"}
+                    }]
+                }
+            }]
+        }))
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    let step = &trajectory.steps[0];
+    // Message comes from the annotation.
+    assert_eq!(step.message, json!("from annotation"));
+    // Tool calls come from the raw payload, with provider extras preserved.
+    let tool_calls = step.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls[0].function_name, "search");
+    assert_eq!(tool_calls[0].arguments, json!({"q": "x"}));
+    assert_eq!(
+        tool_calls[0].extra.as_ref().unwrap()["provider_data"]["trace_id"],
+        json!("t-1")
+    );
+}
+
+#[test]
+fn test_exporter_annotated_tool_only_response_renders_empty_message() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let annotated = OpenAIChatCodec
+        .decode_response(&json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }))
+        .unwrap();
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"}
+                    }]
+                }
+            }]
+        }))
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    let step = &trajectory.steps[0];
+    assert_eq!(step.message, json!(""));
+    assert_eq!(step.tool_calls.as_ref().unwrap()[0].function_name, "lookup");
+}
+
+#[test]
+fn test_exporter_annotated_reasoning_only_response_renders_empty_message() {
+    // An OpenAI Responses reasoning-only output decodes to no assistant text.
+    // The annotated path emits an empty message rather than the raw extractor's
+    // stringified payload.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let output = json!({
+        "model": "gpt-4o",
+        "output": [{"type": "reasoning", "summary": []}],
+        "status": "completed"
+    });
+    let annotated = OpenAIResponsesCodec.decode_response(&output).unwrap();
+    assert!(annotated.message.is_none());
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4o")
+        .scope_type(ScopeType::Llm)
+        .output(output)
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps[0].message, json!(""));
+}
+
+#[test]
+fn test_exporter_annotated_thinking_only_response_renders_empty_message() {
+    // An Anthropic thinking-only response decodes to no assistant text; the
+    // annotated path emits an empty message rather than dumping the raw blocks.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let output = json!({
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet",
+        "content": [{"type": "thinking", "thinking": "hmm", "signature": "sig"}],
+        "stop_reason": "end_turn"
+    });
+    let annotated = AnthropicMessagesCodec.decode_response(&output).unwrap();
+    assert!(annotated.message.is_none());
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("claude-3-5-sonnet")
+        .scope_type(ScopeType::Llm)
+        .output(output)
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps[0].message, json!(""));
+}
+
+#[test]
+fn test_exporter_prefers_annotated_request_message() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello from annotation"}]
+        }),
+    };
+    let annotated = OpenAIChatCodec.decode(&request).unwrap();
+
+    let start = event_builder(Uuid::now_v7(), EventType::Start)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [{"role": "user", "content": "from RAW"}]}))
+        .annotated_request(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(start);
+
+    let trajectory = exporter.export().unwrap();
+    let step = &trajectory.steps[0];
+    assert_eq!(step.source, "user");
+    assert_eq!(step.message, json!("hello from annotation"));
+}
+
+#[test]
+fn test_exporter_annotated_multimodal_request_falls_back_to_raw() {
+    // A multimodal (content-part) request message must not be flattened to text:
+    // the annotation adapter returns None and ATIF preserves the raw content.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let multimodal = json!({
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "describe"},
+            {"type": "image_url", "image_url": {"url": "https://example/img.png"}}
+        ]}]
+    });
+    let annotated = OpenAIChatCodec
+        .decode(&LlmRequest {
+            headers: serde_json::Map::new(),
+            content: multimodal.clone(),
+        })
+        .unwrap();
+
+    let start = event_builder(Uuid::now_v7(), EventType::Start)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .input(multimodal)
+        .annotated_request(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(start);
+
+    let trajectory = exporter.export().unwrap();
+    let message = trajectory.steps[0].message.as_str().unwrap();
+    // Raw fallback preserves the image part rather than flattening to "describe".
+    assert!(
+        message.contains("image_url"),
+        "multimodal content preserved: {message}"
+    );
 }
 
 #[test]
