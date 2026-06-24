@@ -36,10 +36,11 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
 	atof.Endpoints = []ObservabilityAtofEndpoint{{
-		URL:           "http://localhost:8080/events",
-		Transport:     "http_post",
-		Headers:       map[string]string{"X-Test": "yes"},
-		TimeoutMillis: 1000,
+		URL:             "http://localhost:8080/events",
+		Transport:       "http_post",
+		Headers:         map[string]string{"X-Test": "yes"},
+		TimeoutMillis:   1000,
+		FieldNamePolicy: "replace_dots",
 	}}
 	atif := NewObservabilityAtifConfig()
 	if atif.Enabled || atif.AgentName != "NeMo Relay" || atif.ModelName != "unknown" || atif.FilenameTemplate != "nemo-relay-atif-{session_id}.json" {
@@ -77,8 +78,20 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
 	}
 	atofConfig := wrapped.Config["atof"].(map[string]any)
-	if _, ok := atofConfig["endpoints"].([]any); !ok {
+	endpoints, ok := atofConfig["endpoints"].([]any)
+	if !ok {
 		t.Fatalf("expected serialized ATOF endpoints, got %#v", atofConfig)
+	}
+	firstEndpoint, ok := endpoints[0].(map[string]any)
+	if !ok || firstEndpoint["field_name_policy"] != "replace_dots" {
+		t.Fatalf("expected serialized ATOF endpoint field name policy, got %#v", endpoints)
+	}
+	serialized, err := json.Marshal(wrapped)
+	if err != nil {
+		t.Fatalf("marshal observability component failed: %v", err)
+	}
+	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
+		t.Fatalf("expected field_name_policy in serialized component, got %s", serialized)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
 }

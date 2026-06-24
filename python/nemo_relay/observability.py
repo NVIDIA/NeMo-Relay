@@ -60,6 +60,7 @@ class AtofEndpointConfig:
     transport: Literal["http_post", "websocket", "ndjson"] = "http_post"
     headers: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
+    field_name_policy: Literal["preserve", "replace_dots"] = "preserve"
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF endpoint config to the canonical JSON object shape."""
@@ -69,6 +70,7 @@ class AtofEndpointConfig:
                 "transport": self.transport,
                 "headers": self.headers,
                 "timeout_millis": self.timeout_millis,
+                "field_name_policy": self.field_name_policy,
             }
         )
 

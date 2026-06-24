@@ -103,12 +103,14 @@ class TestObservabilityConfigHelpers:
             transport="http_post",
             headers={"X-Test": "yes"},
             timeout_millis=1000,
+            field_name_policy="replace_dots",
         )
         assert endpoint.to_dict() == {
             "url": "http://localhost:8080/events",
             "transport": "http_post",
             "headers": {"X-Test": "yes"},
             "timeout_millis": 1000,
+            "field_name_policy": "replace_dots",
         }
         assert AtofConfig(endpoints=[endpoint]).to_dict()["endpoints"] == [endpoint.to_dict()]
 

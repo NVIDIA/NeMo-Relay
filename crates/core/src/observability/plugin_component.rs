@@ -37,8 +37,9 @@ use crate::api::subscriber::{
 use crate::error::FlowError;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
-    AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointTransport, AtofExporter,
-    AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode,
+    AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointFieldNamePolicy,
+    AtofEndpointTransport, AtofExporter, AtofExporterConfig as CoreAtofExporterConfig,
+    AtofExporterMode,
 };
 #[cfg(feature = "openinference")]
 use crate::observability::openinference::{
@@ -199,6 +200,9 @@ pub struct AtofEndpointSectionConfig {
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
+    /// Field name policy applied before sending events: `preserve` or `replace_dots`.
+    #[serde(default = "default_atof_endpoint_field_name_policy")]
+    pub field_name_policy: String,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -660,8 +664,15 @@ fn build_atof_endpoint_config(
             "ATOF endpoints[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"
         ))
     })?;
+    let field_name_policy = AtofEndpointFieldNamePolicy::parse(&endpoint.field_name_policy)
+        .ok_or_else(|| {
+            PluginError::InvalidConfig(format!(
+                "ATOF endpoints[{index}].field_name_policy must be 'preserve' or 'replace_dots'"
+            ))
+        })?;
     let mut config = CoreAtofEndpointConfig::new(endpoint.url, transport)
-        .with_timeout_millis(endpoint.timeout_millis);
+        .with_timeout_millis(endpoint.timeout_millis)
+        .with_field_name_policy(field_name_policy);
     for (key, value) in endpoint.headers {
         config = config.with_header(key, value);
     }
@@ -1848,6 +1859,18 @@ fn validate_atof_endpoint_values(
             format!("ATOF endpoints[{index}].timeout_millis must be greater than 0"),
         );
     }
+    if AtofEndpointFieldNamePolicy::parse(&endpoint.field_name_policy).is_none() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("endpoints[{index}].field_name_policy")),
+            format!(
+                "ATOF endpoints[{index}].field_name_policy must be 'preserve' or 'replace_dots'"
+            ),
+        );
+    }
 }
 
 #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
@@ -2174,6 +2197,10 @@ fn default_atof_mode() -> String {
 
 fn default_atof_endpoint_transport() -> String {
     "http_post".to_string()
+}
+
+fn default_atof_endpoint_field_name_policy() -> String {
+    "preserve".to_string()
 }
 
 fn default_agent_name() -> String {

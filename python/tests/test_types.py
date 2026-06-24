@@ -469,6 +469,7 @@ class TestAtofExporterType:
             transport="http_post",
             headers={"X-Test": "yes"},
             timeout_millis=1000,
+            field_name_policy="replace_dots",
         )
         config.endpoints = [endpoint]
 
@@ -479,6 +480,20 @@ class TestAtofExporterType:
         assert config.endpoints[0].transport == "http_post"
         assert config.endpoints[0].headers == {"X-Test": "yes"}
         assert config.endpoints[0].timeout_millis == 1000
+        assert config.endpoints[0].field_name_policy == "replace_dots"
+
+    def test_endpoint_field_name_policy_is_validated(self, tmp_path):
+        config = AtofExporterConfig()
+        config.output_directory = str(tmp_path)
+        config.endpoints = [
+            AtofEndpointConfig(
+                "http://localhost:8080/events",
+                field_name_policy="bogus",  # type: ignore[arg-type]
+            )
+        ]
+
+        with pytest.raises(ValueError, match="field_name_policy"):
+            AtofExporter(config)
 
     def test_exporter_lifecycle_writes_raw_jsonl_events(self, tmp_path):
         config = AtofExporterConfig()
