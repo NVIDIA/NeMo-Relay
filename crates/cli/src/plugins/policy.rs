@@ -5,9 +5,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginAttestationMode, DynamicPluginCapability, DynamicPluginCheckState,
-    DynamicPluginFailure, DynamicPluginFailurePhase, DynamicPluginKind, DynamicPluginManifest,
-    DynamicPluginStartupClass,
+    DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailure,
+    DynamicPluginFailurePhase, DynamicPluginKind, DynamicPluginManifest, DynamicPluginStartupClass,
 };
 use serde::Deserialize;
 
@@ -36,7 +35,6 @@ pub(crate) struct DynamicPluginHostPolicyEffect {
     pub(crate) allowed: Option<bool>,
     pub(crate) startup: Option<DynamicPluginStartupClass>,
     pub(crate) attestation: Option<DynamicPluginAttestationMode>,
-    pub(crate) allowed_capabilities: Option<Vec<DynamicPluginCapability>>,
     pub(crate) trusted_public_keys: Option<Vec<String>>,
 }
 
@@ -51,9 +49,6 @@ impl DynamicPluginHostPolicyEffect {
         if let Some(value) = other.attestation {
             self.attestation = Some(value);
         }
-        if let Some(value) = other.allowed_capabilities {
-            self.allowed_capabilities = Some(value);
-        }
         if let Some(value) = other.trusted_public_keys {
             self.trusted_public_keys = Some(value);
         }
@@ -63,7 +58,6 @@ impl DynamicPluginHostPolicyEffect {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct DynamicPluginHostPolicyRule {
     pub(crate) match_kind: Option<DynamicPluginKind>,
-    pub(crate) match_capability: Option<DynamicPluginCapability>,
     pub(crate) match_plugin_id: Option<String>,
     pub(crate) effect: DynamicPluginHostPolicyEffect,
 }
@@ -71,7 +65,6 @@ pub(crate) struct DynamicPluginHostPolicyRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DynamicPluginHostPolicyFailure {
     Blocked,
-    CapabilityNotAllowed(DynamicPluginCapability),
 }
 
 impl DynamicPluginHostPolicyFailure {
@@ -98,11 +91,6 @@ impl fmt::Display for DynamicPluginHostPolicyFailureDisplay<'_> {
                 f,
                 "dynamic plugin '{}' is blocked by host policy",
                 self.plugin_id
-            ),
-            DynamicPluginHostPolicyFailure::CapabilityNotAllowed(capability) => write!(
-                f,
-                "dynamic plugin '{}' is blocked by host policy: capability '{}' is not allowed",
-                self.plugin_id, capability
             ),
         }
     }
@@ -147,7 +135,6 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
         allowed: Some(true),
         startup: Some(DynamicPluginStartupClass::Optional),
         attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
-        allowed_capabilities: None,
         trusted_public_keys: None,
     };
     effect.merge_from(policy.defaults.clone());
@@ -181,24 +168,6 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
         };
     }
 
-    if let Some(allowed_capabilities) = effect.allowed_capabilities
-        && let Some(blocked_capability) = manifest
-            .capabilities
-            .items
-            .iter()
-            .find(|capability| !allowed_capabilities.contains(capability))
-    {
-        return EvaluatedDynamicPluginHostPolicy {
-            policy_satisfied: false,
-            startup_class,
-            attestation_mode,
-            trusted_public_keys,
-            failure: Some(DynamicPluginHostPolicyFailure::CapabilityNotAllowed(
-                *blocked_capability,
-            )),
-        };
-    }
-
     EvaluatedDynamicPluginHostPolicy {
         policy_satisfied: true,
         startup_class,
@@ -214,11 +183,6 @@ fn policy_rule_matches(
 ) -> bool {
     if let Some(match_kind) = rule.match_kind
         && manifest.plugin.kind != match_kind
-    {
-        return false;
-    }
-    if let Some(match_capability) = rule.match_capability
-        && !manifest.capabilities.items.contains(&match_capability)
     {
         return false;
     }
@@ -261,7 +225,6 @@ pub(crate) struct FileDynamicPluginHostPolicyEffect {
     allowed: Option<bool>,
     startup: Option<DynamicPluginStartupClass>,
     attestation: Option<DynamicPluginAttestationMode>,
-    allowed_capabilities: Option<Vec<DynamicPluginCapability>>,
     trusted_public_keys: Option<Vec<String>>,
 }
 
@@ -271,7 +234,6 @@ impl From<FileDynamicPluginHostPolicyEffect> for DynamicPluginHostPolicyEffect {
             allowed: value.allowed,
             startup: value.startup,
             attestation: value.attestation,
-            allowed_capabilities: value.allowed_capabilities,
             trusted_public_keys: value
                 .trusted_public_keys
                 .map(|keys| keys.into_iter().map(|key| key.trim().to_owned()).collect()),
@@ -283,12 +245,10 @@ impl From<FileDynamicPluginHostPolicyEffect> for DynamicPluginHostPolicyEffect {
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileDynamicPluginHostPolicyRule {
     match_kind: Option<DynamicPluginKind>,
-    match_capability: Option<DynamicPluginCapability>,
     match_plugin_id: Option<String>,
     allowed: Option<bool>,
     startup: Option<DynamicPluginStartupClass>,
     attestation: Option<DynamicPluginAttestationMode>,
-    allowed_capabilities: Option<Vec<DynamicPluginCapability>>,
     trusted_public_keys: Option<Vec<String>>,
 }
 
@@ -296,13 +256,11 @@ impl From<FileDynamicPluginHostPolicyRule> for DynamicPluginHostPolicyRule {
     fn from(value: FileDynamicPluginHostPolicyRule) -> Self {
         Self {
             match_kind: value.match_kind,
-            match_capability: value.match_capability,
             match_plugin_id: value.match_plugin_id.map(|value| value.trim().to_owned()),
             effect: DynamicPluginHostPolicyEffect {
                 allowed: value.allowed,
                 startup: value.startup,
                 attestation: value.attestation,
-                allowed_capabilities: value.allowed_capabilities,
                 trusted_public_keys: value
                     .trusted_public_keys
                     .map(|keys| keys.into_iter().map(|key| key.trim().to_owned()).collect()),

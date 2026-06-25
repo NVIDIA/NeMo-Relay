@@ -465,26 +465,26 @@ fn validate_capability_shape(
         DynamicPluginKind::RustDynamic => {
             if !has_native {
                 return Err(PluginError::InvalidConfig(
-                    "rust_dynamic plugins must declare capabilities.items containing plugin.native"
+                    "rust_dynamic plugins must declare capabilities.items containing plugin_native"
                         .into(),
                 ));
             }
             if has_worker {
                 return Err(PluginError::InvalidConfig(
-                    "rust_dynamic plugins must not declare plugin.worker".into(),
+                    "rust_dynamic plugins must not declare plugin_worker".into(),
                 ));
             }
         }
         DynamicPluginKind::Worker => {
             if !has_worker {
                 return Err(PluginError::InvalidConfig(
-                    "worker plugins must declare capabilities.items containing plugin.worker"
+                    "worker plugins must declare capabilities.items containing plugin_worker"
                         .into(),
                 ));
             }
             if has_native {
                 return Err(PluginError::InvalidConfig(
-                    "worker plugins must not declare plugin.native".into(),
+                    "worker plugins must not declare plugin_native".into(),
                 ));
             }
         }

@@ -197,23 +197,12 @@ pub(crate) fn validate(
             let policy =
                 evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
             let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-            scopes[entry.scope_index]
-                .registry
-                .update_validation_status(
-                    &plugin_id,
-                    DynamicPluginValidationStatus {
-                        manifest: DynamicPluginCheckState::Valid,
-                        compatibility: DynamicPluginCheckState::Valid,
-                        integrity: trust.integrity,
-                        environment: DynamicPluginCheckState::Unknown,
-                        authenticity: trust.authenticity,
-                        policy_satisfied: policy.check_state(),
-                        checked_at: None,
-                        message: Some(VALIDATION_MESSAGE.into()),
-                    },
-                )
-                .map_err(|error| CliError::Config(error.to_string()))?;
-            update_registry_policy_status(&mut scopes[entry.scope_index], &plugin_id, &policy)?;
+            update_registry_validation_status(
+                &mut scopes[entry.scope_index],
+                &plugin_id,
+                &policy,
+                &trust,
+            )?;
             scopes[entry.scope_index].save()?;
             let refreshed = find_record_by_id(&scopes, &plugin_id)?
                 .expect("validated registry record should still exist");
@@ -381,9 +370,10 @@ fn mutate_enabled_state(
     update_registry_validation_status(&mut scopes[entry.scope_index], &plugin_id, &policy, &trust)?;
     if enabled && !policy.policy_satisfied {
         scopes[entry.scope_index].save()?;
-        return Err(plugin_refused(
+        return Err(plugin_refused_with_code(
             command,
             Some(plugin_id.clone()),
+            "policy_blocked",
             policy
                 .failure()
                 .map(|failure| failure.display(&plugin_id).to_string())
@@ -394,9 +384,10 @@ fn mutate_enabled_state(
     }
     if enabled && let Some(failure) = trust.failure() {
         scopes[entry.scope_index].save()?;
-        return Err(plugin_refused(
+        return Err(plugin_refused_with_code(
             command,
             Some(plugin_id.clone()),
+            trust_refusal_code(&trust),
             failure.display(&plugin_id).to_string(),
         ));
     }
@@ -499,7 +490,7 @@ fn validated_record_from_manifest(
     record.status.attestation_mode = Some(policy.attestation_mode);
     record.status.last_error = policy
         .last_error(&record.metadata.id)
-        .or_else(|| trust.last_error(&record.metadata.id, policy.attestation_mode));
+        .or_else(|| trust.last_error(&record.metadata.id));
     Ok(record)
 }
 
@@ -558,7 +549,7 @@ fn update_registry_validation_status(
             plugin_id,
             policy
                 .last_error(plugin_id)
-                .or_else(|| trust.last_error(plugin_id, policy.attestation_mode)),
+                .or_else(|| trust.last_error(plugin_id)),
         )
         .map_err(|error| CliError::Config(error.to_string()))
 }

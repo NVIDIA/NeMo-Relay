@@ -5,8 +5,8 @@ use super::*;
 use axum::http::HeaderValue;
 use base64::Engine;
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginAttestationMode, DynamicPluginCapability, DynamicPluginCheckState,
-    DynamicPluginKind, DynamicPluginManifest, DynamicPluginStartupClass,
+    DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginKind,
+    DynamicPluginManifest, DynamicPluginStartupClass,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -36,15 +36,7 @@ fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 fn write_dynamic_manifest(dir: &std::path::Path, plugin_id: &str) -> std::path::PathBuf {
-    write_dynamic_manifest_with_options(dir, plugin_id, &["plugin.worker"], None)
-}
-
-fn write_dynamic_manifest_with_capabilities(
-    dir: &std::path::Path,
-    plugin_id: &str,
-    capabilities: &[&str],
-) -> std::path::PathBuf {
-    write_dynamic_manifest_with_options(dir, plugin_id, capabilities, None)
+    write_dynamic_manifest_with_options(dir, plugin_id, &["plugin_worker"], None)
 }
 
 fn write_dynamic_manifest_with_options(
@@ -812,7 +804,7 @@ attestation = "integrity_only"
 trusted_public_keys = ["ed25519:ZmFrZS1rZXk="]
 
 [[plugins.policy.rules]]
-match_capability = "plugin.worker"
+match_kind = "worker"
 startup = "required"
 
 [plugins.policy.overrides."acme.worker"]
@@ -854,8 +846,8 @@ attestation = "signature_required"
     );
     assert_eq!(resolved.dynamic_plugin_policy.rules.len(), 1);
     assert_eq!(
-        resolved.dynamic_plugin_policy.rules[0].match_capability,
-        Some(DynamicPluginCapability::PluginWorker)
+        resolved.dynamic_plugin_policy.rules[0].match_kind,
+        Some(DynamicPluginKind::Worker)
     );
     assert_eq!(
         resolved.dynamic_plugin_policy.rules[0].effect.startup,
@@ -883,18 +875,15 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
             allowed: Some(true),
             startup: Some(DynamicPluginStartupClass::Optional),
             attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
-            allowed_capabilities: None,
             trusted_public_keys: None,
         },
         rules: vec![DynamicPluginHostPolicyRule {
             match_kind: Some(DynamicPluginKind::Worker),
-            match_capability: Some(DynamicPluginCapability::PluginWorker),
             match_plugin_id: None,
             effect: DynamicPluginHostPolicyEffect {
                 allowed: None,
                 startup: Some(DynamicPluginStartupClass::Required),
                 attestation: None,
-                allowed_capabilities: Some(vec![DynamicPluginCapability::PluginWorker]),
                 trusted_public_keys: None,
             },
         }],
@@ -904,7 +893,6 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
                 allowed: Some(false),
                 startup: None,
                 attestation: Some(DynamicPluginAttestationMode::SignatureRequired),
-                allowed_capabilities: None,
                 trusted_public_keys: None,
             },
         ))
@@ -929,54 +917,6 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
 }
 
 #[test]
-fn dynamic_plugin_host_policy_evaluator_matches_functional_surface_capabilities() {
-    let temp = tempfile::tempdir().unwrap();
-    let plugin_dir = temp.path().join("plugins/acme");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    let manifest_path = write_dynamic_manifest_with_capabilities(
-        &plugin_dir,
-        "acme.guardrail",
-        &["plugin.worker", "middleware.guardrail"],
-    );
-    let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
-    let policy = DynamicPluginHostPolicy {
-        defaults: DynamicPluginHostPolicyEffect {
-            allowed: Some(true),
-            startup: Some(DynamicPluginStartupClass::Optional),
-            attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
-            allowed_capabilities: Some(vec![
-                DynamicPluginCapability::PluginWorker,
-                DynamicPluginCapability::MiddlewareGuardrail,
-            ]),
-            trusted_public_keys: None,
-        },
-        rules: vec![DynamicPluginHostPolicyRule {
-            match_kind: Some(DynamicPluginKind::Worker),
-            match_capability: Some(DynamicPluginCapability::MiddlewareGuardrail),
-            match_plugin_id: None,
-            effect: DynamicPluginHostPolicyEffect {
-                allowed: None,
-                startup: Some(DynamicPluginStartupClass::Required),
-                attestation: None,
-                allowed_capabilities: None,
-                trusted_public_keys: None,
-            },
-        }],
-        overrides: Default::default(),
-    };
-
-    let evaluated = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
-
-    assert!(evaluated.policy_satisfied);
-    assert_eq!(evaluated.startup_class, DynamicPluginStartupClass::Required);
-    assert_eq!(
-        evaluated.attestation_mode,
-        DynamicPluginAttestationMode::IntegrityOnly
-    );
-    assert!(evaluated.failure().is_none());
-}
-
-#[test]
 fn plugins_toml_layers_dynamic_plugin_host_policy_across_sources() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugins = temp.path().join("project-plugins.toml");
@@ -989,7 +929,7 @@ startup = "required"
 
 [[plugins.policy.rules]]
 match_kind = "worker"
-allowed_capabilities = ["plugin.worker"]
+startup = "required"
 
 [plugins.policy.overrides."acme.worker"]
 attestation = "signature_if_present"
@@ -1003,7 +943,7 @@ attestation = "signature_if_present"
 attestation = "signature_required"
 
 [[plugins.policy.rules]]
-match_capability = "plugin.worker"
+match_plugin_id = "acme.worker"
 allowed = false
 
 [plugins.policy.overrides."acme.worker"]
@@ -1016,6 +956,7 @@ allowed = true
         .unwrap()
         .unwrap();
 
+    assert_eq!(resolved.value, None);
     assert_eq!(
         resolved.dynamic_plugin_policy.defaults.startup,
         Some(DynamicPluginStartupClass::Required)
@@ -1030,8 +971,10 @@ allowed = true
         Some(DynamicPluginKind::Worker)
     );
     assert_eq!(
-        resolved.dynamic_plugin_policy.rules[1].match_capability,
-        Some(DynamicPluginCapability::PluginWorker)
+        resolved.dynamic_plugin_policy.rules[1]
+            .match_plugin_id
+            .as_deref(),
+        Some("acme.worker")
     );
     let override_effect = resolved
         .dynamic_plugin_policy
@@ -1527,7 +1470,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_lacks_trusted_ke
     write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.worker",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -1595,7 +1538,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.worker",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -1667,7 +1610,7 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.worker",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     std::fs::write(plugin_dir.join("plugin.py.sig"), "ed25519:not-base64\n").unwrap();

@@ -49,30 +49,14 @@ pub enum WorkerRuntime {
 /// Relay-enforced capability declared by a dynamic plugin.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum DynamicPluginCapability {
     /// Trusted in-process native extension capability.
-    #[serde(rename = "plugin.native")]
-    #[strum(serialize = "plugin.native")]
     PluginNative,
     /// Isolated worker-based extension capability.
-    #[serde(rename = "plugin.worker")]
-    #[strum(serialize = "plugin.worker")]
     PluginWorker,
-    /// Middleware guardrail registration capability.
-    #[serde(rename = "middleware.guardrail")]
-    #[strum(serialize = "middleware.guardrail")]
-    MiddlewareGuardrail,
-    /// Middleware interceptor registration capability.
-    #[serde(rename = "middleware.interceptor")]
-    #[strum(serialize = "middleware.interceptor")]
-    MiddlewareInterceptor,
-    /// Observability exporter registration capability.
-    #[serde(rename = "telemetry.exporter")]
-    #[strum(serialize = "telemetry.exporter")]
-    TelemetryExporter,
     /// Typed configuration schema contribution capability.
-    #[serde(rename = "config.schema")]
-    #[strum(serialize = "config.schema")]
     ConfigSchema,
 }
 

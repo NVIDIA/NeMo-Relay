@@ -189,21 +189,10 @@ impl EvaluatedDynamicPluginTrust {
         self.failure.is_none()
     }
 
-    pub(super) fn last_error(
-        &self,
-        plugin_id: &str,
-        attestation_mode: DynamicPluginAttestationMode,
-    ) -> Option<DynamicPluginFailure> {
+    pub(super) fn last_error(&self, plugin_id: &str) -> Option<DynamicPluginFailure> {
         self.failure.as_ref().map(|failure| DynamicPluginFailure {
             phase: DynamicPluginFailurePhase::Validation,
-            code: match attestation_mode {
-                DynamicPluginAttestationMode::IntegrityOnly => "integrity_verification_failed",
-                DynamicPluginAttestationMode::SignatureIfPresent
-                | DynamicPluginAttestationMode::SignatureRequired => {
-                    "attestation_verification_failed"
-                }
-            }
-            .into(),
+            code: failure.refusal_code().into(),
             message: failure.display(plugin_id).to_string(),
         })
     }
@@ -214,6 +203,14 @@ pub(super) fn evaluate_dynamic_plugin_trust(
     manifest_ref: &str,
     policy: &EvaluatedDynamicPluginHostPolicy,
 ) -> EvaluatedDynamicPluginTrust {
+    if !policy.policy_satisfied {
+        return EvaluatedDynamicPluginTrust {
+            integrity: DynamicPluginCheckState::Unknown,
+            authenticity: DynamicPluginCheckState::Unknown,
+            failure: None,
+        };
+    }
+
     let artifact_path = match verify_integrity(manifest, manifest_ref) {
         Ok(artifact_path) => artifact_path,
         Err(failure) => {

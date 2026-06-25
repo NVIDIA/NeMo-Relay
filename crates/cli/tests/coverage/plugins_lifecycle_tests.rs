@@ -85,15 +85,7 @@ impl Drop for EnvScope {
 }
 
 fn write_dynamic_manifest(dir: &Path, plugin_id: &str) -> PathBuf {
-    write_dynamic_manifest_with_options(dir, plugin_id, &["plugin.worker"], None)
-}
-
-fn write_dynamic_manifest_with_capabilities(
-    dir: &Path,
-    plugin_id: &str,
-    capabilities: &[&str],
-) -> PathBuf {
-    write_dynamic_manifest_with_options(dir, plugin_id, capabilities, None)
+    write_dynamic_manifest_with_options(dir, plugin_id, &["plugin_worker"], None)
 }
 
 fn write_dynamic_manifest_with_options(
@@ -255,46 +247,6 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 }
 
 #[test]
-fn add_refuses_functional_surface_capabilities_blocked_by_host_policy() {
-    let temp = tempfile::tempdir().unwrap();
-    let _env = EnvScope::hermetic(&temp);
-    let _cwd = CurrentDirGuard::enter(temp.path());
-    let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    std::fs::create_dir_all(&config_dir).unwrap();
-    write_dynamic_manifest_with_capabilities(
-        &plugin_dir,
-        "acme.guardrail-surface",
-        &["plugin.worker", "middleware.guardrail"],
-    );
-    std::fs::write(
-        config_dir.join("plugins.toml"),
-        r#"
-[plugins.policy.defaults]
-allowed_capabilities = ["plugin.worker"]
-"#,
-    )
-    .unwrap();
-
-    let error = add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
-                project: true,
-                ..PluginsScopeArgs::default()
-            },
-            path: plugin_dir,
-        },
-        &crate::config::ServerArgs::default(),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("middleware.guardrail"));
-    assert!(error.contains("blocked by host policy"));
-}
-
-#[test]
 fn add_rejects_scope_flags_when_explicit_config_is_set() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -338,7 +290,7 @@ fn add_refuses_dynamic_plugins_blocked_by_host_policy() {
         config_dir.join("plugins.toml"),
         r#"
 [plugins.policy.defaults]
-allowed_capabilities = ["config.schema"]
+allowed = false
 "#,
     )
     .unwrap();
@@ -360,7 +312,7 @@ allowed_capabilities = ["config.schema"]
             kind: PluginLifecycleFailureKind::Refused,
             message,
             ..
-        } => assert!(message.contains("capability 'plugin.worker' is not allowed")),
+        } => assert!(message.contains("blocked by host policy")),
         other => panic!("unexpected policy add error: {other}"),
     }
 
@@ -442,7 +394,10 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     assert!(list.contains("acme.guardrail"));
     assert!(list.contains("absent"));
     assert!(list.contains("false"));
-    assert!(list.contains("valid"));
+    assert!(
+        list.lines()
+            .any(|line| line.contains("acme.guardrail") && line.contains(" valid "))
+    );
 
     let entry = find_record_by_id(&scopes, "acme.guardrail")
         .unwrap()
@@ -828,11 +783,7 @@ fn hydrate_persists_updated_policy_and_error_state() {
     let config_dir = temp.path().join(".nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
-    write_dynamic_manifest_with_capabilities(
-        &plugin_dir,
-        "acme.persist-blocked",
-        &["plugin.worker", "middleware.guardrail"],
-    );
+    write_dynamic_manifest(&plugin_dir, "acme.persist-blocked");
 
     add(
         PluginsAddCommand {
@@ -853,7 +804,7 @@ fn hydrate_persists_updated_policy_and_error_state() {
                 "[[plugins.dynamic]]\n",
                 "manifest = {:?}\n\n",
                 "[plugins.policy.defaults]\n",
-                "allowed_capabilities = [\"config.schema\"]\n"
+                "allowed = false\n"
             ),
             plugin_dir.join("relay-plugin.toml").to_string_lossy()
         ),
@@ -893,7 +844,7 @@ fn hydrate_verifies_signatures_when_host_policy_provides_trusted_keys() {
     let manifest_path = write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.signed",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     let trusted_public_key = write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -944,7 +895,7 @@ fn hydrate_marks_signature_required_plugins_invalid_without_trusted_keys() {
     let manifest_path = write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.signed-without-trust",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -997,7 +948,7 @@ fn hydrate_marks_signature_required_plugins_invalid_with_wrong_trusted_key() {
     let manifest_path = write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.signed-wrong-key",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -1053,7 +1004,7 @@ fn hydrate_marks_malformed_signature_files_invalid_when_signature_is_present() {
     let manifest_path = write_dynamic_manifest_with_options(
         &plugin_dir,
         "acme.signed-malformed",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     std::fs::write(plugin_dir.join("plugin.py.sig"), "ed25519:not-base64\n").unwrap();
@@ -1128,7 +1079,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
                 "[[plugins.dynamic]]\n",
                 "manifest = {:?}\n\n",
                 "[plugins.policy.defaults]\n",
-                "allowed_capabilities = [\"config.schema\"]\n"
+                "allowed = false\n"
             ),
             manifest_path.to_string_lossy()
         ),
@@ -1148,7 +1099,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
             kind: PluginLifecycleFailureKind::Refused,
             message,
             ..
-        } => assert!(message.contains("capability 'plugin.worker' is not allowed")),
+        } => assert!(message.contains("blocked by host policy")),
         other => panic!("unexpected enable policy error: {other}"),
     }
 
@@ -1206,7 +1157,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
                 "[plugins.policy.defaults]\n",
                 "startup = \"required\"\n",
                 "attestation = \"signature_required\"\n",
-                "allowed_capabilities = [\"config.schema\"]\n"
+                "allowed = false\n"
             ),
             manifest_path.to_string_lossy()
         ),

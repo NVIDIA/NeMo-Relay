@@ -39,15 +39,7 @@ fn toml_basic_string(value: &str) -> String {
 }
 
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
-    write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin.worker"], None);
-}
-
-fn write_dynamic_plugin_manifest_with_capabilities(
-    dir: &std::path::Path,
-    plugin_id: &str,
-    capabilities: &[&str],
-) {
-    write_dynamic_plugin_manifest_with_options(dir, plugin_id, capabilities, None);
+    write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
 }
 
 fn write_dynamic_plugin_manifest_with_options(
@@ -348,7 +340,7 @@ fn cli_plugins_validate_json_reports_blocked_policy_for_path_target() {
         user_config_dir.join("plugins.toml"),
         r#"
 [plugins.policy.defaults]
-allowed_capabilities = ["config.schema"]
+allowed = false
 "#,
     )
     .unwrap();
@@ -383,54 +375,6 @@ allowed_capabilities = ["config.schema"]
 }
 
 #[test]
-fn cli_plugins_validate_json_reports_blocked_functional_surface_capability_for_path_target() {
-    let temp = tempfile::tempdir().unwrap();
-    let plugin_dir = temp.path().join("plugins").join("acme");
-    let xdg = temp.path().join("xdg");
-    let user_config_dir = xdg.join("nemo-relay");
-    std::fs::create_dir_all(&user_config_dir).unwrap();
-    write_dynamic_plugin_manifest_with_capabilities(
-        &plugin_dir,
-        "acme.cli-guardrail-path",
-        &["plugin.worker", "middleware.guardrail"],
-    );
-    std::fs::write(
-        user_config_dir.join("plugins.toml"),
-        r#"
-[plugins.policy.defaults]
-allowed_capabilities = ["plugin.worker"]
-"#,
-    )
-    .unwrap();
-
-    let output = Command::new(gateway_bin())
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("HOME", temp.path())
-        .args(["plugins", "validate"])
-        .arg(&plugin_dir)
-        .arg("--json")
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr was:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(parsed["ok"], true);
-    assert_eq!(parsed["data"]["target_kind"], "path");
-    assert_eq!(parsed["data"]["valid"], false);
-    assert_eq!(parsed["data"]["policy_state"], "invalid");
-    assert!(
-        parsed["data"]["errors"][0]
-            .as_str()
-            .unwrap()
-            .contains("middleware.guardrail")
-    );
-}
-
-#[test]
 fn cli_plugins_validate_json_reports_verified_signature_for_path_target() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins").join("acme");
@@ -440,7 +384,7 @@ fn cli_plugins_validate_json_reports_verified_signature_for_path_target() {
     write_dynamic_plugin_manifest_with_options(
         &plugin_dir,
         "acme.cli-signed-path",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     let trusted_public_key = write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -488,7 +432,7 @@ fn cli_plugins_validate_json_reports_invalid_signature_for_wrong_trusted_key() {
     write_dynamic_plugin_manifest_with_options(
         &plugin_dir,
         "acme.cli-signed-wrong-key",
-        &["plugin.worker"],
+        &["plugin_worker"],
         Some("plugin.py.sig"),
     );
     write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
@@ -570,7 +514,7 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
                 "[plugins.policy.defaults]\n",
                 "startup = \"required\"\n",
                 "attestation = \"signature_required\"\n",
-                "allowed_capabilities = [\"config.schema\"]\n"
+                "allowed = false\n"
             ),
             toml_basic_string(plugin_dir.to_string_lossy().as_ref())
         ),
@@ -706,7 +650,7 @@ fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
                 "[plugins.policy.defaults]\n",
                 "startup = \"required\"\n",
                 "attestation = \"signature_required\"\n",
-                "allowed_capabilities = [\"config.schema\"]\n"
+                "allowed = false\n"
             ),
             toml_basic_string(plugin_dir.to_string_lossy().as_ref())
         ),
@@ -825,7 +769,7 @@ fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
                 "[plugins.policy.defaults]\n",
                 "startup = \"required\"\n",
                 "attestation = \"signature_required\"\n",
-                "allowed_capabilities = [\"config.schema\"]\n"
+                "allowed = false\n"
             ),
             toml_basic_string(plugin_dir.to_string_lossy().as_ref())
         ),
