@@ -136,9 +136,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 You should see:
 
-- event lines for the scope, tool, LLM, and mark lifecycle
+- Event lines for the scope, tool, LLM, and mark lifecycle
 - `{"echo":"hello"}` from the tool call
-- a final object containing `ok: true` and the echoed message payload from the
+- A final object containing `ok: true` and the echoed message payload from the
   LLM callback
 
 Native subscriber delivery is asynchronous, so flush before checking subscriber
