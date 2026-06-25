@@ -288,6 +288,7 @@ pub(super) fn failure(
     command: &'static str,
     target: Option<&str>,
     kind: PluginLifecycleFailureKind,
+    code: Option<&'static str>,
     message: &str,
 ) -> ResponseEnvelope<Value> {
     ResponseEnvelope {
@@ -298,7 +299,7 @@ pub(super) fn failure(
         warnings: Vec::new(),
         data: None,
         error: Some(ResponseError {
-            code: failure_code(kind),
+            code: code.unwrap_or_else(|| failure_code(kind)),
             kind,
             message: message.to_owned(),
             details: Map::new(),
@@ -311,7 +312,13 @@ pub(super) fn generic_failure(
     target: Option<&str>,
     message: &str,
 ) -> ResponseEnvelope<Value> {
-    failure(command, target, PluginLifecycleFailureKind::Failed, message)
+    failure(
+        command,
+        target,
+        PluginLifecycleFailureKind::Failed,
+        None,
+        message,
+    )
 }
 
 fn success<T: Serialize>(

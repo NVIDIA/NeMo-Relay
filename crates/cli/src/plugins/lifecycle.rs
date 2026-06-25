@@ -49,6 +49,8 @@ use self::target::PluginTarget;
 const VALIDATION_MESSAGE: &str = "validated by CLI";
 
 pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(), CliError> {
+    const COMMAND: &str = "plugins add";
+
     let resolved = resolve_plugins_config(server.config.as_ref())?;
     let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
     let (manifest, manifest_ref) = load_manifest_for_action("add", &command.path)?;
@@ -77,16 +79,18 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
     let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
     let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
     if !policy.policy_satisfied {
-        return Err(plugin_refused(
-            "plugins add",
+        return Err(plugin_refused_with_code(
+            COMMAND,
             Some(plugin_id.clone()),
+            "policy_blocked",
             policy.refusal_message(&plugin_id),
         ));
     }
     if let Some(message) = trust.message.as_ref() {
-        return Err(plugin_refused(
-            "plugins add",
+        return Err(plugin_refused_with_code(
+            COMMAND,
             Some(plugin_id.clone()),
+            trust_refusal_code(&trust),
             message.clone(),
         ));
     }
@@ -991,7 +995,7 @@ pub(crate) fn render_plugin_error(
     error: &CliError,
     json: bool,
 ) -> Result<Option<ExitCode>, CliError> {
-    let Some((command, target, kind, message)) = error.plugin_lifecycle() else {
+    let Some((command, target, kind, code, message)) = error.plugin_lifecycle() else {
         return Ok(None);
     };
 
@@ -1002,7 +1006,7 @@ pub(crate) fn render_plugin_error(
     };
 
     if json {
-        print_response_json(&failure(command, target, kind, message))?;
+        print_response_json(&failure(command, target, kind, code, message))?;
     } else {
         eprintln!("{message}");
     }
@@ -1027,6 +1031,7 @@ fn plugin_not_found(
         command,
         target,
         kind: PluginLifecycleFailureKind::NotFound,
+        code: None,
         message: message.into(),
     }
 }
@@ -1036,11 +1041,35 @@ fn plugin_refused(
     target: Option<String>,
     message: impl Into<String>,
 ) -> CliError {
+    plugin_refused_with_code(command, target, "refused", message)
+}
+
+fn plugin_refused_with_code(
+    command: &'static str,
+    target: Option<String>,
+    code: &'static str,
+    message: impl Into<String>,
+) -> CliError {
     CliError::PluginLifecycle {
         command,
         target,
         kind: PluginLifecycleFailureKind::Refused,
+        code: Some(code),
         message: message.into(),
+    }
+}
+
+fn trust_refusal_code(trust: &EvaluatedDynamicPluginTrust) -> &'static str {
+    match trust {
+        EvaluatedDynamicPluginTrust {
+            integrity: DynamicPluginCheckState::Invalid,
+            ..
+        } => "integrity_failed",
+        EvaluatedDynamicPluginTrust {
+            authenticity: DynamicPluginCheckState::Invalid,
+            ..
+        } => "attestation_failed",
+        _ => "refused",
     }
 }
 

@@ -1410,11 +1410,25 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         "plugins inspect",
         Some("missing.plugin"),
         PluginLifecycleFailureKind::NotFound,
+        None,
         "missing plugin",
     ))
     .unwrap();
     assert_eq!(failure["ok"], serde_json::json!(false));
     assert_eq!(failure["error"]["code"], serde_json::json!("not_found"));
+
+    let refused = serde_json::to_value(responses::failure(
+        "plugins add",
+        Some("acme.blocked"),
+        PluginLifecycleFailureKind::Refused,
+        Some("policy_blocked"),
+        "blocked by host policy",
+    ))
+    .unwrap();
+    assert_eq!(
+        refused["error"]["code"],
+        serde_json::json!("policy_blocked")
+    );
 }
 
 #[test]
