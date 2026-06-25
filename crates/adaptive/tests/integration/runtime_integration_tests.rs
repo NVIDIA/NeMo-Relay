@@ -305,8 +305,10 @@ fn acg_component_source_resolves_request_surfaces_shape_first_with_provider_hint
         !source.contains("decode_request_for_provider"),
         "acg_component should not decode semantic requests directly from the configured provider",
     );
+    // Whitespace-stripped so a rustfmt reflow of the call's arguments doesn't break this.
+    let source_no_ws: String = source.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
-        source.contains("build_semantic_request_view(request, provider)"),
+        source_no_ws.contains("build_semantic_request_view(request,provider"),
         "acg_component should pass the provider as a disambiguation hint to surface resolution",
     );
 }
