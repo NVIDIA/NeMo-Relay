@@ -20,12 +20,15 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{estimate_cost_for_response_or_requested_model, manual};
+use super::{
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
+    model_name_for_llm_event,
+};
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use crate::codec::response::{CostEstimate, estimate_cost_for_provider};
+use crate::codec::response::CostEstimate;
 use crate::error::FlowError;
 use chrono::{DateTime, Utc};
 use opentelemetry::trace::{
@@ -712,9 +715,6 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
 }
 
 fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
-    if let Some(cost) = manual::cost_from_manual_llm_output(event.output(), false) {
-        return Some(cost);
-    }
     if let Some(response) = event.normalized_llm_response() {
         let response = response.as_ref();
         if let Some(usage) = response.usage.as_ref() {
@@ -730,12 +730,19 @@ fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
             }
         }
     }
+    if let Some(cost) =
+        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::AnyCurrency)
+    {
+        return Some(cost);
+    }
     let usage = manual::usage_from_manual_llm_output(event.output())?;
-    let model_name = event
-        .model_name()
-        .or_else(|| manual::model_name_from_manual_llm_output(event.output()))?;
-    estimate_cost_for_provider(Some(event.name()), model_name, &usage)
-        .and_then(|cost| cost_total_and_currency(&cost))
+    estimate_cost_for_response_or_model(
+        Some(event.name()),
+        event.model_name(),
+        manual::model_name_from_manual_llm_output(event.output()),
+        &usage,
+    )
+    .and_then(|cost| cost_total_and_currency(&cost))
 }
 
 fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
@@ -784,11 +791,8 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
         ),
     ];
 
-    if let Some(model_name) = event.model_name() {
-        attributes.push(KeyValue::new(
-            "nemo_relay.model_name",
-            model_name.to_string(),
-        ));
+    if let Some(model_name) = model_name_for_llm_event(event) {
+        attributes.push(KeyValue::new("nemo_relay.model_name", model_name));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
         attributes.push(KeyValue::new(

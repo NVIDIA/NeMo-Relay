@@ -18,6 +18,14 @@ pub(crate) enum PluginLifecycleFailureKind {
     Refused,
 }
 
+pub(crate) type PluginLifecycleErrorContext<'a> = (
+    &'static str,
+    Option<&'a str>,
+    PluginLifecycleFailureKind,
+    Option<&'static str>,
+    &'a str,
+);
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
     #[error("guardrail rejected: {0}")]
@@ -43,6 +51,7 @@ pub(crate) enum CliError {
         command: &'static str,
         target: Option<String>,
         kind: PluginLifecycleFailureKind,
+        code: Option<&'static str>,
         message: String,
     },
     #[error("NeMo Relay runtime error: {0}")]
@@ -60,16 +69,17 @@ impl CliError {
         }
     }
 
-    pub(crate) fn plugin_lifecycle(
+    pub(crate) fn as_plugin_lifecycle_error_context(
         &self,
-    ) -> Option<(&'static str, Option<&str>, PluginLifecycleFailureKind, &str)> {
+    ) -> Option<PluginLifecycleErrorContext<'_>> {
         match self {
             Self::PluginLifecycle {
                 command,
                 target,
                 kind,
+                code,
                 message,
-            } => Some((command, target.as_deref(), *kind, message.as_str())),
+            } => Some((command, target.as_deref(), *kind, *code, message.as_str())),
             _ => None,
         }
     }
