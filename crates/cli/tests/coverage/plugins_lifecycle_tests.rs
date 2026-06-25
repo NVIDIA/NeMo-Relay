@@ -820,6 +820,68 @@ fn hydrate_applies_host_policy_status_to_discovered_dynamic_plugins() {
 }
 
 #[test]
+fn hydrate_persists_updated_policy_and_error_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_manifest_with_capabilities(
+        &plugin_dir,
+        "acme.persist-blocked",
+        &["plugin.worker", "middleware.guardrail"],
+    );
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir.clone(),
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap();
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "allowed_capabilities = [\"config.schema\"]\n"
+            ),
+            plugin_dir.join("relay-plugin.toml").to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let _ = load_and_hydrate_scopes(None, &resolved).unwrap();
+
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    let record = &state["records"][0];
+    assert_eq!(
+        record["metadata"]["id"],
+        serde_json::json!("acme.persist-blocked")
+    );
+    assert_eq!(
+        record["status"]["validation"]["policy_satisfied"],
+        serde_json::json!("invalid")
+    );
+    assert_eq!(
+        record["status"]["last_error"]["phase"],
+        serde_json::json!("policy")
+    );
+}
+
+#[test]
 fn hydrate_verifies_signatures_when_host_policy_provides_trusted_keys() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);

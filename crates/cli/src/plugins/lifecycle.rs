@@ -425,7 +425,11 @@ fn load_and_hydrate_scopes(
     explicit: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
-    Ok(load_and_hydrate_scopes_with_updates(explicit, resolved)?.0)
+    let (scopes, touched_scope_indices) = load_and_hydrate_scopes_with_updates(explicit, resolved)?;
+    for scope_index in touched_scope_indices {
+        scopes[scope_index].save()?;
+    }
+    Ok(scopes)
 }
 
 fn load_and_hydrate_scopes_with_updates(
@@ -781,6 +785,24 @@ fn trust_refusal_code(trust: &EvaluatedDynamicPluginTrust) -> &'static str {
     trust.refusal_code().unwrap_or("refused")
 }
 
+fn list_validation_state(record: &DynamicPluginRecord) -> DynamicPluginCheckState {
+    let validation = &record.status.validation;
+    if validation.manifest == DynamicPluginCheckState::Invalid
+        || validation.compatibility == DynamicPluginCheckState::Invalid
+        || validation.integrity == DynamicPluginCheckState::Invalid
+        || validation.authenticity == DynamicPluginCheckState::Invalid
+        || validation.policy_satisfied == DynamicPluginCheckState::Invalid
+    {
+        DynamicPluginCheckState::Invalid
+    } else if validation.manifest == DynamicPluginCheckState::Unknown
+        || validation.compatibility == DynamicPluginCheckState::Unknown
+    {
+        DynamicPluginCheckState::Unknown
+    } else {
+        DynamicPluginCheckState::Valid
+    }
+}
+
 struct PluginListView<'a> {
     records: &'a [ScopedDynamicPluginRecord],
     host_config_by_id: &'a HashMap<String, ResolvedDynamicPluginConfig>,
@@ -808,7 +830,7 @@ impl fmt::Display for PluginListView<'_> {
         )?;
         for entry in self.records {
             let scope: &'static str = entry.scope.into();
-            let validation: &'static str = entry.record.status.validation.manifest.into();
+            let validation: &'static str = list_validation_state(&entry.record).into();
             let policy: &'static str = entry.record.status.validation.policy_satisfied.into();
             write!(
                 f,
@@ -876,7 +898,7 @@ impl PluginListWidths {
             validation: column_width(
                 "VALIDATION",
                 records.iter().map(|entry| {
-                    let validation: &'static str = entry.record.status.validation.manifest.into();
+                    let validation: &'static str = list_validation_state(&entry.record).into();
                     validation
                 }),
             ),

@@ -23,7 +23,9 @@ use crate::plugins::policy::EvaluatedDynamicPluginHostPolicy;
 
 use super::state::ScopedDynamicPluginRecord;
 use super::trust::EvaluatedDynamicPluginTrust;
-use super::{inspect_compat_data, inspect_load_data, redacted_host_config_json};
+use super::{
+    inspect_compat_data, inspect_load_data, list_validation_state, redacted_host_config_json,
+};
 
 #[derive(Debug)]
 pub(super) struct ValidateResponseInput<'a> {
@@ -152,7 +154,7 @@ pub(super) fn list_success(
                     kind: record.metadata.kind,
                     enabled: record.spec.enabled,
                     tombstoned: record.is_tombstoned(),
-                    validation_state: record.status.validation.manifest,
+                    validation_state: list_validation_state(record),
                     policy_state: record.status.validation.policy_satisfied,
                     runtime_state: if record.is_tombstoned() {
                         "tombstoned".into()

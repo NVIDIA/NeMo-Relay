@@ -593,10 +593,84 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
     let parsed: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     assert_eq!(parsed["ok"], true);
     assert_eq!(parsed["data"][0]["id"], "acme.cli-blocked-list");
+    assert_eq!(parsed["data"][0]["validation_state"], "invalid");
     assert_eq!(parsed["data"][0]["policy_state"], "invalid");
     assert_eq!(parsed["data"][0]["startup_class"], "required");
     assert_eq!(parsed["data"][0]["attestation_mode"], "signature_required");
     assert_eq!(parsed["data"][0]["last_error"]["phase"], "policy");
+
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(
+        state["records"][0]["status"]["validation"]["policy_satisfied"],
+        "invalid"
+    );
+    assert_eq!(
+        state["records"][0]["status"]["last_error"]["phase"],
+        "policy"
+    );
+}
+
+#[test]
+fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    let config_dir = cwd.join(".nemo-relay");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-trust-list");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n"
+            ),
+            toml_basic_string(plugin_dir.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let list = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        list.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"][0]["id"], "acme.cli-trust-list");
+    assert_eq!(parsed["data"][0]["validation_state"], "invalid");
+    assert_eq!(parsed["data"][0]["policy_state"], "valid");
+    assert_eq!(parsed["data"][0]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"][0]["last_error"]["phase"], "validation");
 }
 
 #[test]
