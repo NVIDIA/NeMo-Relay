@@ -712,7 +712,8 @@ pub(crate) fn render_plugin_error(
     error: &CliError,
     json: bool,
 ) -> Result<Option<ExitCode>, CliError> {
-    let Some((command, target, kind, code, message)) = error.plugin_lifecycle() else {
+    let Some((command, target, kind, code, message)) = error.as_plugin_lifecycle_error_context()
+    else {
         return Ok(None);
     };
 

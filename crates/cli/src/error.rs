@@ -69,7 +69,9 @@ impl CliError {
         }
     }
 
-    pub(crate) fn plugin_lifecycle(&self) -> Option<PluginLifecycleErrorContext<'_>> {
+    pub(crate) fn as_plugin_lifecycle_error_context(
+        &self,
+    ) -> Option<PluginLifecycleErrorContext<'_>> {
         match self {
             Self::PluginLifecycle {
                 command,
