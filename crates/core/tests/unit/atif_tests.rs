@@ -1286,6 +1286,40 @@ fn test_paired_lifecycle_uses_start_model_for_end_metrics_pricing() {
 }
 
 #[test]
+fn test_llm_span_candidate_uses_start_payload_model_for_metrics_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("requested-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let llm_uuid = Uuid::now_v7();
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "requested-model",
+            "messages": [{"role": "user", "content": "price this"}]
+        }))
+        .build();
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "model": "api-echoed-model",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500
+            }
+        }))
+        .build();
+
+    let candidate = LlmSpanCandidate::from_events(llm_uuid, &start, &end).unwrap();
+
+    assert_eq!(candidate.end_metrics.unwrap().cost_usd, Some(0.000_45));
+}
+
+#[test]
 fn test_exporter_uses_normalized_usage_cost_before_model_pricing() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();

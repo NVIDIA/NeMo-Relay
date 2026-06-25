@@ -1454,11 +1454,15 @@ impl LlmSpanCandidate {
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
             end_metrics: end.data().and_then(|output| {
                 let normalized_response = end.normalized_llm_response();
-                let requested_model = end.model_name().or_else(|| start.model_name());
+                let requested_model = end
+                    .model_name()
+                    .or_else(|| start.model_name())
+                    .map(ToOwned::to_owned)
+                    .or_else(|| model_name_for_llm_event(start));
                 extract_metrics(
                     output,
                     Some(end.name()),
-                    requested_model,
+                    requested_model.as_deref(),
                     normalized_response.as_deref(),
                 )
             }),
