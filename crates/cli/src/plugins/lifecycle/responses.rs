@@ -245,13 +245,21 @@ pub(super) fn validate_success(
         .and_then(|entry| entry.record.status.validation.message.clone())
         .into_iter()
         .collect::<Vec<_>>();
-    let valid = input.policy.policy_satisfied && input.trust.message.is_none();
+    let valid = input.policy.policy_satisfied && input.trust.is_satisfied();
     let errors = input
         .policy
-        .message
-        .iter()
-        .chain(input.trust.message.iter())
-        .cloned()
+        .failure()
+        .map(|failure| {
+            failure
+                .display(input.manifest.plugin.id.as_str())
+                .to_string()
+        })
+        .into_iter()
+        .chain(input.trust.failure().map(|failure| {
+            failure
+                .display(input.manifest.plugin.id.as_str())
+                .to_string()
+        }))
         .collect::<Vec<_>>();
 
     success(

@@ -921,8 +921,8 @@ fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() 
     );
     assert!(
         evaluated
-            .message
-            .as_deref()
+            .failure()
+            .map(|failure| failure.display(manifest.plugin.id.as_str()).to_string())
             .unwrap()
             .contains("blocked by host policy")
     );
@@ -973,7 +973,7 @@ fn dynamic_plugin_host_policy_evaluator_matches_functional_surface_capabilities(
         evaluated.attestation_mode,
         DynamicPluginAttestationMode::IntegrityOnly
     );
-    assert!(evaluated.message.is_none());
+    assert!(evaluated.failure().is_none());
 }
 
 #[test]

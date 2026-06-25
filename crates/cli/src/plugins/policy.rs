@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use nemo_relay::plugin::dynamic::{
     DynamicPluginAttestationMode, DynamicPluginCapability, DynamicPluginCheckState,
@@ -65,12 +66,52 @@ pub(crate) struct DynamicPluginHostPolicyRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DynamicPluginHostPolicyFailure {
+    Blocked,
+    CapabilityNotAllowed(DynamicPluginCapability),
+}
+
+impl DynamicPluginHostPolicyFailure {
+    pub(crate) fn display<'a>(
+        &'a self,
+        plugin_id: &'a str,
+    ) -> DynamicPluginHostPolicyFailureDisplay<'a> {
+        DynamicPluginHostPolicyFailureDisplay {
+            failure: self,
+            plugin_id,
+        }
+    }
+}
+
+pub(crate) struct DynamicPluginHostPolicyFailureDisplay<'a> {
+    failure: &'a DynamicPluginHostPolicyFailure,
+    plugin_id: &'a str,
+}
+
+impl fmt::Display for DynamicPluginHostPolicyFailureDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.failure {
+            DynamicPluginHostPolicyFailure::Blocked => write!(
+                f,
+                "dynamic plugin '{}' is blocked by host policy",
+                self.plugin_id
+            ),
+            DynamicPluginHostPolicyFailure::CapabilityNotAllowed(capability) => write!(
+                f,
+                "dynamic plugin '{}' is blocked by host policy: capability '{}' is not allowed",
+                self.plugin_id, capability
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvaluatedDynamicPluginHostPolicy {
     pub(crate) policy_satisfied: bool,
     pub(crate) startup_class: DynamicPluginStartupClass,
     pub(crate) attestation_mode: DynamicPluginAttestationMode,
     pub(crate) trusted_public_keys: Vec<String>,
-    pub(crate) message: Option<String>,
+    pub(crate) failure: Option<DynamicPluginHostPolicyFailure>,
 }
 
 impl EvaluatedDynamicPluginHostPolicy {
@@ -82,18 +123,16 @@ impl EvaluatedDynamicPluginHostPolicy {
         }
     }
 
-    pub(crate) fn last_error(&self) -> Option<DynamicPluginFailure> {
-        self.message.as_ref().map(|message| DynamicPluginFailure {
+    pub(crate) fn last_error(&self, plugin_id: &str) -> Option<DynamicPluginFailure> {
+        self.failure.as_ref().map(|failure| DynamicPluginFailure {
             phase: DynamicPluginFailurePhase::Policy,
             code: "policy_blocked".into(),
-            message: message.clone(),
+            message: failure.display(plugin_id).to_string(),
         })
     }
 
-    pub(crate) fn refusal_message(&self, plugin_id: &str) -> String {
-        self.message
-            .clone()
-            .unwrap_or_else(|| format!("dynamic plugin '{}' is blocked by host policy", plugin_id))
+    pub(crate) fn failure(&self) -> Option<&DynamicPluginHostPolicyFailure> {
+        self.failure.as_ref()
     }
 }
 
@@ -135,10 +174,7 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
             startup_class,
             attestation_mode,
             trusted_public_keys,
-            message: Some(format!(
-                "dynamic plugin '{}' is blocked by host policy",
-                manifest.plugin.id
-            )),
+            failure: Some(DynamicPluginHostPolicyFailure::Blocked),
         };
     }
 
@@ -154,9 +190,8 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
             startup_class,
             attestation_mode,
             trusted_public_keys,
-            message: Some(format!(
-                "dynamic plugin '{}' is blocked by host policy: capability '{}' is not allowed",
-                manifest.plugin.id, blocked_capability
+            failure: Some(DynamicPluginHostPolicyFailure::CapabilityNotAllowed(
+                *blocked_capability,
             )),
         };
     }
@@ -166,7 +201,7 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
         startup_class,
         attestation_mode,
         trusted_public_keys,
-        message: None,
+        failure: None,
     }
 }
 

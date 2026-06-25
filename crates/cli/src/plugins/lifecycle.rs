@@ -80,15 +80,20 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
             COMMAND,
             Some(plugin_id.clone()),
             "policy_blocked",
-            policy.refusal_message(&plugin_id),
+            policy
+                .failure()
+                .map(|failure| failure.display(&plugin_id).to_string())
+                .unwrap_or_else(|| {
+                    format!("dynamic plugin '{}' is blocked by host policy", plugin_id)
+                }),
         ));
     }
-    if let Some(message) = trust.message.as_ref() {
+    if let Some(failure) = trust.failure() {
         return Err(plugin_refused_with_code(
             COMMAND,
             Some(plugin_id.clone()),
             trust_refusal_code(&trust),
-            message.clone(),
+            failure.display(&plugin_id).to_string(),
         ));
     }
     let record = validated_record_from_manifest(manifest, manifest_ref.clone(), &policy, &trust)?;
@@ -379,15 +384,20 @@ fn mutate_enabled_state(
         return Err(plugin_refused(
             command,
             Some(plugin_id.clone()),
-            policy.refusal_message(&plugin_id),
+            policy
+                .failure()
+                .map(|failure| failure.display(&plugin_id).to_string())
+                .unwrap_or_else(|| {
+                    format!("dynamic plugin '{}' is blocked by host policy", plugin_id)
+                }),
         ));
     }
-    if enabled && let Some(message) = trust.message.as_ref() {
+    if enabled && let Some(failure) = trust.failure() {
         scopes[entry.scope_index].save()?;
         return Err(plugin_refused(
             command,
             Some(plugin_id.clone()),
-            message.clone(),
+            failure.display(&plugin_id).to_string(),
         ));
     }
     if enabled {
@@ -484,8 +494,8 @@ fn validated_record_from_manifest(
     record.status.startup_class = Some(policy.startup_class);
     record.status.attestation_mode = Some(policy.attestation_mode);
     record.status.last_error = policy
-        .last_error()
-        .or_else(|| trust.last_error(policy.attestation_mode));
+        .last_error(&record.metadata.id)
+        .or_else(|| trust.last_error(&record.metadata.id, policy.attestation_mode));
     Ok(record)
 }
 
@@ -510,7 +520,7 @@ fn update_registry_policy_status(
             policy.check_state(),
             policy.startup_class,
             policy.attestation_mode,
-            policy.last_error(),
+            policy.last_error(plugin_id),
         )
         .map_err(|error| CliError::Config(error.to_string()))
 }
@@ -543,8 +553,8 @@ fn update_registry_validation_status(
         .update_last_error(
             plugin_id,
             policy
-                .last_error()
-                .or_else(|| trust.last_error(policy.attestation_mode)),
+                .last_error(plugin_id)
+                .or_else(|| trust.last_error(plugin_id, policy.attestation_mode)),
         )
         .map_err(|error| CliError::Config(error.to_string()))
 }
@@ -767,17 +777,7 @@ fn plugin_refused_with_code(
 }
 
 fn trust_refusal_code(trust: &EvaluatedDynamicPluginTrust) -> &'static str {
-    match trust {
-        EvaluatedDynamicPluginTrust {
-            integrity: DynamicPluginCheckState::Invalid,
-            ..
-        } => "integrity_failed",
-        EvaluatedDynamicPluginTrust {
-            authenticity: DynamicPluginCheckState::Invalid,
-            ..
-        } => "attestation_failed",
-        _ => "refused",
-    }
+    trust.refusal_code().unwrap_or("refused")
 }
 
 struct PluginListView<'a> {
@@ -930,7 +930,7 @@ struct PluginValidationSummaryView<'a> {
 
 impl fmt::Display for PluginValidationSummaryView<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.policy.policy_satisfied && self.trust.message.is_none() {
+        if self.policy.policy_satisfied && self.trust.is_satisfied() {
             writeln!(f, "Dynamic plugin '{}' is valid.", self.manifest.plugin.id)?;
         } else if self.policy.policy_satisfied {
             writeln!(
@@ -963,11 +963,19 @@ impl fmt::Display for PluginValidationSummaryView<'_> {
         )?;
         writeln!(f, "startup_class: {}", self.policy.startup_class)?;
         writeln!(f, "attestation_mode: {}", self.policy.attestation_mode)?;
-        if let Some(message) = &self.policy.message {
-            writeln!(f, "policy_error: {message}")?;
+        if let Some(failure) = self.policy.failure() {
+            writeln!(
+                f,
+                "policy_error: {}",
+                failure.display(&self.manifest.plugin.id)
+            )?;
         }
-        if let Some(message) = &self.trust.message {
-            writeln!(f, "trust_error: {message}")?;
+        if let Some(failure) = self.trust.failure() {
+            writeln!(
+                f,
+                "trust_error: {}",
+                failure.display(&self.manifest.plugin.id)
+            )?;
         }
         if let Some(entry) = self.entry {
             writeln!(f, "manifest: {}", self.manifest_ref)?;
