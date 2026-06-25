@@ -575,6 +575,7 @@ fn prepares_hermes_hook_environment() {
             ..AgentConfigs::default()
         },
         dynamic_plugins: Vec::new(),
+        ..ResolvedConfig::default()
     };
     let prepared = PreparedRun::new(
         CodingAgent::Hermes,

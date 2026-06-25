@@ -10,6 +10,10 @@ use crate::config::{
     PluginsListCommand, PluginsRemoveCommand, PluginsScopeArgs, PluginsValidateCommand, ServerArgs,
 };
 use crate::error::PluginLifecycleFailureKind;
+use base64::Engine;
+use ring::rand::SystemRandom;
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use sha2::{Digest, Sha256};
 
 struct CurrentDirGuard {
     original: PathBuf,
@@ -81,6 +85,40 @@ impl Drop for EnvScope {
 }
 
 fn write_dynamic_manifest(dir: &Path, plugin_id: &str) -> PathBuf {
+    write_dynamic_manifest_with_options(dir, plugin_id, &["plugin.worker"], None)
+}
+
+fn write_dynamic_manifest_with_capabilities(
+    dir: &Path,
+    plugin_id: &str,
+    capabilities: &[&str],
+) -> PathBuf {
+    write_dynamic_manifest_with_options(dir, plugin_id, capabilities, None)
+}
+
+fn write_dynamic_manifest_with_options(
+    dir: &Path,
+    plugin_id: &str,
+    capabilities: &[&str],
+    signature_ref: Option<&str>,
+) -> PathBuf {
+    let artifact_body = format!("def register():\n    return {plugin_id:?}\n");
+    std::fs::write(dir.join("plugin.py"), &artifact_body).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(artifact_body.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let capabilities = capabilities
+        .iter()
+        .map(|capability| format!("\"{capability}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let signature_line = signature_ref
+        .map(|signature_ref| format!("signature = \"{signature_ref}\"\n"))
+        .unwrap_or_default();
     let manifest_path = dir.join("relay-plugin.toml");
     std::fs::write(
         &manifest_path,
@@ -100,16 +138,53 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = [{capabilities}]
+
+[source]
+artifact = "plugin.py"
+
+[integrity]
+sha256 = "{digest}"
+{signature_line}
 
 [load]
 runtime = "python"
 entrypoint = "{plugin_id}.plugin:register"
-"#
+"#,
+            capabilities = capabilities,
+            signature_line = signature_line,
         ),
     )
     .unwrap();
     manifest_path
+}
+
+fn write_detached_ed25519_signature(dir: &Path, signature_name: &str) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    let artifact = std::fs::read(dir.join("plugin.py")).unwrap();
+    let pkcs8 =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate ed25519 keypair");
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse ed25519 keypair");
+    let signature = key_pair.sign(&artifact);
+    let signature_text = format!(
+        "ed25519:{}\n",
+        base64::engine::general_purpose::STANDARD.encode(signature.as_ref())
+    );
+    std::fs::write(dir.join(signature_name), signature_text).unwrap();
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
+    )
+}
+
+fn generate_ed25519_public_key() -> String {
+    let pkcs8 =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate ed25519 keypair");
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse ed25519 keypair");
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
+    )
 }
 
 #[test]
@@ -180,6 +255,46 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 }
 
 #[test]
+fn add_refuses_functional_surface_capabilities_blocked_by_host_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_manifest_with_capabilities(
+        &plugin_dir,
+        "acme.guardrail-surface",
+        &["plugin.worker", "middleware.guardrail"],
+    );
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        r#"
+[plugins.policy.defaults]
+allowed_capabilities = ["plugin.worker"]
+"#,
+    )
+    .unwrap();
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &crate::config::ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("middleware.guardrail"));
+    assert!(error.contains("blocked by host policy"));
+}
+
+#[test]
 fn add_rejects_scope_flags_when_explicit_config_is_set() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -207,6 +322,90 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("--config cannot be combined"));
+}
+
+#[test]
+fn add_refuses_dynamic_plugins_blocked_by_host_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.blocked");
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        r#"
+[plugins.policy.defaults]
+allowed_capabilities = ["config.schema"]
+"#,
+    )
+    .unwrap();
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &crate::config::ServerArgs::default(),
+    )
+    .unwrap_err();
+
+    match error {
+        CliError::PluginLifecycle {
+            kind: PluginLifecycleFailureKind::Refused,
+            message,
+            ..
+        } => assert!(message.contains("capability 'plugin.worker' is not allowed")),
+        other => panic!("unexpected policy add error: {other}"),
+    }
+
+    let rendered = std::fs::read_to_string(config_dir.join("plugins.toml")).unwrap();
+    assert!(!rendered.contains("[[plugins.dynamic]]"));
+}
+
+#[test]
+fn validate_path_reports_integrity_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.integrity");
+    std::fs::write(
+        plugin_dir.join("plugin.py"),
+        "def register():\n    return 'tampered'\n",
+    )
+    .unwrap();
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+        .map_err(|error| CliError::Config(error.to_string()))
+        .unwrap();
+    let policy = evaluate_dynamic_plugin_host_policy(
+        &ResolvedConfig::default().dynamic_plugin_policy,
+        &manifest,
+    );
+    let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+    let summary = PluginValidationSummaryView {
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        entry: None,
+        host_config: None,
+        policy: &policy,
+        trust: &trust,
+    }
+    .to_string();
+
+    assert_eq!(trust.integrity, DynamicPluginCheckState::Invalid);
+    assert!(summary.contains("trust verification blocks it"));
+    assert!(summary.contains("integrity_state: invalid"));
+    assert!(
+        summary
+            .contains("trust_error: dynamic plugin 'acme.integrity' failed integrity verification")
+    );
 }
 
 #[test]
@@ -239,9 +438,11 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
         host_config_by_id: &host_config_by_id,
     }
     .to_string();
+    assert!(list.contains("POLICY"));
     assert!(list.contains("acme.guardrail"));
     assert!(list.contains("absent"));
     assert!(list.contains("false"));
+    assert!(list.contains("valid"));
 
     let entry = find_record_by_id(&scopes, "acme.guardrail")
         .unwrap()
@@ -300,14 +501,22 @@ fn validate_renders_summary_for_path_and_id_targets() {
     let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
         .map_err(|error| CliError::Config(error.to_string()))
         .unwrap();
+    let default_policy = evaluate_dynamic_plugin_host_policy(
+        &ResolvedConfig::default().dynamic_plugin_policy,
+        &manifest,
+    );
+    let default_trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &default_policy);
     let path_summary = PluginValidationSummaryView {
         manifest: &manifest,
         manifest_ref: &manifest_ref,
         entry: None,
         host_config: None,
+        policy: &default_policy,
+        trust: &default_trust,
     }
     .to_string();
     assert!(path_summary.contains("Dynamic plugin 'acme.guardrail' is valid."));
+    assert!(path_summary.contains("policy_state: valid"));
 
     let resolved = resolve_plugins_config(None).unwrap();
     let host_config_by_id = host_config_by_id(&resolved);
@@ -315,11 +524,15 @@ fn validate_renders_summary_for_path_and_id_targets() {
     let entry = find_record_by_id(&scopes, "acme.guardrail")
         .unwrap()
         .expect("plugin record");
+    let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+    let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
     let id_summary = PluginValidationSummaryView {
         manifest: &manifest,
         manifest_ref: &manifest_ref,
         entry: Some(&entry),
         host_config: host_config_by_id.get("acme.guardrail"),
+        policy: &policy,
+        trust: &trust,
     }
     .to_string();
     assert!(id_summary.contains("host_config: absent"));
@@ -531,6 +744,519 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
 }
 
 #[test]
+fn hydrate_applies_host_policy_status_to_discovered_dynamic_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.policy");
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n"
+            ),
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.policy")
+        .unwrap()
+        .expect("hydrated record");
+
+    assert_eq!(
+        entry.record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Valid
+    );
+    assert_eq!(
+        entry
+            .record
+            .status
+            .startup_class
+            .map(|value| value.to_string()),
+        Some("required".into())
+    );
+    assert_eq!(
+        entry
+            .record
+            .status
+            .attestation_mode
+            .map(|value| value.to_string()),
+        Some("signature_required".into())
+    );
+    assert_eq!(
+        entry.record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert!(
+        entry
+            .record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("signature verification")
+            || entry
+                .record
+                .status
+                .last_error
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("integrity.signature")
+    );
+}
+
+#[test]
+fn hydrate_verifies_signatures_when_host_policy_provides_trusted_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.signed",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    let trusted_public_key = write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n",
+                "trusted_public_keys = [{:?}]\n"
+            ),
+            manifest_path.to_string_lossy(),
+            trusted_public_key
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.signed")
+        .unwrap()
+        .expect("hydrated signed record");
+
+    assert_eq!(
+        entry.record.status.validation.integrity,
+        DynamicPluginCheckState::Valid
+    );
+    assert_eq!(
+        entry.record.status.validation.authenticity,
+        DynamicPluginCheckState::Valid
+    );
+    assert!(entry.record.status.last_error.is_none());
+}
+
+#[test]
+fn hydrate_marks_signature_required_plugins_invalid_without_trusted_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.signed-without-trust",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "attestation = \"signature_required\"\n"
+            ),
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.signed-without-trust")
+        .unwrap()
+        .expect("hydrated signed record");
+
+    assert_eq!(
+        entry.record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert!(
+        entry
+            .record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("no trusted_public_keys")
+    );
+}
+
+#[test]
+fn hydrate_marks_signature_required_plugins_invalid_with_wrong_trusted_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.signed-wrong-key",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    let wrong_public_key = generate_ed25519_public_key();
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "attestation = \"signature_required\"\n",
+                "trusted_public_keys = [{:?}]\n"
+            ),
+            manifest_path.to_string_lossy(),
+            wrong_public_key
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.signed-wrong-key")
+        .unwrap()
+        .expect("hydrated signed record");
+
+    assert_eq!(
+        entry.record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert!(
+        entry
+            .record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("failed signature verification")
+    );
+}
+
+#[test]
+fn hydrate_marks_malformed_signature_files_invalid_when_signature_is_present() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.signed-malformed",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    std::fs::write(plugin_dir.join("plugin.py.sig"), "ed25519:not-base64\n").unwrap();
+    let trusted_public_key = generate_ed25519_public_key();
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "attestation = \"signature_if_present\"\n",
+                "trusted_public_keys = [{:?}]\n"
+            ),
+            manifest_path.to_string_lossy(),
+            trusted_public_key
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.signed-malformed")
+        .unwrap()
+        .expect("hydrated signed record");
+
+    assert_eq!(
+        entry.record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert!(
+        entry
+            .record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("invalid base64 signature")
+    );
+}
+
+#[test]
+fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.enable-blocked");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "allowed_capabilities = [\"config.schema\"]\n"
+            ),
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let error = enable(
+        PluginsEnableCommand {
+            id: "acme.enable-blocked".into(),
+        },
+        &server,
+    )
+    .unwrap_err();
+
+    match error {
+        CliError::PluginLifecycle {
+            kind: PluginLifecycleFailureKind::Refused,
+            message,
+            ..
+        } => assert!(message.contains("capability 'plugin.worker' is not allowed")),
+        other => panic!("unexpected enable policy error: {other}"),
+    }
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.enable-blocked")
+        .unwrap()
+        .expect("policy-updated record");
+    assert!(!entry.record.spec.enabled);
+    assert_eq!(
+        entry.record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Invalid
+    );
+    assert_eq!(
+        entry
+            .record
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.phase.to_string()),
+        Some("policy".into())
+    );
+}
+
+#[test]
+fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.validate-blocked");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {:?}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n",
+                "allowed_capabilities = [\"config.schema\"]\n"
+            ),
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    validate(
+        PluginsValidateCommand {
+            target: "acme.validate-blocked".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.validate-blocked")
+        .unwrap()
+        .expect("policy-updated record");
+
+    assert_eq!(
+        entry.record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Invalid
+    );
+    assert_eq!(
+        entry.record.status.validation.message.as_deref(),
+        Some("validated by CLI")
+    );
+    let (blocked_manifest, blocked_manifest_ref) =
+        DynamicPluginManifest::load_from_path(&manifest_path)
+            .map_err(|error| CliError::Config(error.to_string()))
+            .unwrap();
+    let blocked_policy =
+        evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &blocked_manifest);
+    let blocked_trust =
+        evaluate_dynamic_plugin_trust(&blocked_manifest, &blocked_manifest_ref, &blocked_policy);
+    let blocked_summary = PluginValidationSummaryView {
+        manifest: &blocked_manifest,
+        manifest_ref: &blocked_manifest_ref,
+        entry: Some(&entry),
+        host_config: None,
+        policy: &blocked_policy,
+        trust: &blocked_trust,
+    }
+    .to_string();
+    assert!(blocked_summary.contains("host policy blocks it"));
+    assert!(blocked_summary.contains("policy_state: invalid"));
+    let blocked_list = PluginListView {
+        records: std::slice::from_ref(&entry),
+        host_config_by_id: &std::collections::HashMap::new(),
+    }
+    .to_string();
+    assert!(blocked_list.contains("POLICY"));
+    assert!(blocked_list.contains("invalid"));
+    let blocked_validate_value = serde_json::to_value(responses::validate_success(
+        responses::ValidateResponseInput {
+            command: "plugins validate",
+            target: Some("acme.validate-blocked"),
+            target_kind: "plugin_id",
+            resolved_plugin_id: Some("acme.validate-blocked"),
+            manifest: &blocked_manifest,
+            manifest_ref: &blocked_manifest_ref,
+            entry: Some(&entry),
+            host_config: None,
+            policy: &blocked_policy,
+            trust: &blocked_trust,
+        },
+    ))
+    .unwrap();
+    assert_eq!(
+        blocked_validate_value["data"]["valid"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        blocked_validate_value["data"]["policy_state"],
+        serde_json::json!("invalid")
+    );
+    assert!(
+        blocked_validate_value["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("blocked by host policy")
+    );
+    assert_eq!(
+        entry
+            .record
+            .status
+            .startup_class
+            .map(|value| value.to_string()),
+        Some("required".into())
+    );
+    assert_eq!(
+        entry
+            .record
+            .status
+            .attestation_mode
+            .map(|value| value.to_string()),
+        Some("signature_required".into())
+    );
+    assert_eq!(
+        entry
+            .record
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.phase.to_string()),
+        Some("policy".into())
+    );
+}
+
+#[test]
 fn add_can_revive_tombstoned_records() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
@@ -644,6 +1370,9 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         serde_json::Value::Null
     );
 
+    let validate_policy =
+        evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+    let validate_trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &validate_policy);
     let validate_value = serde_json::to_value(responses::validate_success(
         responses::ValidateResponseInput {
             command: "plugins validate",
@@ -654,6 +1383,8 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
             manifest_ref: &manifest_ref,
             entry: Some(&entry),
             host_config: host_config_by_id.get("acme.json"),
+            policy: &validate_policy,
+            trust: &validate_trust,
         },
     ))
     .unwrap();
@@ -662,6 +1393,18 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         serde_json::json!("plugin_id")
     );
     assert_eq!(validate_value["data"]["valid"], serde_json::json!(true));
+    assert_eq!(
+        validate_value["data"]["policy_state"],
+        serde_json::json!("valid")
+    );
+    assert_eq!(
+        validate_value["data"]["startup_class"],
+        serde_json::json!("optional")
+    );
+    assert_eq!(
+        validate_value["data"]["attestation_mode"],
+        serde_json::json!("integrity_only")
+    );
 
     let failure = serde_json::to_value(responses::failure(
         "plugins inspect",

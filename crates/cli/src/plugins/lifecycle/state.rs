@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
-use strum::Display;
+use strum::{Display, IntoStaticStr};
 
 use crate::config::{
     PLUGINS_TOML, global_plugin_config_path, project_plugin_config_path, user_config_dir,
@@ -21,7 +21,7 @@ use super::super::config_io::TargetScope;
 const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
 const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Display, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Display, IntoStaticStr, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub(super) enum RegistryScope {

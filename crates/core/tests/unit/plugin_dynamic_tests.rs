@@ -484,7 +484,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker", "config_schema"]
+items = ["plugin.worker", "config.schema"]
 
 [load]
 runtime = "python"
@@ -515,7 +515,7 @@ native_api = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_native"]
+items = ["plugin.native"]
 
 [load]
 library = "target/release/libswitchyard.dylib"
@@ -576,6 +576,51 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
 }
 
 #[test]
+fn manifest_supports_extended_functional_surface_capabilities() {
+    let manifest = DynamicPluginManifest::parse_toml(
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.guardrails.rich"
+kind = "worker"
+
+[compat]
+relay = ">=0.1.0,<0.2.0"
+worker_protocol = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = [
+  "plugin.worker",
+  "middleware.guardrail",
+  "middleware.interceptor",
+  "telemetry.exporter",
+  "config.schema",
+]
+
+[load]
+runtime = "python"
+entrypoint = "acme_guardrails.plugin:register"
+"#,
+    )
+    .expect("parse manifest with functional surface capabilities");
+
+    assert_eq!(
+        manifest.capabilities.items,
+        vec![
+            DynamicPluginCapability::PluginWorker,
+            DynamicPluginCapability::MiddlewareGuardrail,
+            DynamicPluginCapability::MiddlewareInterceptor,
+            DynamicPluginCapability::TelemetryExporter,
+            DynamicPluginCapability::ConfigSchema,
+        ]
+    );
+}
+
+#[test]
 fn manifest_conversion_canonicalizes_required_strings_in_record_state() {
     let manifest = DynamicPluginManifest::parse_toml(
         r#"
@@ -593,7 +638,7 @@ worker_protocol = " 1 "
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"
@@ -663,7 +708,7 @@ relay = ">=0.1.0,<0.2.0"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"
@@ -700,7 +745,7 @@ native_api = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 library = "target/release/libbad.dylib"
@@ -711,7 +756,7 @@ symbol = "nemo_relay_register_plugin"
 
     match err {
         PluginError::InvalidConfig(message) => {
-            assert!(message.contains("plugin_native"), "{message}");
+            assert!(message.contains("plugin.native"), "{message}");
         }
         other => panic!("unexpected capability validation error: {other}"),
     }
@@ -735,7 +780,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"
@@ -769,7 +814,7 @@ relay = ">=0.1.0,<0.2.0"
 enabled = false
 
 [capabilities]
-items = ["plugin_native"]
+items = ["plugin.native"]
 
 [load]
 library = "target/release/libmissing.dylib"
@@ -804,7 +849,7 @@ native_api = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_native"]
+items = ["plugin.native"]
 
 [load]
 runtime = "python"
@@ -948,7 +993,7 @@ worker_protocol = "1"
 enabled = true
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"
@@ -983,7 +1028,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"
@@ -1117,7 +1162,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"
@@ -1152,7 +1197,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker", "plugin_worker"]
+items = ["plugin.worker", "plugin.worker"]
 
 [load]
 runtime = "python"
@@ -1190,7 +1235,7 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin.worker"]
 
 [load]
 runtime = "python"

@@ -3,7 +3,20 @@
 
 use super::*;
 use axum::http::HeaderValue;
+use base64::Engine;
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginAttestationMode, DynamicPluginCapability, DynamicPluginCheckState,
+    DynamicPluginKind, DynamicPluginManifest, DynamicPluginStartupClass,
+};
+use ring::rand::SystemRandom;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::plugins::policy::{
+    DynamicPluginHostPolicy, DynamicPluginHostPolicyEffect, DynamicPluginHostPolicyRule,
+    evaluate_dynamic_plugin_host_policy,
+};
 
 fn config() -> GatewayConfig {
     GatewayConfig {
@@ -23,6 +36,40 @@ fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 fn write_dynamic_manifest(dir: &std::path::Path, plugin_id: &str) -> std::path::PathBuf {
+    write_dynamic_manifest_with_options(dir, plugin_id, &["plugin.worker"], None)
+}
+
+fn write_dynamic_manifest_with_capabilities(
+    dir: &std::path::Path,
+    plugin_id: &str,
+    capabilities: &[&str],
+) -> std::path::PathBuf {
+    write_dynamic_manifest_with_options(dir, plugin_id, capabilities, None)
+}
+
+fn write_dynamic_manifest_with_options(
+    dir: &std::path::Path,
+    plugin_id: &str,
+    capabilities: &[&str],
+    signature_ref: Option<&str>,
+) -> std::path::PathBuf {
+    let artifact_body = format!("def register():\n    return {plugin_id:?}\n");
+    std::fs::write(dir.join("plugin.py"), &artifact_body).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(artifact_body.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let capabilities = capabilities
+        .iter()
+        .map(|capability| format!("\"{capability}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let signature_line = signature_ref
+        .map(|signature_ref| format!("signature = \"{signature_ref}\"\n"))
+        .unwrap_or_default();
     let manifest_path = dir.join("relay-plugin.toml");
     std::fs::write(
         &manifest_path,
@@ -42,16 +89,92 @@ worker_protocol = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = [{capabilities}]
+
+[source]
+artifact = "plugin.py"
+
+[integrity]
+sha256 = "{digest}"
+{signature_line}
 
 [load]
 runtime = "python"
 entrypoint = "{plugin_id}.plugin:register"
-"#
+"#,
+            capabilities = capabilities,
+            signature_line = signature_line,
         ),
     )
     .unwrap();
     manifest_path
+}
+
+fn write_detached_ed25519_signature(dir: &std::path::Path, signature_name: &str) -> String {
+    let artifact = std::fs::read(dir.join("plugin.py")).unwrap();
+    let pkcs8 =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate ed25519 keypair");
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse ed25519 keypair");
+    let signature = key_pair.sign(&artifact);
+    let signature_text = format!(
+        "ed25519:{}\n",
+        base64::engine::general_purpose::STANDARD.encode(signature.as_ref())
+    );
+    std::fs::write(dir.join(signature_name), signature_text).unwrap();
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
+    )
+}
+
+fn generate_ed25519_public_key() -> String {
+    let pkcs8 =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate ed25519 keypair");
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse ed25519 keypair");
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
+    )
+}
+
+fn write_dynamic_plugin_state(plugins_toml_path: &std::path::Path, plugin_id: &str, enabled: bool) {
+    let manifest_ref = plugins_toml_path
+        .parent()
+        .unwrap()
+        .join("plugins/acme/relay-plugin.toml");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_ref).unwrap();
+    let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
+    assert_eq!(record.metadata.id, plugin_id);
+    record.spec.enabled = enabled;
+    record.status.validation.policy_satisfied = DynamicPluginCheckState::Unknown;
+    std::fs::write(
+        plugins_toml_path
+            .parent()
+            .unwrap()
+            .join(".dynamic-plugins.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "records": [record],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn read_dynamic_plugin_state(
+    plugins_toml_path: &std::path::Path,
+) -> nemo_relay::plugin::dynamic::DynamicPluginRecord {
+    let persisted: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            plugins_toml_path
+                .parent()
+                .unwrap()
+                .join(".dynamic-plugins.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    serde_json::from_value(persisted["records"][0].clone()).unwrap()
 }
 
 #[test]
@@ -665,6 +788,264 @@ manifest = '{}'
 }
 
 #[test]
+fn plugins_toml_resolves_dynamic_plugin_host_policy_without_polluting_runtime_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &plugins_path,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[plugins.policy.defaults]
+startup = "optional"
+attestation = "integrity_only"
+trusted_public_keys = ["ed25519:ZmFrZS1rZXk="]
+
+[[plugins.policy.rules]]
+match_capability = "plugin.worker"
+startup = "required"
+
+[plugins.policy.overrides."acme.worker"]
+attestation = "signature_required"
+"#,
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        resolved.value,
+        Some(json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "observability",
+                    "enabled": true,
+                    "config": {
+                        "version": 1
+                    }
+                }
+            ]
+        }))
+    );
+    assert_eq!(
+        resolved.dynamic_plugin_policy.defaults.startup,
+        Some(DynamicPluginStartupClass::Optional)
+    );
+    assert_eq!(
+        resolved.dynamic_plugin_policy.defaults.attestation,
+        Some(DynamicPluginAttestationMode::IntegrityOnly)
+    );
+    assert_eq!(
+        resolved.dynamic_plugin_policy.defaults.trusted_public_keys,
+        Some(vec!["ed25519:ZmFrZS1rZXk=".into()])
+    );
+    assert_eq!(resolved.dynamic_plugin_policy.rules.len(), 1);
+    assert_eq!(
+        resolved.dynamic_plugin_policy.rules[0].match_capability,
+        Some(DynamicPluginCapability::PluginWorker)
+    );
+    assert_eq!(
+        resolved.dynamic_plugin_policy.rules[0].effect.startup,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        resolved
+            .dynamic_plugin_policy
+            .overrides
+            .get("acme.worker")
+            .and_then(|effect| effect.attestation),
+        Some(DynamicPluginAttestationMode::SignatureRequired)
+    );
+}
+
+#[test]
+fn dynamic_plugin_host_policy_evaluator_applies_rules_before_plugin_overrides() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+    let policy = DynamicPluginHostPolicy {
+        defaults: DynamicPluginHostPolicyEffect {
+            allowed: Some(true),
+            startup: Some(DynamicPluginStartupClass::Optional),
+            attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
+            allowed_capabilities: None,
+            trusted_public_keys: None,
+        },
+        rules: vec![DynamicPluginHostPolicyRule {
+            match_kind: Some(DynamicPluginKind::Worker),
+            match_capability: Some(DynamicPluginCapability::PluginWorker),
+            match_plugin_id: None,
+            effect: DynamicPluginHostPolicyEffect {
+                allowed: None,
+                startup: Some(DynamicPluginStartupClass::Required),
+                attestation: None,
+                allowed_capabilities: Some(vec![DynamicPluginCapability::PluginWorker]),
+                trusted_public_keys: None,
+            },
+        }],
+        overrides: std::iter::once((
+            "acme.worker".into(),
+            DynamicPluginHostPolicyEffect {
+                allowed: Some(false),
+                startup: None,
+                attestation: Some(DynamicPluginAttestationMode::SignatureRequired),
+                allowed_capabilities: None,
+                trusted_public_keys: None,
+            },
+        ))
+        .collect(),
+    };
+
+    let evaluated = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+
+    assert!(!evaluated.policy_satisfied);
+    assert_eq!(evaluated.startup_class, DynamicPluginStartupClass::Required);
+    assert_eq!(
+        evaluated.attestation_mode,
+        DynamicPluginAttestationMode::SignatureRequired
+    );
+    assert!(
+        evaluated
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("blocked by host policy")
+    );
+}
+
+#[test]
+fn dynamic_plugin_host_policy_evaluator_matches_functional_surface_capabilities() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest_with_capabilities(
+        &plugin_dir,
+        "acme.guardrail",
+        &["plugin.worker", "middleware.guardrail"],
+    );
+    let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+    let policy = DynamicPluginHostPolicy {
+        defaults: DynamicPluginHostPolicyEffect {
+            allowed: Some(true),
+            startup: Some(DynamicPluginStartupClass::Optional),
+            attestation: Some(DynamicPluginAttestationMode::IntegrityOnly),
+            allowed_capabilities: Some(vec![
+                DynamicPluginCapability::PluginWorker,
+                DynamicPluginCapability::MiddlewareGuardrail,
+            ]),
+            trusted_public_keys: None,
+        },
+        rules: vec![DynamicPluginHostPolicyRule {
+            match_kind: Some(DynamicPluginKind::Worker),
+            match_capability: Some(DynamicPluginCapability::MiddlewareGuardrail),
+            match_plugin_id: None,
+            effect: DynamicPluginHostPolicyEffect {
+                allowed: None,
+                startup: Some(DynamicPluginStartupClass::Required),
+                attestation: None,
+                allowed_capabilities: None,
+                trusted_public_keys: None,
+            },
+        }],
+        overrides: Default::default(),
+    };
+
+    let evaluated = evaluate_dynamic_plugin_host_policy(&policy, &manifest);
+
+    assert!(evaluated.policy_satisfied);
+    assert_eq!(evaluated.startup_class, DynamicPluginStartupClass::Required);
+    assert_eq!(
+        evaluated.attestation_mode,
+        DynamicPluginAttestationMode::IntegrityOnly
+    );
+    assert!(evaluated.message.is_none());
+}
+
+#[test]
+fn plugins_toml_layers_dynamic_plugin_host_policy_across_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_plugins = temp.path().join("project-plugins.toml");
+    let user_plugins = temp.path().join("user-plugins.toml");
+    std::fs::write(
+        &project_plugins,
+        r#"
+[plugins.policy.defaults]
+startup = "required"
+
+[[plugins.policy.rules]]
+match_kind = "worker"
+allowed_capabilities = ["plugin.worker"]
+
+[plugins.policy.overrides."acme.worker"]
+attestation = "signature_if_present"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &user_plugins,
+        r#"
+[plugins.policy.defaults]
+attestation = "signature_required"
+
+[[plugins.policy.rules]]
+match_capability = "plugin.worker"
+allowed = false
+
+[plugins.policy.overrides."acme.worker"]
+allowed = true
+"#,
+    )
+    .unwrap();
+
+    let resolved = load_plugin_toml_config_from_paths(vec![project_plugins, user_plugins])
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        resolved.dynamic_plugin_policy.defaults.startup,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        resolved.dynamic_plugin_policy.defaults.attestation,
+        Some(DynamicPluginAttestationMode::SignatureRequired)
+    );
+    assert_eq!(resolved.dynamic_plugin_policy.rules.len(), 2);
+    assert_eq!(
+        resolved.dynamic_plugin_policy.rules[0].match_kind,
+        Some(DynamicPluginKind::Worker)
+    );
+    assert_eq!(
+        resolved.dynamic_plugin_policy.rules[1].match_capability,
+        Some(DynamicPluginCapability::PluginWorker)
+    );
+    let override_effect = resolved
+        .dynamic_plugin_policy
+        .overrides
+        .get("acme.worker")
+        .expect("merged override");
+    assert_eq!(
+        override_effect.attestation,
+        Some(DynamicPluginAttestationMode::SignatureIfPresent)
+    );
+    assert_eq!(override_effect.allowed, Some(true));
+}
+
+#[test]
 fn plugins_toml_rejects_duplicate_dynamic_plugin_ids_across_sources() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");
@@ -1039,6 +1420,318 @@ fn server_resolution_applies_all_server_overrides() {
 }
 
 #[test]
+fn server_resolution_fails_when_required_enabled_dynamic_plugin_is_blocked_by_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let config_path = temp.path().join("config.toml");
+    let plugins_toml_path = temp.path().join("plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &plugins_toml_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+
+[plugins.policy.defaults]
+startup = "required"
+allowed = false
+"#,
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("required dynamic plugin startup preflight failed"));
+    assert!(error.contains("acme.worker"));
+    assert!(error.contains("blocked by host policy"));
+}
+
+#[test]
+fn server_resolution_fails_when_required_enabled_dynamic_plugin_fails_integrity() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    std::fs::write(
+        plugin_dir.join("plugin.py"),
+        "def register():\n    return 'tampered'\n",
+    )
+    .unwrap();
+    let config_path = temp.path().join("config.toml");
+    let plugins_toml_path = temp.path().join("plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &plugins_toml_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+
+[plugins.policy.defaults]
+startup = "required"
+"#,
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("required dynamic plugin startup preflight failed"));
+    assert!(error.contains("acme.worker"));
+    assert!(error.contains("integrity verification"));
+
+    let record = read_dynamic_plugin_state(&plugins_toml_path);
+    assert_eq!(
+        record.status.validation.integrity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert_eq!(
+        record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Valid
+    );
+    assert_eq!(
+        record.status.startup_class,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        record.status.attestation_mode,
+        Some(DynamicPluginAttestationMode::IntegrityOnly)
+    );
+    assert!(
+        record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("integrity verification")
+    );
+}
+
+#[test]
+fn server_resolution_fails_when_required_enabled_dynamic_plugin_lacks_trusted_keys() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.worker",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    let config_path = temp.path().join("config.toml");
+    let plugins_toml_path = temp.path().join("plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &plugins_toml_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+
+[plugins.policy.defaults]
+startup = "required"
+attestation = "signature_required"
+"#,
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("required dynamic plugin startup preflight failed"));
+    assert!(error.contains("acme.worker"));
+    assert!(error.contains("no trusted_public_keys"));
+
+    let record = read_dynamic_plugin_state(&plugins_toml_path);
+    assert_eq!(
+        record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert_eq!(
+        record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Valid
+    );
+    assert_eq!(
+        record.status.startup_class,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        record.status.attestation_mode,
+        Some(DynamicPluginAttestationMode::SignatureRequired)
+    );
+    assert!(
+        record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("no trusted_public_keys")
+    );
+}
+
+#[test]
+fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_trusted_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.worker",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    let wrong_public_key = generate_ed25519_public_key();
+    let config_path = temp.path().join("config.toml");
+    let plugins_toml_path = temp.path().join("plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &plugins_toml_path,
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = \"plugins/acme/relay-plugin.toml\"\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n",
+                "trusted_public_keys = [{:?}]\n"
+            ),
+            wrong_public_key
+        ),
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("required dynamic plugin startup preflight failed"));
+    assert!(error.contains("acme.worker"));
+    assert!(error.contains("failed signature verification"));
+
+    let record = read_dynamic_plugin_state(&plugins_toml_path);
+    assert_eq!(
+        record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert_eq!(
+        record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Valid
+    );
+    assert_eq!(
+        record.status.startup_class,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        record.status.attestation_mode,
+        Some(DynamicPluginAttestationMode::SignatureRequired)
+    );
+    assert!(
+        record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("failed signature verification")
+    );
+}
+
+#[test]
+fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_signature() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.worker",
+        &["plugin.worker"],
+        Some("plugin.py.sig"),
+    );
+    std::fs::write(plugin_dir.join("plugin.py.sig"), "ed25519:not-base64\n").unwrap();
+    let trusted_public_key = generate_ed25519_public_key();
+    let config_path = temp.path().join("config.toml");
+    let plugins_toml_path = temp.path().join("plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &plugins_toml_path,
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = \"plugins/acme/relay-plugin.toml\"\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_if_present\"\n",
+                "trusted_public_keys = [{:?}]\n"
+            ),
+            trusted_public_key
+        ),
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let error = resolve_server_config(&args).unwrap_err().to_string();
+
+    assert!(error.contains("required dynamic plugin startup preflight failed"));
+    assert!(error.contains("acme.worker"));
+    assert!(error.contains("invalid base64 signature"));
+
+    let record = read_dynamic_plugin_state(&plugins_toml_path);
+    assert_eq!(
+        record.status.validation.authenticity,
+        DynamicPluginCheckState::Invalid
+    );
+    assert_eq!(
+        record.status.validation.policy_satisfied,
+        DynamicPluginCheckState::Valid
+    );
+    assert_eq!(
+        record.status.startup_class,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        record.status.attestation_mode,
+        Some(DynamicPluginAttestationMode::SignatureIfPresent)
+    );
+    assert!(
+        record
+            .status
+            .last_error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("invalid base64 signature")
+    );
+}
+
+#[test]
 fn gateway_body_limit_defaults_are_stable() {
     let gateway = GatewayConfig::default();
 
@@ -1100,6 +1793,47 @@ fn run_resolution_applies_all_run_overrides() {
         resolved.gateway.plugin_config,
         Some(json!({ "components": ["x"] }))
     );
+}
+
+#[test]
+fn run_resolution_fails_when_required_enabled_dynamic_plugin_is_blocked_by_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let config_path = temp.path().join("config.toml");
+    let plugins_toml_path = temp.path().join("plugins.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        &plugins_toml_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+
+[plugins.policy.defaults]
+startup = "required"
+allowed = false
+"#,
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: Some(config_path),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: false,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let error = resolve_run_config(&command, None).unwrap_err().to_string();
+
+    assert!(error.contains("required dynamic plugin startup preflight failed"));
+    assert!(error.contains("acme.worker"));
+    assert!(error.contains("blocked by host policy"));
 }
 
 #[test]
