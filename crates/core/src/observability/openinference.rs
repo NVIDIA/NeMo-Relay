@@ -20,7 +20,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::manual;
+use super::{estimate_cost_for_response_or_requested_model, manual};
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
@@ -1194,9 +1194,10 @@ fn cost_total_from_llm_event(
         if let Some(cost) = usage.cost.as_ref() {
             return cost.total_or_component_sum_for_currency("USD");
         }
-        if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
-            return estimate_cost_for_provider(Some(event.name()), model_name, usage)
-                .and_then(|cost| cost.total_for_currency("USD"));
+        if let Some(cost) =
+            estimate_cost_for_response_or_requested_model(event, response.model.as_deref(), usage)
+        {
+            return cost.total_for_currency("USD");
         }
     }
 

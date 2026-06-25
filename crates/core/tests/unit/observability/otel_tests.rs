@@ -972,6 +972,41 @@ fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
 }
 
 #[test]
+fn llm_end_with_unpriced_response_model_uses_requested_model_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "openai",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("api-echoed-model")),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .build(),
+        ),
+    );
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert_eq!(normalized.model.as_deref(), Some("api-echoed-model"));
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.currency"),
+        Some(&"USD".to_string())
+    );
+}
+
+#[test]
 fn llm_end_with_unannotated_openai_response_without_usage_omits_cost() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     reset_active_pricing_resolver().unwrap();
