@@ -2739,6 +2739,24 @@ fn llm_end_with_unannotated_openai_response_uses_codec_cost_attribute() {
 }
 
 #[test]
+fn llm_end_with_unannotated_openai_response_without_usage_omits_cost_attribute() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let mut output = openai_chat_provider_response("priced-model");
+    output.as_object_mut().unwrap().remove("usage");
+    let event = make_end_event(Uuid::now_v7(), None, "openai", ScopeType::Llm, Some(output));
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert!(normalized.usage.is_none());
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert!(!attributes.contains_key("llm.cost.total"));
+}
+
+#[test]
 fn llm_end_with_manual_usage_and_output_model_emits_derived_cost_attribute() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_test_pricing("priced-model");

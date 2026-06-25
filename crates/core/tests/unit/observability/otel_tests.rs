@@ -972,6 +972,25 @@ fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
 }
 
 #[test]
+fn llm_end_with_unannotated_openai_response_without_usage_omits_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let mut output = openai_chat_provider_response("priced-model");
+    output.as_object_mut().unwrap().remove("usage");
+    let event = make_end_event(Uuid::now_v7(), None, "openai", ScopeType::Llm, Some(output));
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert!(normalized.usage.is_none());
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert!(!attributes.contains_key("nemo_relay.llm.cost.total"));
+    assert!(!attributes.contains_key("nemo_relay.llm.cost.currency"));
+}
+
+#[test]
 fn helper_functions_cover_additional_otel_branches() {
     let function_end = make_end_event(Uuid::now_v7(), None, "fn-scope", ScopeType::Function, None);
     assert_eq!(span_name(&function_end), "fn-scope");
