@@ -559,15 +559,6 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
     );
 
     let runner = MockRunner::default()
-        .with_executable("claude", "/bin/claude")
-        .with_capture_output("/bin/claude plugin list --json", "not json");
-    assert!(
-        host_registration_report(PluginHost::ClaudeCode, &normal, &runner)
-            .unwrap_err()
-            .contains("failed to parse")
-    );
-
-    let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output("/bin/codex plugin list", "PLUGIN  STATUS  VERSION  PATH\n")
         .with_capture_output("/bin/codex plugin marketplace list", "MARKETPLACE ROOT\n");
@@ -661,6 +652,17 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
 fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
     let dir = tempdir().unwrap();
     let normal = options(dir.path());
+
+    // Non-JSON `claude plugin list` output surfaces a parse error. Codex no longer
+    // has a JSON path, so this only applies to the host that still uses `--json`.
+    let runner = MockRunner::default()
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output("/bin/claude plugin list --json", "not json");
+    assert!(
+        host_registration_report(PluginHost::ClaudeCode, &normal, &runner)
+            .unwrap_err()
+            .contains("failed to parse")
+    );
 
     let runner = MockRunner::default()
         .with_executable("claude", "/bin/claude")
