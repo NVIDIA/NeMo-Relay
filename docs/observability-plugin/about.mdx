@@ -11,6 +11,16 @@ Use the Observability plugin when you need to inspect NeMo Relay lifecycle event
 in process or export agent activity to tracing, trajectory, or analysis
 systems from one plugin configuration document.
 
+## Shortest Path
+
+Start with one plugin-managed exporter before layering in additional formats or
+manual subscribers. A common first path is:
+
+1. Instrument one scope, tool call, or LLM call in your application.
+2. Enable the Observability plugin with only one exporter, such as ATOF JSONL.
+3. Run one request through the instrumented path.
+4. Confirm the emitted output before adding more exporters or sanitization rules.
+
 Observability in NeMo Relay starts with events. Scopes, marks, managed tool
 calls, managed LLM calls, middleware, and manual lifecycle APIs emit the
 canonical Agent Trajectory Observability Format (ATOF) event stream.
@@ -84,6 +94,19 @@ Choose the exporter based on the downstream system:
 
 Start with in-process event inspection before exporting externally. Add sanitize
 guardrails before exporters receive sensitive payloads.
+
+## What Success Looks Like
+
+Your first exporter path is wired correctly when:
+
+- The instrumented request still completes successfully.
+- The chosen exporter receives scope data for that request, plus tool or LLM
+  lifecycle data when the request exercises those paths.
+- The exported output shows the same NeMo Relay scope hierarchy you expect from the runtime contract.
+
+If that basic check fails, use the
+[Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook)
+before adding more exporters or extra config layers.
 
 For trace incidents involving missing traces, wrong scope attachment, export
 failures, duplicate events, or sensitive telemetry, use the
