@@ -35,7 +35,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::event::Event;
+use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};

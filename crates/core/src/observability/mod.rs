@@ -3,6 +3,8 @@
 
 //! Optional observability integrations for NeMo Relay Core.
 
+use crate::api::event::EventNormalizationExt;
+
 #[cfg(test)]
 use std::sync::Mutex;
 
