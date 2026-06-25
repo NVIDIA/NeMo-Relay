@@ -1101,16 +1101,13 @@ fn push_raw_output_tool_calls(
     tool_calls: &[Json],
 ) {
     for (call_index, tool_call) in tool_calls.iter().enumerate() {
-        let Some(fields) = manual::tool_call_fields(tool_call) else {
-            continue;
-        };
         push_output_tool_call(
             attributes,
             message_index,
             call_index,
-            fields.id,
-            fields.name,
-            fields.arguments.and_then(|value| {
+            raw_tool_call_id(tool_call),
+            raw_tool_call_name(tool_call),
+            raw_tool_call_arguments(tool_call).and_then(|value| {
                 value
                     .as_str()
                     .map(str::to_string)
@@ -1118,6 +1115,36 @@ fn push_raw_output_tool_calls(
             }),
         );
     }
+}
+
+// Raw replay payloads are an OpenInference-local fallback. Provider-shaped
+// responses should use codec-normalized response tool calls instead.
+fn raw_tool_call_id(tool_call: &Json) -> Option<&str> {
+    tool_call
+        .get("id")
+        .or_else(|| tool_call.get("tool_call_id"))
+        .or_else(|| tool_call.get("call_id"))
+        .and_then(Json::as_str)
+}
+
+fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
+    tool_call
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Json::as_str)
+        .or_else(|| tool_call.get("name").and_then(Json::as_str))
+        .or_else(|| tool_call.get("toolName").and_then(Json::as_str))
+        .or_else(|| tool_call.get("tool_name").and_then(Json::as_str))
+        .or_else(|| tool_call.get("function_name").and_then(Json::as_str))
+}
+
+fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
+    tool_call
+        .get("function")
+        .and_then(|function| function.get("arguments"))
+        .or_else(|| tool_call.get("arguments"))
+        .or_else(|| tool_call.get("args"))
+        .or_else(|| tool_call.get("input"))
 }
 
 fn push_output_tool_call(
@@ -1169,13 +1196,6 @@ fn cost_total_from_llm_event(
     normalized_response: Option<&AnnotatedLlmResponse>,
     fallback_usage: Option<&Usage>,
 ) -> Option<f64> {
-    if let Some(cost) =
-        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::UsdOnly)
-            .map(|(total, _)| total)
-    {
-        return Some(cost);
-    }
-
     if let Some(response) = normalized_response
         && let Some(usage) = response.usage.as_ref()
     {
@@ -1187,6 +1207,13 @@ fn cost_total_from_llm_event(
         {
             return cost.total_for_currency("USD");
         }
+    }
+
+    if let Some(cost) =
+        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::UsdOnly)
+            .map(|(total, _)| total)
+    {
+        return Some(cost);
     }
 
     let usage = fallback_usage?;
@@ -1528,8 +1555,6 @@ fn tool_call_name(value: &Json) -> Option<String> {
                 .and_then(|function| function.get("name"))
                 .and_then(Json::as_str)
         })
-        .or_else(|| value.get("tool_name").and_then(Json::as_str))
-        .or_else(|| value.get("function_name").and_then(Json::as_str))
         .map(str::to_string)
 }
 

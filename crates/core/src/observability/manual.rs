@@ -23,36 +23,6 @@ pub(crate) fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option
     output?.as_object()?.get("model").and_then(Json::as_str)
 }
 
-pub(crate) struct ManualToolCallFields<'a> {
-    pub(crate) id: Option<&'a str>,
-    pub(crate) name: Option<&'a str>,
-    pub(crate) arguments: Option<&'a Json>,
-}
-
-pub(crate) fn tool_call_fields(tool_call: &Json) -> Option<ManualToolCallFields<'_>> {
-    let object = tool_call.as_object()?;
-    let function = object.get("function").and_then(Json::as_object);
-    Some(ManualToolCallFields {
-        id: object
-            .get("id")
-            .or_else(|| object.get("tool_call_id"))
-            .or_else(|| object.get("call_id"))
-            .and_then(Json::as_str),
-        name: function
-            .and_then(|function| function.get("name"))
-            .or_else(|| object.get("name"))
-            .or_else(|| object.get("toolName"))
-            .or_else(|| object.get("tool_name"))
-            .or_else(|| object.get("function_name"))
-            .and_then(Json::as_str),
-        arguments: function
-            .and_then(|function| function.get("arguments"))
-            .or_else(|| object.get("arguments"))
-            .or_else(|| object.get("args"))
-            .or_else(|| object.get("input")),
-    })
-}
-
 pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
     let object = output?.as_object()?;
     let usage = object.get("usage").and_then(Json::as_object);

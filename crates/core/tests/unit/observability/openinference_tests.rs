@@ -1765,20 +1765,20 @@ fn output_value_extracts_chat_completion_display_text() {
 }
 
 #[test]
-fn display_text_from_tool_calls_supports_flat_aliases_without_changing_precedence() {
+fn display_text_from_tool_calls_preserves_legacy_name_precedence() {
     assert_eq!(
         display_text_from_tool_calls(&json!([
             {
                 "name": "top_level",
                 "toolName": "camel",
-                "function": {"name": "nested"},
-                "tool_name": "snake",
-                "function_name": "flat_function"
+                "function": {"name": "nested"}
             },
-            {"tool_name": "search_docs"},
-            {"function_name": "read_file"}
+            {
+                "toolName": "camel_without_top_level",
+                "function": {"name": "nested_without_top_level"}
+            }
         ])),
-        Some("Requested tools: top_level, search_docs, read_file".to_string())
+        Some("Requested tools: top_level, camel_without_top_level".to_string())
     );
 }
 

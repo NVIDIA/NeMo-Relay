@@ -17,8 +17,8 @@ use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::pricing::pricing_test_mutex;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{
-    AnnotatedLlmResponse, PricingCatalog, PricingResolver, reset_active_pricing_resolver,
-    set_active_pricing_resolver,
+    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
+    reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::json;
@@ -98,6 +98,35 @@ fn install_two_model_test_pricing(requested_model: &str, response_model: &str) {
     )
     .unwrap();
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn annotated_response_with_usage(model: &str, usage: Usage) -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        id: None,
+        model: Some(model.to_string()),
+        message: None,
+        tool_calls: None,
+        finish_reason: None,
+        usage: Some(usage),
+        api_specific: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn provider_reported_cost(total: f64, currency: &str, model: &str) -> CostEstimate {
+    CostEstimate {
+        total: Some(total),
+        currency: currency.to_string(),
+        input: None,
+        output: None,
+        cache_read: None,
+        cache_write: None,
+        source: CostSource::ProviderReported,
+        pricing_provider: None,
+        pricing_model: Some(model.to_string()),
+        pricing_as_of: None,
+        pricing_source: None,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -865,6 +894,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(openai_metrics.prompt_tokens, Some(10));
@@ -890,6 +920,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(responses_metrics.prompt_tokens, Some(75));
@@ -913,6 +944,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(anthropic_metrics.prompt_tokens, Some(11));
@@ -928,6 +960,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
                 "cost": { "total": 0.0042, "currency": "EUR" }
             }
         }),
+        None,
         None,
         None,
     )
@@ -947,6 +980,7 @@ fn test_extract_metrics_merges_usage_and_token_usage_fields() {
                 "total_tokens": 30
             }
         }),
+        None,
         None,
         None,
     )
@@ -973,6 +1007,7 @@ fn test_extract_metrics_uses_shared_cache_read_precedence() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -991,6 +1026,7 @@ fn test_extract_metrics_filters_extracted_usage_aliases_from_extra() {
                 "reasoning_tokens": 3
             }
         }),
+        None,
         None,
         None,
     )
@@ -1027,6 +1063,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -1045,6 +1082,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -1063,6 +1101,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -1084,6 +1123,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -1237,6 +1277,88 @@ fn test_exporter_uses_normalized_usage_cost_before_model_pricing() {
 }
 
 #[test]
+fn test_exporter_prefers_annotated_usage_over_raw_usage_conflicts() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "model": "raw-model",
+            "usage": {
+                "prompt_tokens": 999,
+                "completion_tokens": 888,
+                "cost": {
+                    "total": 9.99,
+                    "currency": "USD"
+                }
+            }
+        }))
+        .annotated_response(annotated_response_with_usage(
+            "annotated-model",
+            Usage {
+                prompt_tokens: Some(12),
+                completion_tokens: Some(34),
+                total_tokens: Some(46),
+                cache_read_tokens: Some(5),
+                cache_write_tokens: None,
+                cost: Some(provider_reported_cost(0.42, "USD", "annotated-model")),
+            },
+        ))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+    assert_eq!(metrics.prompt_tokens, Some(12));
+    assert_eq!(metrics.completion_tokens, Some(34));
+    assert_eq!(metrics.cached_tokens, Some(5));
+    assert_eq!(metrics.cost_usd, Some(0.42));
+}
+
+#[test]
+fn test_extract_metrics_does_not_mix_raw_cost_when_annotated_cost_is_non_usd() {
+    let normalized_response = annotated_response_with_usage(
+        "annotated-model",
+        Usage {
+            prompt_tokens: Some(12),
+            completion_tokens: Some(34),
+            total_tokens: Some(46),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            cost: Some(provider_reported_cost(0.42, "EUR", "annotated-model")),
+        },
+    );
+
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 999,
+                "completion_tokens": 888,
+                "cost": {
+                    "total": 9.99,
+                    "currency": "USD"
+                }
+            }
+        }),
+        None,
+        None,
+        Some(&normalized_response),
+    )
+    .unwrap();
+
+    assert_eq!(metrics.prompt_tokens, Some(12));
+    assert_eq!(metrics.completion_tokens, Some(34));
+    assert_eq!(metrics.cost_usd, None);
+}
+
+#[test]
 fn test_exporter_omits_cost_for_unknown_model_pricing() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     reset_active_pricing_resolver().unwrap();
@@ -1249,6 +1371,7 @@ fn test_exporter_omits_cost_for_unknown_model_pricing() {
         }),
         None,
         Some("unknown-model"),
+        None,
     )
     .unwrap();
 

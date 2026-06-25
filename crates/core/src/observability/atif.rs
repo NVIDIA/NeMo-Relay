@@ -39,7 +39,7 @@ use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::response::AnnotatedLlmResponse;
+use crate::codec::response::{AnnotatedLlmResponse, Usage};
 use crate::error::Result;
 use crate::json::Json;
 
@@ -705,58 +705,74 @@ fn extract_metrics(
     output: &Json,
     provider: Option<&str>,
     model_name: Option<&str>,
+    normalized_response: Option<&AnnotatedLlmResponse>,
 ) -> Option<AtifMetrics> {
-    let usage = token_usage_object(output)?;
+    let raw_usage = token_usage_object(output);
     let fallback_usage = manual::usage_from_manual_llm_output(Some(output));
-    let prompt = fallback_usage
-        .as_ref()
-        .and_then(|usage| usage.prompt_tokens);
-    let completion = fallback_usage
+    let normalized_usage = normalized_response.and_then(|response| response.usage.as_ref());
+    let merged_usage = merge_usage(normalized_usage, fallback_usage.as_ref());
+    let prompt = merged_usage.as_ref().and_then(|usage| usage.prompt_tokens);
+    let completion = merged_usage
         .as_ref()
         .and_then(|usage| usage.completion_tokens);
-    let cache_read = fallback_usage
+    let cache_read = merged_usage
         .as_ref()
         .and_then(|usage| usage.cache_read_tokens);
-    let cache_write = fallback_usage
+    let cache_write = merged_usage
         .as_ref()
         .and_then(|usage| usage.cache_write_tokens);
     let cached = sum_options(cache_read, cache_write);
-    let explicit_cost =
+    let normalized_cost_source = normalized_usage.and_then(|usage| usage.cost.as_ref());
+    let normalized_cost =
+        normalized_cost_source.and_then(|cost| cost.total_or_component_sum_for_currency("USD"));
+    let manual_cost =
         manual::cost_from_manual_llm_output(Some(output), manual::ManualCostPolicy::AtifUsdOnly)
             .map(|(total, _)| total);
-    let has_reported_cost = usage.get("cost").is_some();
+    let explicit_cost = if normalized_cost_source.is_some() {
+        normalized_cost
+    } else {
+        manual_cost
+    };
+    let has_reported_cost = normalized_cost_source.is_some()
+        || raw_usage.is_some_and(|usage| usage.get("cost").is_some());
     let cost = if has_reported_cost {
         explicit_cost
     } else {
         explicit_cost.or_else(|| {
-            let usage = fallback_usage.as_ref()?;
+            let usage = merged_usage.as_ref()?;
             estimate_cost_for_response_or_model(
                 provider,
                 model_name,
-                response_model_name(output),
+                normalized_response
+                    .and_then(|response| response.model.as_deref())
+                    .or_else(|| response_model_name(output)),
                 usage,
             )
             .and_then(|cost| cost.total_for_currency("USD"))
         })
     };
-    let prompt_ids = usage
-        .get("prompt_token_ids")
+    let prompt_ids = raw_usage
+        .and_then(|usage| usage.get("prompt_token_ids"))
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_u64).collect());
-    let completion_ids = usage
-        .get("completion_token_ids")
+    let completion_ids = raw_usage
+        .and_then(|usage| usage.get("completion_token_ids"))
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_u64).collect());
-    let logprobs = usage
-        .get("logprobs")
+    let logprobs = raw_usage
+        .and_then(|usage| usage.get("logprobs"))
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_f64).collect());
     let known: std::collections::HashSet<&str> = TOKEN_USAGE_KNOWN_KEYS.iter().copied().collect();
-    let extra_map: serde_json::Map<String, Json> = usage
-        .iter()
-        .filter(|(k, _)| !known.contains(k.as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let extra_map: serde_json::Map<String, Json> = raw_usage
+        .map(|usage| {
+            usage
+                .iter()
+                .filter(|(k, _)| !known.contains(k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     let extra = if extra_map.is_empty() {
         None
     } else {
@@ -775,6 +791,21 @@ fn extract_metrics(
         logprobs,
         extra,
     })
+}
+
+fn merge_usage(primary: Option<&Usage>, secondary: Option<&Usage>) -> Option<Usage> {
+    match (primary, secondary) {
+        (None, None) => None,
+        (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
+        (Some(primary), Some(secondary)) => Some(Usage {
+            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
+            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
+            total_tokens: primary.total_tokens.or(secondary.total_tokens),
+            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
+            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
+            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
+        }),
+    }
 }
 
 fn merge_metrics(
@@ -981,13 +1012,32 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         .or_else(|| anthropic_messages_tool_use_items(output))?;
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
-        let fields = manual::tool_call_fields(tc)?;
-        let mut id = fields.id.unwrap_or("").to_string();
-        let name = fields.name.unwrap_or("").to_string();
+        let tc_obj = tc.as_object()?;
+        let mut id = tc_obj
+            .get("id")
+            .or_else(|| tc_obj.get("tool_call_id"))
+            .or_else(|| tc_obj.get("call_id"))
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_string();
+        let func = tc_obj.get("function").and_then(Json::as_object);
+        let name = func
+            .and_then(|f| f.get("name"))
+            .or_else(|| tc_obj.get("name"))
+            .or_else(|| tc_obj.get("tool_name"))
+            .or_else(|| tc_obj.get("function_name"))
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_string();
         if id.is_empty() && !name.is_empty() {
             id = format!("{name}:{}", index + 1);
         }
-        let arguments = normalize_tool_arguments(fields.arguments);
+        let raw_arguments = func
+            .and_then(|f| f.get("arguments"))
+            .or_else(|| tc_obj.get("arguments"))
+            .or_else(|| tc_obj.get("args"))
+            .or_else(|| tc_obj.get("input"));
+        let arguments = normalize_tool_arguments(raw_arguments);
         // Skip entries with no id and no name — they are not meaningful.
         if id.is_empty() && name.is_empty() {
             continue;
@@ -1101,7 +1151,6 @@ fn tool_call_extra(tool_call: &Json) -> Option<Json> {
                 | "type"
                 | "function"
                 | "name"
-                | "toolName"
                 | "tool_name"
                 | "function_name"
                 | "arguments"
@@ -1406,9 +1455,15 @@ impl LlmSpanCandidate {
                 .or_else(|| model_name_for_llm_event(start))
                 .or_else(|| model_name_for_llm_event(end)),
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
-            end_metrics: end
-                .data()
-                .and_then(|output| extract_metrics(output, Some(end.name()), end.model_name())),
+            end_metrics: end.data().and_then(|output| {
+                let normalized_response = end.normalized_llm_response();
+                extract_metrics(
+                    output,
+                    Some(end.name()),
+                    end.model_name(),
+                    normalized_response.as_deref(),
+                )
+            }),
             hook_instrumentation: is_hook_instrumented_llm_event(start)
                 || is_hook_instrumented_llm_event(end),
             gateway_instrumentation: is_gateway_instrumented_llm_event(start)
@@ -2230,7 +2285,15 @@ impl StepConversionState {
         );
 
         let metrics = merge_metrics(
-            extract_metrics(output, Some(event.name()), event.model_name()),
+            {
+                let normalized_response = event.normalized_llm_response();
+                extract_metrics(
+                    output,
+                    Some(event.name()),
+                    event.model_name(),
+                    normalized_response.as_deref(),
+                )
+            },
             lookups.supplemental_llm_metrics.get(&event.uuid()),
         );
 

@@ -716,11 +716,6 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
 }
 
 fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
-    if let Some(cost) =
-        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::AnyCurrency)
-    {
-        return Some(cost);
-    }
     if let Some(response) = event.normalized_llm_response() {
         let response = response.as_ref();
         if let Some(usage) = response.usage.as_ref() {
@@ -735,6 +730,11 @@ fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
                 return cost_total_and_currency(&cost);
             }
         }
+    }
+    if let Some(cost) =
+        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::AnyCurrency)
+    {
+        return Some(cost);
     }
     let usage = manual::usage_from_manual_llm_output(event.output())?;
     estimate_cost_for_response_or_model(

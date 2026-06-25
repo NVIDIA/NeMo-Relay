@@ -153,38 +153,3 @@ fn model_name_extraction() {
     assert_eq!(model_name_from_manual_llm_output(Some(&json!({}))), None);
     assert_eq!(model_name_from_manual_llm_output(None), None);
 }
-
-#[test]
-fn tool_call_fields_prefers_function_fields_before_aliases() {
-    let tool_call = json!({
-        "id": "call-1",
-        "call_id": "call-2",
-        "name": "top_level_name",
-        "toolName": "camel_name",
-        "function": {
-            "name": "function_name",
-            "arguments": {"query": "needle"}
-        },
-        "arguments": {"query": "fallback"}
-    });
-
-    let fields = tool_call_fields(&tool_call).unwrap();
-    assert_eq!(fields.id, Some("call-1"));
-    assert_eq!(fields.name, Some("function_name"));
-    assert_eq!(fields.arguments, Some(&json!({"query": "needle"})));
-}
-
-#[test]
-fn tool_call_fields_supports_flat_aliases() {
-    let tool_call = json!({
-        "call_id": "call-3",
-        "function_name": "search_docs",
-        "args": "{\"query\":\"docs\"}"
-    });
-
-    let fields = tool_call_fields(&tool_call).unwrap();
-    assert_eq!(fields.id, Some("call-3"));
-    assert_eq!(fields.name, Some("search_docs"));
-    assert_eq!(fields.arguments, Some(&json!("{\"query\":\"docs\"}")));
-    assert!(tool_call_fields(&json!("not an object")).is_none());
-}
