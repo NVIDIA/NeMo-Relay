@@ -26,6 +26,7 @@ not yet know which guide owns the working path.
 | Layer | Use When | Start Here | Success Check |
 |---|---|---|---|
 | CLI and gateway | A coding-agent harness owns invocation and provider routing | [CLI Basic Usage](/nemo-relay-cli/basic-usage) | The wrapped agent runs with Relay active and emits hook output, plus gateway-routed LLM lifecycle output when provider routing is active. |
+| Persistent host-plugin installs | You want the maintained install path for Codex or Claude Code instead of the transparent wrapper | [Plugin Installation](/nemo-relay-cli/plugin-installation) | `nemo-relay doctor --plugin <host>` confirms the installed host plugin is registered and ready. |
 | Direct Python or Node.js application APIs | Your application owns the tool or LLM callback | [Python Quick Start](/getting-started/quick-start/python) or [Node.js Quick Start](/getting-started/quick-start/nodejs) | The sample prints event lines plus tool and LLM results. |
 | Direct Rust application APIs | Your Rust application owns the tool or LLM callback | [Rust Quick Start](/getting-started/quick-start/rust) | The sample prints scope, tool, LLM, and mark lifecycle output. |
 | Plugin-managed runtime setup | You need process-level exporter or plugin behavior from `plugins.toml` | [Plugin Configuration Files](/build-plugins/plugin-configuration-files) | The selected plugin path activates and writes the expected output or behavior. |
