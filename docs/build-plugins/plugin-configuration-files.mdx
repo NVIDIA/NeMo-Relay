@@ -59,7 +59,8 @@ described in [CLI Basic Usage](/nemo-relay-cli/basic-usage).
 The shortest-path setup is working when:
 
 - `nemo-relay` starts without plugin validation or activation errors.
-- The observability component activates exactly one exporter path from the file.
+- The observability component activates the ATOF exporter configured in this
+  file.
 - An instrumented gateway run writes ATOF JSONL output to `logs/events.jsonl`.
 
 After that path works, expand the config with additional components, policies,

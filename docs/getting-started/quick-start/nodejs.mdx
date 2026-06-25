@@ -87,6 +87,7 @@ async function main() {
   });
 
   flushSubscribers();
+  await new Promise((resolve) => setImmediate(resolve));
   deregisterSubscriber("quickstart-printer");
 }
 

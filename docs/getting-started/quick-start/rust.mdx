@@ -138,7 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 You should see:
 
-- Event lines for the scope, tool, LLM, and mark lifecycle
+- Event lines for the root scope, managed tool span, managed LLM span, and
+  mark lifecycle
 - `{"echo":"hello"}` from the tool call
 - A final object containing `ok: true` and the echoed message payload from the
   LLM callback

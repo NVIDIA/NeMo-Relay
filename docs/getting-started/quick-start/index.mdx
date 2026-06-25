@@ -18,19 +18,19 @@ If you still need the shared runtime vocabulary for scopes, middleware, events,
 or plugins, refer to the [Agent Runtime Primer](/getting-started/agent-runtime-primer)
 or [Concepts](/about-nemo-relay/concepts) first.
 
-## Examples By Integration Layer
+## Examples by Integration Layer
 
 Use this map when you know what Relay boundary you want to verify, but you do
 not yet know which guide owns the working path.
 
 | Layer | Use When | Start Here | Success Check |
 |---|---|---|---|
-| CLI and gateway | A coding-agent harness owns invocation and provider routing | [CLI Basic Usage](/nemo-relay-cli/basic-usage) | The wrapped agent runs with Relay active and emits hook plus LLM lifecycle output. |
+| CLI and gateway | A coding-agent harness owns invocation and provider routing | [CLI Basic Usage](/nemo-relay-cli/basic-usage) | The wrapped agent runs with Relay active and emits hook output, plus gateway-routed LLM lifecycle output when provider routing is active. |
 | Direct Python or Node.js application APIs | Your application owns the tool or LLM callback | [Python Quick Start](/getting-started/quick-start/python) or [Node.js Quick Start](/getting-started/quick-start/nodejs) | The sample prints event lines plus tool and LLM results. |
 | Direct Rust application APIs | Your Rust application owns the tool or LLM callback | [Rust Quick Start](/getting-started/quick-start/rust) | The sample prints scope, tool, LLM, and mark lifecycle output. |
 | Plugin-managed runtime setup | You need process-level exporter or plugin behavior from `plugins.toml` | [Plugin Configuration Files](/build-plugins/plugin-configuration-files) | The selected plugin path activates and writes the expected output or behavior. |
 | Managed middleware | You want policy, redaction, routing, or execution wrapping around managed calls | [Add Middleware](/instrument-applications/advanced-guide) | One allowed request succeeds, one rejected request stops before execution, and observed payloads match the policy. |
-| Framework integrations | LangChain, LangGraph, or Deep Agents owns callbacks or scheduling | [Supported Integrations](/supported-integrations/about) | The integration guide's verify step confirms the expected framework-owned output. |
+| Framework integrations | A framework such as LangChain, LangGraph, or Deep Agents owns callbacks or scheduling | [Supported Integrations](/supported-integrations/about) | The integration guide's verify step confirms the expected framework-owned output. |
 | OpenClaw plugin path | OpenClaw owns plugin setup and Relay observes the OpenClaw-managed boundary | [OpenClaw](/supported-integrations/openclaw-plugin) | The OpenClaw guide's verify step confirms plugin setup and runtime output. |
 | Manual or CI workflows | You need explicit config files, deterministic commands, or non-interactive automation | [CLI Basic Usage](/nemo-relay-cli/basic-usage) and [Plugin Configuration Files](/build-plugins/plugin-configuration-files) | The explicit command uses the intended config files without interactive setup. |
 
