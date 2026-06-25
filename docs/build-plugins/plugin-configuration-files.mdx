@@ -46,13 +46,19 @@ filename = "events.jsonl"
 mode = "append"
 ```
 
-Place the file at `./.nemo-relay/plugins.toml` or another discovered location.
-If you want an explicit config root, pass `--config path/to/config.toml` and
-place `plugins.toml` next to that file. For a quick verification path, run one
-of the documented wrapper commands from the same project root, such as
-`nemo-relay codex` or `nemo-relay run -- codex`, so
-`.nemo-relay/plugins.toml` is discoverable by the gateway startup path
-described in [CLI Basic Usage](/nemo-relay-cli/basic-usage).
+For the most deterministic verification path, create `path/to/config.toml`,
+place `plugins.toml` next to it, and launch the wrapper with that explicit
+config root. For example:
+
+```bash
+nemo-relay --config path/to/config.toml run -- codex
+```
+
+This keeps the gateway on the colocated `plugins.toml` path instead of relying
+on system or user plugin discovery. If you prefer implicit discovery, place the
+file at `./.nemo-relay/plugins.toml` or another discovered location and ensure
+no higher-precedence plugin file overrides the exporter you want to verify. See
+[CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper command shapes.
 
 ## What Success Looks Like
 
