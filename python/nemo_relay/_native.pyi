@@ -768,6 +768,7 @@ class AtofEndpointConfig:
     transport: str
     headers: dict[str, str]
     timeout_millis: int
+    field_name_policy: str
 
     def __init__(
         self,
@@ -776,6 +777,7 @@ class AtofEndpointConfig:
         transport: str = "http_post",
         headers: dict[str, str] | None = None,
         timeout_millis: int = 3000,
+        field_name_policy: str = "preserve",
     ) -> None:
         """Create an ATOF streaming endpoint config.
 

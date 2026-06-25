@@ -38,7 +38,8 @@ use uuid::Uuid;
 use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
-use crate::codec::response::{Usage, estimate_cost_for_provider};
+use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use crate::codec::response::{AnnotatedLlmResponse, Usage, estimate_cost_for_provider};
 use crate::error::Result;
 use crate::json::Json;
 
@@ -1052,6 +1053,36 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         });
     }
     if calls.is_empty() { None } else { Some(calls) }
+}
+
+// Annotation adapters: read the normalized message from an annotation, returning
+// None for multimodal content so the caller falls back to the raw extractor.
+
+fn atif_message_from_annotated_request(request: &AnnotatedLlmRequest) -> Option<Json> {
+    let content = request
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::User { content, .. } => Some(content),
+            _ => None,
+        })?;
+    match content {
+        MessageContent::Text(text) => Some(Json::String(text.clone())),
+        MessageContent::Parts(_) => None,
+    }
+}
+
+fn atif_message_from_annotated_response(response: &AnnotatedLlmResponse) -> Option<Json> {
+    match &response.message {
+        Some(MessageContent::Text(text)) => Some(Json::String(text.clone())),
+        // Multimodal: defer to the raw extractor (returns None to fall back).
+        Some(MessageContent::Parts(_)) => None,
+        // No assistant text (tool-call-only, or reasoning/thinking-only): emit an
+        // empty message rather than the raw extractor's stringified payload. Tool
+        // calls and metrics are still recovered from the raw output downstream.
+        None => Some(empty_message()),
+    }
 }
 
 fn tool_call_array(output: &Json) -> Option<&Vec<Json>> {
@@ -2212,7 +2243,10 @@ impl StepConversionState {
         self.steps.push(AtifStep {
             step_id: 0,
             source: "user".to_string(),
-            message: extract_user_messages(&content),
+            message: event
+                .annotated_request()
+                .and_then(|request| atif_message_from_annotated_request(request))
+                .unwrap_or_else(|| extract_user_messages(&content)),
             timestamp: Some(event.timestamp().to_rfc3339()),
             model_name: None,
             reasoning_effort: None,
@@ -2253,7 +2287,10 @@ impl StepConversionState {
         self.steps.push(AtifStep {
             step_id: 0,
             source: "agent".to_string(),
-            message: extract_llm_response_message(output),
+            message: event
+                .annotated_response()
+                .and_then(|response| atif_message_from_annotated_response(response))
+                .unwrap_or_else(|| extract_llm_response_message(output)),
             timestamp: Some(event.timestamp().to_rfc3339()),
             model_name: event.model_name().map(ToOwned::to_owned),
             reasoning_effort,

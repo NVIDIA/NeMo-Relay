@@ -33,6 +33,38 @@ fn toml_basic_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("relay-plugin.toml"),
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = {plugin_id}
+kind = "worker"
+
+[compat]
+relay = "0.5"
+worker_protocol = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = {entrypoint}
+"#,
+            plugin_id = toml_basic_string(plugin_id),
+            entrypoint = toml_basic_string(&format!("{plugin_id}.plugin:register")),
+        ),
+    )
+    .unwrap();
+}
+
 #[test]
 fn toml_basic_string_escapes_toml_control_characters() {
     assert_eq!(
@@ -96,6 +128,321 @@ fn cli_doctor_json_emits_versioned_report() {
     assert!(parsed["environment"].is_object());
     assert!(parsed["configuration"].is_object());
     assert!(parsed["agents"].is_array());
+}
+
+#[test]
+fn cli_plugins_validate_json_emits_versioned_success_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-json");
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "plugins validate");
+    assert_eq!(parsed["data"]["target_kind"], "path");
+    assert_eq!(parsed["data"]["resolved_plugin_id"], "acme.cli-json");
+}
+
+#[test]
+fn cli_plugins_list_json_emits_empty_versioned_success_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "plugins list");
+    assert_eq!(parsed["data"], serde_json::json!([]));
+}
+
+#[test]
+fn cli_plugins_inspect_json_missing_plugin_emits_not_found_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "inspect", "missing.plugin", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], false);
+    assert_eq!(parsed["command"], "plugins inspect");
+    assert_eq!(parsed["error"]["code"], "not_found");
+    assert_eq!(parsed["error"]["kind"], "not_found");
+}
+
+#[test]
+fn cli_plugins_list_all_json_includes_tombstoned_records() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.tombstoned");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let remove = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "remove", "acme.tombstoned"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let list = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "list", "--all", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        list.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "plugins list");
+    assert_eq!(parsed["data"][0]["id"], "acme.tombstoned");
+    assert_eq!(parsed["data"][0]["tombstoned"], true);
+    assert_eq!(parsed["data"][0]["runtime_state"], "tombstoned");
+}
+
+#[test]
+fn cli_plugins_inspect_json_emits_installed_plugin_details() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.inspect-json");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let inspect = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "inspect", "acme.inspect-json", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        inspect.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["command"], "plugins inspect");
+    assert_eq!(parsed["target"], "acme.inspect-json");
+    assert_eq!(parsed["data"]["id"], "acme.inspect-json");
+    assert_eq!(parsed["data"]["kind"], "worker");
+    assert_eq!(parsed["data"]["scope"], "project");
+    assert_eq!(parsed["data"]["host_config_status"], "absent");
+    assert!(parsed["data"]["source"]["manifest_ref"].is_string());
+}
+
+#[test]
+fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.mutate-output");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&add.stdout).trim(),
+        "Added dynamic plugin acme.mutate-output"
+    );
+
+    let enable = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "enable", "acme.mutate-output"])
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&enable.stdout).trim(),
+        "Enabled dynamic plugin acme.mutate-output"
+    );
+
+    let disable = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "disable", "acme.mutate-output"])
+        .output()
+        .unwrap();
+    assert!(
+        disable.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&disable.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&disable.stdout).trim(),
+        "Disabled dynamic plugin acme.mutate-output"
+    );
+
+    let remove = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "remove", "acme.mutate-output"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&remove.stdout).trim(),
+        "Removed dynamic plugin acme.mutate-output"
+    );
+
+    let revive = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        revive.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&revive.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&revive.stdout).trim(),
+        "Revived dynamic plugin acme.mutate-output"
+    );
+}
+
+#[test]
+fn cli_plugins_enable_tombstoned_plugin_returns_refused_exit_code() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    std::fs::create_dir_all(&cwd).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.tombstone-enable");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let remove = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "remove", "acme.tombstone-enable"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let enable = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "enable", "acme.tombstone-enable"])
+        .output()
+        .unwrap();
+    assert_eq!(enable.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&enable.stderr).contains("tombstoned"),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
 }
 
 #[test]

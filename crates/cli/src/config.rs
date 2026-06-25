@@ -11,6 +11,7 @@ use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use strum::Display;
 
 use crate::error::CliError;
 use crate::plugin_shim::PluginShimCommand;
@@ -197,11 +198,51 @@ pub(crate) struct PluginsCommand {
     pub(crate) command: PluginsSubcommand,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PluginJsonContext<'a> {
+    pub(crate) command: &'static str,
+    pub(crate) target: Option<&'a str>,
+}
+
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
     /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
     Edit(PluginsEditCommand),
+    /// Register a manifest-backed dynamic plugin in `plugins.toml`.
+    Add(PluginsAddCommand),
+    /// Validate a manifest-backed dynamic plugin by path or installed ID.
+    Validate(PluginsValidateCommand),
+    /// List discovered dynamic plugins from the resolved host config.
+    List(PluginsListCommand),
+    /// Inspect one discovered dynamic plugin by canonical ID.
+    Inspect(PluginsInspectCommand),
+    /// Mark a registered dynamic plugin enabled in desired state.
+    Enable(PluginsEnableCommand),
+    /// Mark a registered dynamic plugin disabled in desired state.
+    Disable(PluginsDisableCommand),
+    /// Tombstone a registered dynamic plugin and remove its host discovery reference.
+    Remove(PluginsRemoveCommand),
+}
+
+impl PluginsSubcommand {
+    pub(crate) fn json_context(&self) -> Option<PluginJsonContext<'_>> {
+        match self {
+            Self::Validate(command) if command.json => Some(PluginJsonContext {
+                command: "plugins validate",
+                target: Some(command.target.as_str()),
+            }),
+            Self::List(command) if command.json => Some(PluginJsonContext {
+                command: "plugins list",
+                target: None,
+            }),
+            Self::Inspect(command) if command.json => Some(PluginJsonContext {
+                command: "plugins inspect",
+                target: Some(command.id.as_str()),
+            }),
+            _ => None,
+        }
+    }
 }
 
 /// Args for `nemo-relay pricing`.
@@ -298,7 +339,7 @@ pub(crate) struct PricingResolveCommand {
         .args(["user", "project", "global"])
         .multiple(false)
 ))]
-pub(crate) struct PluginsEditCommand {
+pub(crate) struct PluginsScopeArgs {
     /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) user: bool,
@@ -308,6 +349,74 @@ pub(crate) struct PluginsEditCommand {
     /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) global: bool,
+}
+
+/// Args for `nemo-relay plugins edit`.
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct PluginsEditCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
+}
+
+/// Args for `nemo-relay plugins add`.
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct PluginsAddCommand {
+    #[command(flatten)]
+    pub(crate) scope: PluginsScopeArgs,
+    /// Path to a plugin directory or explicit `relay-plugin.toml`.
+    pub(crate) path: PathBuf,
+}
+
+/// Args for `nemo-relay plugins validate`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsValidateCommand {
+    /// Canonical plugin ID or a local plugin directory / `relay-plugin.toml` path.
+    pub(crate) target: String,
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+/// Args for `nemo-relay plugins list`.
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct PluginsListCommand {
+    /// Include tombstoned dynamic plugin records in the output.
+    #[arg(long)]
+    pub(crate) all: bool,
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+/// Args for `nemo-relay plugins inspect`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsInspectCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+    /// Emit machine-readable JSON output.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+/// Args for `nemo-relay plugins enable`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsEnableCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+}
+
+/// Args for `nemo-relay plugins disable`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsDisableCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
+}
+
+/// Args for `nemo-relay plugins remove`.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct PluginsRemoveCommand {
+    /// Canonical plugin ID.
+    pub(crate) id: String,
 }
 
 #[derive(Debug, Clone, Default, Args)]
@@ -488,11 +597,13 @@ pub(crate) struct ResolvedDynamicPluginConfig {
     pub(crate) plugin_id: String,
     pub(crate) manifest_ref: String,
     pub(crate) config: Map<String, Value>,
+    pub(crate) has_explicit_config: bool,
     pub(crate) source: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum DynamicPluginHostConfigStatus {
     Absent,
     Present,
@@ -500,10 +611,10 @@ pub(crate) enum DynamicPluginHostConfigStatus {
 
 impl ResolvedDynamicPluginConfig {
     pub(crate) fn host_config_status(&self) -> DynamicPluginHostConfigStatus {
-        if self.config.is_empty() {
-            DynamicPluginHostConfigStatus::Absent
-        } else {
+        if self.has_explicit_config {
             DynamicPluginHostConfigStatus::Present
+        } else {
+            DynamicPluginHostConfigStatus::Absent
         }
     }
 }
@@ -623,6 +734,13 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
     Ok(resolved)
 }
 
+/// Resolves shared config for plugin-facing CLI commands without mutating gateway runtime fields.
+pub(crate) fn resolve_plugins_config(
+    explicit: Option<&PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
+    load_shared_config(explicit)
+}
+
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
 ///
 /// Explicit run arguments override inherited top-level server flags, which override shared config.
@@ -715,7 +833,7 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Resu
     Ok(())
 }
 
-const PLUGINS_TOML: &str = "plugins.toml";
+pub(crate) const PLUGINS_TOML: &str = "plugins.toml";
 
 // Loads config from the ordered shared locations, deep-merges TOML tables, maps the typed file
 // shape onto runtime structs, applies a sibling/discovered plugins.toml when present, then lets
@@ -937,7 +1055,7 @@ struct PluginTomlPluginsSection {
 struct FileDynamicPluginConfig {
     manifest: String,
     #[serde(default)]
-    config: Map<String, Value>,
+    config: Option<Map<String, Value>>,
 }
 
 fn load_plugin_toml_config(
@@ -1068,7 +1186,8 @@ fn resolve_dynamic_plugin_refs(
         resolved.push(ResolvedDynamicPluginConfig {
             plugin_id,
             manifest_ref,
-            config: dynamic.config,
+            has_explicit_config: dynamic.config.is_some(),
+            config: dynamic.config.unwrap_or_default(),
             source: source.to_path_buf(),
         });
     }

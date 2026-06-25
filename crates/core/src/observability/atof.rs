@@ -9,7 +9,7 @@
 //! one JSON object per JSONL line.
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
@@ -115,6 +115,36 @@ pub enum AtofEndpointTransport {
     Ndjson,
 }
 
+/// Field name transformation policy used before sending events to an endpoint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AtofEndpointFieldNamePolicy {
+    /// Preserve canonical ATOF field names exactly.
+    #[default]
+    Preserve,
+    /// Replace dots in JSON object keys with underscores, recursively.
+    ReplaceDots,
+}
+
+impl AtofEndpointFieldNamePolicy {
+    /// Parse a string policy used by configuration and bindings.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "preserve" => Some(Self::Preserve),
+            "replace_dots" => Some(Self::ReplaceDots),
+            _ => None,
+        }
+    }
+
+    /// Return the stable string representation used by configuration and bindings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Preserve => "preserve",
+            Self::ReplaceDots => "replace_dots",
+        }
+    }
+}
+
 impl AtofEndpointTransport {
     /// Parse a string transport used by configuration and bindings.
     pub fn parse(value: &str) -> Option<Self> {
@@ -150,6 +180,9 @@ pub struct AtofEndpointConfig {
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_endpoint_timeout_millis")]
     pub timeout_millis: u64,
+    /// Field name transformation policy applied before sending events.
+    #[serde(default)]
+    pub field_name_policy: AtofEndpointFieldNamePolicy,
 }
 
 impl AtofEndpointConfig {
@@ -160,6 +193,7 @@ impl AtofEndpointConfig {
             transport,
             headers: HashMap::new(),
             timeout_millis: default_endpoint_timeout_millis(),
+            field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         }
     }
 
@@ -172,6 +206,15 @@ impl AtofEndpointConfig {
     /// Override the endpoint timeout.
     pub fn with_timeout_millis(mut self, timeout_millis: u64) -> Self {
         self.timeout_millis = timeout_millis;
+        self
+    }
+
+    /// Override the endpoint field name policy.
+    pub fn with_field_name_policy(
+        mut self,
+        field_name_policy: AtofEndpointFieldNamePolicy,
+    ) -> Self {
+        self.field_name_policy = field_name_policy;
         self
     }
 }
@@ -263,6 +306,10 @@ impl AtofExporter {
     /// Create a new exporter from config and open its output file.
     pub fn new(config: AtofExporterConfig) -> Result<Self> {
         let path = config.path();
+        create_dir_all(&config.output_directory).map_err(|source| AtofExporterError::OpenFile {
+            path: path.clone(),
+            source,
+        })?;
         let file = open_file(&path, config.mode)?;
         let endpoints = start_endpoint_workers(&config.endpoints)?;
         Ok(Self {
@@ -564,6 +611,7 @@ fn run_endpoint_worker(
     config: AtofEndpointConfig,
     rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
+    install_rustls_crypto_provider();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -581,6 +629,11 @@ fn run_endpoint_worker(
             AtofEndpointTransport::Ndjson => run_ndjson_endpoint(index, config, rx).await,
         }
     });
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
@@ -611,7 +664,7 @@ async fn run_http_post_endpoint(
     while let Some(message) = rx.recv().await {
         match message {
             EndpointMessage::Event(raw_json) => {
-                let body = format!("{raw_json}\n");
+                let body = format!("{}\n", endpoint_event_json(&config, raw_json));
                 let result = client
                     .post(&config.url)
                     .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
@@ -620,10 +673,7 @@ async fn run_http_post_endpoint(
                     .await;
                 match result {
                     Ok(response) if response.status().is_success() => {}
-                    Ok(response) => eprintln!(
-                        "nemo_relay: ATOF endpoint[{index}] HTTP status {}",
-                        response.status()
-                    ),
+                    Ok(response) => log_http_error(index, "HTTP", response).await,
                     Err(error) => {
                         eprintln!("nemo_relay: ATOF endpoint[{index}] send failed: {error}")
                     }
@@ -657,7 +707,7 @@ async fn run_websocket_endpoint(
     while let Some(message) = rx.recv().await {
         match message {
             EndpointMessage::Event(raw_json) => {
-                pending.push_back(raw_json);
+                pending.push_back(endpoint_event_json(&config, raw_json));
                 let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
             }
             EndpointMessage::Flush(done) => {
@@ -788,9 +838,10 @@ async fn run_ndjson_endpoint(
     };
 
     let (body_tx, body) = ndjson_body_channel();
+    let url = config.url.clone();
     let request = tokio::spawn(async move {
         client
-            .post(config.url)
+            .post(url)
             .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
             .body(body)
             .send()
@@ -800,7 +851,9 @@ async fn run_ndjson_endpoint(
 
     while let Some(message) = rx.recv().await {
         match message {
-            EndpointMessage::Event(raw_json) => send_ndjson_event(index, &body_tx, raw_json),
+            EndpointMessage::Event(raw_json) => {
+                send_ndjson_event(index, &body_tx, endpoint_event_json(&config, raw_json))
+            }
             EndpointMessage::Flush(done) => send_ndjson_flush(index, &body_tx, done),
             EndpointMessage::Close(done) => {
                 drop(body_tx);
@@ -879,10 +932,7 @@ async fn finish_ndjson_upload(
 ) {
     match tokio::time::timeout(close_timeout, request).await {
         Ok(Ok(Ok(response))) if response.status().is_success() => {}
-        Ok(Ok(Ok(response))) => eprintln!(
-            "nemo_relay: ATOF endpoint[{index}] NDJSON HTTP status {}",
-            response.status()
-        ),
+        Ok(Ok(Ok(response))) => log_http_error(index, "NDJSON HTTP", response).await,
         Ok(Ok(Err(error))) => {
             eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON upload failed: {error}")
         }
@@ -908,6 +958,95 @@ async fn drain_closed(mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessa
             EndpointMessage::Event(_) => {}
         }
     }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String) -> String {
+    match config.field_name_policy {
+        AtofEndpointFieldNamePolicy::Preserve => raw_json,
+        AtofEndpointFieldNamePolicy::ReplaceDots => replace_dotted_field_names(&raw_json),
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn replace_dotted_field_names(raw_json: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Json>(raw_json) else {
+        return raw_json.to_string();
+    };
+    replace_dotted_value_keys(&mut value);
+    serde_json::to_string(&value).unwrap_or_else(|_| raw_json.to_string())
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn replace_dotted_value_keys(value: &mut Json) {
+    match value {
+        Json::Object(object) => replace_dotted_object_keys(object),
+        Json::Array(items) => {
+            for item in items {
+                replace_dotted_value_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Json>) {
+    let mut old = std::mem::take(object)
+        .into_iter()
+        .map(|(key, mut value)| {
+            replace_dotted_value_keys(&mut value);
+            (key, value)
+        })
+        .collect::<Vec<_>>();
+    old.sort_by_key(|(key, _)| !key.contains('.'));
+
+    for (key, value) in old {
+        let sanitized_key = key.replace('.', "_");
+        let final_key = collision_free_key(object, sanitized_key);
+        object.insert(final_key, value);
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn collision_free_key(object: &serde_json::Map<String, Json>, key: String) -> String {
+    if !object.contains_key(&key) {
+        return key;
+    }
+    for suffix in 2.. {
+        let candidate = format!("{key}_{suffix}");
+        if !object.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded suffix search must find a key")
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+async fn log_http_error(index: usize, label: &str, response: reqwest::Response) {
+    let status = response.status();
+    match response.text().await {
+        Ok(body) if !body.trim().is_empty() => eprintln!(
+            "nemo_relay: ATOF endpoint[{index}] {label} status {status}: {}",
+            truncate_log_body(&body)
+        ),
+        Ok(_) => eprintln!("nemo_relay: ATOF endpoint[{index}] {label} status {status}"),
+        Err(error) => eprintln!(
+            "nemo_relay: ATOF endpoint[{index}] {label} status {status}; failed to read response body: {error}"
+        ),
+    }
+}
+
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn truncate_log_body(body: &str) -> String {
+    const LIMIT: usize = 1024;
+    let trimmed = body.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    let mut truncated = trimmed.chars().take(LIMIT).collect::<String>();
+    truncated.push_str("... <truncated>");
+    truncated
 }
 
 // ---------------------------------------------------------------------------

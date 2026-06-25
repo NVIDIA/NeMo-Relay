@@ -18,8 +18,9 @@ use super::response::AnnotatedLlmResponse;
 /// structured [`AnnotatedLlmRequest`].
 ///
 /// Codecs are implemented by integration patches (LangChain, LangChain-NVIDIA,
-/// LangGraph, etc.) since each SDK has its own request format. They are
-/// registered by name in the global codec registry.
+/// LangGraph, etc.) since each SDK has its own request format. A codec is
+/// supplied per call by the caller; the built-in provider codecs can also be
+/// selected from a raw payload via [`crate::codec::resolve`].
 ///
 /// # Design
 ///

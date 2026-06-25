@@ -370,7 +370,8 @@ fn endpoint_and_exporter_config_builders_preserve_values() {
     let endpoint =
         AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
             .with_header("x-test", "enabled")
-            .with_timeout_millis(42);
+            .with_timeout_millis(42)
+            .with_field_name_policy(AtofEndpointFieldNamePolicy::ReplaceDots);
     let config = AtofExporterConfig::new()
         .with_output_directory(&dir)
         .with_mode(AtofExporterMode::Overwrite)
@@ -382,8 +383,78 @@ fn endpoint_and_exporter_config_builders_preserve_values() {
         Some("enabled")
     );
     assert_eq!(endpoint.timeout_millis, 42);
+    assert_eq!(
+        endpoint.field_name_policy,
+        AtofEndpointFieldNamePolicy::ReplaceDots
+    );
+    assert_eq!(AtofEndpointFieldNamePolicy::Preserve.as_str(), "preserve");
+    assert_eq!(
+        AtofEndpointFieldNamePolicy::parse("replace_dots"),
+        Some(AtofEndpointFieldNamePolicy::ReplaceDots)
+    );
     assert_eq!(config.path(), dir.join("custom.jsonl"));
     assert_eq!(config.endpoints, vec![endpoint]);
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_field_name_policy_replaces_dots_recursively() {
+    let config =
+        AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
+            .with_field_name_policy(AtofEndpointFieldNamePolicy::ReplaceDots);
+    let transformed = endpoint_event_json(
+        &config,
+        json!({
+            "kind": "scope",
+            "metadata": {
+                "otel_status_code": "existing",
+                "otel.status_code": "OK",
+                "nested": [{"a.b": true}]
+            }
+        })
+        .to_string(),
+    );
+    let value: Json = serde_json::from_str(&transformed).unwrap();
+    assert_eq!(value["metadata"]["otel_status_code"], json!("OK"));
+    assert_eq!(value["metadata"]["otel_status_code_2"], json!("existing"));
+    assert_eq!(value["metadata"]["nested"][0]["a_b"], json!(true));
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json() {
+    let preserve =
+        AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost);
+    let raw = "{\"metadata\":{\"otel.status_code\":\"OK\"}}";
+    assert_eq!(endpoint_event_json(&preserve, raw.into()), raw);
+
+    let replace =
+        AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
+            .with_field_name_policy(AtofEndpointFieldNamePolicy::ReplaceDots);
+    assert_eq!(endpoint_event_json(&replace, "not-json".into()), "not-json");
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+fn endpoint_http_helper_edges_are_safe() {
+    install_rustls_crypto_provider();
+    assert_eq!(
+        AtofEndpointFieldNamePolicy::parse("unknown"),
+        None,
+        "unknown field name policies should be rejected"
+    );
+    assert_eq!(truncate_log_body("  short body  "), "short body");
+
+    let long_body = "é".repeat(1_025);
+    let truncated = truncate_log_body(&long_body);
+    assert!(truncated.ends_with("... <truncated>"));
+    assert_eq!(
+        truncated
+            .trim_end_matches("... <truncated>")
+            .chars()
+            .count(),
+        1_024
+    );
 }
 
 #[test]
@@ -1202,6 +1273,24 @@ fn invalid_output_path_errors_cleanly() {
 }
 
 #[test]
+fn missing_output_directory_is_created() {
+    let dir = temp_dir("atof-missing-output-dir");
+    let output_dir = dir.join("nested/atof");
+
+    let exporter = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(&output_dir)
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+
+    let output_path = output_dir.join("events.jsonl");
+    assert_eq!(exporter.path(), output_path.as_path());
+    assert!(output_dir.is_dir());
+    assert!(output_path.exists());
+}
+
+#[test]
 fn invalid_filename_errors_cleanly() {
     let dir = temp_dir("atof-invalid-filename");
 
@@ -1301,6 +1390,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: headers.clone(),
         timeout_millis: 1,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })
     .unwrap();
     assert_eq!(build_header_map(&headers).unwrap().len(), 1);
@@ -1310,6 +1400,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         timeout_millis: 1,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
     assert!(
         validate_endpoint_config(&empty_url)
@@ -1323,6 +1414,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
         timeout_millis: 0,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
     assert!(
         validate_endpoint_config(&zero_timeout)
@@ -1344,6 +1436,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
             transport: AtofEndpointTransport::Ndjson,
             headers: bad_header_value,
             timeout_millis: 1,
+            field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         })
         .unwrap_err()
         .contains("disabled")
@@ -1443,6 +1536,7 @@ fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
                     transport: AtofEndpointTransport::HttpPost,
                     headers,
                     timeout_millis: 1,
+                    field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
                 },
                 rx,
             )
@@ -1475,6 +1569,7 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
         transport: AtofEndpointTransport::Websocket,
         headers,
         timeout_millis: 1,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         assert!(connect_websocket(&config).await.is_err());

@@ -64,6 +64,7 @@ describe('observability plugin helpers', () => {
           transport: 'http_post',
           headers: { 'X-Test': 'yes' },
           timeout_millis: 1000,
+          field_name_policy: 'replace_dots',
         },
       ],
     });
@@ -74,6 +75,7 @@ describe('observability plugin helpers', () => {
         transport: 'http_post',
         headers: { 'X-Test': 'yes' },
         timeout_millis: 1000,
+        field_name_policy: 'replace_dots',
       },
     ]);
   });

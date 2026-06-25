@@ -5,7 +5,18 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use nemo_relay::error::FlowError;
+use serde::Serialize;
 use serde_json::{Map, Value, json};
+use strum::Display;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum PluginLifecycleFailureKind {
+    Failed,
+    NotFound,
+    Refused,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
@@ -27,6 +38,13 @@ pub(crate) enum CliError {
     Config(String),
     #[error("launcher error: {0}")]
     Launch(String),
+    #[error("{message}")]
+    PluginLifecycle {
+        command: &'static str,
+        target: Option<String>,
+        kind: PluginLifecycleFailureKind,
+        message: String,
+    },
     #[error("NeMo Relay runtime error: {0}")]
     Flow(#[from] nemo_relay::error::FlowError),
     #[error("openinference error: {0}")]
@@ -38,6 +56,20 @@ impl CliError {
         match self {
             Self::GuardrailRejected(reason) => Some(reason),
             Self::Flow(FlowError::GuardrailRejected(reason)) => Some(reason),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn plugin_lifecycle(
+        &self,
+    ) -> Option<(&'static str, Option<&str>, PluginLifecycleFailureKind, &str)> {
+        match self {
+            Self::PluginLifecycle {
+                command,
+                target,
+                kind,
+                message,
+            } => Some((command, target.as_deref(), *kind, message.as_str())),
             _ => None,
         }
     }

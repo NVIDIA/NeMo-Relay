@@ -245,6 +245,12 @@ fn test_llm_request_null_inputs_event_null_guards_and_free_nulls() {
     assert!(unsafe { nemo_relay_event_tool_call_id(std::ptr::null()) }.is_null());
     assert!(unsafe { nemo_relay_event_parent_uuid(std::ptr::null()) }.is_null());
     assert!(unsafe { nemo_relay_event_scope_type(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_relay_event_atof_version(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_relay_event_scope_category(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_relay_event_category(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_relay_event_attributes_json(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_relay_event_category_profile(std::ptr::null()) }.is_null());
+    assert!(unsafe { nemo_relay_event_data_schema(std::ptr::null()) }.is_null());
 
     unsafe {
         nemo_relay_scope_handle_free(std::ptr::null_mut());
@@ -256,6 +262,7 @@ fn test_llm_request_null_inputs_event_null_guards_and_free_nulls() {
         nemo_relay_atif_exporter_free(std::ptr::null_mut());
         nemo_relay_otel_subscriber_free(std::ptr::null_mut());
         nemo_relay_openinference_subscriber_free(std::ptr::null_mut());
+        nemo_relay_adaptive_runtime_free(std::ptr::null_mut());
     }
 }
 
@@ -329,6 +336,9 @@ fn test_valid_free_functions_and_none_backed_accessors() {
         ),
     )));
     unsafe { nemo_relay_atif_exporter_free(exporter_ptr) };
+
+    let adaptive_ptr = Box::into_raw(Box::new(FfiAdaptiveRuntime(std::sync::Mutex::new(None))));
+    unsafe { nemo_relay_adaptive_runtime_free(adaptive_ptr) };
 }
 
 #[test]
@@ -387,8 +397,24 @@ fn test_llm_request_and_event_accessors() {
         Some("start".into())
     );
     assert_eq!(
+        take_string(unsafe { nemo_relay_event_atof_version(&ffi_event) }),
+        Some("0.1".into())
+    );
+    assert_eq!(
         take_string(unsafe { nemo_relay_event_category(&ffi_event) }),
         Some("guardrail".into())
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_attributes_json(&ffi_event) }),
+        Some("[]".into())
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_category_profile(&ffi_event) }),
+        None
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_data_schema(&ffi_event) }),
+        None
     );
     assert_eq!(
         take_string(unsafe { nemo_relay_event_uuid(&ffi_event) }),
@@ -464,6 +490,10 @@ fn test_llm_request_and_event_accessors() {
         take_string(unsafe { nemo_relay_event_model_name(&ffi_llm_event) }),
         Some("model".into())
     );
+    let llm_profile = take_string(unsafe { nemo_relay_event_category_profile(&ffi_llm_event) })
+        .expect("expected category profile");
+    let llm_profile: serde_json::Value = serde_json::from_str(&llm_profile).unwrap();
+    assert_eq!(llm_profile["model_name"], json!("model"));
     assert_eq!(
         take_string(unsafe { nemo_relay_event_scope_type(&ffi_llm_event) }),
         Some("llm".into())
@@ -505,6 +535,22 @@ fn test_llm_request_and_event_accessors() {
     let ffi_mark_event = FfiEvent(mark_event);
     assert_eq!(
         take_string(unsafe { nemo_relay_event_scope_type(&ffi_mark_event) }),
+        None
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_atof_version(&ffi_mark_event) }),
+        Some("0.1".into())
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_scope_category(&ffi_mark_event) }),
+        None
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_category(&ffi_mark_event) }),
+        None
+    );
+    assert_eq!(
+        take_string(unsafe { nemo_relay_event_attributes_json(&ffi_mark_event) }),
         None
     );
     assert_eq!(unsafe { nemo_relay_event_attributes(&ffi_mark_event) }, 0);

@@ -601,6 +601,93 @@ fn event_json_value_uses_canonical_subscriber_shape() {
     assert_eq!(decoded, value);
 }
 
+fn llm_end_event(data: serde_json::Value, profile: CategoryProfile) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("llm").data(data).build(),
+        ScopeCategory::End,
+        llm_attributes_to_strings(LlmAttributes::empty()),
+        EventCategory::llm(),
+        Some(profile),
+    ))
+}
+
+fn llm_start_event(data: serde_json::Value, profile: CategoryProfile) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("llm").data(data).build(),
+        ScopeCategory::Start,
+        llm_attributes_to_strings(LlmAttributes::empty()),
+        EventCategory::llm(),
+        Some(profile),
+    ))
+}
+
+#[test]
+fn normalized_llm_response_prefers_annotation_over_raw_output() {
+    // Annotation present: returned (borrowed), ignoring the conflicting raw output.
+    let response = annotated_response("resp-1", "demo-model", "from-annotation");
+    let event = llm_end_event(
+        json!({"choices": [{"message": {"role": "assistant", "content": "from-raw"}}]}),
+        CategoryProfile::builder()
+            .annotated_response(Arc::new(response))
+            .build(),
+    );
+    let normalized = event.normalized_llm_response().expect("annotation present");
+    assert_eq!(normalized.response_text(), Some("from-annotation"));
+}
+
+#[test]
+fn normalized_llm_response_falls_back_to_codec_decode() {
+    // No annotation: best-effort decode of the raw provider output.
+    let event = llm_end_event(
+        json!({
+            "model": "gpt-4o",
+            "choices": [{
+                "message": {"role": "assistant", "content": "from-raw"},
+                "finish_reason": "stop"
+            }]
+        }),
+        CategoryProfile::default(),
+    );
+    let normalized = event
+        .normalized_llm_response()
+        .expect("decodes raw chat output");
+    assert_eq!(normalized.response_text(), Some("from-raw"));
+}
+
+#[test]
+fn normalized_llm_response_none_for_non_provider_output() {
+    let event = llm_end_event(json!({"answer": "x"}), CategoryProfile::default());
+    assert!(event.normalized_llm_response().is_none());
+}
+
+#[test]
+fn normalized_llm_request_decodes_wrapped_request_when_unannotated() {
+    // No annotation: decode the wrapped LlmRequest from the start-event input.
+    let event = llm_start_event(
+        json!({
+            "headers": {},
+            "content": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}
+        }),
+        CategoryProfile::default(),
+    );
+    let normalized = event
+        .normalized_llm_request()
+        .expect("decodes wrapped chat request");
+    assert!(!normalized.messages.is_empty());
+}
+
+#[test]
+fn normalized_llm_request_prefers_annotation() {
+    let request = annotated_request("demo-model", "annotated");
+    let event = llm_start_event(
+        json!({"headers": {}, "content": {"messages": []}}),
+        CategoryProfile::builder()
+            .annotated_request(Arc::new(request))
+            .build(),
+    );
+    assert!(event.normalized_llm_request().is_some());
+}
+
 #[test]
 fn category_profile_wire_empty_accounts_for_annotations() {
     assert!(CategoryProfile::default().is_wire_empty());

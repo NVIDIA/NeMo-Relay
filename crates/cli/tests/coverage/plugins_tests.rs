@@ -3,7 +3,8 @@
 
 use super::*;
 use crate::config::{
-    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
+    PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
+    user_plugin_config_path,
 };
 use nemo_relay::config_editor::{EditorConfig, EditorSchema};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
@@ -90,30 +91,30 @@ fn local_llm_guardrails_component_config(config_yaml: &str) -> serde_json::Map<S
 #[test]
 fn target_scope_defaults_to_user_and_rejects_conflicts() {
     assert_eq!(
-        target_scope(&PluginsEditCommand::default()).unwrap(),
+        target_scope(&PluginsScopeArgs::default()).unwrap(),
         TargetScope::User
     );
     assert_eq!(
-        target_scope(&PluginsEditCommand {
+        target_scope(&PluginsScopeArgs {
             project: true,
-            ..PluginsEditCommand::default()
+            ..PluginsScopeArgs::default()
         })
         .unwrap(),
         TargetScope::Project
     );
     assert_eq!(
-        target_scope(&PluginsEditCommand {
+        target_scope(&PluginsScopeArgs {
             global: true,
-            ..PluginsEditCommand::default()
+            ..PluginsScopeArgs::default()
         })
         .unwrap(),
         TargetScope::Global
     );
 
-    let error = target_scope(&PluginsEditCommand {
+    let error = target_scope(&PluginsScopeArgs {
         user: true,
         project: true,
-        ..PluginsEditCommand::default()
+        ..PluginsScopeArgs::default()
     })
     .unwrap_err()
     .to_string();
