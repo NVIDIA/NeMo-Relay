@@ -73,17 +73,27 @@ pub fn detect_request_surface_with_hint(
         .map(|d| d.surface)
 }
 
+/// Classify a response object to exactly one built-in surface descriptor: the
+/// single source of truth shared by [`detect_response_surface`] and
+/// [`normalize_response`]. Zero or multiple matches yield `None` (the built-in
+/// codecs accept minimal objects, so decode success alone is not a reliable
+/// classifier).
+fn detect_response_descriptor(
+    obj: &serde_json::Map<String, Json>,
+) -> Option<&'static SurfaceDescriptor> {
+    let mut matches = REGISTRY.iter().filter(|d| (d.detect_response)(obj));
+    match (matches.next(), matches.next()) {
+        (Some(descriptor), None) => Some(descriptor),
+        _ => None,
+    }
+}
+
 /// Detect the response surface from a raw provider response, classifying only
 /// when exactly one built-in shape matches (the built-in codecs accept minimal
 /// objects, so decode success alone is not a reliable classifier).
 #[must_use]
 pub fn detect_response_surface(raw: &Json) -> Option<ProviderSurface> {
-    let obj = raw.as_object()?;
-    let mut matches = REGISTRY.iter().filter(|d| (d.detect_response)(obj));
-    match (matches.next(), matches.next()) {
-        (Some(descriptor), None) => Some(descriptor.surface),
-        _ => None,
-    }
+    detect_response_descriptor(raw.as_object()?).map(|d| d.surface)
 }
 
 /// Best-effort decode of a raw request into [`AnnotatedLlmRequest`] (fail-open).
@@ -97,12 +107,7 @@ pub fn normalize_request(request: &LlmRequest) -> Option<AnnotatedLlmRequest> {
 /// Best-effort decode of a raw response into [`AnnotatedLlmResponse`] (fail-open).
 #[must_use]
 pub fn normalize_response(raw: &Json) -> Option<AnnotatedLlmResponse> {
-    let obj = raw.as_object()?;
-    let mut matches = REGISTRY.iter().filter(|d| (d.detect_response)(obj));
-    let descriptor = match (matches.next(), matches.next()) {
-        (Some(descriptor), None) => descriptor,
-        _ => return None,
-    };
+    let descriptor = detect_response_descriptor(raw.as_object()?)?;
     (descriptor.decode_response)(raw).ok()
 }
 

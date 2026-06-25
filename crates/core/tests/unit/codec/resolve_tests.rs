@@ -186,6 +186,10 @@ fn normalize_response_none_for_unrecognized_shape() {
     assert!(normalize_response(&json!({"foo": 1})).is_none());
     // Ambiguous/empty objects do not classify, so they do not decode.
     assert!(normalize_response(&json!({})).is_none());
+    // Multiple matching shapes are ambiguous: detection and normalization share
+    // one exactly-one rule, so normalization must also decline (guards the
+    // shared classifier against divergence).
+    assert!(normalize_response(&json!({"choices": [], "output": []})).is_none());
 }
 
 // ---------------------------------------------------------------------------
