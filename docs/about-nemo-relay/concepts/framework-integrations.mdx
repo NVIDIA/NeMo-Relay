@@ -147,10 +147,10 @@ Use these rules to decide where NeMo Relay should wrap framework behavior.
 - If you only need request transformation, use request-intercept helpers.
 - If you only have milestone visibility, emit mark events.
 
-When provider request or response payloads matter, prefer NeMo Relay codecs and
-annotated request or response data before introducing ad hoc raw-payload parsing
-in the integration. Keep provider-specific round-trip behavior in the codec or
-adapter that owns that provider shape.
+If the LLM provider request or response payloads matter, we recommend using NeMo
+Relay codecs and annotated request or response data before introducing ad hoc
+raw-payload parsing in the integration. Ensure provider-specific round-trip
+behavior stays in the codec or adapter that owns that provider shape.
 
 ## Practical Guidance
 

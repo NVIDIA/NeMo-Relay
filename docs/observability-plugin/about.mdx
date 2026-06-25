@@ -20,11 +20,11 @@ Format (ATIF), OpenTelemetry, or OpenInference.
 
 That makes observability downstream from the runtime contract:
 
-- scopes decide ownership and parentage
-- middleware decides whether execution continues or what payloads are sanitized
-- codecs provide normalized request and response data when available
-- events record the canonical runtime stream
-- subscribers and exporters consume or project that stream
+- Scopes decide ownership and parentage
+- Middleware decides whether execution continues or what payloads are sanitized
+- Codecs provide normalized request and response data when available
+- Events record the canonical runtime stream
+- Subscribers and exporters consume or project that stream
 
 Exporters should not redefine execution semantics. They should preserve the
 meaning of the underlying events while translating them into the shape expected
@@ -33,7 +33,7 @@ by the downstream system.
 Configuration and activation failures are setup failures for the observability
 component. Delivery failures after activation are downstream exporter failures:
 application work continues, and explicit exporter barriers such as flush or
-shutdown can report stored delivery problems. See
+shutdown can report stored delivery problems. Refer to
 [Observability Configuration](/observability-plugin/configuration) for the
 failure table.
 
