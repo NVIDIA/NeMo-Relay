@@ -127,7 +127,7 @@ Return the stable lowercase string form used for encoded scope types.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl<'de> Deserialize<'de> for ScopeType`
 
@@ -135,7 +135,7 @@ Return the stable lowercase string form used for encoded scope types.
 
 #### `deserialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-scopetype\">ScopeType</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
 
 ### `impl From<&EventCategory> for ScopeType`
 
@@ -143,7 +143,7 @@ Return the stable lowercase string form used for encoded scope types.
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;<a href=\"../event/struct-eventcategory\">EventCategory</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;<a href=\"../event/struct-eventcategory\">EventCategory</a>) -&gt; <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
 
 ### `impl From<ScopeType> for EventCategory`
 
@@ -151,7 +151,7 @@ Return the stable lowercase string form used for encoded scope types.
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"enum-scopetype\">ScopeType</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"enum-scopetype\">ScopeType</a>) -&gt; <a href=\"../event/struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 ### `impl Hash for ScopeType`
 
@@ -159,7 +159,7 @@ Return the stable lowercase string form used for encoded scope types.
 
 #### `hash`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)where\n    __H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>,"}} /></pre>
 
 #### `hash_slice`
 
@@ -183,7 +183,7 @@ Return the stable lowercase string form used for encoded scope types.
 
 #### `serialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
 
 ### `impl Copy for ScopeType`
 

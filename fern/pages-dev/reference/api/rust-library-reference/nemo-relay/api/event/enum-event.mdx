@@ -45,19 +45,19 @@ Return the ATOF event kind.
 
 #### `try_to_json_value`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_to_json_value(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/type.Result.html\">Result</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn try_to_json_value(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 Try to return this event as the canonical JSON object delivered by language bindings to subscriber callbacks and ATOF exporters.
 
 #### `to_json_value`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_json_value(&amp;self) -&gt; <a href=\"../../json/type-json\">Json</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_json_value(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>"}} /></pre>
 
 Return this event as the canonical JSON object delivered by language bindings to subscriber callbacks.
 
 #### `to_json_string`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_json_string(&amp;self) -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/type.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn to_json_string(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 Return this event as canonical JSON.
 
@@ -143,7 +143,7 @@ The event name.
 
 #### `data`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn data(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn data(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
 
 Return the optional application payload attached to the event.
 
@@ -163,7 +163,7 @@ Return the optional data schema.
 
 #### `metadata`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn metadata(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn metadata(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
 
 Return the optional metadata attached to the event.
 
@@ -193,7 +193,7 @@ Return the semantic scope category for scope events.
 
 #### `input`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn input(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn input(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
 
 Return the semantic input payload for start events.
 
@@ -203,7 +203,7 @@ Return the semantic input payload for start events.
 
 #### `output`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn output(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn output(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;"}} /></pre>
 
 Return the semantic output payload for end events.
 
@@ -251,20 +251,6 @@ Return the runtime-only annotated LLM response.
 
 `Some` annotated response when the event profile includes one.
 
-#### `normalized_llm_request`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
-
-Normalized LLM request: the codec annotation when present, otherwise a best-effort decode of the start-event input payload.
-
-The fallback decode requires the start-event input to be the serialized [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) wire shape (`{headers, content}`) emitted by the managed LLM pipeline; events whose input is a bare payload or a non-LLM shape yield `None`.
-
-#### `normalized_llm_response`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
-
-Normalized LLM response: the codec annotation when present, otherwise a best-effort decode of the end-event output payload.
-
 #### `is_scope_start`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_scope_start(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
@@ -305,7 +291,7 @@ Return true for scope-end events.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl<'de> Deserialize<'de> for Event`
 
@@ -313,7 +299,19 @@ Return true for scope-end events.
 
 #### `deserialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-event\">Event</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl EventNormalizationExt for Event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-eventnormalizationext\">EventNormalizationExt</a> for <a href=\"enum-event\">Event</a>"}} /></pre>
+
+#### `normalized_llm_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-eventnormalizationext\">normalized_llm_request</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
+
+#### `normalized_llm_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"trait-eventnormalizationext\">normalized_llm_response</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
 
 ### `impl PartialEq for Event`
 
@@ -333,7 +331,7 @@ Return true for scope-end events.
 
 #### `serialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
 
 ### `impl StructuralPartialEq for Event`
 

@@ -1,0 +1,38 @@
+---
+title: "Trait Event Normalization Ext"
+sidebar-title: "EventNormalizationExt"
+description: "Core-only normalized LLM accessors for ATOF events."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait EventNormalizationExt &#123;\n    // Required methods\n    fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;;\n    fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;;\n&#125;"}} /></pre>
+
+Core-only normalized LLM accessors for ATOF events.
+
+These helpers use built-in codec resolution, so they live in the runtime crate rather than the shared DTO crate.
+
+## Required Methods
+
+#### `normalized_llm_request`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
+
+Normalized LLM request: the codec annotation when present, otherwise a best-effort decode of the start-event input payload.
+
+The fallback decode requires the start-event input to be the serialized [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) wire shape (`{headers, content}`) emitted by the managed LLM pipeline; events whose input is a bare payload or a non-LLM shape yield `None`.
+
+#### `normalized_llm_response`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
+
+Normalized LLM response: the codec annotation when present, otherwise a best-effort decode of the end-event output payload.
+
+## Implementors
+
+### `impl EventNormalizationExt for Event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-eventnormalizationext\">EventNormalizationExt</a> for <a href=\"enum-event\">Event</a>"}} /></pre>

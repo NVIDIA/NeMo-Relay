@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CategoryProfile &#123;\n    pub model_name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub tool_call_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub subtype: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub extra: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/collections/btree/map/struct.BTreeMap.html\">BTreeMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"../../json/type-json\">Json</a>&gt;,\n    pub annotated_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;,\n    pub annotated_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CategoryProfile &#123;\n    pub model_name: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub tool_call_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub subtype: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub extra: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/collections/btree/map/struct.BTreeMap.html\">BTreeMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub annotated_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;,\n    pub annotated_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n&#125;"}} /></pre>
 
 Category-specific profile data.
 
@@ -29,7 +29,7 @@ LLM-provider correlation ID for Tool events.
 
 Vendor subtype required when `category == "custom"`.
 
-### `extra: BTreeMap<String, Json>`
+### `extra: BTreeMap<String, Value>`
 
 Unknown category-profile keys preserved from newer producers.
 
@@ -49,7 +49,7 @@ Normalized response annotation for LLM end events.
 
 #### `builder`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; CategoryProfileBuilder&lt;(<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; CategoryProfileBuilder"}} /></pre>
 
 Create a builder for building `CategoryProfile`. On the builder, call `.model_name(...)`(optional), `.tool_call_id(...)`(optional), `.subtype(...)`(optional), `.extra(...)`(optional), `.annotated_request(...)`(optional), `.annotated_response(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `CategoryProfile`.
 
@@ -87,7 +87,7 @@ Return true when the profile has no wire-serialized fields.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl Default for CategoryProfile`
 
@@ -103,7 +103,7 @@ Return true when the profile has no wire-serialized fields.
 
 #### `deserialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-categoryprofile\">CategoryProfile</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
 
 ### `impl PartialEq for CategoryProfile`
 
@@ -123,7 +123,7 @@ Return true when the profile has no wire-serialized fields.
 
 #### `serialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
 
 ### `impl StructuralPartialEq for CategoryProfile`
 

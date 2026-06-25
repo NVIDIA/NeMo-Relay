@@ -21,8 +21,8 @@ This module provides the type system and traits for bidirectional request codecs
 - [openai_chat](/reference/api/rust-library-reference/nemo-relay/codec/openai_chat): Built-in codec for the OpenAI Chat Completions API.
 - [openai_responses](/reference/api/rust-library-reference/nemo-relay/codec/openai_responses): Built-in codec for the OpenAI Responses API.
 - [pricing](/reference/api/rust-library-reference/nemo-relay/codec/pricing): Data-driven LLM model pricing used to layer cost estimates onto usage.
-- [request](/reference/api/rust-library-reference/nemo-relay/codec/request): LLM request codec types and trait.
+- [request](/reference/api/rust-library-reference/nemo-relay/codec/request): Re-exported normalized LLM request data types.
 - [resolve](/reference/api/rust-library-reference/nemo-relay/codec/resolve): Provider-surface detection and best-effort normalization: the preferred path for turning raw provider JSON into normalized types when no codec annotation is present.
-- [response](/reference/api/rust-library-reference/nemo-relay/codec/response): Normalized LLM response types produced by response codecs.
+- [response](/reference/api/rust-library-reference/nemo-relay/codec/response): Re-exported normalized LLM response data types and core pricing helpers.
 - [streaming](/reference/api/rust-library-reference/nemo-relay/codec/streaming): Streaming response codecs for the managed LLM execution pipeline.
 - [traits](/reference/api/rust-library-reference/nemo-relay/codec/traits): LLM codec traits for bidirectional request translation.

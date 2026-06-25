@@ -25,7 +25,7 @@ This is intentionally string-backed so consumers can preserve category values fr
 
 #### `agent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn agent() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn agent() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Top-level agent or workflow scope.
 
@@ -35,7 +35,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `function`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn function() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn function() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Generic function or application step.
 
@@ -45,7 +45,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `llm`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 LLM call.
 
@@ -55,7 +55,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `tool`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Tool invocation.
 
@@ -65,7 +65,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `retriever`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn retriever() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn retriever() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Retrieval step.
 
@@ -75,7 +75,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `embedder`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn embedder() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn embedder() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Embedding-generation step.
 
@@ -85,7 +85,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `reranker`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn reranker() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn reranker() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Result reranking step.
 
@@ -95,7 +95,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `guardrail`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn guardrail() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn guardrail() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Guardrail or validation step.
 
@@ -105,7 +105,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `evaluator`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn evaluator() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn evaluator() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Evaluation or scoring step.
 
@@ -115,7 +115,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `custom`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn custom() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn custom() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Vendor-defined custom category.
 
@@ -125,7 +125,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `unknown`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn unknown() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn unknown() -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Unknown or unclassified work.
 
@@ -135,7 +135,7 @@ An [`EventCategory`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 #### `new`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(value: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(value: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 Create a category from an arbitrary producer-provided string.
 
@@ -187,7 +187,7 @@ The closest matching [`ScopeType`](/reference/api/rust-library-reference/nemo-re
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl<'de> Deserialize<'de> for EventCategory`
 
@@ -195,7 +195,7 @@ The closest matching [`ScopeType`](/reference/api/rust-library-reference/nemo-re
 
 #### `deserialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-eventcategory\">EventCategory</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
 
 ### `impl From<&EventCategory> for ScopeType`
 
@@ -203,7 +203,7 @@ The closest matching [`ScopeType`](/reference/api/rust-library-reference/nemo-re
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;<a href=\"struct-eventcategory\">EventCategory</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: &amp;<a href=\"struct-eventcategory\">EventCategory</a>) -&gt; <a href=\"../scope/enum-scopetype\">ScopeType</a>"}} /></pre>
 
 ### `impl From<ScopeType> for EventCategory`
 
@@ -211,7 +211,7 @@ The closest matching [`ScopeType`](/reference/api/rust-library-reference/nemo-re
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"../scope/enum-scopetype\">ScopeType</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"../scope/enum-scopetype\">ScopeType</a>) -&gt; <a href=\"struct-eventcategory\">EventCategory</a>"}} /></pre>
 
 ### `impl Hash for EventCategory`
 
@@ -219,7 +219,7 @@ The closest matching [`ScopeType`](/reference/api/rust-library-reference/nemo-re
 
 #### `hash`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)where\n    __H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>,"}} /></pre>
 
 #### `hash_slice`
 
@@ -287,7 +287,7 @@ The closest matching [`ScopeType`](/reference/api/rust-library-reference/nemo-re
 
 #### `serialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
 
 ### `impl Eq for EventCategory`
 

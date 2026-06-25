@@ -23,13 +23,13 @@ Bitflags that modify scope behavior and observability.
 
 #### `PARALLEL`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const PARALLEL: Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const PARALLEL: <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 Marks the scope as running in parallel with sibling work.
 
 #### `RELOCATABLE`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const RELOCATABLE: Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const RELOCATABLE: <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 Marks the scope as safe to move across execution contexts.
 
@@ -39,13 +39,13 @@ Marks the scope as safe to move across execution contexts.
 
 #### `empty`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn empty() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn empty() -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 Get a flags value with all bits unset.
 
 #### `all`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn all() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn all() -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 Get a flags value with all known bits set.
 
@@ -59,7 +59,7 @@ The returned value is exactly the bits set in this flags value.
 
 #### `from_bits`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn from_bits(bits: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn from_bits(bits: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-scopeattributes\">ScopeAttributes</a>&gt;"}} /></pre>
 
 Convert from a bits value.
 
@@ -67,19 +67,19 @@ This method will return `None` if any unknown bits are set.
 
 #### `from_bits_truncate`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn from_bits_truncate(bits: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn from_bits_truncate(bits: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 Convert from a bits value, unsetting any unknown bits.
 
 #### `from_bits_retain`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn from_bits_retain(bits: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn from_bits_retain(bits: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 Convert from a bits value exactly.
 
 #### `from_name`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_name(name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_name(name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-scopeattributes\">ScopeAttributes</a>&gt;"}} /></pre>
 
 Get a flags value with the bits of a flag with the given name set.
 
@@ -99,25 +99,25 @@ Whether all known bits in this flags value are set.
 
 #### `intersects`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn intersects(&amp;self, other: Self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn intersects(&amp;self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 Whether any set bits in a source flags value are also set in a target flags value.
 
 #### `contains`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn contains(&amp;self, other: Self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn contains(&amp;self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 Whether all set bits in a source flags value are also set in a target flags value.
 
 #### `insert`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn insert(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn insert(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The bitwise or (`|`) of the bits in two flags values.
 
 #### `remove`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The intersection of a source flags value with the complement of a target flags value (`&!`).
 
@@ -125,31 +125,31 @@ This method is not equivalent to `self & !other` when `other` has unknown bits s
 
 #### `toggle`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn toggle(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn toggle(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The bitwise exclusive-or (`^`) of the bits in two flags values.
 
 #### `set`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set(&amp;mut self, other: Self, value: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>, value: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>)"}} /></pre>
 
 Call `insert` when `value` is `true` or `remove` when `value` is `false`.
 
 #### `intersection`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn intersection(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn intersection(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise and (`&`) of the bits in two flags values.
 
 #### `union`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn union(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn union(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise or (`|`) of the bits in two flags values.
 
 #### `difference`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn difference(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn difference(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The intersection of a source flags value with the complement of a target flags value (`&!`).
 
@@ -157,13 +157,13 @@ This method is not equivalent to `self & !other` when `other` has unknown bits s
 
 #### `symmetric_difference`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn symmetric_difference(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn symmetric_difference(\n    self,\n    other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>,\n) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise exclusive-or (`^`) of the bits in two flags values.
 
 #### `complement`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn complement(self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub const fn complement(self) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise negation (`!`) of the bits in a flags value, truncating the result.
 
@@ -195,7 +195,7 @@ This method is like `iter`, except only yields bits in contained named flags. An
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Binary.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Binary.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl BitAnd for ScopeAttributes`
 
@@ -203,7 +203,7 @@ This method is like `iter`, except only yields bits in contained named flags. An
 
 #### `bitand`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitAnd.html#tymethod.bitand\">bitand</a>(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitAnd.html#tymethod.bitand\">bitand</a>(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise and (`&`) of the bits in two flags values.
 
@@ -217,7 +217,7 @@ The bitwise and (`&`) of the bits in two flags values.
 
 #### `bitand_assign`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitAndAssign.html#tymethod.bitand_assign\">bitand_assign</a>(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitAndAssign.html#tymethod.bitand_assign\">bitand_assign</a>(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The bitwise and (`&`) of the bits in two flags values.
 
@@ -227,7 +227,7 @@ The bitwise and (`&`) of the bits in two flags values.
 
 #### `bitor`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitOr.html#tymethod.bitor\">bitor</a>(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitOr.html#tymethod.bitor\">bitor</a>(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise or (`|`) of the bits in two flags values.
 
@@ -241,7 +241,7 @@ The bitwise or (`|`) of the bits in two flags values.
 
 #### `bitor_assign`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitOrAssign.html#tymethod.bitor_assign\">bitor_assign</a>(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitOrAssign.html#tymethod.bitor_assign\">bitor_assign</a>(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The bitwise or (`|`) of the bits in two flags values.
 
@@ -251,7 +251,7 @@ The bitwise or (`|`) of the bits in two flags values.
 
 #### `bitxor`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitXor.html#tymethod.bitxor\">bitxor</a>(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitXor.html#tymethod.bitxor\">bitxor</a>(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise exclusive-or (`^`) of the bits in two flags values.
 
@@ -265,7 +265,7 @@ The bitwise exclusive-or (`^`) of the bits in two flags values.
 
 #### `bitxor_assign`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitXorAssign.html#tymethod.bitxor_assign\">bitxor_assign</a>(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.BitXorAssign.html#tymethod.bitxor_assign\">bitxor_assign</a>(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The bitwise exclusive-or (`^`) of the bits in two flags values.
 
@@ -287,7 +287,7 @@ The bitwise exclusive-or (`^`) of the bits in two flags values.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl<'de> Deserialize<'de> for ScopeAttributes`
 
@@ -295,7 +295,7 @@ The bitwise exclusive-or (`^`) of the bits in two flags values.
 
 #### `deserialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-scopeattributes\">ScopeAttributes</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
 
 ### `impl Extend<ScopeAttributes> for ScopeAttributes`
 
@@ -303,7 +303,7 @@ The bitwise exclusive-or (`^`) of the bits in two flags values.
 
 #### `extend`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.Extend.html#tymethod.extend\">extend</a>&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = Self&gt;&gt;(&amp;mut self, iterator: T)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.Extend.html#tymethod.extend\">extend</a>&lt;T&gt;(&amp;mut self, iterator: T)where\n    T: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"struct-scopeattributes\">ScopeAttributes</a>&gt;,"}} /></pre>
 
 The bitwise or (`|`) of the bits in each flags value.
 
@@ -445,7 +445,7 @@ The bitwise or (`|`) of the bits in each flags value.
 
 #### `from_iter`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.FromIterator.html#tymethod.from_iter\">from_iter</a>&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = Self&gt;&gt;(iterator: T) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.FromIterator.html#tymethod.from_iter\">from_iter</a>&lt;T&gt;(iterator: T) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>where\n    T: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"struct-scopeattributes\">ScopeAttributes</a>&gt;,"}} /></pre>
 
 The bitwise or (`|`) of the bits in each flags value.
 
@@ -455,7 +455,7 @@ The bitwise or (`|`) of the bits in each flags value.
 
 #### `hash`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut __H</a>)where\n    __H: <a href=\"https://doc.rust-lang.org/1.93.0/core/hash/trait.Hasher.html\">Hasher</a>,"}} /></pre>
 
 #### `hash_slice`
 
@@ -475,7 +475,7 @@ The bitwise or (`|`) of the bits in each flags value.
 
 #### `into_iter`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#tymethod.into_iter\">into_iter</a>(self) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#tymethod.into_iter\">into_iter</a>(self) -&gt; &lt;<a href=\"struct-scopeattributes\">ScopeAttributes</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>"}} /></pre>
 
 ### `impl LowerHex for ScopeAttributes`
 
@@ -483,7 +483,7 @@ The bitwise or (`|`) of the bits in each flags value.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.LowerHex.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.LowerHex.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl Not for ScopeAttributes`
 
@@ -491,7 +491,7 @@ The bitwise or (`|`) of the bits in each flags value.
 
 #### `not`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.Not.html#tymethod.not\">not</a>(self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/bit/trait.Not.html#tymethod.not\">not</a>(self) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The bitwise negation (`!`) of the bits in a flags value, truncating the result.
 
@@ -505,7 +505,7 @@ The bitwise negation (`!`) of the bits in a flags value, truncating the result.
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Octal.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Octal.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl PartialEq for ScopeAttributes`
 
@@ -519,25 +519,13 @@ The bitwise negation (`!`) of the bits in a flags value, truncating the result.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
 
-### `impl PublicFlags for ScopeAttributes`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl PublicFlags for <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
-
-#### `Primitive`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Primitive = <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>"}} /></pre>
-
-#### `Internal`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Internal = InternalBitFlags"}} /></pre>
-
 ### `impl Serialize for ScopeAttributes`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 #### `serialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
 
 ### `impl Sub for ScopeAttributes`
 
@@ -545,7 +533,7 @@ The bitwise negation (`!`) of the bits in a flags value, truncating the result.
 
 #### `sub`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/arith/trait.Sub.html#tymethod.sub\">sub</a>(self, other: Self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/arith/trait.Sub.html#tymethod.sub\">sub</a>(self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>) -&gt; <a href=\"struct-scopeattributes\">ScopeAttributes</a>"}} /></pre>
 
 The intersection of a source flags value with the complement of a target flags value (`&!`).
 
@@ -561,7 +549,7 @@ This method is not equivalent to `self & !other` when `other` has unknown bits s
 
 #### `sub_assign`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/arith/trait.SubAssign.html#tymethod.sub_assign\">sub_assign</a>(&amp;mut self, other: Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/arith/trait.SubAssign.html#tymethod.sub_assign\">sub_assign</a>(&amp;mut self, other: <a href=\"struct-scopeattributes\">ScopeAttributes</a>)"}} /></pre>
 
 The intersection of a source flags value with the complement of a target flags value (`&!`).
 
@@ -573,7 +561,7 @@ This method is not equivalent to `self & !other` when `other` has unknown bits s
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.UpperHex.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.UpperHex.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
 
 ### `impl Copy for ScopeAttributes`
 
