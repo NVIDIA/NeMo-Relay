@@ -91,43 +91,29 @@ It does not replace:
 Instead, it gives those systems a shared runtime contract for call boundaries,
 policy hooks, event emission, and export.
 
-## Choose The Boundary You Own
+## Choose What You Want To Connect
 
-Where you start depends on who owns the call boundary.
+Use this section as a router, not a setup checklist. Start from the destination
+or outcome that matches your task; the linked guide gives the exact install,
+configuration, and validation steps for that path.
 
-If your application directly calls tools or model providers, start by
-instrumenting the application boundary. Add scopes first, then wrap the tool and
-LLM calls your code owns.
-
-If a framework owns scheduling, retries, callbacks, or provider payloads, use a
-framework integration. The integration should preserve framework behavior while
-adding the appropriate mix of NeMo Relay scopes, managed wrappers when
-available, explicit lifecycle APIs, codecs, middleware, and events at stable
-framework boundaries.
-
-If you need the same behavior across multiple services or teams, package it as a
-plugin. Plugins are the configuration-driven path for reusable middleware,
-subscribers, exporters, and adaptive components.
-
-If your main question is how to observe local coding-agent runs, use the CLI
-path. In that mode, the coding-agent harness owns the invocation boundary, while
-NeMo Relay observes hooks, gateway-routed model traffic, and exporter output.
-
-## Read Next
-
-The following pages help you choose the next step for your integration.
-
-- Use [Quick Start](/getting-started/quick-start) for the smallest binding-specific example.
-- Use [NeMo Relay CLI](/nemo-relay-cli/about) when a local coding-agent harness
-  owns the invocation boundary.
-- Use [Instrument Applications](/instrument-applications/about) when you
-  own the tool or LLM call site.
-- Use [Integrate into Frameworks](/integrate-into-frameworks/about) when a
-  framework owns invocation, scheduling, retries, callbacks, or provider
-  payloads.
-- Use [Build Plugins](/build-plugins/about) when behavior should be
-  reusable and activated from configuration.
-- Use [Observability](/observability-plugin/about) when you need to export
-  runtime events to ATIF, OpenTelemetry, or OpenInference.
-- Use [Adaptive](/adaptive-plugin/about) after baseline instrumentation is
-  working and you want to tune behavior from observed runtime signals.
+- **Direct Python, Node.js, or Rust application APIs:** Application code owns
+  callback placement, provider authentication, and plugin initialization. Start
+  with [Quick Start](/getting-started/quick-start), then use
+  [Instrument Applications](/instrument-applications/about) when you own the
+  tool or LLM call site.
+- **LangChain, LangGraph, Deep Agents, or OpenClaw:** Start with
+  [Supported Integrations](/supported-integrations/about) to choose the
+  maintained path and support level. Local wiring still belongs to the
+  application, framework, or OpenClaw plugin configuration.
+- **New framework, orchestration, SDK, or provider integration:** The framework
+  or adapter owns scheduling, retries, callbacks, and provider payloads. Start
+  with [Integrate into Frameworks](/integrate-into-frameworks/about).
+- **Local Claude Code, Codex, Cursor, or Hermes runs:** The coding-agent harness
+  owns invocation while Relay observes hooks, gateway-routed model traffic, and
+  exporter output. Start with [NeMo Relay CLI](/nemo-relay-cli/about).
+- **Reusable runtime behavior across services or teams:** Runtime plugin
+  configuration owns reusable middleware, subscribers, exporters, pricing,
+  policy, or adaptive behavior. Start with [Build Plugins](/build-plugins/about),
+  use [Observability](/observability-plugin/about) for export setup, and use
+  [Adaptive](/adaptive-plugin/about) after baseline instrumentation is working.
