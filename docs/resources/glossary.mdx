@@ -93,7 +93,7 @@ The **event envelope** is the shared set of fields carried by every ATOF event, 
 
 **Execution Intercept**
 
-An **execution intercept** wraps or replaces the real callback. Use this when behavior belongs around the invocation boundary itself, such as: - Retries - Timing - Routing - Wrapper logic - Framework integration
+An **execution intercept** wraps or replaces the real callback. Use this when behavior belongs around the invocation boundary itself, such as retries, timing, routing, wrapper logic, or framework integration.
 
 **Explicit Lifecycle API**
 
@@ -195,7 +195,7 @@ The **next function** is the continuation passed to an execution intercept. The 
 
 **Plugin**
 
-A **plugin** is a reusable runtime component that installs middleware, subscribers, or related behavior from configuration rather than through hand-written registration at every call site. Plugins let you package behavior such as: - Reusable policy bundles - Observability components - Adaptive behavior
+A **plugin** is a reusable runtime component that installs middleware, subscribers, or related behavior from configuration rather than through hand-written registration at every call site. Plugins let you package reusable policy bundles, observability components, and adaptive behavior.
 
 **Plugin Component**
 
@@ -272,7 +272,7 @@ A **sanitize-response guardrail** rewrites the payload recorded on the emitted e
 
 **Scope**
 
-A **scope** is a named unit of ownership in the runtime. Scopes create the parent-child structure that all emitted work attaches to. Scopes answer questions such as: - Which request, task, or agent run does this work belong to? - What is the parent of this tool or LLM call? - Which scope-local middleware or subscribers are visible here?
+A **scope** is a named unit of ownership in the runtime. Scopes create the parent-child structure that all emitted work attaches to. Scopes identify which request, task, or agent run owns the work, what the parent is for each tool or LLM call, and which scope-local middleware or subscribers are visible.
 
 **Scope Handle**
 
