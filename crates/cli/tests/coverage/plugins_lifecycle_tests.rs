@@ -1125,6 +1125,53 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
 }
 
 #[test]
+fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.guardrail");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir.clone(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    enable(
+        PluginsEnableCommand {
+            id: "acme.guardrail".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    std::fs::remove_file(plugin_dir.join("relay-plugin.toml")).unwrap();
+
+    disable(
+        PluginsDisableCommand {
+            id: "acme.guardrail".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    let scopes = load_scoped_registries(None).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.guardrail")
+        .unwrap()
+        .expect("disabled plugin record");
+    assert!(!entry.record.spec.enabled);
+}
+
+#[test]
 fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);

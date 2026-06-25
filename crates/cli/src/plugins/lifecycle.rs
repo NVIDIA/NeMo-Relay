@@ -344,12 +344,63 @@ fn mutate_enabled_state(
     server: &ServerArgs,
     enabled: bool,
 ) -> Result<(), CliError> {
-    let resolved = resolve_plugins_config(server.config.as_ref())?;
-    let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
     let command = if enabled {
         "plugins enable"
     } else {
         "plugins disable"
+    };
+    let mut scopes = if enabled {
+        let resolved = resolve_plugins_config(server.config.as_ref())?;
+        let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
+        let entry = find_registered_entry(&scopes, command, &plugin_id)?;
+        if entry.record.is_tombstoned() {
+            return Err(plugin_refused(
+                command,
+                Some(plugin_id.clone()),
+                format!(
+                    "dynamic plugin '{}' is tombstoned and cannot be {}d",
+                    plugin_id,
+                    if enabled { "enable" } else { "disable" }
+                ),
+            ));
+        }
+        let manifest_ref = manifest_ref_from_record(&entry.record)?;
+        let (manifest, manifest_ref) = load_manifest_for_action(command, &manifest_ref)?;
+        let policy =
+            evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+        let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+        update_registry_validation_status(
+            &mut scopes[entry.scope_index],
+            &plugin_id,
+            &policy,
+            &trust,
+        )?;
+        if !policy.policy_satisfied {
+            scopes[entry.scope_index].save()?;
+            return Err(plugin_refused_with_code(
+                command,
+                Some(plugin_id.clone()),
+                "policy_blocked",
+                policy
+                    .failure()
+                    .map(|failure| failure.display(&plugin_id).to_string())
+                    .unwrap_or_else(|| {
+                        format!("dynamic plugin '{}' is blocked by host policy", plugin_id)
+                    }),
+            ));
+        }
+        if let Some(failure) = trust.failure() {
+            scopes[entry.scope_index].save()?;
+            return Err(plugin_refused_with_code(
+                command,
+                Some(plugin_id.clone()),
+                trust_refusal_code(&trust),
+                failure.display(&plugin_id).to_string(),
+            ));
+        }
+        scopes
+    } else {
+        load_scoped_registries(server.config.as_ref())?
     };
     let entry = find_registered_entry(&scopes, command, &plugin_id)?;
     if entry.record.is_tombstoned() {
@@ -361,34 +412,6 @@ fn mutate_enabled_state(
                 plugin_id,
                 if enabled { "enable" } else { "disable" }
             ),
-        ));
-    }
-    let manifest_ref = manifest_ref_from_record(&entry.record)?;
-    let (manifest, manifest_ref) = load_manifest_for_action(command, &manifest_ref)?;
-    let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
-    let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-    update_registry_validation_status(&mut scopes[entry.scope_index], &plugin_id, &policy, &trust)?;
-    if enabled && !policy.policy_satisfied {
-        scopes[entry.scope_index].save()?;
-        return Err(plugin_refused_with_code(
-            command,
-            Some(plugin_id.clone()),
-            "policy_blocked",
-            policy
-                .failure()
-                .map(|failure| failure.display(&plugin_id).to_string())
-                .unwrap_or_else(|| {
-                    format!("dynamic plugin '{}' is blocked by host policy", plugin_id)
-                }),
-        ));
-    }
-    if enabled && let Some(failure) = trust.failure() {
-        scopes[entry.scope_index].save()?;
-        return Err(plugin_refused_with_code(
-            command,
-            Some(plugin_id.clone()),
-            trust_refusal_code(&trust),
-            failure.display(&plugin_id).to_string(),
         ));
     }
     if enabled {
@@ -1018,7 +1041,7 @@ fn host_config_label(host_config: Option<&ResolvedDynamicPluginConfig>) -> &'sta
             let status: &'static str = plugin.host_config_status().into();
             status
         })
-        .unwrap_or("missing")
+        .unwrap_or("absent")
 }
 
 fn redacted_host_config_json(host_config: &ResolvedDynamicPluginConfig) -> Value {
