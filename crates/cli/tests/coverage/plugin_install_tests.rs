@@ -605,7 +605,6 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
         assert!(report.host_marketplace_registered);
     }
 
-    // Codex `plugin list` is a text table; an installed row registers the plugin.
     let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output(
@@ -619,7 +618,6 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
     let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
     assert!(report.ok());
 
-    // A row that is present but `not installed` must not count as registered.
     let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output(
@@ -634,7 +632,6 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
     assert!(!report.host_plugin_registered);
     assert!(report.host_marketplace_registered);
 
-    // A plugin installed under a different marketplace id must not match.
     let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output(
@@ -653,8 +650,6 @@ fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
     let dir = tempdir().unwrap();
     let normal = options(dir.path());
 
-    // Non-JSON `claude plugin list` output surfaces a parse error. Codex no longer
-    // has a JSON path, so this only applies to the host that still uses `--json`.
     let runner = MockRunner::default()
         .with_executable("claude", "/bin/claude")
         .with_capture_output("/bin/claude plugin list --json", "not json");

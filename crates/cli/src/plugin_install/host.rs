@@ -220,8 +220,7 @@ fn codex_plugin_registered(
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<bool, String> {
-    // Codex `plugin list` has no `--json` flag, so parse its text table the same way
-    // `codex_marketplace_registered` parses `plugin marketplace list`.
+    // Codex `plugin list` has no `--json` flag (unlike Claude Code).
     let output = run_capture_command("codex", &["plugin".into(), "list".into()], options, runner)?;
     let plugin_id = format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}");
     Ok(output
@@ -230,9 +229,6 @@ fn codex_plugin_registered(
         .any(|line| codex_plugin_line_installed(line, &plugin_id)))
 }
 
-// Codex `plugin list` rows are `<id>  <status>  <version>  <path>`. An installed
-// plugin's status starts with `installed` (e.g. `installed, enabled`), while an
-// available-but-uninstalled one is `not installed`.
 fn codex_plugin_line_installed(line: &str, plugin_id: &str) -> bool {
     let mut columns = line.split_whitespace();
     if columns.next() != Some(plugin_id) {
