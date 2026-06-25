@@ -19,11 +19,14 @@ pub(crate) struct DynamicPluginHostPolicy {
 }
 
 impl DynamicPluginHostPolicy {
-    pub(crate) fn merge(&mut self, other: Self) {
-        self.defaults.merge(other.defaults);
+    pub(crate) fn merge_from(&mut self, other: Self) {
+        self.defaults.merge_from(other.defaults);
         self.rules.extend(other.rules);
         for (plugin_id, effect) in other.overrides {
-            self.overrides.entry(plugin_id).or_default().merge(effect);
+            self.overrides
+                .entry(plugin_id)
+                .or_default()
+                .merge_from(effect);
         }
     }
 }
@@ -38,7 +41,7 @@ pub(crate) struct DynamicPluginHostPolicyEffect {
 }
 
 impl DynamicPluginHostPolicyEffect {
-    fn merge(&mut self, other: Self) {
+    fn merge_from(&mut self, other: Self) {
         if let Some(value) = other.allowed {
             self.allowed = Some(value);
         }
@@ -147,17 +150,17 @@ pub(crate) fn evaluate_dynamic_plugin_host_policy(
         allowed_capabilities: None,
         trusted_public_keys: None,
     };
-    effect.merge(policy.defaults.clone());
+    effect.merge_from(policy.defaults.clone());
 
     for rule in &policy.rules {
         if !policy_rule_matches(rule, manifest) {
             continue;
         }
-        effect.merge(rule.effect.clone());
+        effect.merge_from(rule.effect.clone());
     }
 
     if let Some(override_effect) = policy.overrides.get(manifest.plugin.id.trim()) {
-        effect.merge(override_effect.clone());
+        effect.merge_from(override_effect.clone());
     }
 
     let startup_class = effect

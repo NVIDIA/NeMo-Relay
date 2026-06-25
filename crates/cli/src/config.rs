@@ -1099,7 +1099,7 @@ where
         let resolved_plugins =
             resolve_dynamic_plugin_refs(path, &mut parsed, &mut seen_plugin_ids)?;
         dynamic_plugins.extend(resolved_plugins.dynamic_plugins);
-        dynamic_plugin_policy.merge(resolved_plugins.dynamic_plugin_policy);
+        dynamic_plugin_policy.merge_from(resolved_plugins.dynamic_plugin_policy);
         runtime_documents.push((
             path.clone(),
             serde_json::to_value(remove_dynamic_plugin_sections(parsed))
