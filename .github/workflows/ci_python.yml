@@ -268,6 +268,24 @@ jobs:
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/wheels/*.whl
           if-no-files-found: error
 
+      - name: Package Python plugin SDK wheel
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          just \
+            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
+            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
+            package-python-plugin
+
+      - name: Upload Python plugin SDK wheel artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: python-plugin-wheel
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/plugin-wheels/*.whl
+          if-no-files-found: error
+
       - name: Prune uv cache
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv cache prune --ci
