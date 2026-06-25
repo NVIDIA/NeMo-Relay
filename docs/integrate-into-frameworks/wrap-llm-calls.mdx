@@ -32,7 +32,11 @@ Follow this sequence to keep framework work attached to the expected runtime con
 4. Pass a stable provider name and `model_name`.
 5. Keep provider clients, streams, callbacks, and retry state outside emitted JSON payloads.
 
-Use a request or response codec when provider payloads need normalization before middleware or events see them. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for those cases.
+Use a request codec when provider requests need normalization before request
+intercepts or request-side middleware run. Use a response codec when provider
+responses need normalized LLM end-event annotations for subscribers or
+exporters. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for
+those cases.
 
 ## Concrete LLM Example
 

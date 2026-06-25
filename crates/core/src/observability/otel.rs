@@ -20,7 +20,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::manual;
+use super::{estimate_cost_for_response_or_requested_model, manual};
 use crate::api::event::Event;
 use crate::api::event::ScopeCategory;
 use crate::api::runtime::EventSubscriberFn;
@@ -716,15 +716,19 @@ fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
     if let Some(cost) = manual::cost_from_manual_llm_output(event.output(), false) {
         return Some(cost);
     }
-    if let Some(response) = event.annotated_response()
-        && let Some(usage) = response.usage.as_ref()
-    {
-        if let Some(cost) = usage.cost.as_ref() {
-            return cost_total_and_currency(cost);
-        }
-        if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
-            return estimate_cost_for_provider(Some(event.name()), model_name, usage)
-                .and_then(|cost| cost_total_and_currency(&cost));
+    if let Some(response) = event.normalized_llm_response() {
+        let response = response.as_ref();
+        if let Some(usage) = response.usage.as_ref() {
+            if let Some(cost) = usage.cost.as_ref() {
+                return cost_total_and_currency(cost);
+            }
+            if let Some(cost) = estimate_cost_for_response_or_requested_model(
+                event,
+                response.model.as_deref(),
+                usage,
+            ) {
+                return cost_total_and_currency(&cost);
+            }
         }
     }
     let usage = manual::usage_from_manual_llm_output(event.output())?;

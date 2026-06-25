@@ -20,7 +20,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::manual;
+use super::{estimate_cost_for_response_or_requested_model, manual};
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
@@ -776,7 +776,10 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     if is_llm {
         push_llm_usage_attributes(&mut attributes, usage.as_ref());
     }
-    if is_llm && let Some(cost_total) = cost_total_from_llm_event(event, fallback_usage.as_ref()) {
+    if is_llm
+        && let Some(cost_total) =
+            cost_total_from_llm_event(event, normalized.as_deref(), fallback_usage.as_ref())
+    {
         attributes.push(KeyValue::new(oi::llm::cost::TOTAL, cost_total));
     }
     if is_llm {
@@ -1174,22 +1177,27 @@ fn finish_reason_value(reason: &FinishReason) -> String {
     }
 }
 
-fn cost_total_from_llm_event(event: &Event, fallback_usage: Option<&Usage>) -> Option<f64> {
+fn cost_total_from_llm_event(
+    event: &Event,
+    normalized_response: Option<&AnnotatedLlmResponse>,
+    fallback_usage: Option<&Usage>,
+) -> Option<f64> {
     if let Some(cost) =
         manual::cost_from_manual_llm_output(event.output(), true).map(|(total, _)| total)
     {
         return Some(cost);
     }
 
-    if let Some(response) = event.annotated_response()
+    if let Some(response) = normalized_response
         && let Some(usage) = response.usage.as_ref()
     {
         if let Some(cost) = usage.cost.as_ref() {
             return cost.total_or_component_sum_for_currency("USD");
         }
-        if let Some(model_name) = response.model.as_deref().or_else(|| event.model_name()) {
-            return estimate_cost_for_provider(Some(event.name()), model_name, usage)
-                .and_then(|cost| cost.total_for_currency("USD"));
+        if let Some(cost) =
+            estimate_cost_for_response_or_requested_model(event, response.model.as_deref(), usage)
+        {
+            return cost.total_for_currency("USD");
         }
     }
 

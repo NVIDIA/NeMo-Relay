@@ -22,6 +22,31 @@ pub mod otel;
 pub mod plugin_component;
 
 #[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn estimate_cost_for_response_or_requested_model(
+    event: &crate::api::event::Event,
+    response_model: Option<&str>,
+    usage: &crate::codec::response::Usage,
+) -> Option<crate::codec::response::CostEstimate> {
+    // Prefer the provider-echoed model, but fall back to the requested model
+    // when pricing does not recognize the echoed model alias.
+    if let Some(model_name) = response_model
+        && let Some(cost) = crate::codec::response::estimate_cost_for_provider(
+            Some(event.name()),
+            model_name,
+            usage,
+        )
+    {
+        return Some(cost);
+    }
+
+    let event_model = event.model_name()?;
+    if response_model == Some(event_model) {
+        return None;
+    }
+    crate::codec::response::estimate_cost_for_provider(Some(event.name()), event_model, usage)
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn set_span_status_from_event_metadata<S>(span: &mut S, event: &crate::api::event::Event)
 where
     S: opentelemetry::trace::Span,

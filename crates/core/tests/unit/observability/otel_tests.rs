@@ -78,6 +78,14 @@ fn install_test_pricing(model_id: &str) {
 }
 
 fn install_provider_disambiguation_pricing(model_id: &str) {
+    install_disambiguation_pricing(model_id, "test");
+}
+
+fn install_openai_disambiguation_pricing(model_id: &str) {
+    install_disambiguation_pricing(model_id, "openai");
+}
+
+fn install_disambiguation_pricing(model_id: &str, preferred_provider: &str) {
     let catalog = PricingCatalog::from_json_str(
         &json!({
             "version": 1,
@@ -96,7 +104,7 @@ fn install_provider_disambiguation_pricing(model_id: &str) {
                     }
                 },
                 {
-                    "provider": "test",
+                    "provider": preferred_provider,
                     "model_id": model_id,
                     "pricing_as_of": "2026-06-05",
                     "pricing_source": "test",
@@ -115,6 +123,25 @@ fn install_provider_disambiguation_pricing(model_id: &str) {
     )
     .unwrap();
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn openai_chat_provider_response(model_id: &str) -> Json {
+    json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": model_id,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 1_000,
+            "completion_tokens": 500,
+            "total_tokens": 1_500,
+            "prompt_tokens_details": {"cached_tokens": 200}
+        }
+    })
 }
 
 fn reset_global() {
@@ -914,6 +941,88 @@ fn pre_epoch_timestamps_round_trip_through_system_time() {
         to_system_time(timestamp),
         UNIX_EPOCH - Duration::new(1, 500_000_000)
     );
+}
+
+#[test]
+fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "other",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("priced-model")),
+    );
+
+    assert!(event.annotated_response().is_none());
+    assert!(event.normalized_llm_response().is_some());
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.currency"),
+        Some(&"USD".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_unpriced_response_model_uses_requested_model_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "openai",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("api-echoed-model")),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .build(),
+        ),
+    );
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert_eq!(normalized.model.as_deref(), Some("api-echoed-model"));
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.currency"),
+        Some(&"USD".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_unannotated_openai_response_without_usage_omits_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let mut output = openai_chat_provider_response("priced-model");
+    output.as_object_mut().unwrap().remove("usage");
+    let event = make_end_event(Uuid::now_v7(), None, "openai", ScopeType::Llm, Some(output));
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert!(normalized.usage.is_none());
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert!(!attributes.contains_key("nemo_relay.llm.cost.total"));
+    assert!(!attributes.contains_key("nemo_relay.llm.cost.currency"));
 }
 
 #[test]
