@@ -973,11 +973,13 @@ fn test_extract_metrics_merges_usage_and_token_usage_fields() {
     let metrics = extract_metrics(
         &json!({
             "usage": {
-                "prompt_tokens": 10
+                "prompt_tokens": 10,
+                "reasoning_tokens": 7
             },
             "token_usage": {
                 "completion_tokens": 20,
-                "total_tokens": 30
+                "total_tokens": 30,
+                "audio_tokens": 4
             }
         }),
         None,
@@ -989,6 +991,11 @@ fn test_extract_metrics_merges_usage_and_token_usage_fields() {
     assert_eq!(metrics.prompt_tokens, Some(10));
     assert_eq!(metrics.completion_tokens, Some(20));
     assert_eq!(metrics.extra.as_ref().unwrap()["total_tokens"], json!(30));
+    assert_eq!(
+        metrics.extra.as_ref().unwrap()["reasoning_tokens"],
+        json!(7)
+    );
+    assert_eq!(metrics.extra.as_ref().unwrap()["audio_tokens"], json!(4));
 }
 
 #[test]
@@ -1236,6 +1243,46 @@ fn test_exporter_falls_back_to_requested_model_when_response_model_unpriced() {
     let trajectory = exporter.export().unwrap();
     let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
     assert_eq!(metrics.cost_usd, Some(0.000_435));
+}
+
+#[test]
+fn test_paired_lifecycle_uses_start_model_for_end_metrics_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("requested-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [{"role": "user", "content": "price this"}]}))
+        .model_name("requested-model")
+        .build();
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "model": "api-echoed-model",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500
+            }
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(start);
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[1].metrics.as_ref().unwrap();
+    assert_eq!(metrics.cost_usd, Some(0.000_45));
 }
 
 #[test]
@@ -2088,6 +2135,32 @@ fn test_exporter_llm_tool_calls_promoted() {
     assert_eq!(step.llm_call_count, Some(1));
     let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
     assert_eq!(extra.llm_response.unwrap()["role"], json!("assistant"));
+}
+
+#[test]
+fn test_exporter_promotes_tool_name_alias_tool_calls() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "toolName": "search_docs",
+                "arguments": {"query": "docs"}
+            }]
+        }))
+        .build();
+
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    let tool_calls = trajectory.steps[0].tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].tool_call_id, "search_docs:1");
+    assert_eq!(tool_calls[0].function_name, "search_docs");
+    assert_eq!(tool_calls[0].arguments, json!({"query": "docs"}));
 }
 
 #[test]

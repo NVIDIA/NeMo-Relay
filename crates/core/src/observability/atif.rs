@@ -39,11 +39,11 @@ use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::response::{AnnotatedLlmResponse, Usage};
+use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
 
-use super::{estimate_cost_for_response_or_model, manual, model_name_for_llm_event};
+use super::{estimate_cost_for_response_or_model, manual, merge_usage, model_name_for_llm_event};
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
@@ -764,15 +764,18 @@ fn extract_metrics(
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_f64).collect());
     let known: std::collections::HashSet<&str> = TOKEN_USAGE_KNOWN_KEYS.iter().copied().collect();
-    let extra_map: serde_json::Map<String, Json> = raw_usage
-        .map(|usage| {
-            usage
-                .iter()
-                .filter(|(k, _)| !known.contains(k.as_str()))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
+    let extra_map: serde_json::Map<String, Json> = output
+        .as_object()
+        .into_iter()
+        .flat_map(|output| {
+            ["usage", "token_usage"]
+                .into_iter()
+                .filter_map(|key| output.get(key).and_then(Json::as_object))
         })
-        .unwrap_or_default();
+        .flat_map(|usage| usage.iter())
+        .filter(|(k, _)| !known.contains(k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     let extra = if extra_map.is_empty() {
         None
     } else {
@@ -791,21 +794,6 @@ fn extract_metrics(
         logprobs,
         extra,
     })
-}
-
-fn merge_usage(primary: Option<&Usage>, secondary: Option<&Usage>) -> Option<Usage> {
-    match (primary, secondary) {
-        (None, None) => None,
-        (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
-        (Some(primary), Some(secondary)) => Some(Usage {
-            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
-            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
-            total_tokens: primary.total_tokens.or(secondary.total_tokens),
-            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
-            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
-            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
-        }),
-    }
 }
 
 fn merge_metrics(
@@ -1024,6 +1012,7 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         let name = func
             .and_then(|f| f.get("name"))
             .or_else(|| tc_obj.get("name"))
+            .or_else(|| tc_obj.get("toolName"))
             .or_else(|| tc_obj.get("tool_name"))
             .or_else(|| tc_obj.get("function_name"))
             .and_then(Json::as_str)
@@ -1324,6 +1313,7 @@ fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
 struct EventLookupMaps {
     name_map: std::collections::HashMap<Uuid, String>,
     start_ts_map: std::collections::HashMap<Uuid, DateTime<Utc>>,
+    llm_start_model_names: HashMap<Uuid, String>,
     tool_call_ids: std::collections::HashMap<Uuid, String>,
     suppressed_llm_events: HashSet<Uuid>,
     supplemental_llm_metrics: HashMap<Uuid, AtifMetrics>,
@@ -1350,16 +1340,23 @@ impl EventLookupMaps {
     ) -> Self {
         let mut name_map = std::collections::HashMap::new();
         let mut start_ts_map = std::collections::HashMap::new();
+        let mut llm_start_model_names = HashMap::new();
         for event in events {
             if is_start_event(event) {
                 name_map.insert(event.uuid(), event.name().to_string());
                 start_ts_map.insert(event.uuid(), *event.timestamp());
+                if event.category().map(|category| category.as_str()) == Some("llm")
+                    && let Some(model_name) = model_name_for_llm_event(event)
+                {
+                    llm_start_model_names.insert(event.uuid(), model_name);
+                }
             }
         }
         let llm_dedupe = build_llm_dedupe(llm_dedupe_events);
         Self {
             name_map,
             start_ts_map,
+            llm_start_model_names,
             tool_call_ids: build_tool_call_correlations(tool_correlation_events),
             suppressed_llm_events: llm_dedupe.suppressed_events,
             supplemental_llm_metrics: llm_dedupe.supplemental_metrics,
@@ -1457,10 +1454,11 @@ impl LlmSpanCandidate {
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
             end_metrics: end.data().and_then(|output| {
                 let normalized_response = end.normalized_llm_response();
+                let requested_model = end.model_name().or_else(|| start.model_name());
                 extract_metrics(
                     output,
                     Some(end.name()),
-                    end.model_name(),
+                    requested_model,
                     normalized_response.as_deref(),
                 )
             }),
@@ -2276,6 +2274,10 @@ impl StepConversionState {
         let reasoning_effort = self.current_reasoning_effort.take();
         let reasoning_content = extract_reasoning_content(output);
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();
+        let paired_start_model = lookups
+            .llm_start_model_names
+            .get(&event.uuid())
+            .map(String::as_str);
         let ancestry = build_ancestry(event, &lookups.name_map);
         let invocation = build_invocation_info(
             start_ts,
@@ -2290,7 +2292,7 @@ impl StepConversionState {
                 extract_metrics(
                     output,
                     Some(event.name()),
-                    event.model_name(),
+                    event.model_name().or(paired_start_model),
                     normalized_response.as_deref(),
                 )
             },

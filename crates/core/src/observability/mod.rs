@@ -56,6 +56,24 @@ pub(crate) fn estimate_cost_for_response_or_model(
     crate::codec::response::estimate_cost_for_provider(provider, requested_model, usage)
 }
 
+pub(crate) fn merge_usage(
+    primary: Option<&crate::codec::response::Usage>,
+    secondary: Option<&crate::codec::response::Usage>,
+) -> Option<crate::codec::response::Usage> {
+    match (primary, secondary) {
+        (None, None) => None,
+        (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
+        (Some(primary), Some(secondary)) => Some(crate::codec::response::Usage {
+            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
+            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
+            total_tokens: primary.total_tokens.or(secondary.total_tokens),
+            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
+            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
+            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
+        }),
+    }
+}
+
 pub(crate) fn model_name_for_llm_event(event: &crate::api::event::Event) -> Option<String> {
     if let Some(model_name) = event.model_name() {
         return Some(model_name.to_string());

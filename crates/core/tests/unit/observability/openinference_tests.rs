@@ -1323,13 +1323,24 @@ fn openclaw_replay_tool_call_alias_fields_emit_openinference_attributes() {
         ScopeType::Llm,
         Some(json!({
             "role": "assistant",
-            "tool_calls": [{
-                "call_id": "call-search-docs",
-                "toolName": "search_docs",
-                "args": {"query": "docs"}
-            }],
+            "tool_calls": [
+                {
+                    "call_id": "call-search-docs",
+                    "name": "top_level_search",
+                    "toolName": "camel_search",
+                    "function": {
+                        "name": "nested_search",
+                        "arguments": {"query": "docs"}
+                    }
+                },
+                {
+                    "call_id": "call-read-docs",
+                    "toolName": "read_docs",
+                    "args": {"path": "README.md"}
+                }
+            ],
             "openclaw": {
-                "assistant_tool_call_names": ["search_docs"]
+                "assistant_tool_call_names": ["top_level_search", "read_docs"]
             }
         })),
     ));
@@ -1347,12 +1358,27 @@ fn openclaw_replay_tool_call_alias_fields_emit_openinference_attributes() {
     assert_attr(
         &attributes,
         "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
-        "search_docs",
+        "top_level_search",
     );
     assert_attr(
         &attributes,
         "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
         "{\"query\":\"docs\"}",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.1.tool_call.id",
+        "call-read-docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.name",
+        "read_docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments",
+        "{\"path\":\"README.md\"}",
     );
 }
 

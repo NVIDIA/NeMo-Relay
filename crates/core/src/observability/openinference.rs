@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
-    model_name_for_llm_event,
+    merge_usage, model_name_for_llm_event,
 };
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
@@ -789,24 +789,6 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-// Merge two usage sources field by field, preferring `primary` (codec-normalized)
-// and filling gaps from `secondary` (manual scraper). This keeps provider-derived
-// fields without dropping anything either source alone would have reported.
-fn merge_usage(primary: Option<&Usage>, secondary: Option<&Usage>) -> Option<Usage> {
-    match (primary, secondary) {
-        (None, None) => None,
-        (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
-        (Some(primary), Some(secondary)) => Some(Usage {
-            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
-            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
-            total_tokens: primary.total_tokens.or(secondary.total_tokens),
-            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
-            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
-            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
-        }),
-    }
-}
-
 fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usage>) {
     let Some(usage) = usage else {
         return;
@@ -1129,12 +1111,16 @@ fn raw_tool_call_id(tool_call: &Json) -> Option<&str> {
 
 fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
     tool_call
-        .get("function")
-        .and_then(|function| function.get("name"))
+        .get("name")
         .and_then(Json::as_str)
-        .or_else(|| tool_call.get("name").and_then(Json::as_str))
         .or_else(|| tool_call.get("toolName").and_then(Json::as_str))
         .or_else(|| tool_call.get("tool_name").and_then(Json::as_str))
+        .or_else(|| {
+            tool_call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Json::as_str)
+        })
         .or_else(|| tool_call.get("function_name").and_then(Json::as_str))
 }
 
