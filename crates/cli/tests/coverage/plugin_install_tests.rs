@@ -559,21 +559,17 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
     );
 
     let runner = MockRunner::default()
-        .with_executable("codex", "/bin/codex")
-        .with_capture_output("/bin/codex plugin list --json", "not json")
-        .with_capture_output("/bin/codex plugin marketplace list", "");
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output("/bin/claude plugin list --json", "not json");
     assert!(
-        host_registration_report(PluginHost::Codex, &normal, &runner)
+        host_registration_report(PluginHost::ClaudeCode, &normal, &runner)
             .unwrap_err()
             .contains("failed to parse")
     );
 
     let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
-        .with_capture_output(
-            "/bin/codex plugin list --json",
-            json!({"installed": []}).to_string(),
-        )
+        .with_capture_output("/bin/codex plugin list", "PLUGIN  STATUS  VERSION  PATH\n")
         .with_capture_output("/bin/codex plugin marketplace list", "MARKETPLACE ROOT\n");
     let error = validate_host_registration(PluginHost::Codex, &normal, &runner).unwrap_err();
     assert!(
@@ -618,30 +614,41 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
         assert!(report.host_marketplace_registered);
     }
 
-    for plugin_entry in [
-        json!({"id": plugin_id.clone()}),
-        json!({"pluginId": plugin_id.clone()}),
-        json!({"name": PLUGIN_NAME, "marketplaceName": MARKETPLACE_NAME}),
-    ] {
-        let runner = MockRunner::default()
-            .with_executable("codex", "/bin/codex")
-            .with_capture_output(
-                "/bin/codex plugin list --json",
-                json!({"installed": [plugin_entry]}).to_string(),
-            )
-            .with_capture_output(
-                "/bin/codex plugin marketplace list",
-                format!("{MARKETPLACE_NAME} /tmp/nemo-relay-local\n"),
-            );
-        let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
-        assert!(report.ok());
-    }
-
+    // Codex `plugin list` is a text table; an installed row registers the plugin.
     let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output(
-            "/bin/codex plugin list --json",
-            json!({"installed": [{"name": PLUGIN_NAME, "marketplaceName": "other"}]}).to_string(),
+            "/bin/codex plugin list",
+            format!("{plugin_id}  installed, enabled  0.4.0  /tmp/nemo-relay-plugin\n"),
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            format!("{MARKETPLACE_NAME} /tmp/nemo-relay-local\n"),
+        );
+    let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+    assert!(report.ok());
+
+    // A row that is present but `not installed` must not count as registered.
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list",
+            format!("{plugin_id}  not installed\n"),
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            format!("{MARKETPLACE_NAME} /tmp/nemo-relay-local\n"),
+        );
+    let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+    assert!(!report.host_plugin_registered);
+    assert!(report.host_marketplace_registered);
+
+    // A plugin installed under a different marketplace id must not match.
+    let runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list",
+            format!("{PLUGIN_NAME}@other  installed, enabled  0.4.0  /tmp/other\n"),
         )
         .with_capture_output("/bin/codex plugin marketplace list", "other /tmp/other\n");
     let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
@@ -1328,13 +1335,9 @@ fn doctor_json_uses_quiet_plugin_report() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex")
         .with_capture_output(
-            "/bin/codex plugin list --json",
-            json!({
-                "installed": [
-                    { "pluginId": "nemo-relay-plugin@nemo-relay-local" }
-                ]
-            })
-            .to_string(),
+            "/bin/codex plugin list",
+            "PLUGIN                              STATUS              VERSION  PATH\n\
+             nemo-relay-plugin@nemo-relay-local  installed, enabled  0.4.0    /tmp/nemo-relay-plugin\n",
         )
         .with_capture_output(
             "/bin/codex plugin marketplace list",
@@ -1357,7 +1360,7 @@ fn doctor_json_uses_quiet_plugin_report() {
     assert_eq!(
         runner.capture_commands(),
         vec![
-            "/bin/codex plugin list --json",
+            "/bin/codex plugin list",
             "/bin/codex plugin marketplace list"
         ]
     );
