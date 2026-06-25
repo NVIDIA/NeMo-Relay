@@ -28,6 +28,9 @@ surfaces touched by a change.
   Python, Go, Node.js, and WebAssembly.
 - If a language surface changed, always run that language's test target even when
   Rust core did not change.
+- If dynamic plugin behavior changed, use `maintain-dynamic-plugins` and include
+  the native SDK, worker protocol, Python SDK, docs, packaging, and Codecov
+  surfaces in the validation plan.
 - If code changes alter APIs, bindings, commands, paths, packaging behavior,
   observability/adaptive semantics, or documented best practices, update any
   dependent maintainer or consumer skills in the same branch.
@@ -50,6 +53,10 @@ surfaces touched by a change.
   Use `test-wasm-binding`.
 - **FFI surface change**
   Use `test-ffi-surface`.
+- **Dynamic plugin loader, SDK, or protocol change**
+  Use `maintain-dynamic-plugins`. Run the targeted plugin crates and
+  `python/tests/plugin` first, then escalate to the core validation matrix when
+  runtime behavior or `crates/core` changed.
 - **Third-party integration or patch change**
   Run patch validation with `./scripts/apply-patches.sh --check` and the relevant
   integration tests. Keep the root `./scripts/*.sh` wrappers for third-party
@@ -82,9 +89,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # Python
 just build-python
+just build-python-plugin
 just test-python
 uv run ruff format python
 uv run pytest -k "<pattern>"
+uv run pytest python/tests/plugin
 
 # Go
 just build-go
@@ -118,6 +127,7 @@ just docs-linkcheck
 - `test-node-binding`
 - `test-wasm-binding`
 - `test-ffi-surface`
+- `maintain-dynamic-plugins`
 
 ## Pre-commit Semantics
 
@@ -163,6 +173,8 @@ If the change is large or public-facing, also verify:
 - README and docs entry points still match current package names and paths
 - Examples still run with the documented commands
 - Any renamed public surfaces are reflected consistently in manifests and docs
+- Dynamic plugin examples use `compat.relay = ">=0.5,<1.0"` unless deliberately
+  narrower.
 
 ## References
 
@@ -171,3 +183,4 @@ If the change is large or public-facing, also verify:
 - Build and test dispatchers: `justfile`
 - Patch helpers: `scripts/apply-patches.sh`, `scripts/generate-patches.sh`
 - Third-party script implementations: `scripts/third-party/`
+- Dynamic plugin guidance: `maintain-dynamic-plugins`
