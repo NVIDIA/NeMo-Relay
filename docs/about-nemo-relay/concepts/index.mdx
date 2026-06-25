@@ -7,7 +7,28 @@ position: 4
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use these pages to understand the NeMo Relay runtime model before applying it in a use-case workflow.
+Use these pages to understand the NeMo Relay runtime model before applying it
+in a use-case workflow.
+
+NeMo Relay's shared runtime model has five parts:
+
+- **Scopes** decide where work belongs and which scope-local behavior is visible.
+- **Middleware** decides what can block, rewrite, sanitize, or wrap managed
+  execution.
+- **Plugins** install reusable runtime behavior from configuration.
+- **Events** record what happened in the canonical lifecycle stream.
+- **Subscribers and exporters** consume that stream in process, write raw ATOF
+  events, or project events into downstream formats.
+
+Managed tool and LLM helpers are the application-owned API path through scopes,
+middleware, events, and subscribers. Codecs are boundary translators that
+normalize typed application values or provider-native payloads when runtime
+behavior needs stable data shapes.
+
+Use the concepts pages for runtime semantics such as ownership, ordering,
+cleanup, and support boundaries. Use the generated [API
+Reference](/reference/api) for symbol lookup after you already know which
+runtime concept or integration boundary you need.
 
 <CardGroup cols={3}>
 <Card
@@ -68,6 +89,16 @@ Consumers for lifecycle events, including logs, traces, trajectories, analytics,
 >
 
 Integration patterns for frameworks that own invocation boundaries, scheduling, retries, or provider payloads.
+</Card>
+
+<Card
+  title="Codecs"
+  icon="regular arrows-rotate"
+  iconPosition="left"
+  href="/about-nemo-relay/concepts/codecs"
+>
+
+Normalization boundaries for typed application values, provider payloads, middleware, and exporters.
 </Card>
 
 </CardGroup>

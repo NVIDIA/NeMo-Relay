@@ -83,6 +83,7 @@ schemars = { version = "0.8", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
+strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"

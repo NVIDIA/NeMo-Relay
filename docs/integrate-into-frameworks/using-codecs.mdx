@@ -40,7 +40,7 @@ Typed value codecs are different from provider codecs:
 | Typed value codec | Converts application values to and from JSON. | Dataclasses, Pydantic models, TypeScript object shapes, custom framework types. |
 | Provider codec | Converts provider-specific LLM requests and responses to annotated NeMo Relay request or response data. | OpenAI Chat, OpenAI Responses, Anthropic Messages, custom provider payloads. |
 
-Use this page for typed value codecs. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when middleware needs normalized LLM messages, tools, model names, generation parameters, or provider response annotations.
+Use this page for typed value codecs. Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when request intercepts or request-side middleware need normalized LLM messages, tools, model names, and generation parameters, or when subscribers and exporters need provider response annotations.
 
 ## How Typed Value Codecs Work
 

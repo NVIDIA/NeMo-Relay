@@ -85,6 +85,10 @@ Each emitted scope, tool, LLM, middleware, or mark event is written as one ATOF
 JSON object per line. For event field semantics, see
 [Events](/about-nemo-relay/concepts/events).
 
+ATOF is the raw-event export path. It preserves the canonical event shape; it
+does not add semantic extraction, replay policy, scope-owner resolution, or
+exporter projection rules.
+
 Register the plugin before instrumented work starts and clear it during
 shutdown so file handles flush.
 

@@ -22,6 +22,23 @@ impl DynamicPluginRegistry {
         Self::default()
     }
 
+    /// Reconstructs a registry from previously persisted durable records.
+    pub fn from_records(records: Vec<DynamicPluginRecord>) -> Result<Self> {
+        let mut registry = Self::new();
+        for mut record in records {
+            normalize_record_shape(&mut record);
+            validate_record_shape(&record)?;
+            let plugin_id = record.metadata.id.clone();
+            if registry.records.contains_key(&plugin_id) {
+                return Err(PluginError::Conflict(format!(
+                    "dynamic plugin '{plugin_id}' is duplicated in persisted registry state"
+                )));
+            }
+            registry.records.insert(plugin_id, record);
+        }
+        Ok(registry)
+    }
+
     /// Returns the registered record for `plugin_id`, if present.
     pub fn get(&self, plugin_id: &str) -> Option<&DynamicPluginRecord> {
         self.records.get(plugin_id)
@@ -33,6 +50,11 @@ impl DynamicPluginRegistry {
             .values()
             .filter(|record| include_tombstoned || !record.is_tombstoned())
             .collect()
+    }
+
+    /// Clones records for serialization or higher-level projection.
+    pub fn cloned_records(&self, include_tombstoned: bool) -> Vec<DynamicPluginRecord> {
+        self.list(include_tombstoned).into_iter().cloned().collect()
     }
 
     /// Adds a new dynamic plugin record.
