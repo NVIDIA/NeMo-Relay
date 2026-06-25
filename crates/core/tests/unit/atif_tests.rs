@@ -1263,6 +1263,7 @@ fn test_paired_lifecycle_uses_start_model_for_end_metrics_pricing() {
     let end = event_builder(llm_uuid, EventType::End)
         .name("test")
         .scope_type(ScopeType::Llm)
+        .model_name("api-echoed-model")
         .output(json!({
             "content": "priced response",
             "model": "api-echoed-model",
@@ -1303,6 +1304,7 @@ fn test_llm_span_candidate_uses_start_payload_model_for_metrics_pricing() {
     let end = event_builder(llm_uuid, EventType::End)
         .name("test")
         .scope_type(ScopeType::Llm)
+        .model_name("api-echoed-model")
         .output(json!({
             "content": "priced response",
             "model": "api-echoed-model",

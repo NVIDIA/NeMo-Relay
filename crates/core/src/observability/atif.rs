@@ -1454,11 +1454,11 @@ impl LlmSpanCandidate {
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
             end_metrics: end.data().and_then(|output| {
                 let normalized_response = end.normalized_llm_response();
-                let requested_model = end
+                let requested_model = start
                     .model_name()
-                    .or_else(|| start.model_name())
                     .map(ToOwned::to_owned)
-                    .or_else(|| model_name_for_llm_event(start));
+                    .or_else(|| model_name_for_llm_event(start))
+                    .or_else(|| end.model_name().map(ToOwned::to_owned));
                 extract_metrics(
                     output,
                     Some(end.name()),
@@ -2296,7 +2296,7 @@ impl StepConversionState {
                 extract_metrics(
                     output,
                     Some(event.name()),
-                    event.model_name().or(paired_start_model),
+                    paired_start_model.or_else(|| event.model_name()),
                     normalized_response.as_deref(),
                 )
             },
