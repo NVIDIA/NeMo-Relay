@@ -19,7 +19,9 @@ use crate::storage::traits::StorageBackendDyn;
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::LlmExecutionNextFn;
 use nemo_relay::api::runtime::LlmStreamExecutionNextFn;
+use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::traits::LlmCodec;
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 
@@ -406,7 +408,8 @@ impl StorageBackendDyn for FailingStabilityBackend {
 
 #[test]
 fn acg_component_translate_request_degrades_when_provider_semantics_do_not_match_request_surface() {
-    let request = sample_openai_chat_request();
+    // A Responses shape (`input`) genuinely diverges from "anthropic"; the hint can't override it.
+    let request = sample_openai_responses_request();
     let hot_cache = sample_hot_cache();
     let plugin = build_provider_plugin("anthropic").expect("anthropic plugin should build");
 
@@ -581,8 +584,8 @@ fn rewrite_request_with_hot_cache_adaptive_placement_differs_by_state() {
 #[test]
 fn acg_component_translate_request_uses_learning_key_for_profile_lookup() {
     let request = sample_layered_anthropic_request();
-    let semantic_request_view =
-        build_semantic_request_view(&request).expect("anthropic request should decode");
+    let semantic_request_view = build_semantic_request_view(&request, "anthropic")
+        .expect("anthropic request should decode");
     let learning_key = crate::acg_profile::derive_acg_learning_key(
         "agent-1",
         &semantic_request_view.annotated_request,
@@ -812,18 +815,19 @@ fn acg_component_build_provider_plugin_supports_passthrough_and_rejects_unknown(
 #[test]
 fn acg_component_build_semantic_request_view_decodes_supported_surfaces_and_rejects_unknown_shape()
 {
-    let anthropic = build_semantic_request_view(&sample_anthropic_request()).unwrap();
+    let anthropic = build_semantic_request_view(&sample_anthropic_request(), "anthropic").unwrap();
     assert_eq!(anthropic.request_surface, RequestSurface::AnthropicMessages);
     assert_eq!(
         anthropic.annotated_request.model.as_deref(),
         Some("claude-sonnet-4-20250514")
     );
 
-    let chat = build_semantic_request_view(&sample_openai_chat_request()).unwrap();
+    let chat = build_semantic_request_view(&sample_openai_chat_request(), "openai").unwrap();
     assert_eq!(chat.request_surface, RequestSurface::OpenAIChat);
     assert_eq!(chat.annotated_request.model.as_deref(), Some("gpt-4o"));
 
-    let responses = build_semantic_request_view(&sample_openai_responses_request()).unwrap();
+    let responses =
+        build_semantic_request_view(&sample_openai_responses_request(), "openai").unwrap();
     assert_eq!(responses.request_surface, RequestSurface::OpenAIResponses);
     assert_eq!(
         responses.annotated_request.model.as_deref(),
@@ -835,9 +839,91 @@ fn acg_component_build_semantic_request_view_decodes_supported_surfaces_and_reje
         content: json!({"model": "unknown"}),
     };
     assert!(matches!(
-        build_semantic_request_view(&invalid),
+        build_semantic_request_view(&invalid, "passthrough"),
         Err(AdaptiveError::Internal(message)) if message.contains("unable to resolve request surface")
     ));
+}
+
+fn sample_system_less_anthropic_request() -> LlmRequest {
+    LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "claude-sonnet-4-20250514",
+            "messages": [
+                {"role": "user", "content": long_text(1500)},
+                {"role": "user", "content": long_text(1600)},
+                {"role": "user", "content": long_text(1700)}
+            ]
+        }),
+    }
+}
+
+#[test]
+fn acg_component_build_semantic_request_view_uses_provider_hint_for_system_less_anthropic() {
+    let request = sample_system_less_anthropic_request();
+
+    // Without the anthropic hint, the system-less shape stays OpenAI Chat.
+    for provider in ["openai", "passthrough"] {
+        assert_eq!(
+            build_semantic_request_view(&request, provider)
+                .unwrap()
+                .request_surface,
+            RequestSurface::OpenAIChat,
+        );
+    }
+
+    // The "anthropic" hint disambiguates it to Anthropic Messages.
+    assert_eq!(
+        build_semantic_request_view(&request, "anthropic")
+            .unwrap()
+            .request_surface,
+        RequestSurface::AnthropicMessages,
+    );
+}
+
+#[test]
+fn acg_component_translate_request_optimizes_system_less_anthropic_with_provider_hint() {
+    let request = sample_system_less_anthropic_request();
+    let view = build_semantic_request_view(&request, "anthropic").unwrap();
+
+    // The subscriber keys profiles off the Anthropic codec annotation; the hint makes
+    // translate-time decode match it, so the learned profile is found.
+    let learning_key =
+        crate::acg_profile::derive_acg_learning_key("agent-1", &view.annotated_request);
+    assert_eq!(
+        learning_key,
+        crate::acg_profile::derive_acg_learning_key(
+            "agent-1",
+            &AnthropicMessagesCodec.decode(&request).unwrap(),
+        ),
+    );
+
+    let plugin = build_provider_plugin("anthropic").unwrap();
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::from([(
+            learning_key.clone(),
+            layered_stability_result(6),
+        )]),
+        acg_profile_observation_counts: std::collections::HashMap::from([(learning_key, 6)]),
+        acg_stability: None,
+        acg_observation_count: 0,
+    }));
+
+    let translated = translate_request(
+        &request,
+        "agent-1",
+        "anthropic",
+        plugin.as_ref(),
+        &hot_cache,
+    )
+    .expect("system-less anthropic request should translate under the anthropic hint");
+    assert!(
+        translated.content.to_string().contains("cache_control"),
+        "anthropic cache_control breakpoints should be applied",
+    );
 }
 
 #[test]
@@ -945,7 +1031,7 @@ fn acg_component_resolve_model_family_capabilities_prefers_longest_prefix() {
 #[test]
 fn acg_component_build_hint_translation_and_apply_hint_translation_cover_passthrough_and_errors() {
     let request = sample_openai_chat_request();
-    let semantic_view = build_semantic_request_view(&request).unwrap();
+    let semantic_view = build_semantic_request_view(&request, "openai").unwrap();
     let prompt_ir =
         crate::acg::ir_builder::build_prompt_ir(&semantic_view.annotated_request).unwrap();
     let plugin = build_provider_plugin("openai").unwrap();
@@ -992,7 +1078,7 @@ fn acg_component_build_hint_translation_and_apply_hint_translation_cover_passthr
 fn acg_component_translate_request_uses_profile_specific_stability_and_fails_open_without_any_stability()
  {
     let request = sample_openai_responses_request();
-    let semantic_view = build_semantic_request_view(&request).unwrap();
+    let semantic_view = build_semantic_request_view(&request, "openai").unwrap();
     let learning_key = crate::acg_profile::derive_acg_learning_key(
         "agent-profile",
         &semantic_view.annotated_request,
@@ -1137,7 +1223,7 @@ fn acg_component_decode_request_for_surface_reports_codec_specific_errors() {
 #[test]
 fn acg_component_build_hint_translation_succeeds_for_openai_and_anthropic() {
     let openai_request = sample_openai_chat_request();
-    let openai_view = build_semantic_request_view(&openai_request).unwrap();
+    let openai_view = build_semantic_request_view(&openai_request, "openai").unwrap();
     let openai_prompt_ir =
         crate::acg::ir_builder::build_prompt_ir(&openai_view.annotated_request).unwrap();
     let openai_plugin = build_provider_plugin("openai").unwrap();
@@ -1178,7 +1264,7 @@ fn acg_component_build_hint_translation_succeeds_for_openai_and_anthropic() {
     );
 
     let anthropic_request = sample_layered_anthropic_request();
-    let anthropic_view = build_semantic_request_view(&anthropic_request).unwrap();
+    let anthropic_view = build_semantic_request_view(&anthropic_request, "anthropic").unwrap();
     let anthropic_prompt_ir =
         crate::acg::ir_builder::build_prompt_ir(&anthropic_view.annotated_request).unwrap();
     let anthropic_plugin = build_provider_plugin("anthropic").unwrap();

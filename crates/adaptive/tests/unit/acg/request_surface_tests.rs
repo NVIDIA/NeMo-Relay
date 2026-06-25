@@ -290,24 +290,29 @@ fn test_request_surface_resolution_and_passthrough_support_cover_matrix() {
     assert!(RequestSurface::OpenAIChat.supports_provider("passthrough"));
     assert!(!RequestSurface::OpenAIChat.supports_provider("unknown"));
     assert_eq!(
-        super::resolve_request_surface_from_request(&chat_request).unwrap(),
+        super::resolve_request_surface_from_request(&chat_request, None).unwrap(),
         RequestSurface::OpenAIChat
     );
     assert_eq!(
-        super::resolve_request_surface_from_request(&responses_request).unwrap(),
+        super::resolve_request_surface_from_request(&responses_request, None).unwrap(),
         RequestSurface::OpenAIResponses
     );
     assert_eq!(
-        super::resolve_request_surface_from_request(&anthropic_request).unwrap(),
+        super::resolve_request_surface_from_request(&anthropic_request, None).unwrap(),
         RequestSurface::AnthropicMessages
     );
     assert!(matches!(
-        super::resolve_request_surface_from_request(&invalid_request),
+        super::resolve_request_surface_from_request(&invalid_request, None),
         Err(crate::acg::AcgError::Internal(message))
             if message.contains("unable to resolve request surface")
     ));
+    // `resolve_request_surface` is the plugin-facade path, not the live translate path.
+    assert_eq!(
+        super::resolve_request_surface("anthropic", &chat_request).unwrap(),
+        RequestSurface::AnthropicMessages
+    );
     assert!(matches!(
-        super::resolve_request_surface("anthropic", &chat_request),
+        super::resolve_request_surface("anthropic", &responses_request),
         Err(crate::acg::AcgError::Internal(message))
             if message.contains("does not support resolved request surface")
     ));

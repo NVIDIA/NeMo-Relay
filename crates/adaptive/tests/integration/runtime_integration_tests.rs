@@ -294,16 +294,20 @@ fn sample_run_with_requests(
 }
 
 #[test]
-fn acg_component_source_resolves_request_surfaces_instead_of_decoding_from_provider() {
+fn acg_component_source_resolves_request_surfaces_shape_first_with_provider_hint() {
     let source = include_str!("../../src/acg_component.rs");
 
     assert!(
-        source.contains("resolve_request_surface_from_request"),
-        "acg_component should resolve request surfaces independently from provider selection",
+        source.contains("decode_request_for_surface"),
+        "acg_component should decode by the resolved request surface",
     );
     assert!(
         !source.contains("decode_request_for_provider"),
-        "acg_component should no longer decode semantic requests from the configured provider",
+        "acg_component should not decode semantic requests directly from the configured provider",
+    );
+    assert!(
+        source.contains("build_semantic_request_view(request, provider)"),
+        "acg_component should pass the provider as a disambiguation hint to surface resolution",
     );
 }
 

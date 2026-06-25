@@ -108,8 +108,11 @@ fn decode_request_for_surface(
     }
 }
 
-fn build_semantic_request_view(request: &LlmRequest) -> Result<SemanticRequestView> {
-    let request_surface = resolve_request_surface_from_request(request)
+fn build_semantic_request_view(
+    request: &LlmRequest,
+    provider: &str,
+) -> Result<SemanticRequestView> {
+    let request_surface = resolve_request_surface_from_request(request, Some(provider))
         .map_err(|error| AdaptiveError::Internal(error.to_string()))?;
     let annotated_request = decode_request_for_surface(request_surface, request)?;
 
@@ -387,7 +390,7 @@ fn translate_request(
     hot_cache: &Arc<RwLock<HotCache>>,
 ) -> Option<LlmRequest> {
     // Response codecs stay on the observability path after provider execution.
-    let semantic_request_view = match build_semantic_request_view(request) {
+    let semantic_request_view = match build_semantic_request_view(request, provider) {
         Ok(view) => view,
         Err(error) => {
             acg_debug::emit(

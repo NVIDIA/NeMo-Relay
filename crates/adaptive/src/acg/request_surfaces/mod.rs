@@ -16,7 +16,7 @@ pub(crate) mod openai_responses;
 use std::collections::HashSet;
 
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::codec::resolve::{ProviderSurface, detect_request_surface};
+use nemo_relay::codec::resolve::{ProviderSurface, detect_request_surface_with_hint};
 use serde_json::Value;
 
 use crate::acg::prompt_ir::PromptIR;
@@ -79,8 +79,9 @@ impl RequestSurface {
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn resolve_request_surface_from_request(
     request: &LlmRequest,
+    provider_hint: Option<&str>,
 ) -> crate::acg::Result<RequestSurface> {
-    detect_request_surface(&request.content)
+    detect_request_surface_with_hint(&request.content, provider_hint)
         .map(RequestSurface::from_provider_surface)
         .ok_or_else(|| {
             crate::acg::AcgError::Internal(
@@ -94,7 +95,7 @@ pub(crate) fn resolve_request_surface(
     provider: &str,
     request: &LlmRequest,
 ) -> crate::acg::Result<RequestSurface> {
-    let surface = resolve_request_surface_from_request(request)?;
+    let surface = resolve_request_surface_from_request(request, Some(provider))?;
     if surface.supports_provider(provider) {
         Ok(surface)
     } else {
