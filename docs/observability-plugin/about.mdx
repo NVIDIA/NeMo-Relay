@@ -18,6 +18,25 @@ Subscribers consume that stream in process, and exporter-oriented subscribers
 write raw ATOF JSONL or translate events into Agent Trajectory Interchange
 Format (ATIF), OpenTelemetry, or OpenInference.
 
+That makes observability downstream from the runtime contract:
+
+- Scopes decide ownership and parentage
+- Middleware decides whether execution continues or what payloads are sanitized
+- Codecs provide normalized request and response data when available
+- Events record the canonical runtime stream
+- Subscribers and exporters consume or project that stream
+
+Exporters should not redefine execution semantics. They should preserve the
+meaning of the underlying events while translating them into the shape expected
+by the downstream system.
+
+Configuration and activation failures are setup failures for the observability
+component. Delivery failures after activation are downstream exporter failures:
+application work continues, and explicit exporter barriers such as flush or
+shutdown can report stored delivery problems. Refer to
+[Observability Configuration](/observability-plugin/configuration) for the
+failure table.
+
 The first-party plugin component has kind `observability`. It can install:
 
 - Agent Trajectory Observability Format (ATOF) JSONL export for raw lifecycle events.
@@ -34,6 +53,10 @@ Use manual subscriber or exporter APIs when a test, script, or application
 needs direct control over registration names, collection windows, explicit
 flush timing, or per-run exporter objects. The plugin owns subscriber names and
 teardown for the sections it enables.
+
+Both paths consume the same runtime event contract. Choose plugin-managed export
+for reusable process configuration, and choose manual APIs only when the caller
+needs direct control over registration or lifetime.
 
 ## Use Observability When
 

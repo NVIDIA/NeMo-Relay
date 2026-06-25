@@ -245,7 +245,10 @@ Before deploying to production, ensure the following checklist is completed:
 - Pass `model_name` separately when the model should be easy to filter or export.
 - Keep request and response payloads JSON-compatible.
 - Keep SDK clients and transport objects inside the provider callback.
-- Use codecs when middleware needs normalized provider request or response semantics.
+- Use request codecs when request intercepts or request-side middleware need
+  normalized provider request semantics.
+- Use response codecs when LLM end events, subscribers, or exporters need
+  normalized provider response annotations.
 - Use response codecs and the `pricing` plugin when exporters need cost
   estimates from model pricing.
 - Use sanitize guardrails before exporting prompts or model responses in production.
@@ -265,5 +268,7 @@ Use these links to continue from this workflow into the next related task.
 
 - Instrument tools with [Instrument a Tool Call](/instrument-applications/instrument-tool-call).
 - Add policy or transformation with [Add Middleware](/instrument-applications/advanced-guide).
-- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when middleware needs normalized LLM request and response data.
+- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when request
+  intercepts need normalized LLM request data or downstream consumers need
+  normalized response annotations.
 - Export events with [Observability](/observability-plugin/about).

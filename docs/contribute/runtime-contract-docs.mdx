@@ -1,0 +1,123 @@
+---
+title: "Runtime Contract Documentation"
+description: ""
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this page when you need to keep shared NeMo Relay runtime terminology
+aligned across documentation, examples, bindings, plugins, or integrations.
+
+The Rust runtime remains the behavioral source of truth. These docs are the
+coordination point for user-facing language about ownership, execution ordering,
+cleanup, support boundaries, and observability semantics. Keep these pages
+aligned before changing examples or workflow-specific guides that depend on
+them.
+
+## Shared Contract Pages
+
+These pages define or route the shared runtime model:
+
+- `docs/about-nemo-relay/concepts/index.mdx`
+- `docs/about-nemo-relay/concepts/scopes.mdx`
+- `docs/about-nemo-relay/concepts/middleware.mdx`
+- `docs/about-nemo-relay/concepts/subscribers.mdx`
+- `docs/about-nemo-relay/concepts/plugins.mdx`
+- `docs/about-nemo-relay/concepts/events.mdx`
+- `docs/about-nemo-relay/concepts/framework-integrations.mdx`
+- `docs/about-nemo-relay/concepts/codecs.mdx`
+- `docs/getting-started/agent-runtime-primer.mdx`
+- `docs/getting-started/installation.mdx`
+- `docs/getting-started/quick-start/index.mdx`
+- `docs/reference/api/index.mdx`
+- `docs/observability-plugin/about.mdx`
+- `docs/observability-plugin/atof.mdx`
+- `docs/observability-plugin/atif.mdx`
+- `docs/observability-plugin/opentelemetry.mdx`
+- `docs/observability-plugin/openinference.mdx`
+- `docs/resources/glossary.mdx`
+
+Support-sensitive summaries should also stay aligned with:
+
+- `README.md`
+- `docs/integrate-into-frameworks/about.mdx`
+- `docs/nemo-relay-cli/about.mdx`
+- `docs/supported-integrations/about.mdx`
+
+## Contract Boundaries
+
+Use these boundaries when reviewing documentation and examples.
+
+### Concepts Versus API Reference
+
+Concept pages explain runtime semantics. Generated API reference pages are for
+symbol lookup after the reader already knows which concept or integration
+boundary they need.
+
+### Primary Versus Experimental Bindings
+
+Rust, Python, and Node.js are the primary documented bindings. Go, WebAssembly,
+and raw C FFI are source-first experimental surfaces unless a page explicitly
+says otherwise.
+
+### ATOF Versus Projections
+
+ATOF is the canonical event stream. ATIF, OpenTelemetry, and OpenInference are
+downstream projections over those events. Projection docs should not redefine
+scope ownership, middleware ordering, provider payload decoding, replay policy,
+or cost policy.
+
+### Codecs Versus Ownership
+
+Codecs translate typed application values or provider-native payloads into
+stable runtime shapes. They do not decide ownership, middleware ordering,
+whether execution may continue, or which exporter is active.
+
+### Managed Versus Explicit Integration
+
+Managed execution wrappers preserve the full runtime pipeline around a real tool
+or LLM callback. Explicit lifecycle APIs preserve observability and parentage
+when a framework owns the callback, but they do not run the full managed
+execution pipeline by themselves.
+
+## Page Responsibilities
+
+Use this map to keep shared pages focused.
+
+| Page | Responsibility |
+| --- | --- |
+| Concepts hub | Shared runtime model and routing across core concepts, framework integrations, and codecs. |
+| Scopes | Ownership, hierarchy, scope-local visibility, cleanup, and request isolation. |
+| Middleware | Intercepts versus guardrails, managed execution ordering, streaming placement, and failure behavior that changes execution. |
+| Subscribers | Downstream event consumption, async delivery, flush expectations, and exporter relationship. |
+| Plugins | Process-level activation, config-driven behavior installation, validation, rollback, and component ownership boundaries. |
+| Events | Canonical ATOF envelope, start/end pairing, marks, semantic payloads, category profiles, and annotated request or response data. |
+| Framework integrations | What the framework owns, what Relay owns, preferred wrapper points, explicit fallbacks, and what semantics each fallback loses. |
+| Codecs | Typed value codecs, provider request codecs for request intercepts and request-side middleware, and response codecs for end-event annotations, subscribers, exporters, and diagnostics. |
+| Agent runtime primer | Compact runtime model and first routing choice by owned boundary. |
+| Installation | Install-by-surface routing for CLI, primary bindings, and maintained integrations. |
+| Quick Start index | Boundary-based routing that does not promise more than child pages demonstrate. |
+| API index | Generated reference as symbol lookup, not runtime semantics. |
+| Observability pages | Event consumption, raw ATOF export, downstream projections, exporter selection, and setup versus delivery failure behavior. |
+| Glossary | Stable vocabulary shared across concepts, support pages, examples, and generated reference introductions. |
+
+## Review Checklist
+
+Before landing a change that touches shared runtime wording, check:
+
+- The changed page still says who owns the boundary: application, framework,
+  plugin, subscriber, exporter, or NeMo Relay runtime.
+- Managed execution ordering is not implied on pages that only use explicit
+  lifecycle APIs.
+- Sanitize guardrails are described as emitted-payload changes, not real
+  callback argument or return-value changes.
+- Subscriber and exporter work remains downstream from event construction.
+- ATOF remains the raw canonical event format, while ATIF, OpenTelemetry, and
+  OpenInference remain projections.
+- Examples consume shared terminology instead of defining new support or
+  contract language locally.
+- Support matrices stay aligned across README, CLI docs, supported integrations,
+  and install or quick-start routing pages.
+- Generated API reference pages are not used as the only explanation for runtime
+  ownership, ordering, cleanup, or failure behavior.
