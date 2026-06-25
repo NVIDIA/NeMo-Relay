@@ -1765,6 +1765,24 @@ fn output_value_extracts_chat_completion_display_text() {
 }
 
 #[test]
+fn display_text_from_tool_calls_supports_flat_aliases_without_changing_precedence() {
+    assert_eq!(
+        display_text_from_tool_calls(&json!([
+            {
+                "name": "top_level",
+                "toolName": "camel",
+                "function": {"name": "nested"},
+                "tool_name": "snake",
+                "function_name": "flat_function"
+            },
+            {"tool_name": "search_docs"},
+            {"function_name": "read_file"}
+        ])),
+        Some("Requested tools: top_level, search_docs, read_file".to_string())
+    );
+}
+
+#[test]
 fn output_value_extracts_openai_responses_display_text_and_usage() {
     let (provider, exporter) = make_provider();
     let mut processor =

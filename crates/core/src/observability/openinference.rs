@@ -1528,6 +1528,8 @@ fn tool_call_name(value: &Json) -> Option<String> {
                 .and_then(|function| function.get("name"))
                 .and_then(Json::as_str)
         })
+        .or_else(|| value.get("tool_name").and_then(Json::as_str))
+        .or_else(|| value.get("function_name").and_then(Json::as_str))
         .map(str::to_string)
 }
 
