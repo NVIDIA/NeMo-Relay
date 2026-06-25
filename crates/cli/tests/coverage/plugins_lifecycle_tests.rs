@@ -11,6 +11,7 @@ use crate::config::{
 };
 use crate::error::PluginLifecycleFailureKind;
 use base64::Engine;
+use nemo_relay::plugin::dynamic::DynamicPluginFailurePhase;
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
@@ -177,6 +178,129 @@ fn generate_ed25519_public_key() -> String {
         "ed25519:{}",
         base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
     )
+}
+
+#[test]
+fn trust_failure_messages_and_codes_cover_all_variants() {
+    let path = PathBuf::from("/tmp/plugin.py");
+    let signature_path = PathBuf::from("/tmp/plugin.py.sig");
+    let cases = vec![
+        (
+            trust::DynamicPluginTrustFailure::MissingArtifact,
+            "integrity_failed",
+            "missing source.artifact",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::MissingIntegrityDigest,
+            "integrity_failed",
+            "missing integrity.sha256",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::ArtifactRead {
+                path: path.clone(),
+                error: "boom".into(),
+            },
+            "integrity_failed",
+            "could not be read for trust verification",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::IntegrityMismatch {
+                path: path.clone(),
+                expected: "sha256:expected".into(),
+                actual: "sha256:actual".into(),
+            },
+            "integrity_failed",
+            "failed integrity verification",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::MissingSignature,
+            "attestation_failed",
+            "requires integrity.signature",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::MissingTrustedKeys,
+            "attestation_failed",
+            "no trusted_public_keys",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::SignatureRead {
+                path: signature_path.clone(),
+                error: "nope".into(),
+            },
+            "attestation_failed",
+            "signature /tmp/plugin.py.sig could not be read",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::InvalidTrustedKey {
+                key: "ed25519:bad".into(),
+                error: "invalid".into(),
+            },
+            "attestation_failed",
+            "invalid trusted public key",
+        ),
+        (
+            trust::DynamicPluginTrustFailure::SignatureVerification {
+                path: signature_path,
+                parse_errors: vec!["bad key".into()],
+            },
+            "attestation_failed",
+            "key parse errors: bad key",
+        ),
+    ];
+
+    for (failure, code, snippet) in cases {
+        assert_eq!(failure.refusal_code(), code);
+        let rendered = failure.display("acme.coverage").to_string();
+        assert!(rendered.contains("acme.coverage"), "{rendered}");
+        assert!(rendered.contains(snippet), "{rendered}");
+    }
+}
+
+#[test]
+fn trust_last_error_preserves_integrity_code_under_signature_policy() {
+    let trust = EvaluatedDynamicPluginTrust {
+        integrity: DynamicPluginCheckState::Invalid,
+        authenticity: DynamicPluginCheckState::Unknown,
+        failure: Some(trust::DynamicPluginTrustFailure::IntegrityMismatch {
+            path: PathBuf::from("/tmp/plugin.py"),
+            expected: "sha256:expected".into(),
+            actual: "sha256:actual".into(),
+        }),
+    };
+
+    let error = trust
+        .last_error("acme.coverage")
+        .expect("integrity mismatch should persist an error");
+    assert_eq!(error.phase, DynamicPluginFailurePhase::Validation);
+    assert_eq!(error.code, "integrity_failed");
+    assert!(error.message.contains("acme.coverage"));
+    assert!(error.message.contains("failed integrity verification"));
+}
+
+#[test]
+fn trust_evaluation_short_circuits_when_policy_is_blocked() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.blocked-short-circuit");
+
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+        .map_err(|error| CliError::Config(error.to_string()))
+        .unwrap();
+    let blocked_policy = crate::plugins::policy::EvaluatedDynamicPluginHostPolicy {
+        policy_satisfied: false,
+        startup_class: nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required,
+        attestation_mode:
+            nemo_relay::plugin::dynamic::DynamicPluginAttestationMode::SignatureRequired,
+        trusted_public_keys: Vec::new(),
+        failure: Some(crate::plugins::policy::DynamicPluginHostPolicyFailure::Blocked),
+    };
+
+    let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &blocked_policy);
+
+    assert_eq!(trust.integrity, DynamicPluginCheckState::Unknown);
+    assert_eq!(trust.authenticity, DynamicPluginCheckState::Unknown);
+    assert!(trust.failure().is_none());
 }
 
 #[test]
@@ -1097,11 +1221,18 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
     match error {
         CliError::PluginLifecycle {
             kind: PluginLifecycleFailureKind::Refused,
-            message,
+            ref message,
             ..
         } => assert!(message.contains("blocked by host policy")),
         other => panic!("unexpected enable policy error: {other}"),
     }
+    let (command, target, kind, code, _) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("plugin lifecycle error context");
+    assert_eq!(command, "plugins enable");
+    assert_eq!(target, Some("acme.enable-blocked"));
+    assert_eq!(kind, PluginLifecycleFailureKind::Refused);
+    assert_eq!(code, Some("policy_blocked"));
 
     let resolved = resolve_plugins_config(None).unwrap();
     let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
