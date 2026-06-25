@@ -54,6 +54,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 The example below creates a scope, records an initialization mark, runs one
 managed tool call, and runs one managed LLM call through the public Rust APIs.
+Place it in `src/main.rs` in the same Cargo project where you added the
+dependencies above, then run `cargo run`.
 
 ```rust
 use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};

@@ -46,9 +46,13 @@ filename = "events.jsonl"
 mode = "append"
 ```
 
-Place the file at `./.nemo-relay/plugins.toml` or another discovered location,
-then start the gateway normally. If you want an explicit config root, pass
-`--config path/to/config.toml` and place `plugins.toml` next to that file.
+Place the file at `./.nemo-relay/plugins.toml` or another discovered location.
+If you want an explicit config root, pass `--config path/to/config.toml` and
+place `plugins.toml` next to that file. For a quick verification path, run one
+of the documented wrapper commands from the same project root, such as
+`nemo-relay codex` or `nemo-relay run -- codex`, so
+`.nemo-relay/plugins.toml` is discoverable by the gateway startup path
+described in [CLI Basic Usage](/nemo-relay-cli/basic-usage).
 
 ## What Success Looks Like
 
