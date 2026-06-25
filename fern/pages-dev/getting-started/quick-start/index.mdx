@@ -6,8 +6,17 @@ position: 5
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Choose the Quick Start path for the boundary you want Relay to observe or
-control.
+Choose the Quick Start path from the following for the boundary you want Relay
+to observe or control.
+
+- Use the CLI path when a local coding-agent harness owns the invocation
+- Use a binding quick start when your application owns the tool or LLM call
+- Use a supported integration guide when a framework or agent harness owns the
+  boundary
+
+If you still need the shared runtime vocabulary for scopes, middleware, events,
+or plugins, refer to the [Agent Runtime Primer](/getting-started/agent-runtime-primer)
+or [Concepts](/about-nemo-relay/concepts) first.
 
 ## Local Coding-Agent Runs
 
@@ -24,6 +33,50 @@ Code, Cursor, or Hermes Agent session without changing application code.
 
 Run a coding-agent CLI through Relay, forward hooks, route model traffic through
 the local gateway, and export traces or trajectories.
+</Card>
+
+</CardGroup>
+
+## Framework or Agent-Harness-Owned Code
+
+Use a supported integration guide when LangChain, LangGraph, Deep Agents, or
+OpenClaw owns scheduling, callbacks, tool execution, provider payloads, or
+agent lifecycle hooks. If you are building or reviewing a framework integration
+that is not covered by a maintained guide, use the generic framework integration
+workflow instead.
+
+<CardGroup cols={3}>
+<Card
+  title="Supported Integrations"
+  icon="regular puzzle-piece"
+  iconPosition="left"
+  href="/supported-integrations/about"
+>
+
+Choose the maintained integration path and support level for LangChain,
+LangGraph, Deep Agents, or OpenClaw.
+</Card>
+
+<Card
+  title="Integrate Into Frameworks"
+  icon="regular code-branch"
+  iconPosition="left"
+  href="/integrate-into-frameworks/about"
+>
+
+Choose the generic workflow for unsupported frameworks, provider adapters, or
+third-party integration patches.
+</Card>
+
+<Card
+  title="Framework Integration Concepts"
+  icon="regular diagram-project"
+  iconPosition="left"
+  href="/about-nemo-relay/concepts/framework-integrations"
+>
+
+Ensure you understand what the framework owns, what Relay owns, and which
+runtime semantics each integration boundary preserves.
 </Card>
 
 </CardGroup>
@@ -61,7 +114,8 @@ Smallest Node.js workflow that emits scope, tool, and LLM events.
   href="/getting-started/quick-start/rust"
 >
 
-Smallest Rust workflow that emits scope, tool, and LLM events.
+Smallest Rust workflow for direct runtime ownership, starting from scope events
+and mark-based checkpoints.
 </Card>
 
 </CardGroup>

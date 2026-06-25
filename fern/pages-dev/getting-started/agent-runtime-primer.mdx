@@ -26,26 +26,37 @@ NeMo Relay gives those boundaries one execution model.
 NeMo Relay does not decide what your agent should do. It describes and manages
 what happens when your agent crosses runtime boundaries.
 
-The core runtime model has five parts:
+The shared runtime model has five parts, with managed calls and codecs acting
+as paths through that model rather than separate model layers:
 
 - **Scopes** describe where work belongs. They preserve parent-child
   relationships across requests, agent runs, tools, LLM calls, background work,
   and nested functions.
-- **Managed tool and LLM calls** attach work to the active scope, run middleware
-  in a consistent order, and emit lifecycle events. The application result is
-  preserved unless registered intercepts or guardrails intentionally change the
-  execution path.
 - **Middleware** runs around managed execution. Intercepts can transform or wrap
   real calls. Guardrails can block execution or sanitize emitted observability
   payloads.
-- **Events** record what happened. NeMo Relay emits Agent Trajectory
-  Observability Format (ATOF) lifecycle records that subscribers and exporters
-  can consume.
 - **Plugins** package reusable runtime behavior so teams can install middleware,
   subscribers, exporters, or adaptive behavior from configuration instead of
   repeating setup code in every application.
+- **Events** record what happened. NeMo Relay emits Agent Trajectory
+  Observability Format (ATOF) lifecycle records that subscribers and exporters
+  can consume.
+- **Subscribers and exporters** consume events in process, write raw ATOF
+  events, or project events into ATIF, OpenTelemetry, OpenInference, or other
+  downstream formats.
 
-The simplest mental model is:
+Managed tool and LLM calls are the main application-owned API path through that
+model: they attach work to the active scope, run middleware in a consistent
+order, and emit lifecycle events. The application result is preserved unless
+registered intercepts or guardrails intentionally change the execution path.
+
+Codecs translate typed application values or provider-native payloads into
+stable runtime shapes when request-side middleware, events, or exporters need
+normalized data. They are boundary translators, not a separate execution model.
+
+The simplest mental model is below. Codecs appear only when a boundary needs
+payload normalization, so they are shown as an optional translator rather than a
+required step for every call.
 
 <MermaidStyles />
 
@@ -54,11 +65,15 @@ flowchart LR
   boundary["App or framework boundary"]
   scope["NeMo Relay scope"]
   managedCall["Managed tool or LLM call"]
+  codec["Codec boundary when needed"]
   middleware["Middleware"]
   event["Lifecycle event"]
   sink["Subscriber or exporter"]
 
   boundary --> scope --> managedCall --> middleware --> event --> sink
+  managedCall -. normalize payloads .-> codec
+  codec -. normalized data .-> middleware
+  codec -. annotations .-> event
 ```
 
 ## What NeMo Relay Does Not Replace
@@ -67,45 +82,38 @@ NeMo Relay sits below the choices your application already makes.
 
 It does not replace:
 
-- your agent framework or orchestration logic
-- your model provider or provider SDK
-- your application business logic
-- your production observability backend
+- Your agent framework or orchestration logic
+- Your model provider or provider SDK
+- Your application business logic
+- Your production observability backend
 - NeMo Agent Toolkit
 
 Instead, it gives those systems a shared runtime contract for call boundaries,
 policy hooks, event emission, and export.
 
-## Choose The Boundary You Own
+## Find the Right Starting Point
 
-Where you start depends on who owns the call boundary.
+Use this section as a router, not a setup checklist. Start from the destination
+or outcome that matches your task; the linked page points you to the setup,
+configuration, and validation steps for that path.
 
-If your application directly calls tools or model providers, start by
-instrumenting the application boundary. Add scopes first, then wrap the tool and
-LLM calls your code owns.
-
-If a framework owns scheduling, retries, callbacks, or provider payloads, use a
-framework integration. The integration should preserve framework behavior while
-adding NeMo Relay scopes, managed calls, codecs, middleware, and events at stable
-framework boundaries.
-
-If you need the same behavior across multiple services or teams, package it as a
-plugin. Plugins are the configuration-driven path for reusable middleware,
-subscribers, exporters, and adaptive components.
-
-## Read Next
-
-The following pages help you choose the next step for your integration.
-
-- Use [Quick Start](/getting-started/quick-start) for the smallest binding-specific example.
-- Use [Instrument Applications](/instrument-applications/about) when you
-  own the tool or LLM call site.
-- Use [Integrate into Frameworks](/integrate-into-frameworks/about) when a
-  framework owns invocation, scheduling, retries, callbacks, or provider
-  payloads.
-- Use [Build Plugins](/build-plugins/about) when behavior should be
-  reusable and activated from configuration.
-- Use [Observability](/observability-plugin/about) when you need to export
-  runtime events to ATIF, OpenTelemetry, or OpenInference.
-- Use [Adaptive](/adaptive-plugin/about) after baseline instrumentation is
-  working and you want to tune behavior from observed runtime signals.
+- **Direct Python, Node.js, or Rust application APIs:** Application code owns
+  callback placement, provider authentication, and plugin initialization. Start
+  with [Quick Start](/getting-started/quick-start), then use
+  [Instrument Applications](/instrument-applications/about) when you own the
+  tool or LLM call site.
+- **LangChain, LangGraph, Deep Agents, or OpenClaw:** Start with
+  [Supported Integrations](/supported-integrations/about) to choose the
+  maintained path and support level. Local wiring still belongs to the
+  application, framework, or OpenClaw plugin configuration.
+- **New framework, orchestration, SDK, or provider integration:** The framework
+  or adapter owns scheduling, retries, callbacks, and provider payloads. Start
+  with [Integrate into Frameworks](/integrate-into-frameworks/about).
+- **Local Claude Code, Codex, Cursor, or Hermes runs:** The coding-agent harness
+  owns invocation while Relay observes hooks, gateway-routed model traffic, and
+  exporter output. Start with [NeMo Relay CLI](/nemo-relay-cli/about).
+- **Reusable runtime behavior across services or teams:** Runtime plugin
+  configuration owns reusable middleware, subscribers, exporters, pricing,
+  policy, or adaptive behavior. Start with [Build Plugins](/build-plugins/about),
+  use [Observability](/observability-plugin/about) for export setup, and use
+  [Adaptive](/adaptive-plugin/about) after baseline instrumentation is working.
