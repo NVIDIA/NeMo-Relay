@@ -219,6 +219,17 @@ fn normalize_request_decodes_detected_anthropic() {
 }
 
 #[test]
+fn normalize_request_decodes_detected_responses() {
+    // `input` selects the OpenAI Responses surface (priority over chat/anthropic).
+    let request = req(json!({
+        "model": "gpt-4o",
+        "input": "Hello, world!"
+    }));
+    let decoded = normalize_request(&request).expect("responses request decodes");
+    assert!(!decoded.messages.is_empty());
+}
+
+#[test]
 fn normalize_request_none_for_unknown_shape() {
     assert!(normalize_request(&req(json!({"foo": 1}))).is_none());
 }
