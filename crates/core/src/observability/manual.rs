@@ -2,15 +2,55 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Shared best-effort extraction for non-provider/manual LLM output, used as the
-//! fallback by the OpenTelemetry and OpenInference exporters.
+//! fallback by observability exporters before they project into exporter-specific
+//! schemas.
 
 use serde_json::Map;
 
 use crate::codec::response::Usage;
 use crate::json::Json;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ManualCostPolicy {
+    #[cfg(feature = "otel")]
+    AnyCurrency,
+    #[cfg(feature = "openinference")]
+    UsdOnly,
+    AtifUsdOnly,
+}
+
 pub(crate) fn model_name_from_manual_llm_output(output: Option<&Json>) -> Option<&str> {
     output?.as_object()?.get("model").and_then(Json::as_str)
+}
+
+pub(crate) struct ManualToolCallFields<'a> {
+    pub(crate) id: Option<&'a str>,
+    pub(crate) name: Option<&'a str>,
+    pub(crate) arguments: Option<&'a Json>,
+}
+
+pub(crate) fn tool_call_fields(tool_call: &Json) -> Option<ManualToolCallFields<'_>> {
+    let object = tool_call.as_object()?;
+    let function = object.get("function").and_then(Json::as_object);
+    Some(ManualToolCallFields {
+        id: object
+            .get("id")
+            .or_else(|| object.get("tool_call_id"))
+            .or_else(|| object.get("call_id"))
+            .and_then(Json::as_str),
+        name: function
+            .and_then(|function| function.get("name"))
+            .or_else(|| object.get("name"))
+            .or_else(|| object.get("toolName"))
+            .or_else(|| object.get("tool_name"))
+            .or_else(|| object.get("function_name"))
+            .and_then(Json::as_str),
+        arguments: function
+            .and_then(|function| function.get("arguments"))
+            .or_else(|| object.get("arguments"))
+            .or_else(|| object.get("args"))
+            .or_else(|| object.get("input")),
+    })
 }
 
 pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usage> {
@@ -42,35 +82,39 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
         token_usage,
         &["total_tokens", "totalTokens", "total"],
     );
-    let cache_read_tokens = first_u64_from_manual_usage(
-        usage,
-        token_usage,
-        &[
-            "cache_read_tokens",
-            "cached_tokens",
-            "cache_read_input_tokens",
-            "cacheReadTokens",
-            "cachedTokens",
-            "cacheReadInputTokens",
-            "cacheRead",
-        ],
-    )
-    .or_else(|| {
-        first_nested_u64_from_manual_usage(
-            usage,
-            token_usage,
-            "input_tokens_details",
-            "cached_tokens",
-        )
-    })
-    .or_else(|| {
-        first_nested_u64_from_manual_usage(
-            usage,
-            token_usage,
-            "prompt_tokens_details",
-            "cached_tokens",
-        )
-    });
+    // Keep the legacy ATIF cache-read alias order for conflicting manual
+    // payloads while sharing the scalar reader across exporters.
+    let cache_read_tokens =
+        first_u64_from_manual_usage(usage, token_usage, &["cached_tokens", "cachedTokens"])
+            .or_else(|| {
+                first_nested_u64_from_manual_usage(
+                    usage,
+                    token_usage,
+                    "prompt_tokens_details",
+                    "cached_tokens",
+                )
+            })
+            .or_else(|| {
+                first_nested_u64_from_manual_usage(
+                    usage,
+                    token_usage,
+                    "input_tokens_details",
+                    "cached_tokens",
+                )
+            })
+            .or_else(|| {
+                first_u64_from_manual_usage(
+                    usage,
+                    token_usage,
+                    &[
+                        "cache_read_tokens",
+                        "cache_read_input_tokens",
+                        "cacheReadTokens",
+                        "cacheReadInputTokens",
+                        "cacheRead",
+                    ],
+                )
+            });
     let cache_write_tokens = first_u64_from_manual_usage(
         usage,
         token_usage,
@@ -106,27 +150,26 @@ pub(crate) fn usage_from_manual_llm_output(output: Option<&Json>) -> Option<Usag
 
 pub(crate) fn cost_from_manual_llm_output(
     output: Option<&Json>,
-    usd_only: bool,
+    policy: ManualCostPolicy,
 ) -> Option<(f64, String)> {
     let object = output?.as_object()?;
     let usage = object.get("usage").and_then(Json::as_object);
     let token_usage = object.get("token_usage").and_then(Json::as_object);
     usage
-        .and_then(|usage| cost_from_manual_usage(usage, usd_only))
-        .or_else(|| token_usage.and_then(|usage| cost_from_manual_usage(usage, usd_only)))
+        .and_then(|usage| cost_from_manual_usage(usage, policy))
+        .or_else(|| token_usage.and_then(|usage| cost_from_manual_usage(usage, policy)))
 }
 
-fn cost_from_manual_usage(usage: &Map<String, Json>, usd_only: bool) -> Option<(f64, String)> {
+fn cost_from_manual_usage(
+    usage: &Map<String, Json>,
+    policy: ManualCostPolicy,
+) -> Option<(f64, String)> {
     if let Some(total) = usage.get("cost_usd").and_then(Json::as_f64) {
         return Some((total, "USD".to_string()));
     }
     let cost = usage.get("cost")?.as_object()?;
-    let currency = cost
-        .get("currency")
-        .and_then(Json::as_str)
-        .unwrap_or("USD")
-        .to_string();
-    if usd_only && !currency.eq_ignore_ascii_case("USD") {
+    let currency = cost.get("currency").and_then(Json::as_str);
+    if !policy.accepts_currency(currency, cost) {
         return None;
     }
     let total = cost.get("total").and_then(Json::as_f64).or_else(|| {
@@ -136,7 +179,33 @@ fn cost_from_manual_usage(usage: &Map<String, Json>, usd_only: bool) -> Option<(
             .fold((false, 0.0), |(_, total), value| (true, total + value));
         has_component.then_some(component_total)
     })?;
-    Some((total, currency))
+    Some((total, currency.unwrap_or("USD").to_string()))
+}
+
+impl ManualCostPolicy {
+    fn accepts_currency(self, currency: Option<&str>, cost: &Map<String, Json>) -> bool {
+        match self {
+            #[cfg(feature = "otel")]
+            Self::AnyCurrency => true,
+            #[cfg(feature = "openinference")]
+            Self::UsdOnly => currency
+                .map(|currency| currency.eq_ignore_ascii_case("USD"))
+                .unwrap_or(true),
+            Self::AtifUsdOnly => currency
+                .map(|currency| currency.eq_ignore_ascii_case("USD"))
+                .unwrap_or_else(|| {
+                    let source_is_relay_normalized = cost
+                        .get("source")
+                        .and_then(Json::as_str)
+                        .is_some_and(|source| {
+                            matches!(source, "provider_reported" | "model_pricing")
+                        });
+                    let has_legacy_provider_total =
+                        cost.get("total").and_then(Json::as_f64).is_some();
+                    source_is_relay_normalized || has_legacy_provider_total
+                }),
+        }
+    }
 }
 
 // Keep a reported total only when it is internally consistent with the component

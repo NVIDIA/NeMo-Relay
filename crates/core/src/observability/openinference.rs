@@ -20,7 +20,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{estimate_cost_for_response_or_requested_model, manual};
+use super::{
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
+    model_name_for_llm_event,
+};
 use crate::api::event::{Event, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
@@ -28,9 +31,7 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
-use crate::codec::response::{
-    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, estimate_cost_for_provider,
-};
+use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use crate::error::FlowError;
 use crate::json::Json;
 use chrono::{DateTime, Utc};
@@ -1100,13 +1101,16 @@ fn push_raw_output_tool_calls(
     tool_calls: &[Json],
 ) {
     for (call_index, tool_call) in tool_calls.iter().enumerate() {
+        let Some(fields) = manual::tool_call_fields(tool_call) else {
+            continue;
+        };
         push_output_tool_call(
             attributes,
             message_index,
             call_index,
-            tool_call.get("id").and_then(Json::as_str),
-            raw_tool_call_name(tool_call),
-            raw_tool_call_arguments(tool_call).and_then(|value| {
+            fields.id,
+            fields.name,
+            fields.arguments.and_then(|value| {
                 value
                     .as_str()
                     .map(str::to_string)
@@ -1114,23 +1118,6 @@ fn push_raw_output_tool_calls(
             }),
         );
     }
-}
-
-fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
-    tool_call
-        .get("function")
-        .and_then(|function| function.get("name"))
-        .and_then(Json::as_str)
-        .or_else(|| tool_call.get("name").and_then(Json::as_str))
-        .or_else(|| tool_call.get("toolName").and_then(Json::as_str))
-}
-
-fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
-    tool_call
-        .get("function")
-        .and_then(|function| function.get("arguments"))
-        .or_else(|| tool_call.get("arguments"))
-        .or_else(|| tool_call.get("input"))
 }
 
 fn push_output_tool_call(
@@ -1183,7 +1170,8 @@ fn cost_total_from_llm_event(
     fallback_usage: Option<&Usage>,
 ) -> Option<f64> {
     if let Some(cost) =
-        manual::cost_from_manual_llm_output(event.output(), true).map(|(total, _)| total)
+        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::UsdOnly)
+            .map(|(total, _)| total)
     {
         return Some(cost);
     }
@@ -1202,11 +1190,13 @@ fn cost_total_from_llm_event(
     }
 
     let usage = fallback_usage?;
-    let model_name = event
-        .model_name()
-        .or_else(|| manual::model_name_from_manual_llm_output(event.output()))?;
-    estimate_cost_for_provider(Some(event.name()), model_name, usage)
-        .and_then(|cost| cost.total_for_currency("USD"))
+    estimate_cost_for_response_or_model(
+        Some(event.name()),
+        event.model_name(),
+        manual::model_name_from_manual_llm_output(event.output()),
+        usage,
+    )
+    .and_then(|cost| cost.total_for_currency("USD"))
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
@@ -1255,8 +1245,8 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
         ),
     ];
 
-    if let Some(model_name) = event.model_name() {
-        attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name.to_string()));
+    if let Some(model_name) = model_name_for_llm_event(event) {
+        attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
         attributes.push(KeyValue::new(oi::tool_call::ID, tool_call_id.to_string()));

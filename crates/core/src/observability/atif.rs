@@ -39,9 +39,11 @@ use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::response::{AnnotatedLlmResponse, Usage, estimate_cost_for_provider};
+use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
+
+use super::{estimate_cost_for_response_or_model, manual, model_name_for_llm_event};
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
@@ -666,15 +668,29 @@ fn collect_openai_responses_content_text(
 const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
     "prompt_tokens",
     "input_tokens",
+    "inputTokens",
+    "input",
     "completion_tokens",
     "output_tokens",
+    "completionTokens",
+    "outputTokens",
+    "output",
     "cached_tokens",
+    "cachedTokens",
+    "cache_read_tokens",
+    "cacheReadTokens",
     "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "cacheRead",
     "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
     "cache_write_tokens",
+    "cacheWriteTokens",
+    "cacheWrite",
     "cost_usd",
     "cost",
     "prompt_tokens_details",
+    "input_tokens_details",
     "prompt_token_ids",
     "completion_token_ids",
     "logprobs",
@@ -691,38 +707,34 @@ fn extract_metrics(
     model_name: Option<&str>,
 ) -> Option<AtifMetrics> {
     let usage = token_usage_object(output)?;
-    let prompt = usage_u64(usage, &["prompt_tokens", "input_tokens"]);
-    let completion = usage_u64(usage, &["completion_tokens", "output_tokens"]);
-    let cache_read = usage_u64(usage, &["cached_tokens"])
-        .or_else(|| prompt_tokens_detail_u64(usage, "cached_tokens"))
-        .or_else(|| input_tokens_detail_u64(usage, "cached_tokens"))
-        .or_else(|| usage_u64(usage, &["cache_read_input_tokens"]));
-    let cache_write = usage_u64(
-        usage,
-        &["cache_creation_input_tokens", "cache_write_tokens"],
-    );
+    let fallback_usage = manual::usage_from_manual_llm_output(Some(output));
+    let prompt = fallback_usage
+        .as_ref()
+        .and_then(|usage| usage.prompt_tokens);
+    let completion = fallback_usage
+        .as_ref()
+        .and_then(|usage| usage.completion_tokens);
+    let cache_read = fallback_usage
+        .as_ref()
+        .and_then(|usage| usage.cache_read_tokens);
+    let cache_write = fallback_usage
+        .as_ref()
+        .and_then(|usage| usage.cache_write_tokens);
     let cached = sum_options(cache_read, cache_write);
-    let explicit_cost = usage
-        .get("cost_usd")
-        .and_then(Json::as_f64)
-        .or_else(|| usage.get("cost").and_then(cost_usd_from_cost_object));
+    let explicit_cost =
+        manual::cost_from_manual_llm_output(Some(output), manual::ManualCostPolicy::AtifUsdOnly)
+            .map(|(total, _)| total);
     let has_reported_cost = usage.get("cost").is_some();
     let cost = if has_reported_cost {
         explicit_cost
     } else {
         explicit_cost.or_else(|| {
-            let model_name = model_name.or_else(|| response_model_name(output))?;
-            estimate_cost_for_provider(
+            let usage = fallback_usage.as_ref()?;
+            estimate_cost_for_response_or_model(
                 provider,
                 model_name,
-                &Usage {
-                    prompt_tokens: prompt,
-                    completion_tokens: completion,
-                    total_tokens: usage_u64(usage, &["total_tokens"]),
-                    cache_read_tokens: cache_read,
-                    cache_write_tokens: cache_write,
-                    cost: None,
-                },
+                response_model_name(output),
+                usage,
             )
             .and_then(|cost| cost.total_for_currency("USD"))
         })
@@ -762,30 +774,6 @@ fn extract_metrics(
         completion_token_ids: completion_ids,
         logprobs,
         extra,
-    })
-}
-
-fn cost_usd_from_cost_object(cost: &Json) -> Option<f64> {
-    let cost = cost.as_object()?;
-    let currency = cost.get("currency").and_then(Json::as_str);
-    let is_relay_normalized_cost = cost
-        .get("source")
-        .and_then(Json::as_str)
-        .is_some_and(|source| matches!(source, "provider_reported" | "model_pricing"));
-    let has_legacy_provider_total =
-        currency.is_none() && cost.get("total").and_then(Json::as_f64).is_some();
-    let is_usd_cost = currency.is_some_and(|currency| currency.eq_ignore_ascii_case("USD"))
-        || currency.is_none() && (is_relay_normalized_cost || has_legacy_provider_total);
-    if !is_usd_cost {
-        return None;
-    }
-
-    cost.get("total").and_then(Json::as_f64).or_else(|| {
-        let (has_component, component_total) = ["input", "output", "cache_read", "cache_write"]
-            .iter()
-            .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
-            .fold((false, 0.0), |(_, total), value| (true, total + value));
-        has_component.then_some(component_total)
     })
 }
 
@@ -854,11 +842,6 @@ fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json>> {
         .and_then(Json::as_object)
 }
 
-fn usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| usage.get(*key).and_then(Json::as_u64))
-}
-
 fn response_model_name(output: &Json) -> Option<&str> {
     output
         .as_object()
@@ -871,22 +854,6 @@ fn sum_options(left: Option<u64>, right: Option<u64>) -> Option<u64> {
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
     }
-}
-
-fn prompt_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
-    usage
-        .get("prompt_tokens_details")
-        .and_then(Json::as_object)
-        .and_then(|details| details.get(key))
-        .and_then(Json::as_u64)
-}
-
-fn input_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
-    usage
-        .get("input_tokens_details")
-        .and_then(Json::as_object)
-        .and_then(|details| details.get(key))
-        .and_then(Json::as_u64)
 }
 
 /// Extract `reasoning_effort` from an LLM request (string or number).
@@ -1014,33 +981,13 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
         .or_else(|| anthropic_messages_tool_use_items(output))?;
     let mut calls = Vec::with_capacity(arr.len());
     for (index, tc) in arr.iter().enumerate() {
-        let tc_obj = tc.as_object()?;
-        let mut id = tc_obj
-            .get("id")
-            .or_else(|| tc_obj.get("tool_call_id"))
-            .or_else(|| tc_obj.get("call_id"))
-            .and_then(Json::as_str)
-            .unwrap_or("")
-            .to_string();
-        // The function details live under "function".
-        let func = tc_obj.get("function").and_then(Json::as_object);
-        let name = func
-            .and_then(|f| f.get("name"))
-            .or_else(|| tc_obj.get("name"))
-            .or_else(|| tc_obj.get("tool_name"))
-            .or_else(|| tc_obj.get("function_name"))
-            .and_then(Json::as_str)
-            .unwrap_or("")
-            .to_string();
+        let fields = manual::tool_call_fields(tc)?;
+        let mut id = fields.id.unwrap_or("").to_string();
+        let name = fields.name.unwrap_or("").to_string();
         if id.is_empty() && !name.is_empty() {
             id = format!("{name}:{}", index + 1);
         }
-        let raw_arguments = func
-            .and_then(|f| f.get("arguments"))
-            .or_else(|| tc_obj.get("arguments"))
-            .or_else(|| tc_obj.get("args"))
-            .or_else(|| tc_obj.get("input"));
-        let arguments = normalize_tool_arguments(raw_arguments);
+        let arguments = normalize_tool_arguments(fields.arguments);
         // Skip entries with no id and no name — they are not meaningful.
         if id.is_empty() && name.is_empty() {
             continue;
@@ -1154,6 +1101,7 @@ fn tool_call_extra(tool_call: &Json) -> Option<Json> {
                 | "type"
                 | "function"
                 | "name"
+                | "toolName"
                 | "tool_name"
                 | "function_name"
                 | "arguments"
@@ -1454,7 +1402,9 @@ impl LlmSpanCandidate {
             model_name: start
                 .model_name()
                 .or_else(|| end.model_name())
-                .map(ToOwned::to_owned),
+                .map(ToOwned::to_owned)
+                .or_else(|| model_name_for_llm_event(start))
+                .or_else(|| model_name_for_llm_event(end)),
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
             end_metrics: end
                 .data()
@@ -2292,7 +2242,7 @@ impl StepConversionState {
                 .and_then(|response| atif_message_from_annotated_response(response))
                 .unwrap_or_else(|| extract_llm_response_message(output)),
             timestamp: Some(event.timestamp().to_rfc3339()),
-            model_name: event.model_name().map(ToOwned::to_owned),
+            model_name: model_name_for_llm_event(event),
             reasoning_effort,
             reasoning_content,
             tool_calls,
