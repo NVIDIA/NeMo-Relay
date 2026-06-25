@@ -18,6 +18,14 @@ pub(crate) enum PluginLifecycleFailureKind {
     Refused,
 }
 
+pub(crate) type PluginLifecycleErrorContext<'a> = (
+    &'static str,
+    Option<&'a str>,
+    PluginLifecycleFailureKind,
+    Option<&'static str>,
+    &'a str,
+);
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
     #[error("guardrail rejected: {0}")]
@@ -61,15 +69,7 @@ impl CliError {
         }
     }
 
-    pub(crate) fn plugin_lifecycle(
-        &self,
-    ) -> Option<(
-        &'static str,
-        Option<&str>,
-        PluginLifecycleFailureKind,
-        Option<&'static str>,
-        &str,
-    )> {
+    pub(crate) fn plugin_lifecycle(&self) -> Option<PluginLifecycleErrorContext<'_>> {
         match self {
             Self::PluginLifecycle {
                 command,

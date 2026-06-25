@@ -22,9 +22,8 @@ use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::plugins::policy::EvaluatedDynamicPluginHostPolicy;
 
 use super::state::ScopedDynamicPluginRecord;
-use super::{
-    EvaluatedDynamicPluginTrust, inspect_compat_data, inspect_load_data, redacted_host_config_json,
-};
+use super::trust::EvaluatedDynamicPluginTrust;
+use super::{inspect_compat_data, inspect_load_data, redacted_host_config_json};
 
 #[derive(Debug)]
 pub(super) struct ValidateResponseInput<'a> {
