@@ -287,6 +287,32 @@ fn hint_anthropic_upgrades_system_less_messages() {
 }
 
 #[test]
+fn hint_anthropic_descriptor_decodes_system_less_messages() {
+    let request = req(json!({
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop_sequences": ["END"]
+    }));
+
+    assert_eq!(
+        request_descriptor(&request.content, None).map(|descriptor| descriptor.surface),
+        Some(ProviderSurface::OpenAIChat)
+    );
+    let descriptor = request_descriptor(&request.content, Some("anthropic"))
+        .expect("anthropic hint should select descriptor");
+    assert_eq!(descriptor.surface, ProviderSurface::AnthropicMessages);
+
+    let decoded = (descriptor.decode_request)(&request).expect("anthropic request decodes");
+    let stop = decoded
+        .params
+        .as_ref()
+        .and_then(|params| params.stop.as_ref())
+        .expect("anthropic stop_sequences are normalized");
+    assert_eq!(stop, &vec!["END".to_string()]);
+    assert!(!decoded.extra.contains_key("stop_sequences"));
+}
+
+#[test]
 fn hint_other_or_unknown_provider_stays_chat() {
     for hint in [Some("openai"), Some("passthrough"), Some("gemini"), None] {
         assert_eq!(
