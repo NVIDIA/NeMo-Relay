@@ -76,9 +76,9 @@ pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
 
 /// Like [`detect_request_surface`], but a recognized `provider_hint` resolves the
 /// one ambiguous shape (an Anthropic request without a top-level `system`,
-/// otherwise read as OpenAI Chat). Today, `"anthropic"` and provider paths such
-/// as `"anthropic.messages"` are the only hints that change detection; `None`
-/// or any other value is ignored and detection stays shape-only.
+/// otherwise read as OpenAI Chat). Today, only the exact hints `"anthropic"`
+/// and `"anthropic.messages"` change detection; `None` or any other value is
+/// ignored and detection stays shape-only.
 #[must_use]
 pub fn detect_request_surface_with_hint(
     body: &Json,

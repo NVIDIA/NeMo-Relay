@@ -343,6 +343,8 @@ fn hint_other_or_unknown_provider_stays_chat() {
     for hint in [
         Some("openai"),
         Some("openai.chat"),
+        Some("anthropic.count_tokens"),
+        Some("anthropic.preview"),
         Some("passthrough"),
         Some("gemini"),
         None,
