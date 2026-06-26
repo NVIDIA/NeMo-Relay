@@ -23,3 +23,17 @@ func TestPiiRedactionShorthandHelpers(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %#v", report.Diagnostics)
 	}
 }
+
+func TestPiiRedactionComponentSpecAndLocalModelHelpers(t *testing.T) {
+	config := NewConfig()
+	local := NewLocalModelConfig()
+	local.Backend = "local"
+	local.ModelID = "pii-model"
+	config.Mode = "local"
+	config.Local = &local
+
+	spec := NewComponentSpec(config)
+	if !spec.Enabled || spec.Config.Local == nil || spec.Config.Local.ModelID != "pii-model" {
+		t.Fatalf("unexpected PII redaction component spec: %#v", spec)
+	}
+}

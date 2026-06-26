@@ -15,20 +15,12 @@ use crate::api::shared::{
 };
 use crate::error::{FlowError, Result};
 use crate::json::Json;
-use bitflags::bitflags;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-bitflags! {
-    /// Bitflags that modify tool-call behavior and observability.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    pub struct ToolAttributes: u32 {
-        /// Marks the tool as executing out-of-process.
-        const REMOTE = 0b01;
-    }
-}
+pub use nemo_relay_types::api::tool::ToolAttributes;
 
 /// Runtime-owned handle identifying an active or completed tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]

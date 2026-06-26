@@ -8,10 +8,11 @@ use serde_json::{Value, json};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::super::request::ContentPart;
+use super::super::request::{ContentPart, MessageContent};
 use super::super::traits::LlmResponseCodec;
 use crate::codec::pricing::pricing_test_mutex;
 use crate::error::FlowError;
+use crate::json::Json;
 use crate::plugin::{
     DiagnosticLevel, PluginComponentSpec, PluginConfig, clear_plugin_configuration,
     initialize_plugins, validate_plugin_config,

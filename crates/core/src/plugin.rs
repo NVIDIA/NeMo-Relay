@@ -38,6 +38,7 @@ use crate::api::runtime::{
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
+pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
 pub use dynamic::*;
@@ -149,35 +150,6 @@ impl ConfigReport {
             .iter()
             .any(|diag| diag.level == DiagnosticLevel::Error)
     }
-}
-
-/// One validation or compatibility diagnostic.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct ConfigDiagnostic {
-    /// Severity level for the diagnostic.
-    pub level: DiagnosticLevel,
-    /// Stable diagnostic code suitable for machine checks.
-    pub code: String,
-    /// Optional component identifier associated with the diagnostic.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub component: Option<String>,
-    /// Optional field path associated with the diagnostic.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    /// Human-readable diagnostic message.
-    pub message: String,
-}
-
-/// Diagnostic severity.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(rename_all = "lowercase")]
-pub enum DiagnosticLevel {
-    /// Non-fatal compatibility or validation issue.
-    Warning,
-    /// Fatal validation issue that blocks initialization.
-    Error,
 }
 
 /// Policy for how unsupported plugin/runtime config is handled.

@@ -6,7 +6,23 @@ position: 1
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use these generated library references for symbol-level API documentation:
+Use these generated library references for symbol-level API documentation.
+
+Use the generated reference when you already know which public symbol you need.
+Do not treat generated reference pages as the source of truth for runtime
+semantics such as:
+
+- Ownership
+- Managed execution ordering
+- Cleanup boundaries
+- Middleware behavior
+- Support boundaries
+
+For those topics, start with [Concepts](/about-nemo-relay/concepts), the
+[Agent Runtime Primer](/getting-started/agent-runtime-primer), or the
+workflow-specific documentation path that matches the boundary you own.
+
+Primary binding references:
 
 - [Python Library Reference](/reference/api/python-library-reference)
 - [Node.js Library Reference](/reference/api/nodejs-library-reference)

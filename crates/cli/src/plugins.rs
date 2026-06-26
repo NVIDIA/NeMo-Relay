@@ -22,6 +22,8 @@ use crate::error::CliError;
 
 pub(crate) mod config_io;
 mod editor_model;
+pub(crate) mod lifecycle;
+pub(crate) mod policy;
 
 use self::config_io::*;
 use self::editor_model::*;
@@ -91,7 +93,7 @@ fn print_save_success(path: &Path) {
 
 pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     ensure_tty()?;
-    let scope = target_scope(&command)?;
+    let scope = target_scope(&command.scope)?;
     let path = target_path(scope)?;
     let mut config = read_plugin_config(&path)?;
     ensure_observability_component(&mut config)?;

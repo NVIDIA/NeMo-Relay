@@ -7,9 +7,7 @@
 //! throughout the crate, and a [`merge_json`] helper for shallow-merging
 //! optional JSON values.
 
-/// Type alias for [`serde_json::Value`], used as the universal JSON
-/// representation throughout the NeMo Relay runtime.
-pub type Json = serde_json::Value;
+pub use nemo_relay_types::Json;
 
 /// Shallow-merge two optional JSON values.
 ///

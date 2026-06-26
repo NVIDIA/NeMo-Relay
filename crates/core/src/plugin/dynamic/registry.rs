@@ -4,9 +4,10 @@
 use std::collections::BTreeMap;
 
 use super::{
-    DynamicPluginFailure, DynamicPluginId, DynamicPluginManifest, DynamicPluginMetadata,
-    DynamicPluginRecord, DynamicPluginRuntimeStatus, DynamicPluginValidationStatus,
-    bump_generation, stamp_creation_metadata,
+    DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginId,
+    DynamicPluginManifest, DynamicPluginMetadata, DynamicPluginRecord, DynamicPluginRuntimeStatus,
+    DynamicPluginStartupClass, DynamicPluginValidationStatus, bump_generation,
+    stamp_creation_metadata,
 };
 use crate::plugin::{PluginError, Result};
 
@@ -22,6 +23,23 @@ impl DynamicPluginRegistry {
         Self::default()
     }
 
+    /// Reconstructs a registry from previously persisted durable records.
+    pub fn from_records(records: Vec<DynamicPluginRecord>) -> Result<Self> {
+        let mut registry = Self::new();
+        for mut record in records {
+            normalize_record_shape(&mut record);
+            validate_record_shape(&record)?;
+            let plugin_id = record.metadata.id.clone();
+            if registry.records.contains_key(&plugin_id) {
+                return Err(PluginError::Conflict(format!(
+                    "dynamic plugin '{plugin_id}' is duplicated in persisted registry state"
+                )));
+            }
+            registry.records.insert(plugin_id, record);
+        }
+        Ok(registry)
+    }
+
     /// Returns the registered record for `plugin_id`, if present.
     pub fn get(&self, plugin_id: &str) -> Option<&DynamicPluginRecord> {
         self.records.get(plugin_id)
@@ -33,6 +51,11 @@ impl DynamicPluginRegistry {
             .values()
             .filter(|record| include_tombstoned || !record.is_tombstoned())
             .collect()
+    }
+
+    /// Clones records for serialization or higher-level projection.
+    pub fn cloned_records(&self, include_tombstoned: bool) -> Vec<DynamicPluginRecord> {
+        self.list(include_tombstoned).into_iter().cloned().collect()
     }
 
     /// Adds a new dynamic plugin record.
@@ -143,6 +166,23 @@ impl DynamicPluginRegistry {
         last_error: Option<DynamicPluginFailure>,
     ) -> Result<()> {
         let record = self.lookup_mut(plugin_id)?;
+        record.status.last_error = last_error;
+        Ok(())
+    }
+
+    /// Replaces the current host-policy outcome without mutating desired state.
+    pub fn update_policy_status(
+        &mut self,
+        plugin_id: &str,
+        policy_satisfied: DynamicPluginCheckState,
+        startup_class: DynamicPluginStartupClass,
+        attestation_mode: DynamicPluginAttestationMode,
+        last_error: Option<DynamicPluginFailure>,
+    ) -> Result<()> {
+        let record = self.lookup_mut(plugin_id)?;
+        record.status.validation.policy_satisfied = policy_satisfied;
+        record.status.startup_class = Some(startup_class);
+        record.status.attestation_mode = Some(attestation_mode);
         record.status.last_error = last_error;
         Ok(())
     }

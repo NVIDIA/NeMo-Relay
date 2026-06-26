@@ -199,6 +199,11 @@ agent scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
 and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
 same values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
 
+ATIF is a trajectory projection over NeMo Relay events. It should preserve the
+meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
+lineage rules without becoming the source of truth for runtime ownership,
+middleware ordering, or provider payload decoding.
+
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the ATIF

@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-const testAgentID = "go-agent"
+const (
+	testAgentID                 = "go-agent"
+	newAdaptiveRuntimeFailedMsg = "NewAdaptiveRuntime failed: %v"
+)
 
 func testAdaptiveRuntimeConfig(provider string) AdaptiveConfig {
 	config := NewAdaptiveConfig()
@@ -37,7 +40,7 @@ func TestValidateAdaptiveConfigAndOwnedRuntime(t *testing.T) {
 
 	runtime, err := NewAdaptiveRuntime(NewAdaptiveConfig())
 	if err != nil {
-		t.Fatalf("NewAdaptiveRuntime failed: %v", err)
+		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
 	defer runtime.Shutdown()
 	if err := runtime.Register(); err != nil {
@@ -107,7 +110,7 @@ func TestBuildCacheTelemetryEvent(t *testing.T) {
 func TestAdaptiveRuntimeBuildCacheRequestFacts(t *testing.T) {
 	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
 	if err != nil {
-		t.Fatalf("NewAdaptiveRuntime failed: %v", err)
+		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
 	}
 	if err := runtime.Register(); err != nil {
 		t.Fatalf("Register failed: %v", err)
@@ -146,6 +149,18 @@ func TestAdaptiveRuntimeBuildCacheRequestFacts(t *testing.T) {
 	}
 	if facts.MissingFacts[0] != "acg_stability_unavailable" {
 		t.Fatalf("unexpected missing facts: %#v", facts.MissingFacts)
+	}
+}
+
+func TestAdaptiveRuntimeBindScopeRejectsNilScope(t *testing.T) {
+	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))
+	if err != nil {
+		t.Fatalf(newAdaptiveRuntimeFailedMsg, err)
+	}
+	defer runtime.Shutdown()
+
+	if runtime.BindScope(nil) == nil {
+		t.Fatal("expected BindScope to reject nil scope")
 	}
 }
 

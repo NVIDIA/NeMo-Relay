@@ -84,7 +84,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
         Command::Config(command) => run_config(command).await,
-        Command::Plugins(command) => run_plugins(command),
+        Command::Plugins(command) => run_plugins(command, server),
         Command::Pricing(command) => run_pricing(command),
         Command::Doctor(command) => run_doctor(command).await,
         Command::Agents(command) => doctor::run_agents(command.json).await,
@@ -101,11 +101,41 @@ async fn run_config(command: ConfigCommand) -> Result<ExitCode, error::CliError>
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_plugins(command: PluginsCommand) -> Result<ExitCode, error::CliError> {
-    match command.command {
-        PluginsSubcommand::Edit(command) => plugins::edit(command)?,
+fn run_plugins(command: PluginsCommand, server: &ServerArgs) -> Result<ExitCode, error::CliError> {
+    let json_context = command
+        .command
+        .json_context()
+        .map(|context| (context.command, context.target.map(str::to_owned)));
+    let json = json_context.is_some();
+    let result = match command.command {
+        PluginsSubcommand::Edit(command) => plugins::edit(command),
+        PluginsSubcommand::Add(command) => plugins::lifecycle::add(command, server),
+        PluginsSubcommand::Validate(command) => plugins::lifecycle::validate(command, server),
+        PluginsSubcommand::List(command) => plugins::lifecycle::list(command, server),
+        PluginsSubcommand::Inspect(command) => plugins::lifecycle::inspect(command, server),
+        PluginsSubcommand::Enable(command) => plugins::lifecycle::enable(command, server),
+        PluginsSubcommand::Disable(command) => plugins::lifecycle::disable(command, server),
+        PluginsSubcommand::Remove(command) => plugins::lifecycle::remove(command, server),
+    };
+    match result {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(error) => {
+            if let Some(exit_code) = plugins::lifecycle::render_plugin_error(&error, json)? {
+                Ok(exit_code)
+            } else if json {
+                let (json_command, json_target) = json_context
+                    .as_ref()
+                    .expect("json plugin command context should exist when json output is enabled");
+                plugins::lifecycle::render_generic_plugin_json_error(
+                    json_command,
+                    json_target.as_deref(),
+                    &error.to_string(),
+                )
+            } else {
+                Err(error)
+            }
+        }
     }
-    Ok(ExitCode::SUCCESS)
 }
 
 fn run_pricing(command: PricingCommand) -> Result<ExitCode, error::CliError> {
@@ -179,9 +209,61 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
 
 #[cfg(test)]
 mod test_support {
+    #[must_use]
+    pub(crate) struct CwdTestScope {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        prev: Option<std::path::PathBuf>,
+    }
+
+    impl CwdTestScope {
+        pub(crate) fn locked() -> Self {
+            Self {
+                _guard: lock_cwd(),
+                prev: None,
+            }
+        }
+
+        pub(crate) fn enter(path: &std::path::Path) -> Self {
+            let guard = lock_cwd();
+            let prev = std::env::current_dir().unwrap();
+            std::env::set_current_dir(path).unwrap();
+            Self {
+                _guard: guard,
+                prev: Some(prev),
+            }
+        }
+    }
+
+    impl Drop for CwdTestScope {
+        fn drop(&mut self) {
+            if let Some(prev) = &self.prev
+                && let Err(error) = std::env::set_current_dir(prev)
+            {
+                CWD_RESTORE_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+                if std::thread::panicking() {
+                    eprintln!("failed to restore current_dir to {prev:?}: {error}");
+                } else {
+                    panic!("failed to restore current_dir to {prev:?}: {error}");
+                }
+            }
+        }
+    }
+
+    pub(crate) static CWD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static CWD_RESTORE_FAILED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
     pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     pub(crate) static PLUGIN_CONFIG_TEST_LOCK: tokio::sync::Mutex<()> =
         tokio::sync::Mutex::const_new(());
+
+    fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
+        let guard = CWD_TEST_LOCK.lock().expect("CWD_TEST_LOCK poisoned");
+        assert!(
+            !CWD_RESTORE_FAILED.load(std::sync::atomic::Ordering::SeqCst),
+            "current_dir restore failed in a previous test; aborting to prevent cross-test contamination",
+        );
+        guard
+    }
 }
 
 #[cfg(test)]

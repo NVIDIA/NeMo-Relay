@@ -1468,6 +1468,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "js-sys",
+ "nemo-relay-types",
  "object_store",
  "openinference-semantic-conventions",
  "opentelemetry",
@@ -1479,6 +1480,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1519,6 +1521,7 @@ version = "0.5.0"
 dependencies = [
  "async-stream",
  "axum",
+ "base64",
  "bytes",
  "clap",
  "clap_complete",
@@ -1533,10 +1536,13 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "reqwest",
+ "ring",
  "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
+ "strum",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1597,6 +1603,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-plugin"
+version = "0.5.0"
+dependencies = [
+ "nemo-relay-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nemo-relay-python"
 version = "0.5.0"
 dependencies = [
@@ -1611,6 +1626,19 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-relay-types"
+version = "0.5.0"
+dependencies = [
+ "bitflags",
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "typed-builder",
  "uuid",
 ]
 
@@ -2714,6 +2742,27 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "subtle"

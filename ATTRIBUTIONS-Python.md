@@ -3335,7 +3335,7 @@ SOFTWARE AND DOCUMENTATION, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGE.
 ```
 
-## opentelemetry-proto (1.42.1)
+## opentelemetry-proto (1.43.0)
 
 ### Licenses
 License: `Apache-2.0`
@@ -4503,7 +4503,7 @@ Apache License
    limitations under the License.
 ```
 
-## protobuf (6.33.6)
+## protobuf (7.35.1)
 
 ### Licenses
 License: `BSD-3-Clause`

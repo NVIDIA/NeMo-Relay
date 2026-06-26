@@ -8,15 +8,22 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
-use crate::api::llm::LlmAttributes;
+use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
+use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{
-    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
+    reset_active_pricing_resolver, set_active_pricing_resolver,
 };
+use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use serde_json::json;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 struct ResetPricingResolverGuard;
 
@@ -53,6 +60,75 @@ fn install_test_pricing(model_id: &str) {
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
 }
 
+fn install_two_model_test_pricing(requested_model: &str, response_model: &str) {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test",
+                    "model_id": requested_model,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 1000.0,
+                        "output_per_million": 1000.0
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                },
+                {
+                    "provider": "test",
+                    "model_id": response_model,
+                    "pricing_as_of": "2026-06-05",
+                    "pricing_source": "test",
+                    "rates": {
+                        "input_per_million": 0.15,
+                        "output_per_million": 0.60,
+                        "cache_read_per_million": 0.075
+                    },
+                    "prompt_cache": {
+                        "read_accounting": "included_in_prompt_tokens"
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn annotated_response_with_usage(model: &str, usage: Usage) -> AnnotatedLlmResponse {
+    AnnotatedLlmResponse {
+        id: None,
+        model: Some(model.to_string()),
+        message: None,
+        tool_calls: None,
+        finish_reason: None,
+        usage: Some(usage),
+        api_specific: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn provider_reported_cost(total: f64, currency: &str, model: &str) -> CostEstimate {
+    CostEstimate {
+        total: Some(total),
+        currency: currency.to_string(),
+        input: None,
+        output: None,
+        cache_read: None,
+        cache_write: None,
+        source: CostSource::ProviderReported,
+        pricing_provider: None,
+        pricing_model: Some(model.to_string()),
+        pricing_as_of: None,
+        pricing_source: None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum EventType {
     Start,
@@ -73,6 +149,8 @@ struct TestEventBuilder {
     output: Option<serde_json::Value>,
     model_name: Option<String>,
     tool_call_id: Option<String>,
+    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    annotated_response: Option<Arc<AnnotatedLlmResponse>>,
 }
 
 impl TestEventBuilder {
@@ -118,6 +196,16 @@ impl TestEventBuilder {
 
     fn tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
         self.tool_call_id = Some(tool_call_id.into());
+        self
+    }
+
+    fn annotated_request(mut self, annotated: AnnotatedLlmRequest) -> Self {
+        self.annotated_request = Some(Arc::new(annotated));
+        self
+    }
+
+    fn annotated_response(mut self, annotated: AnnotatedLlmResponse) -> Self {
+        self.annotated_response = Some(Arc::new(annotated));
         self
     }
 
@@ -191,6 +279,7 @@ impl TestEventBuilder {
                 Some(
                     CategoryProfile::builder()
                         .model_name_opt(self.model_name)
+                        .annotated_request_opt(self.annotated_request)
                         .build(),
                 ),
             )),
@@ -211,6 +300,7 @@ impl TestEventBuilder {
                 Some(
                     CategoryProfile::builder()
                         .model_name_opt(self.model_name)
+                        .annotated_response_opt(self.annotated_response)
                         .build(),
                 ),
             )),
@@ -265,6 +355,8 @@ fn event_builder(uuid: Uuid, event_type: EventType) -> TestEventBuilder {
         output: None,
         model_name: None,
         tool_call_id: None,
+        annotated_request: None,
+        annotated_response: None,
     }
 }
 
@@ -716,6 +808,77 @@ fn test_exporter_llm_lifecycle() {
 }
 
 #[test]
+fn test_exporter_uses_raw_output_model_name_without_profile() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "model": "raw-model",
+            "content": "done",
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 3
+            }
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let agent_step = &trajectory.steps[0];
+    assert_eq!(agent_step.model_name, Some("raw-model".to_string()));
+    let metrics = agent_step.metrics.as_ref().unwrap();
+    assert_eq!(metrics.prompt_tokens, Some(7));
+    assert_eq!(metrics.completion_tokens, Some(3));
+}
+
+#[test]
+fn test_exporter_prefers_explicit_end_model_over_raw_start_model() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "raw-start-model",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .build();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "done",
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 3
+            }
+        }))
+        .model_name("profile-end-model")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(start);
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(
+        trajectory.steps[1].model_name,
+        Some("profile-end-model".to_string())
+    );
+}
+
+#[test]
 fn test_extract_metrics_supports_provider_usage_payloads() {
     let openai_metrics = extract_metrics(
         &json!({
@@ -729,6 +892,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
                 }
             }
         }),
+        None,
         None,
         None,
     )
@@ -756,6 +920,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(responses_metrics.prompt_tokens, Some(75));
@@ -779,6 +944,7 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(anthropic_metrics.prompt_tokens, Some(11));
@@ -796,9 +962,92 @@ fn test_extract_metrics_supports_provider_usage_payloads() {
         }),
         None,
         None,
+        None,
     )
     .unwrap();
     assert_eq!(non_usd_metrics.cost_usd, None);
+}
+
+#[test]
+fn test_extract_metrics_merges_usage_and_token_usage_fields() {
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "reasoning_tokens": 7
+            },
+            "token_usage": {
+                "completion_tokens": 20,
+                "total_tokens": 30,
+                "audio_tokens": 4
+            }
+        }),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(metrics.prompt_tokens, Some(10));
+    assert_eq!(metrics.completion_tokens, Some(20));
+    assert_eq!(metrics.extra.as_ref().unwrap()["total_tokens"], json!(30));
+    assert_eq!(
+        metrics.extra.as_ref().unwrap()["reasoning_tokens"],
+        json!(7)
+    );
+    assert_eq!(metrics.extra.as_ref().unwrap()["audio_tokens"], json!(4));
+}
+
+#[test]
+fn test_extract_metrics_uses_shared_cache_read_precedence() {
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "cached_tokens": 12,
+                "prompt_tokens_details": {"cached_tokens": 42},
+                "input_tokens_details": {"cached_tokens": 24},
+                "cache_read_input_tokens": 77,
+                "cache_read_tokens": 99
+            }
+        }),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(metrics.cached_tokens, Some(12));
+}
+
+#[test]
+fn test_extract_metrics_filters_extracted_usage_aliases_from_extra() {
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 20,
+                "cacheReadInputTokens": 5,
+                "totalTokens": 35,
+                "reasoning_tokens": 3
+            }
+        }),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(metrics.prompt_tokens, Some(10));
+    assert_eq!(metrics.completion_tokens, Some(20));
+    assert_eq!(metrics.cached_tokens, Some(5));
+    let extra = metrics.extra.as_ref().unwrap().as_object().unwrap();
+    assert!(!extra.contains_key("inputTokens"));
+    assert!(!extra.contains_key("outputTokens"));
+    assert!(!extra.contains_key("cacheReadInputTokens"));
+    assert_eq!(extra.get("totalTokens"), Some(&json!(35)));
+    assert_eq!(extra.get("reasoning_tokens"), Some(&json!(3)));
 }
 
 #[test]
@@ -821,6 +1070,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -839,6 +1089,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -857,6 +1108,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -878,6 +1130,7 @@ fn test_reported_cost_object_blocks_model_pricing_estimation() {
         }),
         Some("test"),
         Some("priced-model"),
+        None,
     )
     .unwrap();
 
@@ -923,6 +1176,152 @@ fn test_exporter_derives_llm_cost_from_model_pricing() {
 }
 
 #[test]
+fn test_exporter_prefers_response_model_before_requested_model_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_two_model_test_pricing("requested-model", "response-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "model": "response-model",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "prompt_tokens_details": {"cached_tokens": 200}
+            }
+        }))
+        .model_name("requested-model")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+    assert_eq!(metrics.cost_usd, Some(0.000_435));
+}
+
+#[test]
+fn test_exporter_falls_back_to_requested_model_when_response_model_unpriced() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("requested-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "model": "api-echoed-model",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500,
+                "prompt_tokens_details": {"cached_tokens": 200}
+            }
+        }))
+        .model_name("requested-model")
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+    assert_eq!(metrics.cost_usd, Some(0.000_435));
+}
+
+#[test]
+fn test_paired_lifecycle_uses_start_model_for_end_metrics_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("requested-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [{"role": "user", "content": "price this"}]}))
+        .model_name("requested-model")
+        .build();
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .model_name("api-echoed-model")
+        .output(json!({
+            "content": "priced response",
+            "model": "api-echoed-model",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500
+            }
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(start);
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[1].metrics.as_ref().unwrap();
+    assert_eq!(metrics.cost_usd, Some(0.000_45));
+}
+
+#[test]
+fn test_llm_span_candidate_uses_start_payload_model_for_metrics_pricing() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_test_pricing("requested-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let llm_uuid = Uuid::now_v7();
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "requested-model",
+            "messages": [{"role": "user", "content": "price this"}]
+        }))
+        .build();
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .model_name("api-echoed-model")
+        .output(json!({
+            "content": "priced response",
+            "model": "api-echoed-model",
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 500,
+                "total_tokens": 1500
+            }
+        }))
+        .build();
+
+    let candidate = LlmSpanCandidate::from_events(llm_uuid, &start, &end).unwrap();
+
+    assert_eq!(candidate.end_metrics.unwrap().cost_usd, Some(0.000_45));
+}
+
+#[test]
 fn test_exporter_uses_normalized_usage_cost_before_model_pricing() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();
@@ -961,6 +1360,88 @@ fn test_exporter_uses_normalized_usage_cost_before_model_pricing() {
 }
 
 #[test]
+fn test_exporter_prefers_annotated_usage_over_raw_usage_conflicts() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("test")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "content": "priced response",
+            "model": "raw-model",
+            "usage": {
+                "prompt_tokens": 999,
+                "completion_tokens": 888,
+                "cost": {
+                    "total": 9.99,
+                    "currency": "USD"
+                }
+            }
+        }))
+        .annotated_response(annotated_response_with_usage(
+            "annotated-model",
+            Usage {
+                prompt_tokens: Some(12),
+                completion_tokens: Some(34),
+                total_tokens: Some(46),
+                cache_read_tokens: Some(5),
+                cache_write_tokens: None,
+                cost: Some(provider_reported_cost(0.42, "USD", "annotated-model")),
+            },
+        ))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let metrics = trajectory.steps[0].metrics.as_ref().unwrap();
+    assert_eq!(metrics.prompt_tokens, Some(12));
+    assert_eq!(metrics.completion_tokens, Some(34));
+    assert_eq!(metrics.cached_tokens, Some(5));
+    assert_eq!(metrics.cost_usd, Some(0.42));
+}
+
+#[test]
+fn test_extract_metrics_does_not_mix_raw_cost_when_annotated_cost_is_non_usd() {
+    let normalized_response = annotated_response_with_usage(
+        "annotated-model",
+        Usage {
+            prompt_tokens: Some(12),
+            completion_tokens: Some(34),
+            total_tokens: Some(46),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            cost: Some(provider_reported_cost(0.42, "EUR", "annotated-model")),
+        },
+    );
+
+    let metrics = extract_metrics(
+        &json!({
+            "usage": {
+                "prompt_tokens": 999,
+                "completion_tokens": 888,
+                "cost": {
+                    "total": 9.99,
+                    "currency": "USD"
+                }
+            }
+        }),
+        None,
+        None,
+        Some(&normalized_response),
+    )
+    .unwrap();
+
+    assert_eq!(metrics.prompt_tokens, Some(12));
+    assert_eq!(metrics.completion_tokens, Some(34));
+    assert_eq!(metrics.cost_usd, None);
+}
+
+#[test]
 fn test_exporter_omits_cost_for_unknown_model_pricing() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     reset_active_pricing_resolver().unwrap();
@@ -973,6 +1454,7 @@ fn test_exporter_omits_cost_for_unknown_model_pricing() {
         }),
         None,
         Some("unknown-model"),
+        None,
     )
     .unwrap();
 
@@ -1689,6 +2171,243 @@ fn test_exporter_llm_tool_calls_promoted() {
     assert_eq!(step.llm_call_count, Some(1));
     let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
     assert_eq!(extra.llm_response.unwrap()["role"], json!("assistant"));
+}
+
+#[test]
+fn test_exporter_promotes_tool_name_alias_tool_calls() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "toolName": "search_docs",
+                "arguments": {"query": "docs"}
+            }]
+        }))
+        .build();
+
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    let tool_calls = trajectory.steps[0].tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].tool_call_id, "search_docs:1");
+    assert_eq!(tool_calls[0].function_name, "search_docs");
+    assert_eq!(tool_calls[0].arguments, json!({"query": "docs"}));
+}
+
+#[test]
+fn test_exporter_uses_annotated_message_but_raw_tool_calls() {
+    // The annotation supplies the normalized message text (winning over the raw
+    // content), while tool calls stay on the raw path so provider-specific
+    // extras are preserved.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let annotated = OpenAIChatCodec
+        .decode_response(&json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "from annotation"},
+                "finish_reason": "stop"
+            }]
+        }))
+        .unwrap();
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "from RAW",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "provider_data": {"trace_id": "t-1"},
+                        "function": {"name": "search", "arguments": "{\"q\":\"x\"}"}
+                    }]
+                }
+            }]
+        }))
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    let step = &trajectory.steps[0];
+    // Message comes from the annotation.
+    assert_eq!(step.message, json!("from annotation"));
+    // Tool calls come from the raw payload, with provider extras preserved.
+    let tool_calls = step.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls[0].function_name, "search");
+    assert_eq!(tool_calls[0].arguments, json!({"q": "x"}));
+    assert_eq!(
+        tool_calls[0].extra.as_ref().unwrap()["provider_data"]["trace_id"],
+        json!("t-1")
+    );
+}
+
+#[test]
+fn test_exporter_annotated_tool_only_response_renders_empty_message() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let annotated = OpenAIChatCodec
+        .decode_response(&json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        }))
+        .unwrap();
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"}
+                    }]
+                }
+            }]
+        }))
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    let step = &trajectory.steps[0];
+    assert_eq!(step.message, json!(""));
+    assert_eq!(step.tool_calls.as_ref().unwrap()[0].function_name, "lookup");
+}
+
+#[test]
+fn test_exporter_annotated_reasoning_only_response_renders_empty_message() {
+    // An OpenAI Responses reasoning-only output decodes to no assistant text.
+    // The annotated path emits an empty message rather than the raw extractor's
+    // stringified payload.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let output = json!({
+        "model": "gpt-4o",
+        "output": [{"type": "reasoning", "summary": []}],
+        "status": "completed"
+    });
+    let annotated = OpenAIResponsesCodec.decode_response(&output).unwrap();
+    assert!(annotated.message.is_none());
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("gpt-4o")
+        .scope_type(ScopeType::Llm)
+        .output(output)
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps[0].message, json!(""));
+}
+
+#[test]
+fn test_exporter_annotated_thinking_only_response_renders_empty_message() {
+    // An Anthropic thinking-only response decodes to no assistant text; the
+    // annotated path emits an empty message rather than dumping the raw blocks.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let output = json!({
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet",
+        "content": [{"type": "thinking", "thinking": "hmm", "signature": "sig"}],
+        "stop_reason": "end_turn"
+    });
+    let annotated = AnthropicMessagesCodec.decode_response(&output).unwrap();
+    assert!(annotated.message.is_none());
+
+    let end = event_builder(Uuid::now_v7(), EventType::End)
+        .name("claude-3-5-sonnet")
+        .scope_type(ScopeType::Llm)
+        .output(output)
+        .annotated_response(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(end);
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps[0].message, json!(""));
+}
+
+#[test]
+fn test_exporter_prefers_annotated_request_message() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello from annotation"}]
+        }),
+    };
+    let annotated = OpenAIChatCodec.decode(&request).unwrap();
+
+    let start = event_builder(Uuid::now_v7(), EventType::Start)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .input(json!({"messages": [{"role": "user", "content": "from RAW"}]}))
+        .annotated_request(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(start);
+
+    let trajectory = exporter.export().unwrap();
+    let step = &trajectory.steps[0];
+    assert_eq!(step.source, "user");
+    assert_eq!(step.message, json!("hello from annotation"));
+}
+
+#[test]
+fn test_exporter_annotated_multimodal_request_falls_back_to_raw() {
+    // A multimodal (content-part) request message must not be flattened to text:
+    // the annotation adapter returns None and ATIF preserves the raw content.
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let multimodal = json!({
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "describe"},
+            {"type": "image_url", "image_url": {"url": "https://example/img.png"}}
+        ]}]
+    });
+    let annotated = OpenAIChatCodec
+        .decode(&LlmRequest {
+            headers: serde_json::Map::new(),
+            content: multimodal.clone(),
+        })
+        .unwrap();
+
+    let start = event_builder(Uuid::now_v7(), EventType::Start)
+        .name("gpt-4")
+        .scope_type(ScopeType::Llm)
+        .input(multimodal)
+        .annotated_request(annotated)
+        .build();
+    exporter.state.lock().unwrap().events.push(start);
+
+    let trajectory = exporter.export().unwrap();
+    let message = trajectory.steps[0].message.as_str().unwrap();
+    // Raw fallback preserves the image part rather than flattening to "describe".
+    assert!(
+        message.contains("image_url"),
+        "multimodal content preserved: {message}"
+    );
 }
 
 #[test]

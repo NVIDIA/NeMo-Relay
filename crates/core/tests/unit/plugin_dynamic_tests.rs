@@ -576,6 +576,45 @@ fn manifest_parse_and_conversion_supports_worker_lane() {
 }
 
 #[test]
+fn manifest_supports_declared_capabilities() {
+    let manifest = DynamicPluginManifest::parse_toml(
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.guardrails.rich"
+kind = "worker"
+
+[compat]
+relay = ">=0.1.0,<0.2.0"
+worker_protocol = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = [
+  "plugin_worker",
+  "config_schema",
+]
+
+[load]
+runtime = "python"
+entrypoint = "acme_guardrails.plugin:register"
+"#,
+    )
+    .expect("parse manifest with functional surface capabilities");
+
+    assert_eq!(
+        manifest.capabilities.items,
+        vec![
+            DynamicPluginCapability::PluginWorker,
+            DynamicPluginCapability::ConfigSchema,
+        ]
+    );
+}
+
+#[test]
 fn manifest_conversion_canonicalizes_required_strings_in_record_state() {
     let manifest = DynamicPluginManifest::parse_toml(
         r#"

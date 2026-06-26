@@ -78,6 +78,14 @@ fn install_test_pricing(model_id: &str) {
 }
 
 fn install_provider_disambiguation_pricing(model_id: &str) {
+    install_disambiguation_pricing(model_id, "test");
+}
+
+fn install_openai_disambiguation_pricing(model_id: &str) {
+    install_disambiguation_pricing(model_id, "openai");
+}
+
+fn install_disambiguation_pricing(model_id: &str, preferred_provider: &str) {
     let catalog = PricingCatalog::from_json_str(
         &json!({
             "version": 1,
@@ -96,7 +104,7 @@ fn install_provider_disambiguation_pricing(model_id: &str) {
                     }
                 },
                 {
-                    "provider": "test",
+                    "provider": preferred_provider,
                     "model_id": model_id,
                     "pricing_as_of": "2026-06-05",
                     "pricing_source": "test",
@@ -115,6 +123,25 @@ fn install_provider_disambiguation_pricing(model_id: &str) {
     )
     .unwrap();
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn openai_chat_provider_response(model_id: &str) -> Json {
+    json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": model_id,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 1_000,
+            "completion_tokens": 500,
+            "total_tokens": 1_500,
+            "prompt_tokens_details": {"cached_tokens": 200}
+        }
+    })
 }
 
 fn reset_global() {
@@ -753,6 +780,116 @@ fn orphan_marks_become_zero_duration_spans() {
 }
 
 #[test]
+fn late_parented_marks_reuse_completed_parent_trace_context() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let tool_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    processor.process(&make_mark_event(
+        Some(tool_uuid),
+        "visor.tool_output_compressed",
+        Some(json!({"estimated_tokens_saved": 42})),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+    let tool_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "terminal")
+        .unwrap();
+    let mark_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:visor.tool_output_compressed")
+        .unwrap();
+
+    assert_eq!(
+        mark_span.span_context.trace_id(),
+        tool_span.span_context.trace_id()
+    );
+    assert_eq!(mark_span.parent_span_id, tool_span.span_context.span_id());
+    assert!(!mark_span.parent_span_is_remote);
+
+    let attributes = attr_map(&mark_span.attributes);
+    assert_eq!(
+        attributes.get("nemo_relay.mark.orphan"),
+        Some(&"true".to_string())
+    );
+}
+
+#[test]
+fn process_start_removes_completed_span_order_entry() {
+    let (provider, _exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider, "test-scope".to_string());
+    let tool_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert_eq!(
+        processor
+            .completed_span_order
+            .iter()
+            .filter(|uuid| **uuid == tool_uuid)
+            .count(),
+        1
+    );
+
+    processor.process(&make_start_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        None,
+    ));
+    assert!(!processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert!(!processor.completed_span_order.contains(&tool_uuid));
+
+    processor.process(&make_end_event(
+        tool_uuid,
+        None,
+        "terminal",
+        ScopeType::Tool,
+        Some(json!({"status": "done"})),
+    ));
+    assert!(processor.completed_span_contexts.contains_key(&tool_uuid));
+    assert_eq!(
+        processor
+            .completed_span_order
+            .iter()
+            .filter(|uuid| **uuid == tool_uuid)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn semantic_scope_type_and_span_kind_follow_event_variants() {
     let scope_event = make_start_event(
         Uuid::now_v7(),
@@ -807,6 +944,88 @@ fn pre_epoch_timestamps_round_trip_through_system_time() {
 }
 
 #[test]
+fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "other",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("priced-model")),
+    );
+
+    assert!(event.annotated_response().is_none());
+    assert!(event.normalized_llm_response().is_some());
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.currency"),
+        Some(&"USD".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_unpriced_response_model_uses_requested_model_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "openai",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("api-echoed-model")),
+        Some(
+            CategoryProfile::builder()
+                .model_name("priced-model")
+                .build(),
+        ),
+    );
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert_eq!(normalized.model.as_deref(), Some("api-echoed-model"));
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.total"),
+        Some(&"0.000435".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.llm.cost.currency"),
+        Some(&"USD".to_string())
+    );
+}
+
+#[test]
+fn llm_end_with_unannotated_openai_response_without_usage_omits_cost() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    reset_active_pricing_resolver().unwrap();
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let mut output = openai_chat_provider_response("priced-model");
+    output.as_object_mut().unwrap().remove("usage");
+    let event = make_end_event(Uuid::now_v7(), None, "openai", ScopeType::Llm, Some(output));
+
+    assert!(event.annotated_response().is_none());
+    let normalized = event.normalized_llm_response().unwrap();
+    assert!(normalized.usage.is_none());
+
+    let attributes = attr_map(&end_attributes(&event));
+    assert!(!attributes.contains_key("nemo_relay.llm.cost.total"));
+    assert!(!attributes.contains_key("nemo_relay.llm.cost.currency"));
+}
+
+#[test]
 fn helper_functions_cover_additional_otel_branches() {
     let function_end = make_end_event(Uuid::now_v7(), None, "fn-scope", ScopeType::Function, None);
     assert_eq!(span_name(&function_end), "fn-scope");
@@ -837,6 +1056,20 @@ fn helper_functions_cover_additional_otel_branches() {
     assert_eq!(
         llm_attributes.get("nemo_relay.model_name"),
         Some(&"demo-model".to_string())
+    );
+    let raw_model_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"model": "raw-model", "answer": "ok"})),
+        None,
+    );
+    let raw_model_attributes = attr_map(&common_attributes(&raw_model_event));
+    assert_eq!(
+        raw_model_attributes.get("nemo_relay.model_name"),
+        Some(&"raw-model".to_string())
     );
 
     let tool_event = Event::Scope(ScopeEvent::new(

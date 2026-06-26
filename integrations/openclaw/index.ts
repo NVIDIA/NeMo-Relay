@@ -12,7 +12,9 @@ import { definePluginEntry, type OpenClawPluginApi } from 'openclaw/plugin-sdk/p
 import { nemoRelayConfigSchema } from './src/config.js';
 import { registerNemoRelayPlugin } from './src/runtime-state.js';
 
-export default definePluginEntry({
+type NemoRelayPluginEntry = ReturnType<typeof definePluginEntry>;
+
+const nemoRelayPluginEntry: NemoRelayPluginEntry = definePluginEntry({
   id: 'nemo-relay',
   name: 'NeMo Relay Observability',
   description: 'ATIF, OpenInference, and OpenTelemetry telemetry through NeMo Relay',
@@ -21,3 +23,5 @@ export default definePluginEntry({
     registerNemoRelayPlugin(api);
   },
 });
+
+export default nemoRelayPluginEntry;

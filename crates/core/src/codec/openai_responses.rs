@@ -25,6 +25,7 @@ use super::request::{
     AnnotatedLlmRequest, GenerationParams, Message, MessageContent, ToolChoice, ToolChoiceFunction,
     ToolChoiceFunctionName, ToolDefinition,
 };
+use super::resolve::{ProviderSurface, SurfaceDescriptor};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
     estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
@@ -37,6 +38,21 @@ use super::traits::{LlmCodec, LlmResponseCodec};
 
 /// Built-in codec for the OpenAI Responses API.
 pub struct OpenAIResponsesCodec;
+
+// ---------------------------------------------------------------------------
+// Built-in surface descriptor (codec-owned detection, registered in resolve)
+// ---------------------------------------------------------------------------
+
+pub(crate) const SURFACE_DESCRIPTOR: SurfaceDescriptor = SurfaceDescriptor {
+    surface: ProviderSurface::OpenAIResponses,
+    detect_request: |obj, _| obj.contains_key("input") || obj.contains_key("instructions"),
+    detect_response: |obj| {
+        obj.get("output").is_some_and(Json::is_array)
+            || obj.get("output_text").is_some_and(Json::is_string)
+    },
+    decode_request: |request| OpenAIResponsesCodec.decode(request),
+    decode_response: |raw| OpenAIResponsesCodec.decode_response(raw),
+};
 
 // ---------------------------------------------------------------------------
 // Private intermediate serde structs for response decode
@@ -192,6 +208,11 @@ fn collect_output_item(
         .unwrap_or("")
     {
         "message" => collect_message_text_parts(item, text_parts),
+        "output_text" => {
+            if let Some(text) = output_text_block(item) {
+                text_parts.push(text);
+            }
+        }
         "function_call" => tool_calls.push(parse_function_call(item)),
         _ => {}
     }
@@ -242,6 +263,14 @@ fn message_from_text_parts(text_parts: Vec<String>) -> Option<MessageContent> {
         [text] => Some(MessageContent::Text(text.clone())),
         _ => Some(MessageContent::Text(text_parts.join("\n"))),
     }
+}
+
+fn top_level_output_text(response: &Json) -> Option<MessageContent> {
+    response
+        .get("output_text")
+        .and_then(|value| value.as_str())
+        .filter(|text| !text.is_empty())
+        .map(|text| MessageContent::Text(text.to_string()))
 }
 
 fn optional_vec<T>(items: Vec<T>) -> Option<Vec<T>> {
@@ -456,7 +485,8 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
 
         let all_output_items = raw.output.clone();
         let (text_parts, tool_calls) = collect_output_parts(raw.output.as_deref());
-        let message = message_from_text_parts(text_parts);
+        let message =
+            message_from_text_parts(text_parts).or_else(|| top_level_output_text(response));
         let tool_calls = optional_vec(tool_calls);
 
         // Map finish reason from status + incomplete_details.

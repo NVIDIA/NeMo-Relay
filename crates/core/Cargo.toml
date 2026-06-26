@@ -30,7 +30,7 @@ atof-streaming = [
     "tokio/rt-multi-thread",
     "tokio/time",
 ]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "nemo-relay-types/schema"]
 guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
@@ -75,6 +75,7 @@ openinference = [
 ]
 
 [dependencies]
+nemo-relay-types.workspace = true
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -83,6 +84,7 @@ schemars = { version = "0.8", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 bitflags = { version = "2", features = ["serde"] }
 thiserror = "2"
+strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 typed-builder = "0.23.2"
