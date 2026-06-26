@@ -28,10 +28,13 @@ fn maps_claude_canonical_tool_payload() {
             assert_eq!(event.tool_call_id, "toolu-1");
             assert_eq!(event.tool_name, "Read");
             assert_eq!(event.arguments, json!({ "file_path": "README.md" }));
+            assert!(event.metadata.get("transcript_path").is_none());
+            assert!(event.metadata.get("cwd").is_none());
             assert_eq!(
-                event.metadata["transcript_path"],
+                event.payload["transcript_path"],
                 json!("/tmp/transcript.jsonl")
             );
+            assert_eq!(event.payload["cwd"], json!("/workspace"));
         }
         event => panic!("unexpected event: {event:?}"),
     }
@@ -336,8 +339,9 @@ fn maps_cursor_subagent_and_permission_response() {
         NormalizedEvent::ToolStarted(event) => {
             assert_eq!(event.session_id, "cursor-session");
             assert_eq!(event.subagent_id.as_deref(), Some("worker"));
-            assert_eq!(event.metadata["project_dir"], json!("/repo"));
+            assert!(event.metadata.get("project_dir").is_none());
             assert!(event.metadata.get("user_email").is_none());
+            assert_eq!(event.payload["project_dir"], json!("/repo"));
             assert_eq!(event.payload["user_email"], json!("dev@example.com"));
         }
         event => panic!("unexpected event: {event:?}"),
@@ -813,7 +817,7 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         }
         assert_eq!(session_id, "header-session");
         assert_eq!(metadata["model"], json!("model-a"));
-        assert_eq!(metadata["cwd"], json!("/repo"));
+        assert!(metadata.get("cwd").is_none());
         assert_eq!(metadata["gateway_config_profile"], json!("coverage"));
     }
 }

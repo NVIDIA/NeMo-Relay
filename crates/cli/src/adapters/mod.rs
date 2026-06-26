@@ -118,9 +118,6 @@ impl AgentPayloadExtractor for CommonAgentPayloadExtractor {
             object.insert("gateway_config_profile".into(), json!(profile));
         }
         for (key, value) in [
-            ("cwd", string_at(payload, &["cwd"])),
-            ("transcript_path", string_at(payload, &["transcript_path"])),
-            ("project_dir", string_at(payload, &["project_dir"])),
             ("model", string_at(payload, &["model"])),
             ("agent_id", string_at(payload, &["agent_id"])),
             ("agent_type", string_at(payload, &["agent_type"])),
