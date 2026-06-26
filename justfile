@@ -454,6 +454,8 @@ changed = []
 found_workspace_version = False
 local_dependencies = (
     "nemo-relay-types",
+    "nemo-relay-worker-proto",
+    "nemo-relay-worker",
     "nemo-relay",
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
@@ -654,9 +656,11 @@ PY
 published_cargo_packages() {
     printf '%s\n' \
         nemo-relay-types \
+        nemo-relay-plugin \
+        nemo-relay-worker-proto \
+        nemo-relay-worker \
         nemo-relay \
         nemo-relay-adaptive \
-        nemo-relay-plugin \
         nemo-relay-pii-redaction \
         nemo-relay-ffi \
         nemo-relay-cli
@@ -1149,19 +1153,25 @@ package-rust:
         echo "Using explicit version $ref_name"
         set_cargo_workspace_version "$ref_name"
     fi
-    cargo_dirty_args=()
-    if [[ -n "$ref_name" ]]; then
-        cargo_dirty_args+=(--allow-dirty)
-    fi
     while IFS= read -r package; do
         cargo_package_config=()
+        cargo_package_args=(--locked --package "$package" --target-dir "$package_target_dir")
+        if [[ -n "$ref_name" ]]; then
+            cargo_package_args+=(--allow-dirty)
+        fi
         case "$package" in
             nemo-relay)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
             nemo-relay-adaptive)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-worker)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
                 ;;
             nemo-relay-plugin)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
@@ -1169,18 +1179,20 @@ package-rust:
             nemo-relay-pii-redaction)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
             nemo-relay-ffi|nemo-relay-cli)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
                 ;;
         esac
         if ((${#cargo_package_config[@]} == 0)); then
-            cargo package --locked --package "$package" "${cargo_dirty_args[@]}" --target-dir "$package_target_dir"
+            cargo package "${cargo_package_args[@]}"
         else
-            cargo package --locked --package "$package" "${cargo_dirty_args[@]}" --target-dir "$package_target_dir" "${cargo_package_config[@]}"
+            cargo package "${cargo_package_args[@]}" "${cargo_package_config[@]}"
         fi
     done < <(published_cargo_packages)
     find "$package_target_dir/package" -maxdepth 1 -type f -name '*.crate' -exec cp {} "$package_dir"/ \;

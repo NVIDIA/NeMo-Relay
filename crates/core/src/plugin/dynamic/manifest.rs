@@ -433,6 +433,8 @@ fn required_trimmed_string<'a>(value: Option<&'a str>, field: &str) -> Result<&'
             "{field} must not be empty"
         )));
     }
+    // Validate trimmed content while returning the original slice so each caller
+    // can decide whether preserving or normalizing whitespace is correct.
     Ok(value)
 }
 

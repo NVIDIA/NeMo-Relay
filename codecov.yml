@@ -54,6 +54,19 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
+    - component_id: plugin_sdk
+      name: Plugin SDK
+      paths:
+        - "crates/types/src"
+        - "crates/plugin/src"
+        - "crates/worker-proto/src"
+        - "crates/worker/src"
+      statuses:
+        - type: project
+          target: 90%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
     - component_id: cli
       name: CLI
       paths:

@@ -66,10 +66,14 @@ fn request_field_numbers_are_stable() {
         host_endpoint: "unix:///tmp/host.sock".into(),
     };
     let encoded = handshake.encode_to_vec();
-    assert!(
-        encoded
-            .windows(b"grpc-v1".len())
-            .any(|item| item == b"grpc-v1")
+    assert_eq!(
+        encoded,
+        b"\x0a\x03act\x12\x06plugin\x1a\x050.5.0\x22\x07grpc-v1\x2a\x05token\x32\x15unix:///tmp/host.sock"
+            .to_vec()
+    );
+    assert_eq!(
+        HandshakeRequest::decode(encoded.as_slice()).expect("decode handshake"),
+        handshake
     );
 
     let invoke = InvokeRequest {
@@ -79,10 +83,18 @@ fn request_field_numbers_are_stable() {
         surface: RegistrationSurface::ToolRequestIntercept as i32,
         continuation_id: "next".into(),
         scope: None,
+        auth_token: "token".into(),
         payload: None,
     };
     let encoded = invoke.encode_to_vec();
-    assert!(!encoded.is_empty());
+    assert_eq!(
+        encoded,
+        b"\x0a\x03act\x12\x06invoke\x1a\x04tool\x20\x0d\x2a\x04next\x3a\x05token".to_vec()
+    );
+    assert_eq!(
+        InvokeRequest::decode(encoded.as_slice()).expect("decode invoke"),
+        invoke
+    );
 }
 
 #[test]

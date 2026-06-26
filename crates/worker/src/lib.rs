@@ -8,11 +8,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
+use std::net::{SocketAddr, ToSocketAddrs};
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
+#[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::Event;
@@ -31,10 +35,13 @@ use nemo_relay_worker_proto::v1::{
     ValidateRequest, ValidateResponse, WorkerAck, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server};
 use tonic::{Request, Response, Status};
+#[cfg(unix)]
 use tower::service_fn;
 
 /// SDK result type.
@@ -47,11 +54,11 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
 tokio::task_local! {
-    static TASK_SCOPE_STACK_ID: Option<String>;
+    static TASK_SCOPE_CONTEXT: Option<ScopeContext>;
 }
 
 thread_local! {
-    static THREAD_SCOPE_STACK_ID: RefCell<Option<String>> = const { RefCell::new(None) };
+    static THREAD_SCOPE_CONTEXT: RefCell<Option<ScopeContext>> = const { RefCell::new(None) };
 }
 
 /// Error returned by worker SDK callbacks and runtime helpers.
@@ -115,7 +122,8 @@ type LlmStreamExecutionFn =
 struct WorkerHandlers {
     registrations: Vec<Registration>,
     subscribers: HashMap<String, SubscriberFn>,
-    tool_sanitizers: HashMap<String, ToolSanitizeFn>,
+    tool_sanitize_requests: HashMap<String, ToolSanitizeFn>,
+    tool_sanitize_responses: HashMap<String, ToolSanitizeFn>,
     tool_conditionals: HashMap<String, ToolConditionalFn>,
     tool_requests: HashMap<String, ToolRequestFn>,
     tool_executions: HashMap<String, ToolExecutionFn>,
@@ -182,7 +190,7 @@ impl PluginContext {
             false,
         );
         self.handlers
-            .tool_sanitizers
+            .tool_sanitize_requests
             .insert(name.into(), Arc::new(callback));
     }
 
@@ -202,7 +210,7 @@ impl PluginContext {
             false,
         );
         self.handlers
-            .tool_sanitizers
+            .tool_sanitize_responses
             .insert(name.into(), Arc::new(callback));
     }
 
@@ -545,14 +553,27 @@ impl PluginRuntime {
     }
 
     async fn host_client(&self) -> Result<RelayHostRuntimeClient<Channel>> {
-        connect_uds(&self.host_endpoint)
+        connect_host_endpoint(&self.host_endpoint)
             .await
             .map(RelayHostRuntimeClient::new)
     }
 
     fn current_scope_context(&self) -> Option<ScopeContext> {
-        current_scope_stack_id().map(|scope_stack_id| scope_context(&scope_stack_id))
+        current_scope_context()
     }
+}
+
+/// Explicit worker server configuration for tests and custom launchers.
+#[derive(Debug, Clone)]
+pub struct WorkerServerConfig {
+    /// Endpoint the worker listens on, such as `unix:///tmp/worker.sock` or `http://127.0.0.1:50051`.
+    pub worker_endpoint: String,
+    /// Relay host runtime endpoint used for callbacks and continuations.
+    pub host_endpoint: String,
+    /// Host-issued activation identifier accepted by this worker.
+    pub activation_id: String,
+    /// Host-issued bearer token accepted by this worker.
+    pub auth_token: String,
 }
 
 /// Continuation handle for tool execution intercepts.
@@ -615,6 +636,7 @@ pub struct LlmStreamNext {
 impl LlmStreamNext {
     /// Calls the remaining LLM streaming execution chain.
     pub async fn call(&self, request: LlmRequest) -> Result<JsonStream> {
+        let scope = self.runtime.current_scope_context();
         let mut client = self.runtime.host_client().await?;
         let response = client
             .llm_stream_next(Request::new(LlmStreamNextRequest {
@@ -629,7 +651,7 @@ impl LlmStreamNext {
             Ok(chunk) => stream_chunk_to_json(chunk),
             Err(err) => Err(WorkerSdkError::Transport(err.to_string())),
         });
-        Ok(Box::pin(stream))
+        Ok(Box::pin(ScopedJsonStream::new(Box::pin(stream), scope)))
     }
 }
 
@@ -648,27 +670,72 @@ pub async fn serve_plugin(plugin: impl WorkerPlugin) -> Result<()> {
 /// Returns an error when required worker environment variables are missing or
 /// the gRPC server fails.
 pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
-    let worker_endpoint = required_env("NEMO_RELAY_WORKER_SOCKET")?;
-    let host_endpoint = required_env("NEMO_RELAY_HOST_SOCKET")?;
-    let activation_id = required_env("NEMO_RELAY_WORKER_ID")?;
-    let auth_token = required_env("NEMO_RELAY_WORKER_TOKEN")?;
+    let config = WorkerServerConfig {
+        worker_endpoint: required_env("NEMO_RELAY_WORKER_SOCKET")?,
+        host_endpoint: required_env("NEMO_RELAY_HOST_SOCKET")?,
+        activation_id: required_env("NEMO_RELAY_WORKER_ID")?,
+        auth_token: required_env("NEMO_RELAY_WORKER_TOKEN")?,
+    };
+    serve_plugin_arc_with_config(plugin, config).await
+}
+
+/// Serves a shared worker plugin using explicit endpoint and authentication configuration.
+///
+/// This is primarily useful for tests and custom worker launchers. Relay-spawned
+/// workers should normally use [`serve_plugin`] or [`serve_plugin_arc`].
+///
+/// # Errors
+/// Returns an error when the endpoint configuration is invalid or the gRPC
+/// server fails.
+pub async fn serve_plugin_arc_with_config(
+    plugin: Arc<dyn WorkerPlugin>,
+    config: WorkerServerConfig,
+) -> Result<()> {
     let runtime = PluginRuntime {
-        activation_id,
-        auth_token,
-        host_endpoint,
+        activation_id: config.activation_id,
+        auth_token: config.auth_token,
+        host_endpoint: config.host_endpoint,
     };
     let service = WorkerService {
         plugin,
         runtime,
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
     };
-    let path = parse_unix_endpoint(&worker_endpoint)?;
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)
-        .map_err(|err| WorkerSdkError::Transport(format!("failed to bind worker socket: {err}")))?;
+    serve_worker_service(service, &config.worker_endpoint).await
+}
+
+#[cfg(unix)]
+async fn serve_worker_service(service: WorkerService, endpoint: &str) -> Result<()> {
+    if endpoint.starts_with("unix://") {
+        let path = parse_unix_endpoint(endpoint)?;
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).map_err(|err| {
+            WorkerSdkError::Transport(format!("failed to bind worker socket: {err}"))
+        })?;
+        return Server::builder()
+            .add_service(PluginWorkerServer::new(service))
+            .serve_with_incoming(UnixListenerStream::new(listener))
+            .await
+            .map_err(|err| WorkerSdkError::Transport(err.to_string()));
+    }
+    serve_tcp_worker_service(service, endpoint).await
+}
+
+#[cfg(not(unix))]
+async fn serve_worker_service(service: WorkerService, endpoint: &str) -> Result<()> {
+    if endpoint.starts_with("unix://") {
+        return Err(WorkerSdkError::InvalidInput(
+            "unix endpoints are not supported on this platform".into(),
+        ));
+    }
+    serve_tcp_worker_service(service, endpoint).await
+}
+
+async fn serve_tcp_worker_service(service: WorkerService, endpoint: &str) -> Result<()> {
+    let addr = parse_tcp_endpoint(endpoint)?;
     Server::builder()
         .add_service(PluginWorkerServer::new(service))
-        .serve_with_incoming(UnixListenerStream::new(listener))
+        .serve(addr)
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
 }
@@ -686,9 +753,7 @@ impl PluginWorker for WorkerService {
         request: Request<HandshakeRequest>,
     ) -> std::result::Result<Response<HandshakeResponse>, Status> {
         let request = request.into_inner();
-        if request.auth_token != self.runtime.auth_token {
-            return Err(Status::permission_denied("invalid worker token"));
-        }
+        self.authorize(&request.activation_id, &request.auth_token)?;
         Ok(Response::new(HandshakeResponse {
             plugin_id: self.plugin.plugin_id().into(),
             plugin_kind: self.plugin.plugin_id().into(),
@@ -710,6 +775,7 @@ impl PluginWorker for WorkerService {
         request: Request<ValidateRequest>,
     ) -> std::result::Result<Response<ValidateResponse>, Status> {
         let request = request.into_inner();
+        self.authorize(&request.activation_id, &request.auth_token)?;
         let config = request
             .config
             .as_ref()
@@ -733,6 +799,7 @@ impl PluginWorker for WorkerService {
         request: Request<RegisterRequest>,
     ) -> std::result::Result<Response<RegisterResponse>, Status> {
         let request = request.into_inner();
+        self.authorize(&request.activation_id, &request.auth_token)?;
         let config = request
             .config
             .as_ref()
@@ -764,6 +831,7 @@ impl PluginWorker for WorkerService {
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<InvokeResponse>, Status> {
         let request = request.into_inner();
+        self.authorize(&request.activation_id, &request.auth_token)?;
         let response = self.invoke_inner(request).await;
         Ok(Response::new(response))
     }
@@ -776,7 +844,8 @@ impl PluginWorker for WorkerService {
         request: Request<InvokeRequest>,
     ) -> std::result::Result<Response<Self::InvokeStreamStream>, Status> {
         let request = request.into_inner();
-        let scope_id = invocation_scope_id(request.scope.as_ref());
+        self.authorize(&request.activation_id, &request.auth_token)?;
+        let scope = invocation_scope_context(request.scope.as_ref());
         let surface = RegistrationSurface::try_from(request.surface)
             .map_err(|_| Status::invalid_argument("unknown registration surface"))?;
         if surface != RegistrationSurface::LlmStreamExecutionIntercept {
@@ -799,15 +868,15 @@ impl PluginWorker for WorkerService {
             runtime: self.runtime.clone(),
             continuation_id: request.continuation_id,
         };
-        let stream = TASK_SCOPE_STACK_ID
-            .scope(scope_id.clone(), async {
-                let future = with_thread_scope(&scope_id, || {
-                    handler(&payload.model_name, request_value, next)
-                });
+        let stream = TASK_SCOPE_CONTEXT
+            .scope(scope.clone(), async {
+                let future =
+                    with_thread_scope(&scope, || handler(&payload.model_name, request_value, next));
                 future.await
             })
             .await
             .map_err(|err| Status::internal(err.to_string()))?;
+        let stream = ScopedJsonStream::new(stream, scope);
         let mapped = stream.map(|item| match item {
             Ok(value) => Ok(StreamChunk {
                 item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
@@ -826,26 +895,40 @@ impl PluginWorker for WorkerService {
 
     async fn cancel_invocation(
         &self,
-        _request: Request<CancelInvocationRequest>,
+        request: Request<CancelInvocationRequest>,
     ) -> std::result::Result<Response<WorkerAck>, Status> {
+        let request = request.into_inner();
+        self.authorize(&request.activation_id, &request.auth_token)?;
         Ok(Response::new(WorkerAck {
-            accepted: true,
-            message: "cancel accepted".into(),
+            accepted: false,
+            message: "cancel invocation is not implemented by the Rust worker SDK yet".into(),
         }))
     }
 
     async fn shutdown(
         &self,
-        _request: Request<ShutdownRequest>,
+        request: Request<ShutdownRequest>,
     ) -> std::result::Result<Response<WorkerAck>, Status> {
+        let request = request.into_inner();
+        self.authorize(&request.activation_id, &request.auth_token)?;
         Ok(Response::new(WorkerAck {
-            accepted: true,
-            message: "shutdown accepted".into(),
+            accepted: false,
+            message: "shutdown is not implemented by the Rust worker SDK yet".into(),
         }))
     }
 }
 
 impl WorkerService {
+    fn authorize(&self, activation_id: &str, auth_token: &str) -> std::result::Result<(), Status> {
+        if activation_id != self.runtime.activation_id {
+            return Err(Status::permission_denied("invalid worker activation"));
+        }
+        if auth_token != self.runtime.auth_token {
+            return Err(Status::permission_denied("invalid worker token"));
+        }
+        Ok(())
+    }
+
     async fn invoke_inner(&self, request: InvokeRequest) -> InvokeResponse {
         match self.invoke_result(request).await {
             Ok(response) => response,
@@ -858,19 +941,16 @@ impl WorkerService {
     }
 
     async fn invoke_result(&self, request: InvokeRequest) -> Result<InvokeResponse> {
-        let scope_id = invocation_scope_id(request.scope.as_ref());
-        TASK_SCOPE_STACK_ID
-            .scope(
-                scope_id.clone(),
-                self.invoke_result_scoped(request, scope_id),
-            )
+        let scope = invocation_scope_context(request.scope.as_ref());
+        TASK_SCOPE_CONTEXT
+            .scope(scope.clone(), self.invoke_result_scoped(request, scope))
             .await
     }
 
     async fn invoke_result_scoped(
         &self,
         request: InvokeRequest,
-        scope_id: Option<String>,
+        scope: Option<ScopeContext>,
     ) -> Result<InvokeResponse> {
         let surface = RegistrationSurface::try_from(request.surface)
             .map_err(|_| WorkerSdkError::InvalidInput("unknown registration surface".into()))?;
@@ -878,28 +958,34 @@ impl WorkerService {
             RegistrationSurface::Subscriber => {
                 let event = event_payload(request.payload)?;
                 let handler = self.subscriber(&request.registration_name)?;
-                with_thread_scope(&scope_id, || handler(&event));
+                with_thread_scope(&scope, || handler(&event));
                 Ok(empty_response())
             }
-            RegistrationSurface::ToolSanitizeRequestGuardrail
-            | RegistrationSurface::ToolSanitizeResponseGuardrail => {
+            RegistrationSurface::ToolSanitizeRequestGuardrail => {
                 let payload = tool_payload(request.payload)?;
-                let handler = self.tool_sanitizer(&request.registration_name)?;
-                Ok(json_response(with_thread_scope(&scope_id, || {
+                let handler = self.tool_sanitize_request(&request.registration_name)?;
+                Ok(json_response(with_thread_scope(&scope, || {
+                    handler(&payload.tool_name, payload.value)
+                })))
+            }
+            RegistrationSurface::ToolSanitizeResponseGuardrail => {
+                let payload = tool_payload(request.payload)?;
+                let handler = self.tool_sanitize_response(&request.registration_name)?;
+                Ok(json_response(with_thread_scope(&scope, || {
                     handler(&payload.tool_name, payload.value)
                 })))
             }
             RegistrationSurface::ToolConditionalExecutionGuardrail => {
                 let payload = tool_payload(request.payload)?;
                 let handler = self.tool_conditional(&request.registration_name)?;
-                Ok(guardrail_response(with_thread_scope(&scope_id, || {
+                Ok(guardrail_response(with_thread_scope(&scope, || {
                     handler(&payload.tool_name, &payload.value)
                 })?))
             }
             RegistrationSurface::ToolRequestIntercept => {
                 let payload = tool_payload(request.payload)?;
                 let handler = self.tool_request(&request.registration_name)?;
-                Ok(json_response(with_thread_scope(&scope_id, || {
+                Ok(json_response(with_thread_scope(&scope, || {
                     handler(&payload.tool_name, payload.value)
                 })?))
             }
@@ -910,9 +996,8 @@ impl WorkerService {
                     runtime: self.runtime.clone(),
                     continuation_id: request.continuation_id,
                 };
-                let future = with_thread_scope(&scope_id, || {
-                    handler(&payload.tool_name, payload.value, next)
-                });
+                let future =
+                    with_thread_scope(&scope, || handler(&payload.tool_name, payload.value, next));
                 Ok(json_response(future.await?))
             }
             RegistrationSurface::LlmSanitizeRequestGuardrail => {
@@ -920,7 +1005,7 @@ impl WorkerService {
                 let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
                 let handler = self.llm_sanitize_request(&request.registration_name)?;
                 Ok(json_response(serde_json::to_value(with_thread_scope(
-                    &scope_id,
+                    &scope,
                     || handler(request_value),
                 ))?))
             }
@@ -928,7 +1013,7 @@ impl WorkerService {
                 let payload = llm_payload(request.payload)?;
                 let response = required_json::<Json>(payload.response, "llm response")?;
                 let handler = self.llm_sanitize_response(&request.registration_name)?;
-                Ok(json_response(with_thread_scope(&scope_id, || {
+                Ok(json_response(with_thread_scope(&scope, || {
                     handler(response)
                 })))
             }
@@ -936,7 +1021,7 @@ impl WorkerService {
                 let payload = llm_payload(request.payload)?;
                 let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
                 let handler = self.llm_conditional(&request.registration_name)?;
-                Ok(guardrail_response(with_thread_scope(&scope_id, || {
+                Ok(guardrail_response(with_thread_scope(&scope, || {
                     handler(&request_value)
                 })?))
             }
@@ -948,7 +1033,7 @@ impl WorkerService {
                     .map(|value| decode_json_envelope::<AnnotatedLlmRequest>(&value))
                     .transpose()?;
                 let handler = self.llm_request(&request.registration_name)?;
-                let (request, annotated) = with_thread_scope(&scope_id, || {
+                let (request, annotated) = with_thread_scope(&scope, || {
                     handler(&payload.model_name, request_value, annotated)
                 })?;
                 Ok(llm_request_response(request, annotated)?)
@@ -961,9 +1046,8 @@ impl WorkerService {
                     runtime: self.runtime.clone(),
                     continuation_id: request.continuation_id,
                 };
-                let future = with_thread_scope(&scope_id, || {
-                    handler(&payload.model_name, request_value, next)
-                });
+                let future =
+                    with_thread_scope(&scope, || handler(&payload.model_name, request_value, next));
                 Ok(json_response(future.await?))
             }
             RegistrationSurface::LlmStreamExecutionIntercept | RegistrationSurface::Unspecified => {
@@ -986,15 +1070,31 @@ impl WorkerService {
             })
     }
 
-    fn tool_sanitizer(&self, name: &str) -> Result<ToolSanitizeFn> {
+    fn tool_sanitize_request(&self, name: &str) -> Result<ToolSanitizeFn> {
         self.handlers
             .lock()
             .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .tool_sanitizers
+            .tool_sanitize_requests
             .get(name)
             .cloned()
             .ok_or_else(|| {
-                WorkerSdkError::InvalidInput(format!("tool sanitizer '{name}' not registered"))
+                WorkerSdkError::InvalidInput(format!(
+                    "tool request sanitizer '{name}' not registered"
+                ))
+            })
+    }
+
+    fn tool_sanitize_response(&self, name: &str) -> Result<ToolSanitizeFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .tool_sanitize_responses
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "tool response sanitizer '{name}' not registered"
+                ))
             })
     }
 
@@ -1269,33 +1369,55 @@ fn ack_to_result(ok: bool, error: Option<WorkerError>) -> Result<()> {
     }
 }
 
-fn invocation_scope_id(scope: Option<&ScopeContext>) -> Option<String> {
-    scope
-        .map(|scope| scope.scope_stack_id.trim())
-        .filter(|scope_stack_id| !scope_stack_id.is_empty())
-        .map(ToOwned::to_owned)
+struct ScopedJsonStream {
+    inner: JsonStream,
+    scope: Option<ScopeContext>,
 }
 
-fn current_scope_stack_id() -> Option<String> {
-    TASK_SCOPE_STACK_ID
+impl ScopedJsonStream {
+    fn new(inner: JsonStream, scope: Option<ScopeContext>) -> Self {
+        Self { inner, scope }
+    }
+}
+
+impl Stream for ScopedJsonStream {
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let scope = this.scope.clone();
+        TASK_SCOPE_CONTEXT.sync_scope(scope.clone(), || {
+            with_thread_scope(&scope, || this.inner.as_mut().poll_next(cx))
+        })
+    }
+}
+
+fn invocation_scope_context(scope: Option<&ScopeContext>) -> Option<ScopeContext> {
+    scope
+        .filter(|scope| !scope.scope_stack_id.trim().is_empty())
+        .cloned()
+}
+
+fn current_scope_context() -> Option<ScopeContext> {
+    TASK_SCOPE_CONTEXT
         .try_with(Clone::clone)
         .ok()
         .flatten()
-        .or_else(|| THREAD_SCOPE_STACK_ID.with(|scope| scope.borrow().clone()))
+        .or_else(|| THREAD_SCOPE_CONTEXT.with(|scope| scope.borrow().clone()))
 }
 
-fn with_thread_scope<T>(scope_id: &Option<String>, f: impl FnOnce() -> T) -> T {
-    let _guard = ThreadScopeBinding::new(scope_id.clone());
+fn with_thread_scope<T>(scope: &Option<ScopeContext>, f: impl FnOnce() -> T) -> T {
+    let _guard = ThreadScopeBinding::new(scope.clone());
     f()
 }
 
 struct ThreadScopeBinding {
-    previous: Option<String>,
+    previous: Option<ScopeContext>,
 }
 
 impl ThreadScopeBinding {
-    fn new(scope_id: Option<String>) -> Self {
-        let previous = THREAD_SCOPE_STACK_ID.with(|scope| scope.replace(scope_id));
+    fn new(scope: Option<ScopeContext>) -> Self {
+        let previous = THREAD_SCOPE_CONTEXT.with(|current| current.replace(scope));
         Self { previous }
     }
 }
@@ -1303,7 +1425,7 @@ impl ThreadScopeBinding {
 impl Drop for ThreadScopeBinding {
     fn drop(&mut self) {
         let previous = self.previous.take();
-        THREAD_SCOPE_STACK_ID.with(|scope| {
+        THREAD_SCOPE_CONTEXT.with(|scope| {
             scope.replace(previous);
         });
     }
@@ -1349,6 +1471,19 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
     ]
 }
 
+async fn connect_host_endpoint(endpoint: &str) -> Result<Channel> {
+    if endpoint.starts_with("unix://") {
+        return connect_uds(endpoint).await;
+    }
+    let endpoint = normalize_tcp_endpoint(endpoint)?;
+    Endpoint::from_shared(endpoint)
+        .map_err(|err| WorkerSdkError::InvalidInput(err.to_string()))?
+        .connect()
+        .await
+        .map_err(|err| WorkerSdkError::Transport(err.to_string()))
+}
+
+#[cfg(unix)]
 async fn connect_uds(endpoint: &str) -> Result<Channel> {
     let path = Arc::new(parse_unix_endpoint(endpoint)?);
     let endpoint = Endpoint::try_from("http://[::]:50051")
@@ -1356,12 +1491,59 @@ async fn connect_uds(endpoint: &str) -> Result<Channel> {
     endpoint
         .connect_with_connector(service_fn(move |_| {
             let path = path.clone();
-            async move { UnixStream::connect(&*path).await.map(TokioIo::new) }
+            async move {
+                let stream = UnixStream::connect(&*path).await?;
+                Ok::<_, std::io::Error>(TokioIo::new(stream))
+            }
         }))
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
 }
 
+#[cfg(not(unix))]
+async fn connect_uds(_endpoint: &str) -> Result<Channel> {
+    Err(WorkerSdkError::InvalidInput(
+        "unix endpoints are not supported on this platform".into(),
+    ))
+}
+
+fn parse_tcp_endpoint(endpoint: &str) -> Result<SocketAddr> {
+    let endpoint = normalize_tcp_endpoint(endpoint)?;
+    let authority = endpoint
+        .strip_prefix("http://")
+        .expect("normalized TCP endpoints always use http scheme");
+    if authority.contains('/') {
+        return Err(WorkerSdkError::InvalidInput(format!(
+            "unsupported TCP endpoint '{endpoint}'"
+        )));
+    }
+    authority
+        .to_socket_addrs()
+        .map_err(|err| {
+            WorkerSdkError::InvalidInput(format!("invalid TCP endpoint '{endpoint}': {err}"))
+        })?
+        .next()
+        .ok_or_else(|| WorkerSdkError::InvalidInput(format!("invalid TCP endpoint '{endpoint}'")))
+}
+
+fn normalize_tcp_endpoint(endpoint: &str) -> Result<String> {
+    if let Some(authority) = endpoint.strip_prefix("tcp://") {
+        if authority.is_empty() {
+            return Err(WorkerSdkError::InvalidInput(format!(
+                "unsupported endpoint '{endpoint}'"
+            )));
+        }
+        return Ok(format!("http://{authority}"));
+    }
+    if endpoint.starts_with("http://") {
+        return Ok(endpoint.to_owned());
+    }
+    Err(WorkerSdkError::InvalidInput(format!(
+        "unsupported endpoint '{endpoint}'"
+    )))
+}
+
+#[cfg(unix)]
 fn parse_unix_endpoint(endpoint: &str) -> Result<PathBuf> {
     endpoint
         .strip_prefix("unix://")

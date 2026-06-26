@@ -121,6 +121,7 @@ message InvokeRequest {
   RegistrationSurface surface = 4;
   string continuation_id = 5;
   ScopeContext scope = 6;
+  string auth_token = 7;
 
   oneof payload {
     JsonEnvelope event = 10;

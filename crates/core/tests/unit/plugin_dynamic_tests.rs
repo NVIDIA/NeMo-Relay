@@ -662,6 +662,50 @@ entrypoint = " acme_guardrails.plugin:register "
 }
 
 #[test]
+fn manifest_parse_accepts_rust_and_command_worker_runtimes() {
+    for (runtime, expected) in [
+        ("rust", WorkerRuntime::Rust),
+        ("command", WorkerRuntime::Command),
+    ] {
+        let manifest = DynamicPluginManifest::parse_toml(&format!(
+            r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.guardrails.{runtime}"
+kind = "worker"
+
+[compat]
+relay = ">=0.1.0,<0.2.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "{runtime}"
+entrypoint = "acme_guardrails.plugin:register"
+"#
+        ))
+        .expect("parse worker manifest");
+
+        let record = manifest
+            .into_record(None)
+            .expect("manifest converts into record");
+        assert_eq!(
+            record.load,
+            DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+                runtime: expected,
+                entrypoint: "acme_guardrails.plugin:register".into(),
+            })
+        );
+    }
+}
+
+#[test]
 fn manifest_rejects_unsupported_worker_protocol() {
     let err = DynamicPluginManifest::parse_toml(
         r#"
