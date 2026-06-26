@@ -272,6 +272,51 @@ fn common_extractor_keeps_fallbacks_at_adapter_boundary() {
 }
 
 #[test]
+fn common_extractor_reads_agent_hint_and_tool_call_fields() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "subagent_id": "worker-1",
+        "agent": {
+            "id": "agent-1",
+            "type": "reviewer"
+        },
+        "conversationId": "conversation-1",
+        "generation": { "id": "generation-1" },
+        "request": { "id": "request-1" },
+        "modelName": "gpt-test",
+        "tool_call_id": "tool-call-1",
+        "tool": { "name": "search" },
+        "arguments": { "query": "needle" },
+        "result": { "matches": 2 },
+        "status": "success"
+    });
+
+    assert_eq!(
+        COMMON_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        ExtractedLlmHint {
+            subagent_id: Some("worker-1".into()),
+            agent_id: Some("agent-1".into()),
+            agent_type: Some("reviewer".into()),
+            conversation_id: Some("conversation-1".into()),
+            generation_id: Some("generation-1".into()),
+            request_id: Some("request-1".into()),
+            model: Some("gpt-test".into()),
+        }
+    );
+    assert_eq!(
+        COMMON_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
+        ExtractedToolCall {
+            tool_call_id: Some("tool-call-1".into()),
+            tool_name: Some("search".into()),
+            subagent_id: Some("worker-1".into()),
+            arguments: Some(json!({ "query": "needle" })),
+            result: Some(json!({ "matches": 2 })),
+            status: Some("success".into()),
+        }
+    );
+}
+
+#[test]
 fn maps_cursor_subagent_and_permission_response() {
     let headers = HeaderMap::new();
     let outcome = cursor::adapt(
