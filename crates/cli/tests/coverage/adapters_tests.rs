@@ -337,7 +337,8 @@ fn maps_cursor_subagent_and_permission_response() {
             assert_eq!(event.session_id, "cursor-session");
             assert_eq!(event.subagent_id.as_deref(), Some("worker"));
             assert_eq!(event.metadata["project_dir"], json!("/repo"));
-            assert_eq!(event.metadata["user_email"], json!("dev@example.com"));
+            assert!(event.metadata.get("user_email").is_none());
+            assert_eq!(event.payload["user_email"], json!("dev@example.com"));
         }
         event => panic!("unexpected event: {event:?}"),
     }

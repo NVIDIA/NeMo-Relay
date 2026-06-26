@@ -121,7 +121,6 @@ impl AgentPayloadExtractor for CommonAgentPayloadExtractor {
             ("cwd", string_at(payload, &["cwd"])),
             ("transcript_path", string_at(payload, &["transcript_path"])),
             ("project_dir", string_at(payload, &["project_dir"])),
-            ("user_email", string_at(payload, &["user_email"])),
             ("model", string_at(payload, &["model"])),
             ("agent_id", string_at(payload, &["agent_id"])),
             ("agent_type", string_at(payload, &["agent_type"])),
