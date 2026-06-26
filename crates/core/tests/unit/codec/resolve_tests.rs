@@ -280,10 +280,13 @@ fn hint_anthropic_upgrades_system_less_messages() {
         detect_request_surface(&json!({"messages": []})),
         Some(ProviderSurface::OpenAIChat)
     );
-    assert_eq!(
-        detect_request_surface_with_hint(&json!({"messages": []}), Some("anthropic")),
-        Some(ProviderSurface::AnthropicMessages)
-    );
+    for hint in [Some("anthropic"), Some("anthropic.messages")] {
+        assert_eq!(
+            detect_request_surface_with_hint(&json!({"messages": []}), hint),
+            Some(ProviderSurface::AnthropicMessages),
+            "messages-only with hint {hint:?} should select Anthropic",
+        );
+    }
 }
 
 #[test]
@@ -313,8 +316,37 @@ fn hint_anthropic_descriptor_decodes_system_less_messages() {
 }
 
 #[test]
+fn normalize_request_with_hint_decodes_system_less_anthropic() {
+    let request = req(json!({
+        "model": "claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop_sequences": ["END"]
+    }));
+
+    let decoded_without_hint =
+        normalize_request(&request).expect("messages-only request decodes as chat by default");
+    assert!(decoded_without_hint.extra.contains_key("stop_sequences"));
+
+    let decoded = normalize_request_with_hint(&request, Some("anthropic.messages"))
+        .expect("anthropic-hinted request decodes");
+    let stop = decoded
+        .params
+        .as_ref()
+        .and_then(|params| params.stop.as_ref())
+        .expect("anthropic stop_sequences are normalized");
+    assert_eq!(stop, &vec!["END".to_string()]);
+    assert!(!decoded.extra.contains_key("stop_sequences"));
+}
+
+#[test]
 fn hint_other_or_unknown_provider_stays_chat() {
-    for hint in [Some("openai"), Some("passthrough"), Some("gemini"), None] {
+    for hint in [
+        Some("openai"),
+        Some("openai.chat"),
+        Some("passthrough"),
+        Some("gemini"),
+        None,
+    ] {
         assert_eq!(
             detect_request_surface_with_hint(&json!({"messages": []}), hint),
             Some(ProviderSurface::OpenAIChat),

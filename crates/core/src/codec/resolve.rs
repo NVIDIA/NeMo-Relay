@@ -73,9 +73,9 @@ pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
 
 /// Like [`detect_request_surface`], but a recognized `provider_hint` resolves the
 /// one ambiguous shape (an Anthropic request without a top-level `system`,
-/// otherwise read as OpenAI Chat). Today, `"anthropic"` is the only hint that
-/// changes detection; `None` or any other value is ignored and detection stays
-/// shape-only.
+/// otherwise read as OpenAI Chat). Today, `"anthropic"` and provider paths such
+/// as `"anthropic.messages"` are the only hints that change detection; `None`
+/// or any other value is ignored and detection stays shape-only.
 #[must_use]
 pub fn detect_request_surface_with_hint(
     body: &Json,
@@ -116,7 +116,17 @@ fn response_descriptor(raw: &Json) -> Option<&'static ProviderSurfaceDescriptor>
 /// Best-effort decode of a raw request into [`AnnotatedLlmRequest`] (fail-open).
 #[must_use]
 pub fn normalize_request(request: &LlmRequest) -> Option<AnnotatedLlmRequest> {
-    let descriptor = request_descriptor(&request.content, None)?;
+    normalize_request_with_hint(request, None)
+}
+
+/// Like [`normalize_request`], but a recognized `provider_hint` can
+/// disambiguate provider request shapes that are otherwise identical.
+#[must_use]
+pub fn normalize_request_with_hint(
+    request: &LlmRequest,
+    provider_hint: Option<&str>,
+) -> Option<AnnotatedLlmRequest> {
+    let descriptor = request_descriptor(&request.content, provider_hint)?;
     (descriptor.decode_request)(request).ok()
 }
 
