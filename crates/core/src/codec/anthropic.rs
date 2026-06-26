@@ -45,8 +45,9 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
     detect_request: |obj, hint| {
         // A system-less Anthropic request is shape-identical to OpenAI Chat;
         // an Anthropic provider hint disambiguates it.
-        let hinted_anthropic =
-            hint.is_some_and(|hint| hint == "anthropic" || hint.starts_with("anthropic."));
+        let hinted_anthropic = hint.is_some_and(|hint_value| {
+            hint_value == "anthropic" || hint_value.starts_with("anthropic.")
+        });
         obj.contains_key("system") || (hinted_anthropic && obj.contains_key("messages"))
     },
     detect_response: |obj| {

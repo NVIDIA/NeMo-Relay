@@ -54,7 +54,8 @@ pub(crate) struct ExtractedToolCall {
 
 /// Strategy for extracting normalized facts from agent or harness hook payloads.
 ///
-/// Implementations should return `None` for missing or untrusted fields. The
+/// Implementations should return `None` for missing or untrusted fields,
+/// including per-field values inside returned hint and tool-call structs. The
 /// adapter layer owns compatibility fallbacks such as synthetic session IDs,
 /// synthetic tool-call IDs, and `unknown_tool` names so downstream lifecycle
 /// behavior remains stable for sparse payloads.
@@ -78,11 +79,11 @@ pub(crate) trait AgentPayloadExtractor {
     ) -> ExtractedToolCall;
 }
 
-struct CommonAgentPayloadExtractor;
+struct BuiltinAgentPayloadExtractor;
 
-static COMMON_AGENT_PAYLOAD_EXTRACTOR: CommonAgentPayloadExtractor = CommonAgentPayloadExtractor;
+static BUILTIN_AGENT_PAYLOAD_EXTRACTOR: BuiltinAgentPayloadExtractor = BuiltinAgentPayloadExtractor;
 
-impl AgentPayloadExtractor for CommonAgentPayloadExtractor {
+impl AgentPayloadExtractor for BuiltinAgentPayloadExtractor {
     fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
         header_string(headers, "x-nemo-relay-session-id")
             .or_else(|| header_string(headers, "x-claude-code-session-id"))
@@ -185,8 +186,8 @@ impl AgentPayloadExtractor for CommonAgentPayloadExtractor {
     ) -> ExtractedToolCall {
         let normalized_event = normalize_name(event_name);
         ExtractedToolCall {
-            tool_call_id: raw_tool_call_id(payload),
-            tool_name: raw_tool_name(payload),
+            tool_call_id: tool_call_id(payload),
+            tool_name: tool_name(payload),
             subagent_id: self.subagent_id(payload, headers),
             arguments: tool_arguments(payload),
             result: tool_result(payload, &normalized_event),
@@ -204,7 +205,7 @@ impl AgentPayloadExtractor for CommonAgentPayloadExtractor {
 // fields, and finally a v7 UUID. Header precedence lets gateway and hook-forward callers
 // correlate events even when agent payload schemas omit or rename their native session field.
 fn session_id(payload: &Value, headers: &HeaderMap) -> String {
-    COMMON_AGENT_PAYLOAD_EXTRACTOR
+    BUILTIN_AGENT_PAYLOAD_EXTRACTOR
         .session_id(payload, headers)
         .unwrap_or_else(|| format!("hook-{}", Uuid::now_v7()))
 }
@@ -231,7 +232,7 @@ fn session_id_from_payload(payload: &Value) -> Option<String> {
 // This deliberately keeps unknown payloads observable instead of rejecting them at the adapter
 // boundary, allowing the session layer to emit a generic mark event.
 fn event_name(payload: &Value) -> String {
-    COMMON_AGENT_PAYLOAD_EXTRACTOR
+    BUILTIN_AGENT_PAYLOAD_EXTRACTOR
         .event_name(payload)
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -240,7 +241,7 @@ fn event_name(payload: &Value) -> String {
 // gateway configuration hints are lifted out; the full payload remains on the event for consumers
 // that need agent-specific detail.
 fn metadata(payload: &Value, headers: &HeaderMap, kind: AgentKind, event_name: &str) -> Value {
-    COMMON_AGENT_PAYLOAD_EXTRACTOR.metadata(payload, headers, kind, event_name)
+    BUILTIN_AGENT_PAYLOAD_EXTRACTOR.metadata(payload, headers, kind, event_name)
 }
 
 // Creates a root session event using the common session-id and metadata extraction rules so
@@ -265,7 +266,7 @@ pub(crate) fn common_session_event(
 // rather than dropping them when an integration lacks explicit nested-agent IDs.
 fn common_subagent_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> SubagentEvent {
     let session = common_session_event(payload, headers, kind);
-    let subagent_id = COMMON_AGENT_PAYLOAD_EXTRACTOR
+    let subagent_id = BUILTIN_AGENT_PAYLOAD_EXTRACTOR
         .subagent_id(payload, headers)
         .unwrap_or_else(|| "subagent".to_string());
     SubagentEvent {
@@ -283,7 +284,7 @@ fn common_subagent_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) 
 // generation, request, and model identifiers under different shapes.
 fn common_llm_hint_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> LlmHintEvent {
     let session = common_session_event(payload, headers, kind);
-    let hint = COMMON_AGENT_PAYLOAD_EXTRACTOR.llm_hint(payload, headers);
+    let hint = BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(payload, headers);
     LlmHintEvent {
         session_id: session.session_id,
         agent_kind: kind,
@@ -305,7 +306,8 @@ fn common_llm_hint_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) 
 // payload shapes, and failure or permission-denied event names are reflected in status metadata.
 fn common_tool_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> ToolEvent {
     let session = common_session_event(payload, headers, kind);
-    let tool_call = COMMON_AGENT_PAYLOAD_EXTRACTOR.tool_call(payload, headers, &session.event_name);
+    let tool_call =
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(payload, headers, &session.event_name);
     ToolEvent {
         session_id: session.session_id,
         agent_kind: kind,
@@ -333,7 +335,7 @@ fn first_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
 
 // Resolves a tool call identifier from all known agent payload conventions before synthesizing a
 // UUID-backed id. The synthetic id keeps lifecycle events recordable even when hooks omit IDs.
-fn raw_tool_call_id(payload: &Value) -> Option<String> {
+fn tool_call_id(payload: &Value) -> Option<String> {
     first_string_at(
         payload,
         &[
@@ -352,7 +354,7 @@ fn raw_tool_call_id(payload: &Value) -> Option<String> {
 
 // Resolves a human-readable tool name from the common top-level, nested tool, and tool-input
 // shapes. Missing names are kept explicit as `unknown_tool` rather than inheriting event names.
-fn raw_tool_name(payload: &Value) -> Option<String> {
+fn tool_name(payload: &Value) -> Option<String> {
     first_string_at(
         payload,
         &[

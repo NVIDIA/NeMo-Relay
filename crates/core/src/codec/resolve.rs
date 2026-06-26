@@ -27,6 +27,9 @@ pub enum ProviderSurface {
 /// Request shape detector; the optional `&str` is a provider hint a codec may use
 /// to claim an otherwise-ambiguous shape.
 type RequestSurfaceDetector = fn(&serde_json::Map<String, Json>, Option<&str>) -> bool;
+
+/// Response shape detector; response routing is payload-only because provider
+/// responses carry stronger built-in discriminators than request bodies.
 type ResponseSurfaceDetector = fn(&serde_json::Map<String, Json>) -> bool;
 
 /// Built-in provider extraction strategy for one request/response surface.

@@ -235,25 +235,25 @@ fn adapter_string_lookup_accepts_scalar_values_only() {
 }
 
 #[test]
-fn common_extractor_keeps_fallbacks_at_adapter_boundary() {
+fn builtin_extractor_keeps_fallbacks_at_adapter_boundary() {
     let headers = HeaderMap::new();
     let payload = json!({});
 
     assert_eq!(
-        COMMON_AGENT_PAYLOAD_EXTRACTOR.session_id(&payload, &headers),
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.session_id(&payload, &headers),
         None
     );
-    assert_eq!(COMMON_AGENT_PAYLOAD_EXTRACTOR.event_name(&payload), None);
+    assert_eq!(BUILTIN_AGENT_PAYLOAD_EXTRACTOR.event_name(&payload), None);
     assert_eq!(
-        COMMON_AGENT_PAYLOAD_EXTRACTOR.subagent_id(&payload, &headers),
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.subagent_id(&payload, &headers),
         None
     );
     assert_eq!(
-        COMMON_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
         ExtractedLlmHint::default()
     );
     assert_eq!(
-        COMMON_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PreToolUse"),
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PreToolUse"),
         ExtractedToolCall {
             tool_call_id: None,
             tool_name: None,
@@ -275,7 +275,7 @@ fn common_extractor_keeps_fallbacks_at_adapter_boundary() {
 }
 
 #[test]
-fn common_extractor_reads_agent_hint_and_tool_call_fields() {
+fn builtin_extractor_reads_agent_hint_and_tool_call_fields() {
     let headers = HeaderMap::new();
     let payload = json!({
         "subagent_id": "worker-1",
@@ -295,7 +295,7 @@ fn common_extractor_reads_agent_hint_and_tool_call_fields() {
     });
 
     assert_eq!(
-        COMMON_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
         ExtractedLlmHint {
             subagent_id: Some("worker-1".into()),
             agent_id: Some("agent-1".into()),
@@ -307,7 +307,7 @@ fn common_extractor_reads_agent_hint_and_tool_call_fields() {
         }
     );
     assert_eq!(
-        COMMON_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
         ExtractedToolCall {
             tool_call_id: Some("tool-call-1".into()),
             tool_name: Some("search".into()),
