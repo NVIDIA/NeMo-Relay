@@ -791,21 +791,21 @@ fn normalizes_mark_style_events_and_header_session_ids() {
             }),
             &headers,
         );
-        let (session_id, metadata) = match &outcome.events[0] {
+        let (session_id, metadata, payload) = match &outcome.events[0] {
             NormalizedEvent::PromptSubmitted(event) if expected == "prompt" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::LlmHint(event) if expected == "response" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::Compaction(event) if expected == "compact" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::Notification(event) if expected == "notification" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::HookMark(event) if expected == "hook" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             event => panic!("unexpected event for {event_name}: {event:?}"),
         };
@@ -818,6 +818,7 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         assert_eq!(session_id, "header-session");
         assert_eq!(metadata["model"], json!("model-a"));
         assert!(metadata.get("cwd").is_none());
+        assert_eq!(payload["cwd"], json!("/repo"));
         assert_eq!(metadata["gateway_config_profile"], json!("coverage"));
     }
 }
