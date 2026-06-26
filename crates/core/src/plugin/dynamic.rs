@@ -19,9 +19,13 @@ pub type DynamicPluginId = String;
 pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 
 mod manifest;
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
 mod registry;
 
 pub use manifest::*;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::*;
 pub use registry::*;
 
 /// Plugin execution lane.

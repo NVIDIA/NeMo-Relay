@@ -775,7 +775,9 @@ pub(crate) fn resolve_run_config(
     resolved.gateway.bind = "127.0.0.1:0"
         .parse()
         .expect("valid transparent bind address");
-    enforce_required_dynamic_plugin_startup(config, &resolved)?;
+    if !command.dry_run {
+        enforce_required_dynamic_plugin_startup(config, &resolved)?;
+    }
     Ok(resolved)
 }
 

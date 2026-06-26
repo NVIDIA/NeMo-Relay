@@ -8,10 +8,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginLoadContract,
-    DynamicPluginManifest, DynamicPluginRecord, DynamicPluginValidationStatus,
+    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginKind,
+    DynamicPluginLoadContract, DynamicPluginManifest, DynamicPluginRecord,
+    DynamicPluginValidationStatus,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::config::{
     PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand, PluginsInspectCommand,
@@ -337,6 +338,54 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
 
     println!("Removed dynamic plugin {}", command.id);
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveDynamicPluginComponent {
+    pub(crate) plugin_id: String,
+    pub(crate) kind: DynamicPluginKind,
+    pub(crate) manifest_ref: Option<String>,
+    pub(crate) config: Map<String, Value>,
+}
+
+pub(crate) fn active_dynamic_plugin_components(
+    explicit: Option<&PathBuf>,
+    resolved: &ResolvedConfig,
+) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
+    let scopes = load_and_hydrate_scopes(explicit, resolved)?;
+    let host_config_by_id = host_config_by_id(resolved);
+    let mut components = Vec::new();
+
+    for resolved_plugin in &resolved.dynamic_plugins {
+        let Some(entry) = find_record_by_id(&scopes, &resolved_plugin.plugin_id)? else {
+            return Err(CliError::Config(format!(
+                "dynamic plugin '{}' is present in resolved config but not lifecycle state",
+                resolved_plugin.plugin_id
+            )));
+        };
+        if entry.record.is_tombstoned() || !entry.record.spec.enabled {
+            continue;
+        }
+        let host_config = host_config_by_id
+            .get(&entry.record.metadata.id)
+            .ok_or_else(|| {
+                CliError::Config(format!(
+                    "dynamic plugin '{}' is enabled but has no resolved host config",
+                    entry.record.metadata.id
+                ))
+            })?;
+        components.push(ActiveDynamicPluginComponent {
+            plugin_id: entry.record.metadata.id.clone(),
+            kind: entry.record.metadata.kind,
+            manifest_ref: match entry.record.metadata.kind {
+                DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(&entry.record)?),
+                DynamicPluginKind::Worker => entry.record.source.manifest_ref.clone(),
+            },
+            config: host_config.config.clone(),
+        });
+    }
+
+    Ok(components)
 }
 
 fn mutate_enabled_state(

@@ -22,6 +22,7 @@ use crate::error::CliError;
 use crate::installer::{
     generated_hooks, hook_forward_command, merge_hermes_config, merge_hooks, read_json_file,
 };
+use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
@@ -87,6 +88,7 @@ struct TransparentRun {
     agent: CodingAgent,
     prepared: PreparedRun,
     resolved: ResolvedConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     listener: TcpListener,
     gateway_url: String,
     dry_run: bool,
@@ -99,7 +101,16 @@ impl TransparentRun {
     async fn new(command: RunCommand, inherited: Option<&ServerArgs>) -> Result<Self, CliError> {
         let dry_run = command.dry_run;
         let print = command.print;
+        let explicit_config = command
+            .config
+            .as_ref()
+            .or_else(|| inherited.and_then(|args| args.config.as_ref()));
         let mut resolved = resolve_run_config(&command, inherited)?;
+        let dynamic_plugins = if dry_run {
+            Vec::new()
+        } else {
+            crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
+        };
         let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -111,6 +122,7 @@ impl TransparentRun {
             agent,
             prepared,
             resolved,
+            dynamic_plugins,
             listener,
             gateway_url,
             dry_run,
@@ -134,9 +146,10 @@ impl TransparentRun {
         }
         self.prepared
             .print_live_status(self.agent, &self.gateway_url, &self.resolved);
-        execute_live_run(
+        execute_live_run_with_dynamic(
             self.listener,
             self.resolved.gateway,
+            self.dynamic_plugins,
             &self.gateway_url,
             self.prepared,
         )
@@ -146,13 +159,24 @@ impl TransparentRun {
 
 // Starts the gateway, waits for readiness, runs the child command, restores temporary state, and then
 // maps the child process status to the launcher's exit code.
+#[cfg(test)]
 async fn execute_live_run(
     listener: TcpListener,
     gateway_config: GatewayConfig,
     gateway_url: &str,
     prepared: PreparedRun,
 ) -> Result<ExitCode, CliError> {
-    let running_server = RunningGateway::start(listener, gateway_config);
+    execute_live_run_with_dynamic(listener, gateway_config, Vec::new(), gateway_url, prepared).await
+}
+
+async fn execute_live_run_with_dynamic(
+    listener: TcpListener,
+    gateway_config: GatewayConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    gateway_url: &str,
+    prepared: PreparedRun,
+) -> Result<ExitCode, CliError> {
+    let running_server = RunningGateway::start(listener, gateway_config, dynamic_plugins);
     if let Err(error) = wait_for_health(gateway_url).await {
         let restore = prepared.restore();
         let server_result = running_server.stop().await;
@@ -269,10 +293,20 @@ struct RunningGateway {
 impl RunningGateway {
     // Starts the gateway listener on a background task and keeps the shutdown sender paired with the
     // task handle so health failures and normal exits use identical cleanup semantics.
-    fn start(listener: TcpListener, config: crate::config::GatewayConfig) -> Self {
+    fn start(
+        listener: TcpListener,
+        config: crate::config::GatewayConfig,
+        dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
-            server::serve_listener(listener, config, Some(shutdown_rx)).await
+            server::serve_listener_with_dynamic(
+                listener,
+                config,
+                dynamic_plugins,
+                Some(shutdown_rx),
+            )
+            .await
         });
         Self { shutdown_tx, task }
     }

@@ -87,6 +87,10 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
+    let server = ServerArgs {
+        config: Some(temp.path().join("config.toml")),
+        ..ServerArgs::default()
+    };
 
     assert_eq!(
         run_completions(CompletionsCommand {
@@ -101,7 +105,7 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
         PluginsCommand {
             command: PluginsSubcommand::Edit(PluginsEditCommand::default()),
         },
-        &ServerArgs::default(),
+        &server,
     )
     .unwrap_err()
     .to_string();
@@ -112,7 +116,7 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
             PluginsCommand {
                 command: PluginsSubcommand::List(PluginsListCommand::default()),
             },
-            &ServerArgs::default()
+            &server
         )
         .unwrap(),
         ExitCode::SUCCESS
@@ -126,7 +130,7 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
                     json: false,
                 }),
             },
-            &ServerArgs::default(),
+            &server,
         )
         .unwrap(),
         ExitCode::from(2)
@@ -140,7 +144,7 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
                     json: false,
                 }),
             },
-            &ServerArgs::default(),
+            &server,
         )
         .unwrap(),
         ExitCode::from(2)
@@ -154,7 +158,7 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
                     json: false,
                 }),
             },
-            &ServerArgs::default()
+            &server
         )
         .unwrap(),
         ExitCode::SUCCESS
@@ -165,6 +169,10 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
 fn safe_dispatch_plugin_json_errors_return_exit_codes() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
+    let server = ServerArgs {
+        config: Some(temp.path().join("config.toml")),
+        ..ServerArgs::default()
+    };
 
     assert_eq!(
         run_plugins(
@@ -174,7 +182,7 @@ fn safe_dispatch_plugin_json_errors_return_exit_codes() {
                     json: true,
                 }),
             },
-            &ServerArgs::default(),
+            &server,
         )
         .unwrap(),
         ExitCode::from(2)
@@ -188,7 +196,7 @@ fn safe_dispatch_plugin_json_errors_return_exit_codes() {
                     json: true,
                 }),
             },
-            &ServerArgs::default(),
+            &server,
         )
         .unwrap(),
         ExitCode::from(2)

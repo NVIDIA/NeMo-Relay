@@ -257,6 +257,9 @@ tokio::task_local! {
 }
 
 thread_local! {
+    /// Synchronous override used by native plugin callbacks that need to run a
+    /// bounded block with an isolated stack even inside a task-local context.
+    static SCOPE_STACK_OVERRIDE: RefCell<Option<ScopeStackHandle>> = const { RefCell::new(None) };
     /// Thread-local fallback scope stack for non-task contexts.
     static THREAD_SCOPE_STACK: RefCell<ScopeStackHandle> = RefCell::new(create_scope_stack());
     /// Whether the current thread explicitly owns a scope stack.
@@ -275,9 +278,33 @@ thread_local! {
 /// When no explicit thread-local stack has been installed yet, the default
 /// per-thread root-only stack is returned.
 pub fn current_scope_stack() -> ScopeStackHandle {
+    if let Some(stack) = SCOPE_STACK_OVERRIDE.with(|stack| stack.borrow().clone()) {
+        return stack;
+    }
     TASK_SCOPE_STACK
         .try_with(|stack| stack.clone())
         .unwrap_or_else(|_| THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone()))
+}
+
+/// Run a synchronous callback with `handle` as the visible scope stack.
+///
+/// This override takes precedence over task-local and thread-local stacks for
+/// the duration of the callback and is restored even when the callback panics.
+pub fn with_scope_stack<T>(handle: ScopeStackHandle, f: impl FnOnce() -> T) -> T {
+    struct OverrideGuard {
+        previous: Option<ScopeStackHandle>,
+    }
+
+    impl Drop for OverrideGuard {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            SCOPE_STACK_OVERRIDE.with(|stack| *stack.borrow_mut() = previous);
+        }
+    }
+
+    let previous = SCOPE_STACK_OVERRIDE.with(|stack| stack.replace(Some(handle)));
+    let _guard = OverrideGuard { previous };
+    f()
 }
 
 /// Install an explicit scope stack for the current thread.
@@ -356,6 +383,9 @@ pub fn sync_thread_scope_stack(handle: ScopeStackHandle) {
 /// A synchronized thread-local stack does not count as explicit unless it was
 /// installed through [`set_thread_scope_stack`].
 pub fn scope_stack_active() -> bool {
+    if SCOPE_STACK_OVERRIDE.with(|stack| stack.borrow().is_some()) {
+        return true;
+    }
     TASK_SCOPE_STACK
         .try_with(|_| true)
         .unwrap_or_else(|_| THREAD_SCOPE_STACK_EXPLICIT.with(|flag| flag.get()))

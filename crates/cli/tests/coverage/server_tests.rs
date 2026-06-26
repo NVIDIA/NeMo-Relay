@@ -18,6 +18,7 @@ use nemo_relay::api::registry::{
     deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
     register_plugin,
@@ -30,6 +31,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::error::CliError;
+use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
@@ -166,6 +168,44 @@ fn test_config() -> GatewayConfig {
         max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
+}
+
+fn write_missing_native_plugin_manifest(
+    dir: &std::path::Path,
+    plugin_id: &str,
+) -> std::path::PathBuf {
+    let missing_library = dir.join("missing-native-plugin");
+    let manifest_ref = dir.join("relay-plugin.toml");
+    let plugin_id = serde_json::to_string(plugin_id).unwrap();
+    let library = serde_json::to_string(&missing_library.to_string_lossy()).unwrap();
+    std::fs::write(
+        &manifest_ref,
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = {plugin_id}
+kind = "rust_dynamic"
+
+[compat]
+relay = "={version}"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[load]
+library = {library}
+symbol = "nemo_relay_missing_native_plugin"
+"#,
+            version = env!("CARGO_PKG_VERSION"),
+        ),
+    )
+    .unwrap();
+    manifest_ref
 }
 
 fn find_scope_event<'a>(
@@ -1675,6 +1715,36 @@ async fn serve_listener_rejects_invalid_plugin_config() {
         .unwrap_err();
 
     assert!(error.to_string().contains("ATOF mode"));
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
+}
+
+#[tokio::test]
+async fn serve_listener_with_dynamic_reports_native_load_errors() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let manifest_ref = write_missing_native_plugin_manifest(temp.path(), "cli.missing-native");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    drop(shutdown_tx);
+    let error = serve_listener_with_dynamic(
+        listener,
+        test_config(),
+        vec![ActiveDynamicPluginComponent {
+            plugin_id: "cli.missing-native".into(),
+            kind: DynamicPluginKind::RustDynamic,
+            manifest_ref: Some(manifest_ref.to_string_lossy().into_owned()),
+            config: Map::new(),
+        }],
+        Some(shutdown_rx),
+    )
+    .await
+    .unwrap_err();
+
+    let error = error.to_string();
+    assert!(error.contains("native plugin load failed"), "{error}");
+    assert!(error.contains("does not exist"), "{error}");
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 

@@ -97,8 +97,28 @@ mod native {
 
     fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
         while let Ok(message) = rx.recv() {
-            handle_message(message);
+            match message {
+                DispatcherMessage::Flush { done } => {
+                    let pending_flushes = drain_pending_messages(&rx);
+                    let _ = done.send(());
+                    for pending in pending_flushes {
+                        let _ = pending.send(());
+                    }
+                }
+                message => handle_message(message),
+            }
         }
+    }
+
+    fn drain_pending_messages(rx: &Receiver<DispatcherMessage>) -> Vec<Sender<()>> {
+        let mut pending_flushes = Vec::new();
+        while let Ok(message) = rx.try_recv() {
+            match message {
+                DispatcherMessage::Flush { done } => pending_flushes.push(done),
+                message => handle_message(message),
+            }
+        }
+        pending_flushes
     }
 
     fn handle_message(message: DispatcherMessage) {

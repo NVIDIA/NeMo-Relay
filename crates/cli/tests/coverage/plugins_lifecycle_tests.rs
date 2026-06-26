@@ -125,7 +125,7 @@ kind = "worker"
 
 [compat]
 relay = "0.5"
-worker_protocol = "1"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -303,6 +303,54 @@ fn trust_evaluation_short_circuits_when_policy_is_blocked() {
     assert!(trust.failure().is_none());
 }
 
+fn write_native_dynamic_manifest(dir: &Path, plugin_id: &str) -> PathBuf {
+    let artifact_body = b"native plugin fixture";
+    std::fs::write(dir.join("libfixture_native.so"), artifact_body).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(artifact_body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let manifest_path = dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"
+manifest_version = 1
+
+[plugin]
+id = "{plugin_id}"
+kind = "rust_dynamic"
+
+[compat]
+relay = "0.5"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[source]
+artifact = "libfixture_native.so"
+
+[integrity]
+sha256 = "{digest}"
+
+[load]
+library = "libfixture_native.so"
+symbol = "nemo_relay_fixture_native_plugin"
+"#,
+            digest = digest,
+        ),
+    )
+    .unwrap();
+    manifest_path
+}
+
 #[test]
 fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
@@ -332,6 +380,149 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let resolved = resolve_plugins_config(None).unwrap();
     assert_eq!(resolved.dynamic_plugins.len(), 1);
     assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.guardrail");
+}
+
+#[test]
+fn active_dynamic_plugin_components_project_enabled_native_records_only() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("native");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_native_dynamic_manifest(&plugin_dir, "acme.native");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let inactive = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert!(inactive.is_empty());
+
+    enable(
+        PluginsEnableCommand {
+            id: "acme.native".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    let active = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].plugin_id, "acme.native");
+    assert_eq!(active[0].kind, DynamicPluginKind::RustDynamic);
+    assert!(
+        active[0]
+            .manifest_ref
+            .as_deref()
+            .is_some_and(|manifest_ref| manifest_ref.contains("relay-plugin.toml"))
+    );
+    assert!(active[0].config.is_empty());
+}
+
+#[test]
+fn active_dynamic_plugin_components_accept_enabled_worker_records() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("worker");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    enable(
+        PluginsEnableCommand {
+            id: "acme.worker".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let active = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].plugin_id, "acme.worker");
+    assert_eq!(active[0].kind, DynamicPluginKind::Worker);
+    assert!(
+        active[0]
+            .manifest_ref
+            .as_deref()
+            .is_some_and(|manifest_ref| manifest_ref.contains("relay-plugin.toml"))
+    );
+    assert!(active[0].config.is_empty());
+}
+
+#[test]
+fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("worker");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let server = crate::config::ServerArgs::default();
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    enable(
+        PluginsEnableCommand {
+            id: "acme.worker".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    let mut scopes = load_scoped_registries(server.config.as_ref()).unwrap();
+    let scope = scopes
+        .iter_mut()
+        .find(|scope| scope.registry.get("acme.worker").is_some())
+        .expect("worker record should exist");
+    let mut records = scope.registry.cloned_records(true);
+    records
+        .iter_mut()
+        .find(|record| record.metadata.id == "acme.worker")
+        .expect("worker record should exist")
+        .source
+        .manifest_ref = None;
+    scope.registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::from_records(records)
+        .expect("registry should accept worker without manifest_ref");
+    scope.save().unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let active = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].plugin_id, "acme.worker");
+    assert_eq!(active[0].kind, DynamicPluginKind::Worker);
+    assert_eq!(active[0].manifest_ref, None);
 }
 
 #[test]

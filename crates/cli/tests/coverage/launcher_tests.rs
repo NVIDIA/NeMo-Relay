@@ -1138,6 +1138,68 @@ async fn dry_run_does_not_spawn_agent() {
 }
 
 #[tokio::test]
+async fn dry_run_does_not_hydrate_dynamic_plugin_lifecycle_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = plugin_dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.worker"
+kind = "worker"
+
+[compat]
+relay = "={version}"
+worker_protocol = "grpc-v1"
+
+[capabilities]
+items = ["plugin_worker"]
+
+[defaults]
+
+[load]
+runtime = "python"
+entrypoint = "acme.worker:create_plugin"
+"#,
+            version = env!("CARGO_PKG_VERSION"),
+        ),
+    )
+    .unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::write(
+        temp.path().join("plugins.toml"),
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: Some(config_path),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config: None,
+        dry_run: true,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let code = run(command, None).await.unwrap();
+
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(!temp.path().join(".dynamic-plugins.json").exists());
+}
+
+#[tokio::test]
 async fn wait_for_health_reports_unready_gateway() {
     let error = wait_for_health("http://127.0.0.1:1")
         .await

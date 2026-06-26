@@ -196,8 +196,12 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
     //   `nemo-relay config` remains the reconfiguration path.
     if server_args.requested_daemon_mode() {
-        let config = config::resolve_server_config(server_args)?;
-        server::serve(config.gateway).await?;
+        let resolved = config::resolve_server_config(server_args)?;
+        let dynamic_plugins = plugins::lifecycle::active_dynamic_plugin_components(
+            server_args.config.as_ref(),
+            &resolved,
+        )?;
+        server::serve_with_dynamic(resolved.gateway, dynamic_plugins).await?;
         Ok(ExitCode::SUCCESS)
     } else if config::any_config_file_exists() {
         doctor::run_doctor(None, false).await
