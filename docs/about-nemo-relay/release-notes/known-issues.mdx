@@ -42,6 +42,13 @@ and limitations apply to NeMo Relay 0.4:
 - Pricing estimates depend on configured pricing sources and the freshness of
   the source catalog. Unknown model pricing and missing token data leave cost
   absent instead of defaulting to zero.
+- ATIF token and cost metrics are derived from the raw LLM event payload, not
+  from the codec-normalized `annotated_response.usage`. A managed call whose
+  usage or cost exists only in the codec annotation (for example, a custom
+  response codec, or a framework that reports usage out of band) is reflected in
+  OpenInference token attributes and in OpenTelemetry and OpenInference cost
+  attributes, but not in ATIF step or final metrics. A future release will align
+  ATIF with the codec annotation.
 - ATOF streaming endpoints depend on collector availability. Failed endpoints
   are skipped or retried without blocking file output or other configured
   endpoints.
