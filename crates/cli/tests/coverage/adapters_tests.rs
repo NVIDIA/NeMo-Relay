@@ -232,6 +232,46 @@ fn adapter_string_lookup_accepts_scalar_values_only() {
 }
 
 #[test]
+fn common_extractor_keeps_fallbacks_at_adapter_boundary() {
+    let headers = HeaderMap::new();
+    let payload = json!({});
+
+    assert_eq!(
+        COMMON_AGENT_PAYLOAD_EXTRACTOR.session_id(&payload, &headers),
+        None
+    );
+    assert_eq!(COMMON_AGENT_PAYLOAD_EXTRACTOR.event_name(&payload), None);
+    assert_eq!(
+        COMMON_AGENT_PAYLOAD_EXTRACTOR.subagent_id(&payload, &headers),
+        None
+    );
+    assert_eq!(
+        COMMON_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        ExtractedLlmHint::default()
+    );
+    assert_eq!(
+        COMMON_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PreToolUse"),
+        ExtractedToolCall {
+            tool_call_id: None,
+            tool_name: None,
+            subagent_id: None,
+            arguments: None,
+            result: None,
+            status: None,
+        }
+    );
+
+    assert!(session_id(&payload, &headers).starts_with("hook-"));
+    assert_eq!(event_name(&payload), "unknown");
+
+    let event = common_tool_event(&payload, &headers, AgentKind::ClaudeCode);
+    assert!(event.tool_call_id.starts_with("tool-"));
+    assert_eq!(event.tool_name, "unknown_tool");
+    assert_eq!(event.arguments, json!(null));
+    assert_eq!(event.result, json!(null));
+}
+
+#[test]
 fn maps_cursor_subagent_and_permission_response() {
     let headers = HeaderMap::new();
     let outcome = cursor::adapt(
