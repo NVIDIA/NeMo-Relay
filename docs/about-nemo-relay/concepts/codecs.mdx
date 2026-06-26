@@ -105,6 +105,13 @@ and replayable request or response JSON when the source payload contains enough
 information. Provider codecs should preserve unknown fields and treat request
 encoding as a merge over the original provider payload.
 
+The response-extraction interface is the existing response codec contract:
+`LlmResponseCodec::decode_response` returns `AnnotatedLlmResponse`. Built-in
+codecs populate that normalized response with model, finish reason, tool-call,
+usage, cost, provider-specific, and preserved `extra` fields. Cost parsing and
+estimation helpers are codec implementation details behind that interface, not a
+separate provider-response API.
+
 ### Agent Payload Extraction
 
 Agent payload extraction is separate from provider codecs. Coding agents,

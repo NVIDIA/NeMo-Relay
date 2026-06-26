@@ -35,6 +35,10 @@ type ResponseSurfaceDetector = fn(&serde_json::Map<String, Json>) -> bool;
 /// schema-specific decode logic while preserving the existing public
 /// [`LlmCodec`](super::traits::LlmCodec) and
 /// [`LlmResponseCodec`](super::traits::LlmResponseCodec) traits.
+/// `decode_response` is the provider response-extraction interface: built-in
+/// codecs populate [`AnnotatedLlmResponse`] with model names, finish reasons,
+/// tool calls, usage, cost, provider-specific fields, and replayable response
+/// data when the source payload supplies them.
 pub(crate) struct ProviderSurfaceDescriptor {
     pub(crate) surface: ProviderSurface,
     pub(crate) detect_request: RequestSurfaceDetector,
