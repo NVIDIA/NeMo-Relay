@@ -3,7 +3,7 @@ title: "Module scope_stack"
 sidebar-title: "scope_stack"
 slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack"
 description: "Scope stack storage and propagation helpers."
-position: 38
+position: 39
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -36,6 +36,7 @@ The runtime tracks the current scope hierarchy through a shared [`ScopeStack`](/
 - [task_scope_push](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-task-scope-push): Push a scope handle onto the active stack.
 - [task_scope_remove](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-task-scope-remove): Remove a scope handle from the active stack.
 - [task_scope_top](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-task-scope-top): Clone the current top-most scope handle from the active stack.
+- [with_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-with-scope-stack): Run a synchronous callback with `handle` as the visible scope stack.
 
 ## Type Aliases
 

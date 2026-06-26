@@ -37,6 +37,8 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [DynamicPluginValidationStatus](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginvalidationstatus): Decomposed validation results for one plugin record.
 - [DynamicPluginWorkerCompatibility](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkercompatibility): Compatibility contract for worker plugins.
 - [DynamicPluginWorkerLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkerloadcontract): Lane-specific load contract for worker plugins.
+- [NativePluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginactivation): Owns native dynamic libraries registered into the plugin registry.
+- [NativePluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginloadspec): Native plugin load request derived from host dynamic-plugin state.
 
 ## Enums
 
@@ -55,6 +57,10 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 ## Constants
 
 - [DYNAMIC_PLUGIN_MANIFEST_FILENAME](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/constant-dynamic-plugin-manifest-filename): Canonical filename for authored Relay plugin manifests.
+
+## Functions
+
+- [load_native_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-native-plugins): Loads native dynamic plugins and registers their plugin kinds.
 
 ## Type Aliases
 
