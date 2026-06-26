@@ -12,6 +12,8 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 ```rust
 pub enum WorkerRuntime {
     Python,
+    Rust,
+    Command,
 }
 ```
 
@@ -24,6 +26,18 @@ Managed runtime identity for worker-based plugins.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Python"}} /></pre>
 
 Python worker runtime.
+
+### `Rust`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Rust"}} /></pre>
+
+Rust worker executable runtime.
+
+### `Command`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Command"}} /></pre>
+
+Generic executable worker runtime.
 
 ## Trait Implementations
 
