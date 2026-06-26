@@ -48,6 +48,50 @@ fn identical_request() -> AnnotatedLlmRequest {
     }
 }
 
+fn coding_agent_request(work_item: &str) -> AnnotatedLlmRequest {
+    AnnotatedLlmRequest {
+        messages: vec![
+            Message::System {
+                content: MessageContent::Text("You are a repo coding agent.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Apply the repository review checklist.".to_string()),
+                name: None,
+            },
+            Message::Assistant {
+                content: Some(MessageContent::Text(
+                    "Acknowledged. I will review with that checklist.".to_string(),
+                )),
+                tool_calls: None,
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text(work_item.to_string()),
+                name: None,
+            },
+        ],
+        model: Some("gpt-4o".to_string()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
 fn run_with_requests(requests: Vec<AnnotatedLlmRequest>) -> RunRecord {
     let now = Utc::now();
     RunRecord {
@@ -178,4 +222,51 @@ async fn acg_learner_declares_convergence_before_window_exhausted() {
         agent_observations_at_convergence,
         "agent aggregate observation storage should be skipped after convergence"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_convergence_accepts_stable_prefix_with_variable_work_item_suffix() {
+    let observation_window = 12;
+    let stability_window = 3;
+    let learner = AcgLearner::new_with_convergence(
+        "convergence-agent",
+        observation_window,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window,
+        }),
+    );
+    let backend = InMemoryBackend::new();
+    let hot_cache = empty_cache();
+
+    let mut converged_at = None;
+    let mut stable_prefix = 0;
+    for iteration in 0..observation_window {
+        let run = run_with_requests(vec![coding_agent_request(&format!(
+            "Review changed bundle #{iteration}"
+        ))]);
+        learner
+            .process_run(&run, &backend, &hot_cache)
+            .await
+            .unwrap();
+
+        let stability = backend
+            .load_stability("convergence-agent")
+            .await
+            .unwrap()
+            .expect("stability should be stored");
+        if stability.converged {
+            converged_at = Some(iteration + 1);
+            stable_prefix = stability.stable_prefix_length;
+            break;
+        }
+    }
+
+    assert!(
+        converged_at.is_some(),
+        "stable active-agent prelude should converge despite variable work item suffix"
+    );
+    assert_eq!(stable_prefix, 3);
 }

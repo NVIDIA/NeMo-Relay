@@ -82,6 +82,15 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         self.len
     }
 
+    fn last(&self) -> Option<T> {
+        if self.len == 0 {
+            return None;
+        }
+
+        let index = if self.pos == 0 { N - 1 } else { self.pos - 1 };
+        Some(self.data[index])
+    }
+
     fn copy_window(&self, window_size: usize, out: &mut [T]) -> usize {
         let window_size = window_size.min(self.len).min(out.len());
         if window_size == 0 {
@@ -94,6 +103,19 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         }
         window_size
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ConvergenceDecision {
+    pub(crate) epoch: u64,
+    pub(crate) stability_window: usize,
+    pub(crate) latest_betti: BettiNumbers,
+    pub(crate) latest_drift: f64,
+    pub(crate) latest_error: f64,
+    pub(crate) betti_stable: bool,
+    pub(crate) drift_decreasing: bool,
+    pub(crate) error_converged: bool,
+    pub(crate) converged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -118,11 +140,39 @@ impl ConvergenceDetector {
         }
     }
 
-    pub(crate) fn record_epoch(&mut self, betti: BettiNumbers, drift: f64, error: f64) {
+    pub(crate) fn record_epoch(
+        &mut self,
+        betti: BettiNumbers,
+        drift: f64,
+        error: f64,
+    ) -> ConvergenceDecision {
         self.betti_history.push(betti);
         self.drift_history.push(sanitize_non_negative(drift));
         self.error_history.push(sanitize_non_negative(error));
         self.epoch = self.epoch.saturating_add(1);
+        self.decision()
+            .expect("record_epoch should always leave a latest convergence decision")
+    }
+
+    pub(crate) fn decision(&self) -> Option<ConvergenceDecision> {
+        let latest_betti = self.betti_history.last()?;
+        let latest_drift = self.drift_history.last()?;
+        let latest_error = self.error_history.last()?;
+        let betti_stable = self.is_betti_stable();
+        let drift_decreasing = self.is_drift_decreasing();
+        let error_converged = self.is_error_window_converged();
+
+        Some(ConvergenceDecision {
+            epoch: self.epoch,
+            stability_window: self.stability_window,
+            latest_betti,
+            latest_drift,
+            latest_error,
+            betti_stable,
+            drift_decreasing,
+            error_converged,
+            converged: betti_stable && drift_decreasing && error_converged,
+        })
     }
 
     pub(crate) fn is_converged(&self) -> bool {

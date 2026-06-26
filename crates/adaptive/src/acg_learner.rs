@@ -94,20 +94,38 @@ impl AcgLearner {
         let total_spans = stability.scores.len();
         let betti_0 = stability.stable_prefix_length as u32;
         let betti_1 = total_spans.saturating_sub(stability.stable_prefix_length) as u32;
-        let drift = 1.0 - (stability.stable_prefix_length as f64 / total_spans.max(1) as f64);
-        let avg_score = if stability.scores.is_empty() {
+        let drift = if stability.stable_prefix_length == 0 {
+            1.0
+        } else {
+            0.0
+        };
+        let stable_prefix_len = stability.stable_prefix_length.min(stability.scores.len());
+        let avg_score = if stable_prefix_len == 0 {
             0.0
         } else {
             stability
                 .scores
                 .iter()
+                .take(stable_prefix_len)
                 .map(|score| score.score)
                 .sum::<f64>()
-                / stability.scores.len() as f64
+                / stable_prefix_len as f64
         };
         let error = 1.0 - avg_score;
 
         (BettiNumbers::new(betti_0, betti_1), drift, error)
+    }
+
+    fn prompt_topology_matches_stability(
+        stability: &crate::acg::stability::StabilityAnalysisResult,
+        observation: &PromptIR,
+    ) -> bool {
+        stability.scores.len() == observation.blocks.len()
+            && stability
+                .scores
+                .iter()
+                .zip(&observation.blocks)
+                .all(|(score, block)| score.span_id == block.span_id)
     }
 
     /// Update the per-profile topological convergence detector and return
@@ -176,36 +194,47 @@ impl Learner for AcgLearner {
                 Vec<PromptIR>,
                 crate::acg::stability::StabilityAnalysisResult,
             )> = None;
+            let mut best_aggregate_stability: Option<
+                crate::acg::stability::StabilityAnalysisResult,
+            > = None;
 
             for (profile_key, new_observations) in grouped_observations.drain() {
-                let existing = backend.load_observations(&profile_key).await?;
                 let existing_stability = backend.load_stability(&profile_key).await?;
+                let stability_window = self
+                    .convergence
+                    .as_ref()
+                    .map(|config| config.stability_window.max(3))
+                    .unwrap_or(3);
 
                 // If the profile has already converged, reuse the cached
-                // stability result and skip adding new observations.
-                if let (Some(cached), Some(observations)) = (
-                    existing_stability
-                        .as_ref()
-                        .filter(|stability| stability.converged),
-                    existing
-                        .as_ref()
-                        .filter(|observations| !observations.is_empty()),
-                ) {
+                // stability result and skip loading or adding observations.
+                // Stale records below the stability window fall through to
+                // the normal repair path. Requests whose span topology changed
+                // under the same learning key also reopen learning.
+                if let Some(cached) = existing_stability.as_ref().filter(|stability| {
+                    stability.converged
+                        && stability.total_observations as usize >= stability_window
+                        && new_observations.iter().all(|observation| {
+                            Self::prompt_topology_matches_stability(stability, observation)
+                        })
+                }) {
                     profile_counts.insert(profile_key.clone(), cached.total_observations);
                     profile_stability.insert(profile_key.clone(), cached.clone());
 
-                    let replace_best = best_profile_seed
+                    let replace_best = best_aggregate_stability
                         .as_ref()
-                        .map(|(_, current)| {
+                        .map(|current| {
                             (cached.stable_prefix_length, cached.total_observations)
                                 > (current.stable_prefix_length, current.total_observations)
                         })
                         .unwrap_or(true);
                     if replace_best {
-                        best_profile_seed = Some((observations.clone(), cached.clone()));
+                        best_aggregate_stability = Some(cached.clone());
                     }
                     continue;
                 }
+
+                let existing = backend.load_observations(&profile_key).await?;
 
                 let mut window: VecDeque<PromptIR> =
                     existing.unwrap_or_default().into_iter().collect();
@@ -252,6 +281,7 @@ impl Learner for AcgLearner {
                     .unwrap_or(true);
                 if replace_best {
                     best_profile_seed = Some((observations_vec.clone(), stability_result.clone()));
+                    best_aggregate_stability = Some(stability_result.clone());
                 }
             }
 
@@ -272,7 +302,7 @@ impl Learner for AcgLearner {
             })?;
             guard.acg_profiles.extend(profile_stability);
             guard.acg_profile_observation_counts.extend(profile_counts);
-            if let Some((_, aggregate_stability)) = best_profile_seed {
+            if let Some(aggregate_stability) = best_aggregate_stability {
                 guard.acg_observation_count = aggregate_stability.total_observations;
                 guard.acg_stability = Some(aggregate_stability);
             }

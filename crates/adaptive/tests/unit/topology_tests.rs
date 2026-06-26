@@ -56,6 +56,25 @@ fn stable_betti_and_decreasing_drift_converges() {
 }
 
 #[test]
+fn convergence_decision_reports_latest_epoch_and_gate_status() {
+    let mut detector = ConvergenceDetector::new(0.001, 3);
+
+    detector.record_epoch(BettiNumbers::new(2, 1), 0.1, 0.0005);
+    detector.record_epoch(BettiNumbers::new(2, 1), 0.05, 0.0004);
+    let decision = detector.record_epoch(BettiNumbers::new(2, 1), 0.001, 0.0003);
+
+    assert_eq!(decision.epoch, 3);
+    assert_eq!(decision.stability_window, 3);
+    assert_eq!(decision.latest_betti, BettiNumbers::new(2, 1));
+    assert_eq!(decision.latest_drift, 0.001);
+    assert_eq!(decision.latest_error, 0.0003);
+    assert!(decision.betti_stable);
+    assert!(decision.drift_decreasing);
+    assert!(decision.error_converged);
+    assert!(decision.converged);
+}
+
+#[test]
 fn unstable_betti_does_not_converge() {
     let mut detector = ConvergenceDetector::new(0.001, 3);
 

@@ -5,7 +5,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use chrono::Utc;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -95,6 +95,7 @@ struct SeedObservationBackend {
     observations: std::sync::RwLock<HashMap<String, Vec<PromptIR>>>,
     stability: std::sync::RwLock<HashMap<String, crate::acg::stability::StabilityAnalysisResult>>,
     fail_observation_store: AtomicBool,
+    load_observation_count: AtomicUsize,
 }
 
 impl SeedObservationBackend {
@@ -103,6 +104,7 @@ impl SeedObservationBackend {
             observations: std::sync::RwLock::new(HashMap::new()),
             stability: std::sync::RwLock::new(HashMap::new()),
             fail_observation_store: AtomicBool::new(false),
+            load_observation_count: AtomicUsize::new(0),
         }
     }
 
@@ -129,6 +131,10 @@ impl SeedObservationBackend {
             .write()
             .unwrap()
             .insert(agent_id.to_string(), stability);
+    }
+
+    fn load_observation_count(&self) -> usize {
+        self.load_observation_count.load(Ordering::SeqCst)
     }
 }
 
@@ -208,6 +214,7 @@ impl StorageBackendDyn for SeedObservationBackend {
         &'a self,
         agent_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<Vec<PromptIR>>>> + Send + 'a>> {
+        self.load_observation_count.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { Ok(self.observations.read().unwrap().get(agent_id).cloned()) })
     }
 
@@ -470,6 +477,95 @@ async fn acg_learner_repairs_converged_stability_with_empty_observations() {
         .unwrap()
         .expect("empty observations should be repaired instead of trusting converged stability");
     assert_eq!(repaired_observations.len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_reuses_converged_stability_without_loading_observations() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let seed_observation = build_prompt_ir(&request).unwrap();
+    let observations = vec![
+        seed_observation.clone(),
+        seed_observation.clone(),
+        seed_observation.clone(),
+    ];
+    let mut converged_stability = analyze_stability(&observations, &StabilityThresholds::default());
+    converged_stability.converged = true;
+
+    let backend = SeedObservationBackend::new(&learning_key, observations);
+    backend.seed_stability(&learning_key, converged_stability);
+    let hot_cache = empty_cache();
+
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        backend.load_observation_count(),
+        0,
+        "converged profiles should reuse cached stability without reading the observation window"
+    );
+    let guard = hot_cache.read().unwrap();
+    assert_eq!(guard.acg_profiles.len(), 1);
+    assert_eq!(guard.acg_observation_count, 3);
+    assert!(guard.acg_stability.as_ref().unwrap().converged);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_reopens_converged_profile_when_prompt_topology_changes() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let base = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let mut grown = base.clone();
+    grown.messages.push(Message::Assistant {
+        content: Some(MessageContent::Text("Acknowledged.".to_string())),
+        tool_calls: None,
+        name: None,
+    });
+    grown.messages.push(Message::User {
+        content: MessageContent::Text("New active-agent work item".to_string()),
+        name: None,
+    });
+
+    let learning_key = derive_acg_learning_key("agent-a", &base);
+    assert_eq!(learning_key, derive_acg_learning_key("agent-a", &grown));
+
+    let seed = build_prompt_ir(&base).unwrap();
+    let observations = vec![seed.clone(), seed.clone(), seed];
+    let mut converged_stability = analyze_stability(&observations, &StabilityThresholds::default());
+    converged_stability.converged = true;
+
+    let backend = SeedObservationBackend::new(&learning_key, observations);
+    backend.seed_stability(&learning_key, converged_stability);
+
+    learner
+        .process_run(&sample_run(vec![grown]), &backend, &empty_cache())
+        .await
+        .unwrap();
+
+    assert!(
+        backend.load_observation_count() > 0,
+        "topology change must inspect observations instead of blindly reusing convergence"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
