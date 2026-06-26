@@ -14,6 +14,22 @@ fn req(content: serde_json::Value) -> LlmRequest {
     }
 }
 
+#[test]
+fn builtin_provider_surface_registry_keeps_request_priority() {
+    let surfaces: Vec<_> = BUILTIN_PROVIDER_SURFACES
+        .iter()
+        .map(|descriptor| descriptor.surface)
+        .collect();
+    assert_eq!(
+        surfaces,
+        vec![
+            ProviderSurface::OpenAIResponses,
+            ProviderSurface::AnthropicMessages,
+            ProviderSurface::OpenAIChat,
+        ]
+    );
+}
+
 // ---------------------------------------------------------------------------
 // detect_request_surface (priority order, hoisted from adaptive)
 // ---------------------------------------------------------------------------

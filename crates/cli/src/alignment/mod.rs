@@ -72,6 +72,47 @@ impl GatewayManagementPolicy {
     }
 }
 
+/// Strategy for extracting provider-request facts used by gateway alignment.
+///
+/// This stays separate from [`SessionAlignmentState`] because extraction is a
+/// stateless read of request JSON, while ownership resolution is stateful and
+/// depends on active scopes, hints, aliases, and recent tool activity.
+pub(crate) trait ProviderRequestExtractor {
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String>;
+    fn gateway_turn_input(
+        &self,
+        agent_kind: AgentKind,
+        provider: &str,
+        request: &LlmRequest,
+    ) -> Option<Value>;
+}
+
+struct CommonProviderRequestExtractor;
+
+static COMMON_PROVIDER_REQUEST_EXTRACTOR: CommonProviderRequestExtractor =
+    CommonProviderRequestExtractor;
+
+impl ProviderRequestExtractor for CommonProviderRequestExtractor {
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        let task_text = request_user_task_text(&request.content)?;
+        let normalized = normalize_affinity_text(&task_text);
+        (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
+            .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
+    }
+
+    fn gateway_turn_input(
+        &self,
+        agent_kind: AgentKind,
+        provider: &str,
+        request: &LlmRequest,
+    ) -> Option<Value> {
+        if agent_kind != AgentKind::ClaudeCode || provider != "anthropic.messages" {
+            return None;
+        }
+        request_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+    }
+}
+
 // Records that a provider-created child session is really a subagent under another session. The
 // session manager stores this until the child emits its terminal AgentEnded event, then removes the
 // alias so future unrelated events cannot be reparented through stale state.
@@ -563,10 +604,7 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
 // the task. The extractor understands Anthropic Messages, OpenAI Chat Completions, and OpenAI
 // Responses shapes, and deliberately ignores raw count-token/file payloads.
 pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
-    let task_text = request_user_task_text(&request.content)?;
-    let normalized = normalize_affinity_text(&task_text);
-    (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
-        .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
+    COMMON_PROVIDER_REQUEST_EXTRACTOR.request_affinity_key(request)
 }
 
 // Builds a non-null turn input when a direct gateway request arrives before the prompt hook. This
@@ -577,10 +615,7 @@ pub(crate) fn gateway_turn_input(
     provider: &str,
     request: &LlmRequest,
 ) -> Option<Value> {
-    if agent_kind != AgentKind::ClaudeCode || provider != "anthropic.messages" {
-        return None;
-    }
-    request_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+    COMMON_PROVIDER_REQUEST_EXTRACTOR.gateway_turn_input(agent_kind, provider, request)
 }
 
 // Detects tool results that imply a subagent completed. Claude Code reports this through the
