@@ -603,6 +603,10 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
 // worker id; this key lets session correlation pair those calls with the subagent that first owned
 // the task. The extractor understands Anthropic Messages, OpenAI Chat Completions, and OpenAI
 // Responses shapes, and deliberately ignores raw count-token/file payloads.
+// TODO(extraction): These free-function shims preserve existing alignment call
+// sites while host-specific extractors land. Move callers onto
+// `ProviderRequestExtractor` implementations and remove the shims after that
+// migration completes.
 pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
     COMMON_PROVIDER_REQUEST_EXTRACTOR.request_affinity_key(request)
 }

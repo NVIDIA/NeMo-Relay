@@ -199,6 +199,11 @@ impl AgentPayloadExtractor for CommonAgentPayloadExtractor {
     }
 }
 
+// TODO(extraction): These free-function shims preserve existing adapter call
+// sites while host-specific extractors land. Move callers onto
+// `AgentPayloadExtractor` implementations and remove the shims after that
+// migration completes.
+
 // Derives a stable session identifier from gateway headers first, then common agent payload
 // fields, and finally a v7 UUID. Header precedence lets gateway and hook-forward callers
 // correlate events even when agent payload schemas omit or rename their native session field.
