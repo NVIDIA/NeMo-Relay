@@ -7,6 +7,7 @@ package nemo.relay.worker.v1;
 
 service PluginWorker {
   rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
   rpc Validate(ValidateRequest) returns (ValidateResponse);
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc Invoke(InvokeRequest) returns (InvokeResponse);
@@ -81,6 +82,22 @@ message HandshakeResponse {
   string runtime_name = 7;
   string runtime_version = 8;
   repeated RegistrationSurface supported_surfaces = 9;
+}
+
+message HealthRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+  string plugin_id = 3;
+  string worker_protocol = 4;
+  string sdk_name = 5;
+  string sdk_version = 6;
+  string runtime_name = 7;
+  string runtime_version = 8;
 }
 
 message ValidateRequest {

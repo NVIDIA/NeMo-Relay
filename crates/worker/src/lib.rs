@@ -28,11 +28,12 @@ use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWork
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, InvokeRequest,
-    InvokeResponse, JsonEnvelope, JsonResult, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolNextRequest,
-    ValidateRequest, ValidateResponse, WorkerAck, WorkerError,
+    EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
+    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmNextRequest,
+    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
+    ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
+    WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 #[cfg(unix)]
@@ -767,6 +768,24 @@ impl PluginWorker for WorkerService {
                 .into_iter()
                 .map(|surface| surface as i32)
                 .collect(),
+        }))
+    }
+
+    async fn health(
+        &self,
+        request: Request<HealthRequest>,
+    ) -> std::result::Result<Response<HealthResponse>, Status> {
+        let request = request.into_inner();
+        self.authorize(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(HealthResponse {
+            ok: true,
+            message: "ready".into(),
+            plugin_id: self.plugin.plugin_id().into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            sdk_name: "nemo-relay-worker".into(),
+            sdk_version: env!("CARGO_PKG_VERSION").into(),
+            runtime_name: "rust".into(),
+            runtime_version: rustc_version_runtime(),
         }))
     }
 

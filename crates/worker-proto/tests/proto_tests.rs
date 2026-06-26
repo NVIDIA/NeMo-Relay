@@ -4,7 +4,7 @@
 //! Tests for stable worker protocol helpers and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    HandshakeRequest, InvokeRequest, JsonEnvelope, RegistrationSurface, ScopeType,
+    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, RegistrationSurface, ScopeType,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use prost::Message;
@@ -74,6 +74,17 @@ fn request_field_numbers_are_stable() {
     assert_eq!(
         HandshakeRequest::decode(encoded.as_slice()).expect("decode handshake"),
         handshake
+    );
+
+    let health = HealthRequest {
+        activation_id: "act".into(),
+        auth_token: "token".into(),
+    };
+    let encoded = health.encode_to_vec();
+    assert_eq!(encoded, b"\x0a\x03act\x12\x05token".to_vec());
+    assert_eq!(
+        HealthRequest::decode(encoded.as_slice()).expect("decode health"),
+        health
     );
 
     let invoke = InvokeRequest {

@@ -23,10 +23,11 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HostAck, InvokeRequest,
-    InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest, LlmStreamNextRequest,
-    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegistrationSurface,
-    ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation, ToolNextRequest, ValidateRequest,
+    DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
+    InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
+    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
+    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    ToolNextRequest, ValidateRequest,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use serde_json::json;
@@ -90,6 +91,30 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .supported_surfaces
             .contains(&(RegistrationSurface::LlmStreamExecutionIntercept as i32))
     );
+
+    let bad_health = client
+        .health(Request::new(HealthRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: "bad-token".into(),
+        }))
+        .await
+        .expect_err("health auth should fail");
+    assert_eq!(bad_health.code(), tonic::Code::PermissionDenied);
+
+    let health = client
+        .health(Request::new(HealthRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect("health succeeds")
+        .into_inner();
+    assert!(health.ok);
+    assert_eq!(health.message, "ready");
+    assert_eq!(health.plugin_id, PLUGIN_ID);
+    assert_eq!(health.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
+    assert_eq!(health.sdk_name, "nemo-relay-worker");
+    assert_eq!(health.runtime_name, "rust");
 
     let validate_err = client
         .validate(Request::new(ValidateRequest {
