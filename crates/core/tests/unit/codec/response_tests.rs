@@ -1457,6 +1457,21 @@ fn test_unknown_model_pricing_returns_none_without_blocking_usage() {
     assert_eq!(usage.prompt_tokens, Some(1_000));
 }
 
+#[test]
+fn test_usage_ignores_unmodeled_provider_subfields() {
+    // Usage has no serde catch-all, so unknown provider usage keys are dropped.
+    let usage: Usage = serde_json::from_value(json!({
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "some_future_field": 99
+    }))
+    .unwrap();
+    assert_eq!(usage.prompt_tokens, Some(5));
+    assert_eq!(usage.completion_tokens, Some(7));
+    let reserialized = serde_json::to_value(&usage).unwrap();
+    assert!(reserialized.get("some_future_field").is_none());
+}
+
 // -------------------------------------------------------------------
 // FinishReason serialization
 // -------------------------------------------------------------------

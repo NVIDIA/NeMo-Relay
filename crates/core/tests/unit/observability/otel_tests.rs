@@ -972,6 +972,43 @@ fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
 }
 
 #[test]
+fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "other",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("priced-model")),
+    );
+
+    let attributes = attr_map(&end_attributes(&event));
+
+    // Cost is the only nemo_relay.llm.* surface; token counts are not emitted as
+    // discrete attributes, and no foreign gen_ai.* namespace is used.
+    let llm_keys: Vec<&String> = attributes
+        .keys()
+        .filter(|key| key.starts_with("nemo_relay.llm."))
+        .collect();
+    assert_eq!(
+        llm_keys.len(),
+        2,
+        "unexpected nemo_relay.llm.* keys: {llm_keys:?}"
+    );
+    assert!(attributes.contains_key("nemo_relay.llm.cost.total"));
+    assert!(attributes.contains_key("nemo_relay.llm.cost.currency"));
+    assert!(
+        attributes
+            .keys()
+            .all(|key| !key.starts_with("gen_ai") && !key.contains("token_count")),
+        "no token-count attributes expected"
+    );
+}
+
+#[test]
 fn llm_end_with_unpriced_response_model_uses_requested_model_cost() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_openai_disambiguation_pricing("priced-model");

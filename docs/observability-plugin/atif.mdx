@@ -199,6 +199,13 @@ agent scope UUID. Each step's `extra.ancestry.function_id` is the event UUID,
 and `extra.ancestry.parent_id` is the parent event UUID. Trace spans expose the
 same values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
 
+Each step's `metrics` carries `prompt_tokens`, `completion_tokens`, `cached_tokens`
+(cache read + write), and USD `cost_usd`; the trajectory `final_metrics` sums these
+as `total_*`. See
+[Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
+for the full mapping, including how ATIF sources these values from the raw event
+payload.
+
 ATIF is a trajectory projection over NeMo Relay events. It should preserve the
 meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
 lineage rules without becoming the source of truth for runtime ownership,
