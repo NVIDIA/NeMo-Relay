@@ -1,0 +1,126 @@
+---
+title: "gRPC Worker Protocol"
+description: ""
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+`grpc-v1` is the stable out-of-process plugin protocol for
+`plugin.kind = "worker"`. It is runtime-neutral: Python, Rust, and generic
+executable workers all speak the same `nemo.relay.worker.v1` API.
+
+The protocol is local-first in this milestone. Relay spawns workers and uses
+Unix domain sockets by default. Remote worker endpoints are not enabled.
+
+## Services
+
+```proto
+service PluginWorker {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc InvokeStream(InvokeRequest) returns (stream StreamChunk);
+  rpc CancelInvocation(CancelInvocationRequest) returns (WorkerAck);
+  rpc Shutdown(ShutdownRequest) returns (WorkerAck);
+}
+
+service RelayHostRuntime {
+  rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
+  rpc PopScope(PopScopeRequest) returns (HostAck);
+  rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
+  rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
+  rpc ToolNext(ToolNextRequest) returns (JsonResult);
+  rpc LlmNext(LlmNextRequest) returns (JsonResult);
+  rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
+}
+```
+
+`PluginWorker` is implemented by the plugin process. `RelayHostRuntime` is
+implemented by the Relay host and is available to workers for events, scopes,
+and execution continuations.
+
+## Activation Flow
+
+1. The host reads `relay-plugin.toml`, validates `compat.worker_protocol =
+   "grpc-v1"`, creates local sockets, and spawns the worker process.
+2. The worker receives socket and token environment variables, starts its gRPC
+   server, and connects to the host runtime service.
+3. The host calls `Handshake` and rejects plugin ID, kind, or protocol mismatch.
+4. The host calls `Validate` with component config. Error diagnostics prevent
+   initialization.
+5. The host calls `Register` and validates the declarative registration plan.
+6. The host installs proxy callbacks. Rollback removes any partial registration
+   if installation fails.
+7. The host calls `Shutdown` and deregisters proxies before the worker process
+   exits.
+
+## Data Model
+
+Relay DTOs travel through:
+
+```proto
+message JsonEnvelope {
+  string schema = 1;
+  bytes json = 2;
+}
+```
+
+The envelope carries event, LLM request, annotated LLM request, tool JSON,
+response JSON, diagnostics, scope data, and metadata shapes from
+`nemo-relay-types`. Protobuf owns protocol control flow, not duplicated Relay
+DTO schemas.
+
+## Registrations
+
+`RegisterResponse` returns declarative registrations:
+
+```proto
+message Registration {
+  string local_name = 1;
+  RegistrationSurface surface = 2;
+  int32 priority = 3;
+  bool break_chain = 4;
+}
+```
+
+The host owns namespacing, registry mutation, rollback, and deregistration.
+Workers do not mutate host registries directly.
+
+Supported surfaces are subscriber, tool sanitize request/response, tool
+conditional execution, tool request intercept, tool execution intercept, LLM
+sanitize request/response, LLM conditional execution, LLM request intercept, LLM
+execution intercept, and LLM stream execution intercept.
+
+## Invocation And Continuations
+
+`Invoke` handles unary surfaces. Results are surface-specific: empty result,
+JSON result, optional guardrail block reason, transformed LLM request plus
+optional annotation, or a structured worker error.
+
+`InvokeStream` handles LLM stream execution intercepts. Stream chunks carry
+ordered JSON envelopes or structured stream errors.
+
+Execution intercept invocations include an opaque `continuation_id`. Workers may
+call `ToolNext`, `LlmNext`, or `LlmStreamNext` while the invocation is active.
+Calls after completion or cancellation fail.
+
+## Host Runtime Calls
+
+Workers can call the host runtime to emit marks, push and pop scopes, create and
+drop isolated scope stacks, and call execution continuations. Scope APIs use
+host-issued opaque IDs. Workers can pass a selected stack ID on mark and scope
+calls to create non-correlated visibility stacks.
+
+## Errors
+
+gRPC non-OK statuses are reserved for transport, authentication, and protocol
+failures. Plugin callback failures should return structured `WorkerError`
+values so the host can map them to Relay runtime errors predictably.
+
+Cancellation uses gRPC cancellation/deadlines plus best-effort
+`CancelInvocation`. Shutdown should deregister host proxies before process
+termination.

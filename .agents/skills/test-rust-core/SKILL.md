@@ -15,7 +15,7 @@ work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
 Use this skill when a change is primarily in `crates/core`, `crates/adaptive`,
-or shared Rust runtime semantics.
+dynamic plugin Rust crates, or shared Rust runtime semantics.
 
 ## Default Path
 
@@ -46,6 +46,13 @@ cargo test -p nemo-relay
 # Adaptive crate when touched
 cargo test -p nemo-relay-adaptive
 
+# Dynamic plugin crates when touched
+cargo test -p nemo-relay-types
+cargo test -p nemo-relay-plugin
+cargo test -p nemo-relay-worker-proto
+cargo test -p nemo-relay-worker
+cargo test -p nemo-relay --test native_plugin_tests --test worker_plugin_tests
+
 # Compile sweep
 just build-rust
 
@@ -57,6 +64,9 @@ just ci=true test-rust
 
 - If a public API, event shape, middleware behavior, plugin semantics, or any
   `crates/core`/`crates/adaptive` behavior changed, also use `validate-change`.
+- If native dynamic plugins, gRPC workers, `nemo-relay-plugin`,
+  `nemo-relay-worker`, `nemo-relay-worker-proto`, or `nemo-relay-types` changed,
+  also use `maintain-dynamic-plugins`.
 - If the change is isolated to one binding wrapper on top of unchanged Rust
   semantics, prefer that binding's build/test skill instead.
 
@@ -69,3 +79,4 @@ just ci=true test-rust
 - `crates/adaptive/README.md`
 - `docs/contribute/testing-and-docs.md`
 - `validate-change`
+- `maintain-dynamic-plugins`

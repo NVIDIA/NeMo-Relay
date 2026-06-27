@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-plugin"
+version = "0.5.0"
+description = "Python SDK for NeMo Relay dynamic worker plugins."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+    { name = "NVIDIA Corporation & Affiliates" },
+]
+keywords = [
+    "agents",
+    "grpc",
+    "llm",
+    "middleware",
+    "nemo-relay",
+    "plugins",
+    "tools",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "grpcio>=1.81.1,<2",
+    "protobuf>=6.33.5,<7",
+]
+
+[project.urls]
+Documentation = "https://docs.nvidia.com/nemo/relay"
+Homepage = "https://github.com/NVIDIA/NeMo-Relay"
+Issues = "https://github.com/NVIDIA/NeMo-Relay/issues"
+Repository = "https://github.com/NVIDIA/NeMo-Relay"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+nemo_relay_plugin = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["src/nemo_relay_plugin/_proto"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nemo_relay_plugin"]

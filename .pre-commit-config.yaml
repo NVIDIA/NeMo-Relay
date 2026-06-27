@@ -52,7 +52,7 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check . --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
+        entry: uv run ty check . --extra-search-path python/plugin/src --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/** --exclude python/plugin/src/nemo_relay_plugin/_proto/**
         language: system
         types: [python]
         pass_filenames: false
@@ -103,6 +103,13 @@ repos:
         entry: uv lock
         language: system
         files: '^(pyproject\.toml|uv\.lock)$'
+        pass_filenames: false
+
+      - id: python-worker-proto-check
+        name: Python worker protobuf stubs are up to date
+        entry: just check-python-worker-proto
+        language: system
+        files: '^(crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker\.proto|python/plugin/src/nemo_relay_plugin/_proto/plugin_worker_pb2(_grpc)?\.py|justfile)$'
         pass_filenames: false
 
       - id: node-lockfile-check

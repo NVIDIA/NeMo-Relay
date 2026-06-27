@@ -26,6 +26,10 @@ Use this skill for docs-only or example-heavy changes.
 - Keep stable user-facing wrappers at `scripts/` root in docs and examples;
   only point at namespaced helper paths when documenting internal maintenance
   work
+- Dynamic plugin docs must keep Rust native plugin examples, Python worker
+  plugin examples, and `grpc-v1` protocol details on separate pages.
+- Dynamic plugin manifests in docs/examples should use
+  `compat.relay = ">=0.5,<1.0"` unless deliberately narrower.
 - In MDX files, top-of-file comments must use JSX comment delimiters:
   `{/*` to open and `*/}` to close. Do not use HTML comments for MDX SPDX
   headers.
@@ -36,6 +40,8 @@ Use this skill for docs-only or example-heavy changes.
 - [ ] Relevant getting-started or reference docs updated
 - [ ] Example commands still match current package names and paths
 - [ ] Relevant package or crate `README.md` files updated when examples or binding guidance changed
+- [ ] Dynamic plugin entry pages link to native, worker, Rust example, Python
+      example, and protocol pages when those pages exist
 - [ ] New or regenerated MDX files use `{/* ... */}` for top-of-file SPDX comments
 - [ ] Release-policy docs still point to GitHub Releases as the only release-history source of truth
 - [ ] Run `just docs` when the docs site changed; `./scripts/build-docs.sh html` remains the compatibility wrapper

@@ -1,0 +1,98 @@
+---
+title: "Worker Dynamic Plugins"
+description: ""
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use worker dynamic plugins when plugin code should run out of process while
+still installing NeMo Relay subscribers, guardrails, and intercepts at gateway
+startup.
+
+Worker plugins use the stable `grpc-v1` protocol. The Relay host starts a local
+worker process, connects over Unix domain sockets, validates the component
+config, asks the worker for a declarative registration plan, and installs host
+proxy callbacks for those registrations. The worker process can be written in
+Rust, Python, or any language that can speak the `nemo.relay.worker.v1` gRPC
+API.
+
+## Manifest
+
+Worker plugins use `relay-plugin.toml`:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "acme.policy"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = "acme_policy.worker:main"
+```
+
+The `runtime` value controls only process launch:
+
+| Runtime | Launch behavior |
+|---|---|
+| `python` | Runs a Python interpreter and imports the configured `module:function`. |
+| `rust` | Runs the manifest-relative or absolute executable in `entrypoint`. |
+| `command` | Runs the manifest-relative or absolute executable in `entrypoint`. |
+
+Each worker receives these environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `NEMO_RELAY_WORKER_ID` | Activation identifier for this worker process. |
+| `NEMO_RELAY_PLUGIN_ID` | Manifest plugin ID. |
+| `NEMO_RELAY_WORKER_SOCKET` | Worker gRPC endpoint the process must bind. |
+| `NEMO_RELAY_HOST_SOCKET` | Host runtime gRPC endpoint for events, scopes, and continuations. |
+| `NEMO_RELAY_WORKER_TOKEN` | Shared local activation token. |
+
+## Registration Surfaces
+
+`grpc-v1` supports the current plugin registration surfaces:
+
+| Area | Surfaces |
+|---|---|
+| Events | Subscriber callbacks. |
+| Tools | Sanitize request/response guardrails, conditional execution guardrails, request intercepts, execution intercepts. |
+| LLMs | Sanitize request/response guardrails, conditional execution guardrails, request intercepts, execution intercepts, stream execution intercepts. |
+
+Registrations are declarative. The worker returns `{ local_name, surface,
+priority, break_chain }`, and the host owns registry mutation, rollback,
+namespacing, and deregistration.
+
+## Runtime Calls
+
+During callback invocation, workers can call the host runtime to emit mark
+events, push and pop scopes, create and drop isolated scope stacks, and call
+`ToolNext`, `LlmNext`, or `LlmStreamNext` while an execution intercept is active.
+
+Relay DTOs are carried as `JsonEnvelope` values. The protobuf schema owns
+protocol control flow; Relay data models stay serialized through
+`nemo-relay-types` JSON shapes to avoid protobuf/Rust/Python type drift.
+
+See [Build a Python Worker Plugin](/build-plugins/python-worker-plugin-example)
+for the Python SDK path and [gRPC Worker Protocol](/build-plugins/grpc-worker-protocol)
+for the protocol shape.
+
+## Trust And Isolation
+
+Worker plugins are trusted local code. Running out of process provides
+dependency and crash isolation, but it is not a security sandbox. `grpc-v1`
+uses local sockets and an activation token in this milestone; remote worker
+endpoints are not enabled.

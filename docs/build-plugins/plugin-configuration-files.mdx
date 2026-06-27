@@ -68,6 +68,35 @@ Each component has:
 
 The gateway reads only files named `plugins.toml`.
 
+## Dynamic Plugin Records
+
+`[[plugins.dynamic]]` records are a separate discovery path for manifest-backed
+dynamic plugins. They do not merge into the generic `components` array while
+configuration is being resolved.
+
+```toml
+[[plugins.dynamic]]
+manifest = "../plugins/acme/relay-plugin.toml"
+config = { mode = "observe" }
+```
+
+For enabled dynamic plugins, the gateway loads lifecycle records first and then
+synthesizes in-memory component specs using the manifest plugin ID as `kind`
+and `plugins.dynamic.config` as the component config. `rust_dynamic` records
+load trusted in-process shared libraries. `worker` records start trusted local
+out-of-process workers using the `grpc-v1` protocol. Disabled dynamic records
+stay visible to `nemo-relay plugins list`, `inspect`, and `validate`, but they
+are not loaded or initialized.
+
+See [Native Dynamic Plugins](/build-plugins/native-dynamic-plugins) for the
+trusted shared-library ABI and `relay-plugin.toml` manifest contract.
+See [Worker Dynamic Plugins](/build-plugins/worker-dynamic-plugins) for the
+out-of-process worker protocol and manifest contract.
+See [Build a Rust Native Plugin](/build-plugins/rust-native-plugin-example),
+[Build a Python Worker Plugin](/build-plugins/python-worker-plugin-example),
+and [gRPC Worker Protocol](/build-plugins/grpc-worker-protocol) for example
+implementations and protocol details.
+
 ## Discovery
 
 The gateway resolves plugin configuration using two kinds of input: file and CLI
