@@ -81,6 +81,49 @@ function telemetryConfig(config = {}) {
 }
 
 /**
+ * Create topology-aware hint load-shedding settings with defaults applied.
+ *
+ * @param {object} [config={}] - Partial governor settings to override.
+ * @returns {object} A normalized governor config object.
+ */
+function governorConfig(config = {}) {
+  return {
+    enabled: false,
+    epsilon: 1.0,
+    ...config,
+  };
+}
+
+/**
+ * Create topology-aware tool-plan drift detection settings with defaults applied.
+ *
+ * @param {object} [config={}] - Partial drift settings to override.
+ * @returns {object} A normalized drift config object.
+ */
+function driftConfig(config = {}) {
+  return {
+    enabled: false,
+    threshold: 0.75,
+    ...config,
+  };
+}
+
+/**
+ * Create topological convergence detector settings with defaults applied.
+ *
+ * @param {object} [config={}] - Partial convergence settings to override.
+ * @returns {object} A normalized convergence config object.
+ */
+function convergenceConfig(config = {}) {
+  return {
+    enabled: false,
+    epsilon: 0.001,
+    stability_window: 3,
+    ...config,
+  };
+}
+
+/**
  * Create adaptive hint-injection settings with defaults applied.
  *
  * Merges caller-supplied overrides onto the default config used by the
@@ -202,6 +245,9 @@ module.exports = {
   inMemoryBackend,
   redisBackend,
   telemetryConfig,
+  governorConfig,
+  driftConfig,
+  convergenceConfig,
   adaptiveHintsConfig,
   toolParallelismConfig,
   acgConfig,

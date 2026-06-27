@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::acg::canonicalize::sha256_hex;
 use crate::acg::profile::{BlockStabilityScore, StabilityClass};
-use crate::acg::prompt_ir::{PromptIR, SpanId};
+use crate::acg::prompt_ir::{BlockContentType, PromptBlock, PromptIR, PromptRole, SpanId};
 
 /// Thresholds controlling prompt-block stability classification.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,8 +39,15 @@ pub struct StabilityAnalysisResult {
     pub scores: Vec<BlockStabilityScore>,
     /// Number of leading blocks that were classified as stable.
     pub stable_prefix_length: usize,
+    /// Fingerprint of the dominant observed stable prefix content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub stable_prefix_fingerprint: Option<String>,
     /// Total number of observations included in the analysis.
     pub total_observations: u32,
+    /// Whether topological convergence has been declared for this profile.
+    #[serde(default)]
+    pub converged: bool,
 }
 
 struct SpanObservations {
@@ -69,7 +76,9 @@ pub fn analyze_stability(
         return StabilityAnalysisResult {
             scores: Vec::new(),
             stable_prefix_length: 0,
+            stable_prefix_fingerprint: None,
             total_observations: 0,
+            converged: false,
         };
     }
 
@@ -85,15 +94,108 @@ pub fn analyze_stability(
         .map(|(span_id, obs)| build_stability_score(span_id, obs, total_observations, thresholds))
         .collect();
 
-    indexed_scores.sort_by_key(|(idx, _)| *idx);
+    sort_indexed_scores(&mut indexed_scores);
     let scores: Vec<BlockStabilityScore> =
         indexed_scores.into_iter().map(|(_, score)| score).collect();
     let stable_prefix_length = find_stable_prefix_length(&scores);
+    let stable_prefix_fingerprint =
+        dominant_stable_prefix_fingerprint(observations, stable_prefix_length);
 
     StabilityAnalysisResult {
         scores,
         stable_prefix_length,
+        stable_prefix_fingerprint,
         total_observations,
+        converged: false,
+    }
+}
+
+pub(crate) fn prompt_prefix_fingerprint(
+    observation: &PromptIR,
+    prefix_length: usize,
+) -> Option<String> {
+    if prefix_length == 0 || observation.blocks.len() < prefix_length {
+        return None;
+    }
+
+    let prefix = observation
+        .blocks
+        .iter()
+        .take(prefix_length)
+        .map(block_fingerprint_part)
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(sha256_hex(&prefix))
+}
+
+fn dominant_stable_prefix_fingerprint(
+    observations: &[PromptIR],
+    stable_prefix_length: usize,
+) -> Option<String> {
+    let mut counts: HashMap<String, u32> = HashMap::new();
+    for observation in observations {
+        let Some(fingerprint) = prompt_prefix_fingerprint(observation, stable_prefix_length) else {
+            continue;
+        };
+        *counts.entry(fingerprint).or_insert(0) += 1;
+    }
+
+    select_dominant_prefix_fingerprint(counts)
+}
+
+fn select_dominant_prefix_fingerprint(counts: HashMap<String, u32>) -> Option<String> {
+    counts
+        .into_iter()
+        .fold(None, |best, candidate| match best {
+            None => Some(candidate),
+            Some((best_fingerprint, best_count)) => {
+                let (candidate_fingerprint, candidate_count) = candidate;
+                if candidate_count > best_count
+                    || (candidate_count == best_count && candidate_fingerprint < best_fingerprint)
+                {
+                    Some((candidate_fingerprint, candidate_count))
+                } else {
+                    Some((best_fingerprint, best_count))
+                }
+            }
+        })
+        .map(|(fingerprint, _)| fingerprint)
+}
+
+fn sort_indexed_scores(indexed_scores: &mut [(u32, BlockStabilityScore)]) {
+    indexed_scores.sort_by(|(left_index, left_score), (right_index, right_score)| {
+        left_index
+            .cmp(right_index)
+            .then_with(|| left_score.span_id.0.cmp(&right_score.span_id.0))
+    });
+}
+
+fn block_fingerprint_part(block: &PromptBlock) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        block.span_id.0,
+        prompt_role_tag(block.role),
+        content_type_tag(block.content_type),
+        sha256_hex(&block.content)
+    )
+}
+
+fn prompt_role_tag(role: PromptRole) -> &'static str {
+    match role {
+        PromptRole::System => "system",
+        PromptRole::User => "user",
+        PromptRole::Assistant => "assistant",
+        PromptRole::Tool => "tool",
+    }
+}
+
+fn content_type_tag(content_type: BlockContentType) -> &'static str {
+    match content_type {
+        BlockContentType::Text => "text",
+        BlockContentType::ToolSchema => "tool_schema",
+        BlockContentType::ToolResult => "tool_result",
+        BlockContentType::StructuredOutput => "structured_output",
+        BlockContentType::Image => "image",
     }
 }
 

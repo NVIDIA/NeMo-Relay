@@ -29,12 +29,33 @@ export interface AdaptiveHintsConfig {
   break_chain?: boolean;
   inject_header?: boolean;
   inject_body_path?: string;
+  governor?: GovernorConfig;
 }
 
 /** Built-in adaptive tool scheduling settings. */
 export interface ToolParallelismConfig {
   priority?: number;
   mode?: 'observe_only' | 'inject_hints' | 'schedule' | string;
+  drift?: DriftConfig;
+}
+
+/** Topology-aware hint load-shedding settings. */
+export interface GovernorConfig {
+  enabled?: boolean;
+  epsilon?: number;
+}
+
+/** Topology-aware tool-plan drift detection settings. */
+export interface DriftConfig {
+  enabled?: boolean;
+  threshold?: number;
+}
+
+/** Topological convergence detector settings. */
+export interface ConvergenceConfig {
+  enabled?: boolean;
+  epsilon?: number;
+  stability_window?: number;
 }
 
 /** ACG prompt-stability classification thresholds. */
@@ -50,6 +71,7 @@ export interface AcgConfig {
   observation_window?: number;
   priority?: number;
   stability_thresholds?: AcgStabilityThresholds;
+  convergence?: ConvergenceConfig;
 }
 
 /** Canonical config object for the top-level adaptive component. */
@@ -61,6 +83,7 @@ export interface Config {
   adaptive_hints?: AdaptiveHintsConfig;
   tool_parallelism?: ToolParallelismConfig;
   acg?: AcgConfig;
+  convergence?: ConvergenceConfig;
   policy?: ConfigPolicy;
 }
 
@@ -208,6 +231,12 @@ export declare function redisBackend(url: string, keyPrefix?: string): BackendSp
  * append learner names without checking for initialization first.
  */
 export declare function telemetryConfig(config?: TelemetryConfig): TelemetryConfig;
+/** Create topology-aware hint load-shedding settings with defaults applied. */
+export declare function governorConfig(config?: GovernorConfig): GovernorConfig;
+/** Create topology-aware tool-plan drift detection settings with defaults applied. */
+export declare function driftConfig(config?: DriftConfig): DriftConfig;
+/** Create topological convergence detector settings with defaults applied. */
+export declare function convergenceConfig(config?: ConvergenceConfig): ConvergenceConfig;
 /**
  * Create adaptive hint-injection settings with defaults applied.
  *

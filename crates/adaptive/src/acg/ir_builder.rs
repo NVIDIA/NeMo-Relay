@@ -17,6 +17,8 @@ use crate::acg::prompt_ir::{
     ToolSchemaHash,
 };
 
+const RESPONSE_FORMAT_EXTRA_KEY: &str = "response_format";
+
 /// Build a normalized [`PromptIR`] from an annotated LLM request.
 ///
 /// The builder preserves prompt order, inserts tool-schema blocks before the
@@ -35,43 +37,70 @@ use crate::acg::prompt_ir::{
 pub fn build_prompt_ir(request: &AnnotatedLlmRequest) -> Result<PromptIR> {
     let mut blocks: Vec<PromptBlock> = Vec::new();
     let mut sequence_index: u32 = 0;
-    let mut inserted_tool_blocks = false;
+    let mut inserted_static_contract_blocks = false;
+    let structured_output_contract = build_structured_output_contract(request)?;
+    let has_static_contract_blocks =
+        request.tools.is_some() || structured_output_contract.is_some();
 
     for message in &request.messages {
-        if should_insert_tool_blocks_before_message(inserted_tool_blocks, request, message) {
-            append_tool_schema_blocks(&mut blocks, &mut sequence_index, request.tools.as_deref())?;
-            inserted_tool_blocks = true;
+        if should_insert_static_contract_blocks_before_message(
+            inserted_static_contract_blocks,
+            has_static_contract_blocks,
+            message,
+        ) {
+            append_static_contract_blocks(
+                &mut blocks,
+                &mut sequence_index,
+                request.tools.as_deref(),
+                structured_output_contract.as_ref(),
+            )?;
+            inserted_static_contract_blocks = true;
         }
 
         append_message_blocks(&mut blocks, &mut sequence_index, message)?;
     }
 
-    if !inserted_tool_blocks {
-        append_tool_schema_blocks(&mut blocks, &mut sequence_index, request.tools.as_deref())?;
+    if !inserted_static_contract_blocks {
+        append_static_contract_blocks(
+            &mut blocks,
+            &mut sequence_index,
+            request.tools.as_deref(),
+            structured_output_contract.as_ref(),
+        )?;
     }
 
     let tool_schema_hashes = match &request.tools {
         Some(tools) => Some(build_tool_schema_hashes(tools)?),
         None => None,
     };
+    let structured_output_schema_id = structured_output_contract
+        .as_ref()
+        .map(|contract| contract.schema_id.clone());
     let source_request_hash = Some(compute_request_hash(request)?);
 
     Ok(PromptIR {
         ir_id: Uuid::new_v4(),
         blocks,
         tool_schema_hashes,
-        structured_output_schema_id: None,
+        structured_output_schema_id,
         source_request_hash,
         created_at: Utc::now(),
     })
 }
 
-fn should_insert_tool_blocks_before_message(
-    inserted_tool_blocks: bool,
-    request: &AnnotatedLlmRequest,
+struct StructuredOutputContract {
+    content: String,
+    schema_id: String,
+}
+
+fn should_insert_static_contract_blocks_before_message(
+    inserted_static_contract_blocks: bool,
+    has_static_contract_blocks: bool,
     message: &Message,
 ) -> bool {
-    !inserted_tool_blocks && !matches!(message, Message::System { .. }) && request.tools.is_some()
+    !inserted_static_contract_blocks
+        && has_static_contract_blocks
+        && !matches!(message, Message::System { .. })
 }
 
 fn append_message_blocks(
@@ -252,6 +281,21 @@ fn append_tool_schema_blocks(
     Ok(())
 }
 
+fn append_static_contract_blocks(
+    blocks: &mut Vec<PromptBlock>,
+    seq: &mut u32,
+    tools: Option<&[ToolDefinition]>,
+    structured_output_contract: Option<&StructuredOutputContract>,
+) -> Result<()> {
+    append_tool_schema_blocks(blocks, seq, tools)?;
+
+    if let Some(contract) = structured_output_contract {
+        blocks.push(build_structured_output_block(seq, contract));
+    }
+
+    Ok(())
+}
+
 fn build_tool_schema_block(seq: &mut u32, tool: &ToolDefinition) -> Result<PromptBlock> {
     let tool_value = serde_json::to_value(tool)?;
     let canonical = canonicalize_value(&tool_value)?;
@@ -270,6 +314,41 @@ fn build_tool_schema_block(seq: &mut u32, tool: &ToolDefinition) -> Result<Promp
         sensitivity: SensitivityLabel::default(),
         token_metadata: None,
     })
+}
+
+fn build_structured_output_contract(
+    request: &AnnotatedLlmRequest,
+) -> Result<Option<StructuredOutputContract>> {
+    let Some(response_format) = request.extra.get(RESPONSE_FORMAT_EXTRA_KEY) else {
+        return Ok(None);
+    };
+
+    let canonical = canonicalize_value(response_format)?;
+    let content = normalize_whitespace(&canonical);
+    Ok(Some(StructuredOutputContract {
+        schema_id: sha256_hex(&canonical),
+        content,
+    }))
+}
+
+fn build_structured_output_block(
+    seq: &mut u32,
+    contract: &StructuredOutputContract,
+) -> PromptBlock {
+    let index = *seq;
+    let span_id = generate_span_id(PromptRole::System, index, Some("structured-output"));
+    *seq += 1;
+
+    PromptBlock {
+        span_id,
+        sequence_index: index,
+        role: PromptRole::System,
+        content: contract.content.clone(),
+        content_type: BlockContentType::StructuredOutput,
+        provenance: ProvenanceLabel::System,
+        sensitivity: SensitivityLabel::default(),
+        token_metadata: None,
+    }
 }
 
 fn build_tool_schema_hashes(tools: &[ToolDefinition]) -> Result<Vec<ToolSchemaHash>> {

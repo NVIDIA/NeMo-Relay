@@ -19,7 +19,7 @@ func TestNewAdaptiveConfigDefaults(t *testing.T) {
 	if config.Version != 1 {
 		t.Fatalf("expected version 1, got %d", config.Version)
 	}
-	if config.Telemetry != nil || config.AdaptiveHints != nil || config.ToolParallelism != nil || config.Acg != nil {
+	if config.Telemetry != nil || config.AdaptiveHints != nil || config.ToolParallelism != nil || config.Acg != nil || config.Convergence != nil {
 		t.Fatal("expected adaptive feature sections to default to nil")
 	}
 }
@@ -30,6 +30,15 @@ func TestAdaptiveHelperConstructors(t *testing.T) {
 
 	telemetry := NewTelemetryConfig()
 	assertTelemetryDefaults(t, telemetry)
+
+	governor := NewGovernorConfig()
+	assertGovernorDefaults(t, governor)
+
+	drift := NewDriftConfig()
+	assertDriftDefaults(t, drift)
+
+	convergence := NewConvergenceConfig()
+	assertConvergenceDefaults(t, convergence)
 
 	hints := NewAdaptiveHintsConfig()
 	assertAdaptiveHintsDefaults(t, hints)
@@ -70,6 +79,27 @@ func assertTelemetryDefaults(t *testing.T, telemetry TelemetryConfig) {
 	t.Helper()
 	if telemetry.SubscriberName != "" || len(telemetry.Learners) != 0 {
 		t.Fatalf("expected empty telemetry defaults, got %#v", telemetry)
+	}
+}
+
+func assertGovernorDefaults(t *testing.T, governor GovernorConfig) {
+	t.Helper()
+	if governor.Enabled || governor.Epsilon != 1.0 {
+		t.Fatalf("unexpected governor defaults: %#v", governor)
+	}
+}
+
+func assertDriftDefaults(t *testing.T, drift DriftConfig) {
+	t.Helper()
+	if drift.Enabled || drift.Threshold != 0.75 {
+		t.Fatalf("unexpected drift defaults: %#v", drift)
+	}
+}
+
+func assertConvergenceDefaults(t *testing.T, convergence ConvergenceConfig) {
+	t.Helper()
+	if convergence.Enabled || convergence.Epsilon != 0.001 || convergence.StabilityWindow != 3 {
+		t.Fatalf("unexpected convergence defaults: %#v", convergence)
 	}
 }
 

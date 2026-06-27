@@ -19,6 +19,9 @@ from nemo_relay.adaptive import (
     AdaptiveHintsConfig,
     BackendSpec,
     ComponentSpec,
+    ConvergenceConfig,
+    DriftConfig,
+    GovernorConfig,
     StateConfig,
     TelemetryConfig,
     ToolParallelismConfig,
@@ -32,6 +35,16 @@ class TestAdaptiveConfigHelpers:
         annotated_request = "AnnotatedLLMRequest" + "("
         assert runtime_call in source
         assert annotated_request in source
+
+    def test_public_exports_include_runtime_and_validation_helpers(self):
+        assert {
+            "AdaptiveRuntime",
+            "validate_config",
+            "build_cache_telemetry_event",
+            "ConvergenceConfig",
+            "DriftConfig",
+            "GovernorConfig",
+        }.issubset(set(adaptive_module.__all__))
 
     def test_backend_helpers(self):
         assert BackendSpec.in_memory().to_dict() == {"kind": "in_memory", "config": {}}
@@ -60,6 +73,14 @@ class TestAdaptiveConfigHelpers:
         assert TelemetryConfig(learners=["latency_sensitivity"]).to_dict() == {"learners": ["latency_sensitivity"]}
         assert AdaptiveHintsConfig().to_dict()["priority"] == 100
         assert ToolParallelismConfig().to_dict()["mode"] == "observe_only"
+        assert AdaptiveHintsConfig(governor=GovernorConfig(enabled=True)).to_dict()["governor"] == {
+            "enabled": True,
+            "epsilon": 1.0,
+        }
+        assert ToolParallelismConfig(drift=DriftConfig(enabled=True)).to_dict()["drift"] == {
+            "enabled": True,
+            "threshold": 0.75,
+        }
 
     def test_adaptive_component_wraps_as_plugin_component(self):
         wrapped = ComponentSpec(AdaptiveConfig()).to_dict()
@@ -70,6 +91,16 @@ class TestAdaptiveConfigHelpers:
             plugin.PluginConfig(components=[ComponentSpec(AdaptiveConfig(telemetry=TelemetryConfig()))])
         )
         assert any(diag["code"] == "adaptive.section_disabled_missing_state" for diag in report["diagnostics"])
+
+    def test_topology_helper_config_is_accepted_by_plugin_validation(self):
+        config = AdaptiveConfig(
+            adaptive_hints=AdaptiveHintsConfig(governor=GovernorConfig(enabled=True)),
+            tool_parallelism=ToolParallelismConfig(drift=DriftConfig(enabled=True)),
+            acg=AcgConfig(provider="anthropic", convergence=ConvergenceConfig(enabled=True)),
+            convergence=ConvergenceConfig(enabled=True),
+        )
+        report = plugin.validate(plugin.PluginConfig(components=[ComponentSpec(config)]))
+        assert not any(diag["code"] == "adaptive.unknown_field" for diag in report["diagnostics"])
 
     def test_plugin_component_spec_normalizes_lists_of_dataclasses(self):
         @dataclass
@@ -95,6 +126,7 @@ class TestAdaptiveConfigHelpers:
             "observation_window",
             "priority",
             "stability_thresholds",
+            "convergence",
         ]
         assert AcgStabilityThresholds().to_dict() == {
             "stable_threshold": 0.95,
@@ -110,6 +142,11 @@ class TestAdaptiveConfigHelpers:
                 "semi_stable_threshold": 0.5,
                 "min_observations_for_full_confidence": 20,
             },
+        }
+        assert AcgConfig(convergence=ConvergenceConfig(enabled=True)).to_dict()["convergence"] == {
+            "enabled": True,
+            "epsilon": 0.001,
+            "stability_window": 3,
         }
 
 

@@ -41,7 +41,9 @@ fn sample_stability_result() -> StabilityAnalysisResult {
             observation_count: 4,
         }],
         stable_prefix_length: 1,
+        stable_prefix_fingerprint: None,
         total_observations: 4,
+        converged: false,
     }
 }
 

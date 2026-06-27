@@ -25,9 +25,19 @@ fn test_typed_section_helpers_default() {
     let adaptive_hints = AdaptiveHintsComponentConfig::default();
     assert_eq!(adaptive_hints.priority, 100);
     assert!(adaptive_hints.inject_header);
+    assert!(adaptive_hints.governor.is_none());
 
     let tool_parallelism = ToolParallelismComponentConfig::default();
     assert_eq!(tool_parallelism.mode, "observe_only");
+    assert!(tool_parallelism.drift.is_none());
+
+    let governor = GovernorConfig::default();
+    assert!(!governor.enabled);
+    assert_eq!(governor.epsilon, 1.0);
+
+    let drift = DriftConfig::default();
+    assert!(!drift.enabled);
+    assert_eq!(drift.threshold, 0.75);
 }
 
 #[test]
@@ -66,11 +76,29 @@ fn test_component_configs_deserialize_with_default_helpers() {
     assert!(!adaptive_hints.break_chain);
     assert!(adaptive_hints.inject_header);
     assert_eq!(adaptive_hints.inject_body_path, "nvext.agent_hints");
+    assert!(adaptive_hints.governor.is_none());
 
     let tool_parallelism: ToolParallelismComponentConfig =
         serde_json::from_value(json!({})).unwrap();
     assert_eq!(tool_parallelism.priority, 100);
     assert_eq!(tool_parallelism.mode, "observe_only");
+    assert!(tool_parallelism.drift.is_none());
+
+    let adaptive_hints: AdaptiveHintsComponentConfig = serde_json::from_value(json!({
+        "governor": {"enabled": true}
+    }))
+    .unwrap();
+    let governor = adaptive_hints.governor.unwrap();
+    assert!(governor.enabled);
+    assert_eq!(governor.epsilon, 1.0);
+
+    let tool_parallelism: ToolParallelismComponentConfig = serde_json::from_value(json!({
+        "drift": {"enabled": true}
+    }))
+    .unwrap();
+    let drift = tool_parallelism.drift.unwrap();
+    assert!(drift.enabled);
+    assert_eq!(drift.threshold, 0.75);
 }
 
 #[test]
@@ -90,6 +118,7 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
             "adaptive_hints",
             "tool_parallelism",
             "acg",
+            "convergence",
             "policy",
         ]
     );
@@ -103,6 +132,20 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     assert_eq!(
         telemetry.field("learners").unwrap().kind,
         EditorFieldKind::Json
+    );
+
+    let adaptive_hints = schema.field("adaptive_hints").unwrap().schema().unwrap();
+    let governor = adaptive_hints.field("governor").unwrap().schema().unwrap();
+    assert_eq!(
+        governor.field("epsilon").unwrap().kind,
+        EditorFieldKind::Float
+    );
+
+    let tool_parallelism = schema.field("tool_parallelism").unwrap().schema().unwrap();
+    let drift = tool_parallelism.field("drift").unwrap().schema().unwrap();
+    assert_eq!(
+        drift.field("threshold").unwrap().kind,
+        EditorFieldKind::Float
     );
 
     let acg = schema.field("acg").unwrap().schema().unwrap();

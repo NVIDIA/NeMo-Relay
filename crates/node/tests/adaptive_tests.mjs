@@ -203,4 +203,36 @@ describe('adaptive helpers', () => {
       },
     );
   });
+
+  it('builds topology-aware adaptive config helpers', () => {
+    assert.deepEqual(adaptive.governorConfig({ enabled: true }), {
+      enabled: true,
+      epsilon: 1.0,
+    });
+    assert.deepEqual(adaptive.driftConfig({ enabled: true }), {
+      enabled: true,
+      threshold: 0.75,
+    });
+    assert.deepEqual(adaptive.convergenceConfig({ enabled: true }), {
+      enabled: true,
+      epsilon: 0.001,
+      stability_window: 3,
+    });
+
+    const config = adaptive.defaultConfig();
+    config.state = { backend: adaptive.inMemoryBackend() };
+    config.adaptive_hints = adaptive.adaptiveHintsConfig({
+      governor: adaptive.governorConfig({ enabled: true }),
+    });
+    config.tool_parallelism = adaptive.toolParallelismConfig({
+      drift: adaptive.driftConfig({ enabled: true }),
+    });
+    config.acg = adaptive.acgConfig({
+      provider: 'anthropic',
+      convergence: adaptive.convergenceConfig({ enabled: true }),
+    });
+    config.convergence = adaptive.convergenceConfig({ enabled: true });
+
+    assert.equal(adaptive.validateConfig(config).diagnostics.length, 0);
+  });
 });

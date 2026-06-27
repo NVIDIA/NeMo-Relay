@@ -32,6 +32,9 @@ pub struct AdaptiveConfig {
     /// Adaptive Cache Governor settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acg: Option<AcgComponentConfig>,
+    /// Global topological convergence settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convergence: Option<ConvergenceConfig>,
     /// Adaptive-local unsupported-config policy.
     #[serde(default)]
     pub policy: ConfigPolicy,
@@ -47,6 +50,7 @@ impl Default for AdaptiveConfig {
             adaptive_hints: None,
             tool_parallelism: None,
             acg: None,
+            convergence: None,
             policy: ConfigPolicy::default(),
         }
     }
@@ -123,6 +127,9 @@ pub struct AdaptiveHintsComponentConfig {
     /// JSON path used when injecting request-body hints.
     #[serde(default = "default_adaptive_hints_path")]
     pub inject_body_path: String,
+    /// Optional topology-aware load-shedding governor for hint injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub governor: Option<GovernorConfig>,
 }
 
 impl Default for AdaptiveHintsComponentConfig {
@@ -132,6 +139,7 @@ impl Default for AdaptiveHintsComponentConfig {
             break_chain: false,
             inject_header: true,
             inject_body_path: default_adaptive_hints_path(),
+            governor: None,
         }
     }
 }
@@ -145,6 +153,9 @@ pub struct ToolParallelismComponentConfig {
     /// Scheduling mode such as `observe_only`, `inject_hints`, or `schedule`.
     #[serde(default = "default_tool_parallelism_mode")]
     pub mode: String,
+    /// Optional topology-aware drift detector for stale plan invalidation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift: Option<DriftConfig>,
 }
 
 impl Default for ToolParallelismComponentConfig {
@@ -152,6 +163,71 @@ impl Default for ToolParallelismComponentConfig {
         Self {
             priority: default_priority(),
             mode: default_tool_parallelism_mode(),
+            drift: None,
+        }
+    }
+}
+
+/// Typed helper for topology-aware hint load shedding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GovernorConfig {
+    /// Whether the governor is active.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Initial sensitivity threshold used by the governor.
+    #[serde(default = "default_governor_epsilon")]
+    pub epsilon: f64,
+}
+
+impl Default for GovernorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            epsilon: default_governor_epsilon(),
+        }
+    }
+}
+
+/// Typed helper for topology-aware tool plan drift detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftConfig {
+    /// Whether drift detection is active.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Drift distance above which the existing execution plan is invalidated.
+    #[serde(default = "default_drift_threshold")]
+    pub threshold: f64,
+}
+
+impl Default for DriftConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: default_drift_threshold(),
+        }
+    }
+}
+
+/// Typed helper for topological convergence detection settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvergenceConfig {
+    /// Whether convergence detection is active.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Error threshold below which the detector is considered converged.
+    #[serde(default = "default_convergence_epsilon")]
+    pub epsilon: f64,
+    /// Minimum number of epochs required to judge Betti-number stability.
+    #[serde(default = "default_convergence_stability_window")]
+    pub stability_window: usize,
+}
+
+impl Default for ConvergenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            epsilon: default_convergence_epsilon(),
+            stability_window: default_convergence_stability_window(),
         }
     }
 }
@@ -171,6 +247,9 @@ pub struct AcgComponentConfig {
     /// Stability classification thresholds used by the learner.
     #[serde(default)]
     pub stability_thresholds: crate::acg::stability::StabilityThresholds,
+    /// Optional component-scoped topological convergence settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convergence: Option<ConvergenceConfig>,
 }
 
 impl Default for AcgComponentConfig {
@@ -180,6 +259,7 @@ impl Default for AcgComponentConfig {
             observation_window: default_acg_observation_window(),
             priority: default_acg_priority(),
             stability_thresholds: crate::acg::stability::StabilityThresholds::default(),
+            convergence: None,
         }
     }
 }
@@ -214,6 +294,22 @@ fn default_acg_observation_window() -> usize {
 
 fn default_acg_priority() -> i32 {
     50
+}
+
+fn default_convergence_epsilon() -> f64 {
+    0.001
+}
+
+fn default_convergence_stability_window() -> usize {
+    3
+}
+
+fn default_governor_epsilon() -> f64 {
+    1.0
+}
+
+fn default_drift_threshold() -> f64 {
+    0.75
 }
 
 nemo_relay::editor_config! {
@@ -253,6 +349,13 @@ nemo_relay::editor_config! {
             optional: true,
             nested: AcgComponentConfig,
             default: AcgComponentConfig,
+        },
+        convergence => {
+            label: "convergence",
+            kind: Section,
+            optional: true,
+            nested: ConvergenceConfig,
+            default: ConvergenceConfig,
         },
         policy => {
             label: "policy",
@@ -294,6 +397,13 @@ nemo_relay::editor_config! {
         break_chain => { label: "break_chain", kind: Boolean },
         inject_header => { label: "inject_header", kind: Boolean },
         inject_body_path => { label: "inject_body_path", kind: String },
+        governor => {
+            label: "governor",
+            kind: Section,
+            optional: true,
+            nested: GovernorConfig,
+            default: GovernorConfig,
+        },
     }
 }
 
@@ -305,6 +415,27 @@ nemo_relay::editor_config! {
             kind: Enum,
             values: ["observe_only", "inject_hints", "schedule"],
         },
+        drift => {
+            label: "drift",
+            kind: Section,
+            optional: true,
+            nested: DriftConfig,
+            default: DriftConfig,
+        },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl GovernorConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        epsilon => { label: "epsilon", kind: Float },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl DriftConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        threshold => { label: "threshold", kind: Float },
     }
 }
 
@@ -323,6 +454,21 @@ nemo_relay::editor_config! {
             nested: crate::acg::stability::StabilityThresholds,
             default: crate::acg::stability::StabilityThresholds,
         },
+        convergence => {
+            label: "convergence",
+            kind: Section,
+            optional: true,
+            nested: ConvergenceConfig,
+            default: ConvergenceConfig,
+        },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl ConvergenceConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        epsilon => { label: "epsilon", kind: Float },
+        stability_window => { label: "stability_window", kind: Integer },
     }
 }
 

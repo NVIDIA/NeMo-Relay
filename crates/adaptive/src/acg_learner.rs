@@ -8,14 +8,19 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
+use serde_json::json;
+
+use crate::acg::debug as acg_debug;
 use crate::acg::ir_builder::build_prompt_ir;
 use crate::acg::prompt_ir::PromptIR;
-use crate::acg::stability::{StabilityThresholds, analyze_stability};
+use crate::acg::stability::{StabilityThresholds, analyze_stability, prompt_prefix_fingerprint};
+use crate::config::ConvergenceConfig;
 
 use crate::acg_profile::derive_acg_learning_key;
 use crate::error::{AdaptiveError, Result};
 use crate::learner::traits::Learner;
 use crate::storage::traits::StorageBackendDyn;
+use crate::topology::{BettiNumbers, ConvergenceDetector};
 use crate::types::cache::HotCache;
 use crate::types::records::{CallKind, RunRecord};
 
@@ -28,6 +33,8 @@ pub struct AcgLearner {
     agent_id: String,
     observation_window: usize,
     thresholds: StabilityThresholds,
+    convergence: Option<ConvergenceConfig>,
+    convergence_detectors: Arc<RwLock<HashMap<String, ConvergenceDetector>>>,
 }
 
 impl AcgLearner {
@@ -46,11 +53,125 @@ impl AcgLearner {
         observation_window: usize,
         thresholds: StabilityThresholds,
     ) -> Self {
+        Self::new_with_convergence(agent_id, observation_window, thresholds, None)
+    }
+
+    /// Create a new ACG learner with optional topological convergence
+    /// detection.
+    ///
+    /// # Parameters
+    /// - `agent_id`: Agent identifier whose observations should be updated.
+    /// - `observation_window`: Maximum number of observations to retain per
+    ///   profile.
+    /// - `thresholds`: Stability thresholds used during analysis.
+    /// - `convergence`: Optional convergence configuration; takes precedence
+    ///   over any global settings when provided.
+    ///
+    /// # Returns
+    /// A configured [`AcgLearner`].
+    pub fn new_with_convergence(
+        agent_id: impl Into<String>,
+        observation_window: usize,
+        thresholds: StabilityThresholds,
+        convergence: Option<ConvergenceConfig>,
+    ) -> Self {
         Self {
             agent_id: agent_id.into(),
             observation_window,
             thresholds,
+            convergence,
+            convergence_detectors: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Map a stability analysis result to the topological feature vector used
+    /// by the convergence detector.
+    ///
+    /// The mapping treats the stable reusable prefix as the cacheable topology.
+    /// Suffix spans are cache-opaque work-item content, so they do not create
+    /// topology holes for convergence. Drift measures whether a cacheable
+    /// prefix boundary has appeared, and error is the complement of the average
+    /// stable-prefix score.
+    fn stability_to_convergence_features(
+        stability: &crate::acg::stability::StabilityAnalysisResult,
+    ) -> (BettiNumbers, f64, f64) {
+        let betti_0 = stability.stable_prefix_length as u32;
+        let betti_1 = 0;
+        let drift = if stability.stable_prefix_length == 0 {
+            1.0
+        } else {
+            0.0
+        };
+        let stable_prefix_len = stability.stable_prefix_length.min(stability.scores.len());
+        let avg_score = if stable_prefix_len == 0 {
+            0.0
+        } else {
+            stability
+                .scores
+                .iter()
+                .take(stable_prefix_len)
+                .map(|score| score.score)
+                .sum::<f64>()
+                / stable_prefix_len as f64
+        };
+        let error = 1.0 - avg_score;
+
+        (BettiNumbers::new(betti_0, betti_1), drift, error)
+    }
+
+    fn prompt_topology_matches_stability(
+        stability: &crate::acg::stability::StabilityAnalysisResult,
+        observation: &PromptIR,
+    ) -> bool {
+        let stable_prefix_length = stability.stable_prefix_length;
+        stable_prefix_length > 0
+            && stability.scores.len() >= stable_prefix_length
+            && observation.blocks.len() >= stable_prefix_length
+            && stability
+                .stable_prefix_fingerprint
+                .as_deref()
+                .is_some_and(|fingerprint| {
+                    prompt_prefix_fingerprint(observation, stable_prefix_length).as_deref()
+                        == Some(fingerprint)
+                })
+            && stability
+                .scores
+                .iter()
+                .take(stable_prefix_length)
+                .zip(observation.blocks.iter().take(stable_prefix_length))
+                .all(|(score, block)| score.span_id == block.span_id)
+    }
+
+    /// Update the per-profile topological convergence detector and return
+    /// whether the profile has converged.
+    fn record_stability_epoch(
+        &self,
+        profile_key: &str,
+        stability: &crate::acg::stability::StabilityAnalysisResult,
+    ) -> Result<bool> {
+        let Some(ref config) = self.convergence else {
+            return Ok(false);
+        };
+        if !config.enabled {
+            return Ok(false);
+        }
+
+        let mut detectors = self.convergence_detectors.write().map_err(|error| {
+            AdaptiveError::Internal(format!("convergence detector lock poisoned: {error}"))
+        })?;
+        let stability_window = config.stability_window.max(3);
+        let detector = detectors
+            .entry(profile_key.to_string())
+            .or_insert_with(|| ConvergenceDetector::new(config.epsilon, stability_window));
+
+        let (betti, drift, error) = Self::stability_to_convergence_features(stability);
+        detector.record_epoch(betti, drift, error);
+
+        // Require at least `stability_window` epochs before allowing
+        // convergence so that error-based convergence cannot fire on the very
+        // first observation.
+        let enough_epochs = detector.epoch() as usize >= stability_window;
+        Ok(detector.is_converged() && enough_epochs)
     }
 }
 
@@ -87,9 +208,58 @@ impl Learner for AcgLearner {
                 Vec<PromptIR>,
                 crate::acg::stability::StabilityAnalysisResult,
             )> = None;
+            let mut best_aggregate_stability: Option<
+                crate::acg::stability::StabilityAnalysisResult,
+            > = None;
 
             for (profile_key, new_observations) in grouped_observations.drain() {
+                let existing_stability = backend.load_stability(&profile_key).await?;
+                let stability_window = self
+                    .convergence
+                    .as_ref()
+                    .map(|config| config.stability_window.max(3))
+                    .unwrap_or(3);
+
+                // If the profile has already converged, reuse the cached
+                // stability result and skip loading or adding observations.
+                // Stale records below the stability window fall through to
+                // the normal repair path. Requests whose span topology changed
+                // under the same learning key also reopen learning.
+                if let Some(cached) = existing_stability.as_ref().filter(|stability| {
+                    stability.converged
+                        && stability.total_observations as usize >= stability_window
+                        && new_observations.iter().all(|observation| {
+                            Self::prompt_topology_matches_stability(stability, observation)
+                        })
+                }) {
+                    profile_counts.insert(profile_key.clone(), cached.total_observations);
+                    profile_stability.insert(profile_key.clone(), cached.clone());
+
+                    let replace_best = best_aggregate_stability
+                        .as_ref()
+                        .map(|current| {
+                            (cached.stable_prefix_length, cached.total_observations)
+                                > (current.stable_prefix_length, current.total_observations)
+                        })
+                        .unwrap_or(true);
+                    if replace_best {
+                        best_aggregate_stability = Some(cached.clone());
+                    }
+                    acg_debug::emit(
+                        "learner_profile_reused",
+                        json!({
+                            "agent_id": self.agent_id,
+                            "learning_key": profile_key,
+                            "total_observations": cached.total_observations,
+                            "stable_prefix_length": cached.stable_prefix_length,
+                            "converged": cached.converged,
+                        }),
+                    );
+                    continue;
+                }
+
                 let existing = backend.load_observations(&profile_key).await?;
+
                 let mut window: VecDeque<PromptIR> =
                     existing.unwrap_or_default().into_iter().collect();
 
@@ -101,17 +271,41 @@ impl Learner for AcgLearner {
                 }
 
                 let observations_vec: Vec<PromptIR> = window.into_iter().collect();
+                let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
+
+                let converged_now = self.record_stability_epoch(&profile_key, &stability_result)?;
+
+                // Store the observations that produced this stability result.
+                // On the epoch that first declares convergence these
+                // observations are preserved; on subsequent runs the cached
+                // converged result is reused and this path is skipped.
                 backend
                     .store_observations(&profile_key, &observations_vec)
                     .await?;
 
-                let stability_result = analyze_stability(&observations_vec, &self.thresholds);
+                if converged_now {
+                    stability_result.converged = true;
+                }
+
                 backend
                     .store_stability(&profile_key, &stability_result)
                     .await?;
 
+                acg_debug::emit(
+                    "learner_profile_updated",
+                    json!({
+                        "agent_id": self.agent_id,
+                        "learning_key": profile_key,
+                        "total_observations": stability_result.total_observations,
+                        "stable_prefix_length": stability_result.stable_prefix_length,
+                        "converged": stability_result.converged,
+                        "converged_now": converged_now,
+                        "stability_window": stability_window,
+                    }),
+                );
+
                 profile_counts.insert(profile_key.clone(), stability_result.total_observations);
-                profile_stability.insert(profile_key, stability_result.clone());
+                profile_stability.insert(profile_key.clone(), stability_result.clone());
 
                 let replace_best = best_profile_seed
                     .as_ref()
@@ -124,6 +318,7 @@ impl Learner for AcgLearner {
                     .unwrap_or(true);
                 if replace_best {
                     best_profile_seed = Some((observations_vec.clone(), stability_result.clone()));
+                    best_aggregate_stability = Some(stability_result.clone());
                 }
             }
 
@@ -144,7 +339,7 @@ impl Learner for AcgLearner {
             })?;
             guard.acg_profiles.extend(profile_stability);
             guard.acg_profile_observation_counts.extend(profile_counts);
-            if let Some((_, aggregate_stability)) = best_profile_seed {
+            if let Some(aggregate_stability) = best_aggregate_stability {
                 guard.acg_observation_count = aggregate_stability.total_observations;
                 guard.acg_stability = Some(aggregate_stability);
             }

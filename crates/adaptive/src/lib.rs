@@ -31,13 +31,15 @@ pub mod storage;
 pub mod subscriber;
 /// Learner that derives tool fan-out plans from observed runs.
 pub mod tool_parallelism_learner;
+pub(crate) mod topology;
 pub mod trie;
 /// Serializable adaptive data models shared across runtime components.
 pub mod types;
 
 pub use config::{
-    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec, StateConfig,
-    TelemetryComponentConfig, ToolParallelismComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec,
+    ConvergenceConfig, DriftConfig, GovernorConfig, StateConfig, TelemetryComponentConfig,
+    ToolParallelismComponentConfig,
 };
 pub use context_helpers::{
     LATENCY_SENSITIVITY_POINTER, extract_scope_path, read_manual_latency_sensitivity,
@@ -50,3 +52,9 @@ pub use runtime::features::AdaptiveRuntime;
 pub use storage::erased::AnyBackend;
 pub use storage::memory::InMemoryBackend;
 pub use storage::traits::{StorageBackend, StorageBackendDyn};
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) static GLOBAL_RUNTIME_TEST_MUTEX: tokio::sync::Mutex<()> =
+        tokio::sync::Mutex::const_new(());
+}

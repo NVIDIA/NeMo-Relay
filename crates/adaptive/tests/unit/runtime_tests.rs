@@ -11,13 +11,15 @@ use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_sco
 use serde_json::{Map, Value as Json};
 
 use crate::config::{
-    AcgComponentConfig, AdaptiveConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
+    AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, BackendSpec,
+    ConvergenceConfig, DriftConfig, GovernorConfig, StateConfig, TelemetryComponentConfig,
     ToolParallelismComponentConfig,
 };
 use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
+use crate::test_support::GLOBAL_RUNTIME_TEST_MUTEX;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
 
@@ -317,6 +319,64 @@ fn validate_config_reports_unknown_backend_and_acg_provider_per_policy() {
     assert!(ignore_report.diagnostics.is_empty());
 }
 
+#[test]
+fn validate_config_reports_invalid_topology_numeric_fields() {
+    let report = validate_config(&AdaptiveConfig {
+        adaptive_hints: Some(AdaptiveHintsComponentConfig {
+            governor: Some(GovernorConfig {
+                enabled: true,
+                epsilon: f64::NAN,
+            }),
+            ..AdaptiveHintsComponentConfig::default()
+        }),
+        tool_parallelism: Some(ToolParallelismComponentConfig {
+            drift: Some(DriftConfig {
+                enabled: true,
+                threshold: 0.0,
+            }),
+            ..ToolParallelismComponentConfig::default()
+        }),
+        acg: Some(AcgComponentConfig {
+            convergence: Some(ConvergenceConfig {
+                enabled: true,
+                epsilon: -1.0,
+                stability_window: 2,
+            }),
+            ..AcgComponentConfig::default()
+        }),
+        convergence: Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: f64::INFINITY,
+            stability_window: 0,
+        }),
+        policy: ConfigPolicy {
+            unsupported_value: UnsupportedBehavior::Error,
+            ..ConfigPolicy::default()
+        },
+        ..AdaptiveConfig::default()
+    });
+
+    assert!(report.has_errors());
+    for (component, field) in [
+        ("adaptive_hints.governor", "epsilon"),
+        ("tool_parallelism.drift", "threshold"),
+        ("acg.convergence", "epsilon"),
+        ("acg.convergence", "stability_window"),
+        ("convergence", "epsilon"),
+        ("convergence", "stability_window"),
+    ] {
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diag| diag.code == "adaptive.unsupported_value"
+                    && diag.component.as_deref() == Some(component)
+                    && diag.field.as_deref() == Some(field)),
+            "expected unsupported value diagnostic for {component}.{field}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_new_accepts_valid_in_memory_configuration() {
     let runtime = AdaptiveRuntime::new(AdaptiveConfig {
@@ -410,18 +470,14 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
     );
     assert_eq!(
         profile_key,
-        "agent-1::model=claude-sonnet-4::roles=system.user::system=sha256:97f793c76::anchor=no-anchor::tools=no-tools"
+        "agent-1::model=claude-sonnet-4::roles=system.user::system=sha256:97f793c76::anchor=no-anchor::tools=no-tools::contract=no-contract"
     );
     let learning_key = crate::acg_profile::derive_acg_learning_key(
         "agent-1",
         &sample_annotated_request(Some("claude-sonnet-4")),
     );
     let expected_learning_key = format!(
-        "agent-1::model=claude-sonnet-4::seed={}::system={}::tools=no-tools",
-        short_hash(&format!(
-            "user:{}",
-            crate::acg::sha256_hex("Summarize the latest findings")
-        )),
+        "agent-1::model=claude-sonnet-4::scaffold=stable::system={}::tools=no-tools",
         short_hash(&crate::acg::sha256_hex("You are a careful planner")),
     );
     assert_eq!(learning_key, expected_learning_key,);
@@ -498,9 +554,9 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
         "agent-1",
         &sample_layered_request(Some("claude-sonnet-4"), "Python review guide"),
     );
-    assert_ne!(
+    assert_eq!(
         rust_learning_key, python_learning_key,
-        "layered requests should still separate learning buckets when the stable anchor differs",
+        "layered requests share the coarse learning bucket; topology checks reopen when the stable anchor differs",
     );
 
     let rust_bundle_variant = AnnotatedLlmRequest {
@@ -581,6 +637,7 @@ async fn adaptive_runtime_build_cache_request_facts_keeps_missing_stability_sema
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_bind_scope_requires_registration_and_passes_through_without_state() {
+    let _guard = GLOBAL_RUNTIME_TEST_MUTEX.lock().await;
     reset_runtime_context();
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
         agent_id: Some("agent-1".to_string()),

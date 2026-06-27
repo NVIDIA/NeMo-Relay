@@ -126,6 +126,66 @@ fn acg_profile_helpers_cover_none_paths_and_short_hash() {
 }
 
 #[test]
+fn acg_learning_key_groups_variable_first_user_under_stable_system_scaffold() {
+    let spam_item = request(
+        vec![
+            Message::System {
+                content: MessageContent::Text("Apply the moderation policy exactly.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Review forum post #1 about spam links".to_string()),
+                name: None,
+            },
+        ],
+        None,
+    );
+    let bug_item = request(
+        vec![
+            Message::System {
+                content: MessageContent::Text("Apply the moderation policy exactly.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Review forum post #2 about a vague bug".to_string()),
+                name: None,
+            },
+        ],
+        None,
+    );
+
+    assert_eq!(
+        derive_acg_learning_key("moderator-agent", &spam_item),
+        derive_acg_learning_key("moderator-agent", &bug_item),
+        "the learning key should follow the reusable agent scaffold, not the variable work item"
+    );
+}
+
+#[test]
+fn acg_learning_key_keeps_seed_fallback_when_no_stable_scaffold_exists() {
+    let first = request(
+        vec![Message::User {
+            content: MessageContent::Text("One-off prompt A".to_string()),
+            name: None,
+        }],
+        None,
+    );
+    let second = request(
+        vec![Message::User {
+            content: MessageContent::Text("One-off prompt B".to_string()),
+            name: None,
+        }],
+        None,
+    );
+
+    assert_ne!(
+        derive_acg_learning_key("direct-agent", &first),
+        derive_acg_learning_key("direct-agent", &second),
+        "without a stable scaffold, ACG should not collapse unrelated one-off prompts"
+    );
+}
+
+#[test]
 fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
     let with_image_a = request(
         vec![Message::User {

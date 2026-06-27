@@ -317,6 +317,81 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
 }
 
 #[test]
+fn test_adaptive_hints_governor_sheds_low_sensitivity_hints_but_keeps_manual_override() {
+    let _guard = test_mutex().lock().unwrap();
+    reset_root_metadata();
+
+    let defaults = AgentHints {
+        osl: 9,
+        iat: 12,
+        priority: 3,
+        latency_sensitivity: 2.0,
+        prefix_id: "defaults".into(),
+        total_requests: 11,
+    };
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: Some(defaults),
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: None,
+        acg_observation_count: 0,
+    }));
+    let governor = GovernorConfig {
+        enabled: true,
+        epsilon: 10.0,
+    };
+    let req_fn = AdaptiveHintsIntercept::with_governor(
+        hot_cache.clone(),
+        "fallback-agent".to_string(),
+        Some(governor.clone()),
+    )
+    .into_request_fn();
+
+    let (request, _) = req_fn(
+        "model",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: serde_json::json!({}),
+        },
+        None,
+    )
+    .unwrap();
+    assert!(request.headers.get(AGENT_HINTS_HEADER_KEY).is_none());
+    assert!(
+        request
+            .content
+            .get("nvext")
+            .and_then(|nvext| nvext.get("agent_hints"))
+            .is_none()
+    );
+
+    crate::context_helpers::set_latency_sensitivity(11).unwrap();
+    let manual_req_fn = AdaptiveHintsIntercept::with_governor(
+        hot_cache,
+        "fallback-agent".to_string(),
+        Some(governor),
+    )
+    .into_request_fn();
+    let (manual_request, _) = manual_req_fn(
+        "model",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: serde_json::json!({}),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        manual_request.content["nvext"]["agent_hints"]["latency_sensitivity"],
+        serde_json::json!(11.0)
+    );
+
+    reset_root_metadata();
+}
+
+#[test]
 fn test_apply_manual_latency_override_and_inject_agent_hints_cover_manual_paths() {
     let base_hints = AgentHints {
         osl: 10,

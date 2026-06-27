@@ -10,16 +10,19 @@
 //! transforms the [`LlmRequest`] before it reaches the callable.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Instant;
 
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::LlmRequestInterceptFn;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 
+use crate::config::GovernorConfig;
 use crate::context_helpers::{
     extract_scope_path, read_manual_latency_sensitivity, resolve_agent_id,
 };
 use crate::intercepts::AGENT_HINTS_HEADER_KEY;
+use crate::topology::GeometricGovernor;
 use crate::trie::builder::SensitivityConfig;
 use crate::trie::lookup::PredictionTrieLookup;
 use crate::types::cache::HotCache;
@@ -121,15 +124,29 @@ pub struct AdaptiveHintsIntercept {
     hot_cache: Arc<RwLock<HotCache>>,
     agent_id: String,
     call_counter: AtomicU32,
+    governor: Option<Arc<Mutex<HintGovernor>>>,
 }
 
 impl AdaptiveHintsIntercept {
     /// Creates a new `AdaptiveHintsIntercept`.
     pub fn new(hot_cache: Arc<RwLock<HotCache>>, agent_id: String) -> Self {
+        Self::with_governor(hot_cache, agent_id, None)
+    }
+
+    /// Creates a new `AdaptiveHintsIntercept` with optional load shedding.
+    pub fn with_governor(
+        hot_cache: Arc<RwLock<HotCache>>,
+        agent_id: String,
+        governor: Option<GovernorConfig>,
+    ) -> Self {
+        let governor = governor
+            .filter(|config| config.enabled)
+            .map(|config| Arc::new(Mutex::new(HintGovernor::new(config.epsilon))));
         Self {
             hot_cache,
             agent_id,
             call_counter: AtomicU32::new(1),
+            governor,
         }
     }
 
@@ -163,6 +180,21 @@ impl AdaptiveHintsIntercept {
         }
     }
 
+    fn should_inject_hints(&self, hints: &AgentHints, manual_ls: Option<u32>) -> bool {
+        if manual_ls.is_some() {
+            return true;
+        }
+
+        let Some(governor) = &self.governor else {
+            return true;
+        };
+
+        governor
+            .lock()
+            .map(|mut governor| governor.allow(hints.latency_sensitivity))
+            .unwrap_or(true)
+    }
+
     /// Converts this intercept into an [`LlmRequestInterceptFn`] suitable for
     /// registration with [`register_llm_request_intercept`].
     ///
@@ -188,13 +220,41 @@ impl AdaptiveHintsIntercept {
                     scope_depth,
                 );
 
-                if let Some(hints) = final_hints {
+                if let Some(hints) = final_hints
+                    && this.should_inject_hints(&hints, manual_ls)
+                {
                     inject_agent_hints(&mut request, &hints);
                 }
 
                 Ok((request, annotated))
             },
         )
+    }
+}
+
+struct HintGovernor {
+    governor: GeometricGovernor,
+    last_seen: Option<Instant>,
+}
+
+impl HintGovernor {
+    fn new(epsilon: f64) -> Self {
+        Self {
+            governor: GeometricGovernor::with_epsilon(epsilon),
+            last_seen: None,
+        }
+    }
+
+    fn allow(&mut self, latency_sensitivity: f64) -> bool {
+        let allow = self.governor.should_trigger(latency_sensitivity);
+        let now = Instant::now();
+        if let Some(last_seen) = self.last_seen {
+            let dt = now.duration_since(last_seen).as_secs_f64().max(0.000_001);
+            let observed_rate = 1.0 / dt;
+            self.governor.adapt(observed_rate, dt);
+        }
+        self.last_seen = Some(now);
+        allow
     }
 }
 
