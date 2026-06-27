@@ -37,6 +37,8 @@ This path is for local source development when you need to build the binding fro
 ## Run One Scope, One Tool Call, and One LLM Call
 
 The example below runs one minimal instrumented workflow through the binding.
+Save it as `quickstart.js` in the same project where you installed
+`nemo-relay-node`, then run `node quickstart.js`.
 
 ```js
 const {
@@ -85,6 +87,7 @@ async function main() {
   });
 
   flushSubscribers();
+  await new Promise((resolve) => setImmediate(resolve));
   deregisterSubscriber("quickstart-printer");
 }
 

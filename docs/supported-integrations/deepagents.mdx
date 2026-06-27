@@ -63,7 +63,6 @@ agent = create_deep_agent(
     **add_nemo_relay_integration(
         model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
         tools=[],
-        skills=["/skills/research/"],
         name="main-agent",
     )
 )
@@ -86,6 +85,17 @@ with nemo_relay.scope.scope("deepagents-request", nemo_relay.ScopeType.Agent):
 final_message = result["messages"][-1]
 print(f"Final response: {final_message.content}")
 ```
+
+Add `skills=[...]` or subagent configuration after this minimal path is working
+if you want to capture Deep Agents skill or subagent marks too.
+
+## Verify the Integration
+
+The integration is wired correctly when:
+
+- The Deep Agents run completes and prints a final response.
+- The `deepagents-request` scope contains the top-level agent execution.
+- Skill, subagent, and human-in-the-loop marks appear when those features are exercised.
 
 ## Observability
 

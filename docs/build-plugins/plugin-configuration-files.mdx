@@ -24,6 +24,57 @@ generic plugin document and component-local `config` objects use canonical
 
 </Note>
 
+## Shortest Path Example
+
+Use this minimal `plugins.toml` when you want the CLI gateway to start with one
+plugin-managed observability exporter and no extra layering:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "append"
+```
+
+For the most deterministic verification path, place `plugins.toml` next to the
+gateway `config.toml` you want this run to use, then launch the wrapper with
+that explicit config root. For example:
+
+```bash
+nemo-relay --config path/to/config.toml run -- codex
+```
+
+This keeps plugin discovery scoped to the colocated `plugins.toml` instead of
+relying on implicit project, user, or system plugin files. The plugin file is
+the configuration being demonstrated here; `--config` only tells the gateway
+which config root to use for this run. If you prefer implicit discovery, place
+the file at `./.nemo-relay/plugins.toml` or another discovered location and
+ensure no higher-precedence plugin file overrides the exporter you want to
+verify. See [CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper
+command shapes.
+
+## What Success Looks Like
+
+The shortest-path setup is working when:
+
+- `nemo-relay` starts without plugin validation or activation errors.
+- The observability component activates the ATOF exporter configured in this
+  file.
+- An instrumented gateway run writes ATOF JSONL output to `logs/events.jsonl`.
+
+After that path works, expand the config with additional components, policies,
+or higher-precedence files as needed.
+
 ## File Shape
 
 `plugins.toml` uses the canonical plugin document shape:
