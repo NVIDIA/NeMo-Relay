@@ -13,7 +13,7 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 
 use super::request::{AnnotatedLlmRequest, GenerationParams, Message, ToolChoice, ToolDefinition};
-use super::resolve::{ProviderSurface, SurfaceDescriptor};
+use super::resolve::{ProviderSurface, ProviderSurfaceDescriptor};
 use super::response::{
     AnnotatedLlmResponse, ApiSpecificResponse, FinishReason, RawUsageCost, ResponseToolCall, Usage,
     estimate_cost_for_provider, infer_model_provider, provider_reported_cost,
@@ -27,11 +27,7 @@ use super::traits::{LlmCodec, LlmResponseCodec};
 /// Built-in codec for the OpenAI Chat Completions API.
 pub struct OpenAIChatCodec;
 
-// ---------------------------------------------------------------------------
-// Built-in surface descriptor (codec-owned detection, registered in resolve)
-// ---------------------------------------------------------------------------
-
-pub(crate) const SURFACE_DESCRIPTOR: SurfaceDescriptor = SurfaceDescriptor {
+pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDescriptor {
     surface: ProviderSurface::OpenAIChat,
     detect_request: |obj, _| obj.contains_key("messages"),
     detect_response: |obj| obj.get("choices").is_some_and(Json::is_array),

@@ -41,6 +41,10 @@ pub struct LlmHandle {
     #[builder(default = Utc::now())]
     pub started_at: DateTime<Utc>,
     /// Provider or logical call name recorded on lifecycle events.
+    ///
+    /// Gateway-managed provider calls use provider route names such as
+    /// `anthropic.messages`; event normalization may reuse those route names as
+    /// codec hints when raw request shapes overlap across providers.
     #[builder(setter(into))]
     pub name: String,
     /// Optional application payload stored on the handle.
@@ -64,7 +68,8 @@ pub struct LlmHandle {
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateLlmHandleParams<'a> {
-    /// Logical provider or model family name.
+    /// Logical provider or model family name. Gateway-managed provider calls
+    /// should pass the provider route name, for example `anthropic.messages`.
     pub name: &'a str,
     /// Optional parent scope UUID.
     #[builder(default)]

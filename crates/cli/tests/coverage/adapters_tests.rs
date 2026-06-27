@@ -28,10 +28,13 @@ fn maps_claude_canonical_tool_payload() {
             assert_eq!(event.tool_call_id, "toolu-1");
             assert_eq!(event.tool_name, "Read");
             assert_eq!(event.arguments, json!({ "file_path": "README.md" }));
+            assert!(event.metadata.get("transcript_path").is_none());
+            assert!(event.metadata.get("cwd").is_none());
             assert_eq!(
-                event.metadata["transcript_path"],
+                event.payload["transcript_path"],
                 json!("/tmp/transcript.jsonl")
             );
+            assert_eq!(event.payload["cwd"], json!("/workspace"));
         }
         event => panic!("unexpected event: {event:?}"),
     }
@@ -232,6 +235,91 @@ fn adapter_string_lookup_accepts_scalar_values_only() {
 }
 
 #[test]
+fn builtin_extractor_keeps_fallbacks_at_adapter_boundary() {
+    let headers = HeaderMap::new();
+    let payload = json!({});
+
+    assert_eq!(
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.session_id(&payload, &headers),
+        None
+    );
+    assert_eq!(BUILTIN_AGENT_PAYLOAD_EXTRACTOR.event_name(&payload), None);
+    assert_eq!(
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.subagent_id(&payload, &headers),
+        None
+    );
+    assert_eq!(
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        ExtractedLlmHint::default()
+    );
+    assert_eq!(
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PreToolUse"),
+        ExtractedToolCall {
+            tool_call_id: None,
+            tool_name: None,
+            subagent_id: None,
+            arguments: None,
+            result: None,
+            status: None,
+        }
+    );
+
+    assert!(session_id(&payload, &headers).starts_with("hook-"));
+    assert_eq!(event_name(&payload), "unknown");
+
+    let event = common_tool_event(&payload, &headers, AgentKind::ClaudeCode);
+    assert!(event.tool_call_id.starts_with("tool-"));
+    assert_eq!(event.tool_name, "unknown_tool");
+    assert_eq!(event.arguments, json!(null));
+    assert_eq!(event.result, json!(null));
+}
+
+#[test]
+fn builtin_extractor_reads_agent_hint_and_tool_call_fields() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "subagent_id": "worker-1",
+        "agent": {
+            "id": "agent-1",
+            "type": "reviewer"
+        },
+        "conversationId": "conversation-1",
+        "generation": { "id": "generation-1" },
+        "request": { "id": "request-1" },
+        "modelName": "gpt-test",
+        "tool_call_id": "tool-call-1",
+        "tool": { "name": "search" },
+        "arguments": { "query": "needle" },
+        "result": { "matches": 2 },
+        "status": "success"
+    });
+
+    assert_eq!(
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        ExtractedLlmHint {
+            subagent_id: Some("worker-1".into()),
+            agent_id: Some("agent-1".into()),
+            agent_type: Some("reviewer".into()),
+            conversation_id: Some("conversation-1".into()),
+            generation_id: Some("generation-1".into()),
+            request_id: Some("request-1".into()),
+            model: Some("gpt-test".into()),
+        }
+    );
+    assert_eq!(
+        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
+        ExtractedToolCall {
+            tool_call_id: Some("tool-call-1".into()),
+            tool_name: Some("search".into()),
+            subagent_id: Some("worker-1".into()),
+            arguments: Some(json!({ "query": "needle" })),
+            result: Some(json!({ "matches": 2 })),
+            status: Some("success".into()),
+        }
+    );
+}
+
+#[test]
 fn maps_cursor_subagent_and_permission_response() {
     let headers = HeaderMap::new();
     let outcome = cursor::adapt(
@@ -251,8 +339,10 @@ fn maps_cursor_subagent_and_permission_response() {
         NormalizedEvent::ToolStarted(event) => {
             assert_eq!(event.session_id, "cursor-session");
             assert_eq!(event.subagent_id.as_deref(), Some("worker"));
-            assert_eq!(event.metadata["project_dir"], json!("/repo"));
-            assert_eq!(event.metadata["user_email"], json!("dev@example.com"));
+            assert!(event.metadata.get("project_dir").is_none());
+            assert!(event.metadata.get("user_email").is_none());
+            assert_eq!(event.payload["project_dir"], json!("/repo"));
+            assert_eq!(event.payload["user_email"], json!("dev@example.com"));
         }
         event => panic!("unexpected event: {event:?}"),
     }
@@ -701,21 +791,21 @@ fn normalizes_mark_style_events_and_header_session_ids() {
             }),
             &headers,
         );
-        let (session_id, metadata) = match &outcome.events[0] {
+        let (session_id, metadata, payload) = match &outcome.events[0] {
             NormalizedEvent::PromptSubmitted(event) if expected == "prompt" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::LlmHint(event) if expected == "response" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::Compaction(event) if expected == "compact" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::Notification(event) if expected == "notification" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             NormalizedEvent::HookMark(event) if expected == "hook" => {
-                (event.session_id.as_str(), &event.metadata)
+                (event.session_id.as_str(), &event.metadata, &event.payload)
             }
             event => panic!("unexpected event for {event_name}: {event:?}"),
         };
@@ -727,7 +817,8 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         }
         assert_eq!(session_id, "header-session");
         assert_eq!(metadata["model"], json!("model-a"));
-        assert_eq!(metadata["cwd"], json!("/repo"));
+        assert!(metadata.get("cwd").is_none());
+        assert_eq!(payload["cwd"], json!("/repo"));
         assert_eq!(metadata["gateway_config_profile"], json!("coverage"));
     }
 }
