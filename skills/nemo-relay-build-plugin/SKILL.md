@@ -5,6 +5,8 @@ author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
 
+<!-- Non-semantic CI refresh marker: 2026-06-06. -->
+
 # Build a Plugin
 
 Use this skill when a user wants to package reusable NeMo Relay runtime behavior
