@@ -1,0 +1,122 @@
+---
+title: "Build a Python Worker Plugin"
+description: ""
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the Python `nemo-relay-plugin` package when plugin code should run out of
+process and communicate with Relay through `grpc-v1`. The package owns the gRPC
+server setup, generated protobuf stubs, JSON envelope conversion,
+continuations, cancellation hooks, and scope-stack binding helpers.
+
+## Install
+
+In the worker environment:
+
+```bash
+python -m pip install nemo-relay-plugin
+```
+
+When developing from this repository:
+
+```bash
+python -m pip install -e python/plugin
+```
+
+## Worker
+
+```python
+from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
+
+
+class ExamplePythonWorker(WorkerPlugin):
+    plugin_id = "examples.python_grpc_worker"
+
+    def validate(self, config: Json) -> list[ConfigDiagnostic]:
+        if isinstance(config, dict) and config.get("reject") is True:
+            return [
+                ConfigDiagnostic(
+                    level=DiagnosticLevel.ERROR,
+                    code="examples.python_grpc_worker.rejected",
+                    component=self.plugin_id,
+                    field="reject",
+                    message="Python worker rejection requested",
+                )
+            ]
+        return []
+
+    def register(self, ctx: PluginContext, config: Json) -> None:
+        del config
+
+        async def tag_tool_request(tool_name: str, args: Json) -> Json:
+            await ctx.runtime.emit_mark(
+                "examples.python_grpc_worker.tool_request",
+                {"tool_name": tool_name},
+            )
+            if isinstance(args, dict):
+                return {**args, "python_grpc_worker": True}
+            return {"value": args, "python_grpc_worker": True}
+
+        ctx.register_tool_request_intercept("tag_tool_request", tag_tool_request)
+
+
+async def main() -> None:
+    await serve_plugin(ExamplePythonWorker())
+```
+
+The configured `module:function` entrypoint must start the worker server and
+return only after Relay sends shutdown.
+
+## Manifest
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.python_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = "worker:main"
+```
+
+## Run Locally
+
+```bash
+cd examples/python-grpc-worker-plugin
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ../../python/plugin -e .
+
+nemo-relay plugins add ./relay-plugin.toml
+nemo-relay plugins enable examples.python_grpc_worker
+NEMO_RELAY_PYTHON="$PWD/.venv/bin/python" nemo-relay gateway
+```
+
+The worker process is started by Relay. Do not run the worker module directly
+unless you also provide the worker socket, host socket, activation ID, plugin ID,
+and activation token environment variables that Relay normally supplies.
+
+## Runtime Helpers
+
+`PluginContext` registration helpers cover subscribers, tool guardrails and
+intercepts, LLM guardrails and intercepts, and LLM stream execution intercepts.
+
+`PluginRuntime` can emit marks, push and pop scopes, create isolated scope
+stacks, and bind a callback to a selected stack. Execution intercept callbacks
+receive `ToolNext`, `LlmNext`, or `LlmStreamNext` handles for calling the
+remaining host chain.

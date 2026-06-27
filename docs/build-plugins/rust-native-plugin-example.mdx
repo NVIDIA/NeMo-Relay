@@ -1,0 +1,179 @@
+---
+title: "Build a Rust Native Plugin"
+description: ""
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the Rust `nemo-relay-plugin` crate when you want an in-process native plugin
+without writing raw C ABI callbacks by hand. The SDK keeps the C ABI as the only
+dynamic-library boundary and gives plugin authors typed Rust helpers for the
+current plugin registration surfaces.
+
+The complete runnable example lives in
+`examples/rust-native-plugin`. It includes:
+
+- `Cargo.toml` for a `cdylib` plugin crate.
+- `relay-plugin.toml` for dynamic plugin discovery.
+- `src/lib.rs` with validation, subscribers, tool middleware, LLM middleware,
+  runtime marks/scopes, and an isolated plugin-owned scope stack.
+- `README.md` with build and activation commands.
+
+## Build the Example
+
+From the repository root:
+
+```bash
+cd examples/rust-native-plugin
+cargo build
+```
+
+The example manifest points at the macOS debug build output:
+
+```toml
+[load]
+library = "target/debug/libnemo_relay_rust_native_plugin_example.dylib"
+symbol = "nemo_relay_register_plugin"
+```
+
+Use the platform-specific library extension when running elsewhere:
+
+| Platform | Library path |
+|---|---|
+| macOS | `target/debug/libnemo_relay_rust_native_plugin_example.dylib` |
+| Linux | `target/debug/libnemo_relay_rust_native_plugin_example.so` |
+| Windows | `target/debug/nemo_relay_rust_native_plugin_example.dll` |
+
+## Manifest
+
+Native plugins are discovered through `relay-plugin.toml`:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_native_policy"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[load]
+library = "target/debug/libnemo_relay_rust_native_plugin_example.dylib"
+symbol = "nemo_relay_register_plugin"
+```
+
+The gateway loads the shared library, calls the exported symbol, verifies that
+the returned plugin kind matches `[plugin].id`, and then initializes the plugin
+with the `[[plugins.dynamic]].config` JSON object.
+
+## Activation
+
+Register and enable the manifest with the CLI:
+
+```bash
+nemo-relay plugins add ./relay-plugin.toml
+nemo-relay plugins enable examples.rust_native_policy
+```
+
+You can also reference it from `plugins.toml`:
+
+```toml
+[[plugins.dynamic]]
+manifest = "./examples/rust-native-plugin/relay-plugin.toml"
+config = {
+  tag = "demo",
+  block_tools = false,
+  block_llms = false,
+  emit_isolated_scope = true,
+}
+```
+
+Start the gateway normally after the dynamic record is enabled:
+
+```bash
+nemo-relay gateway
+```
+
+## Implementation Shape
+
+The example implements the high-level `NativePlugin` trait and exports the
+stable ABI entry symbol with the SDK macro:
+
+```rust
+use nemo_relay_plugin::{
+    ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmRequest, NativePlugin,
+    PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+};
+use serde_json::{Map, json};
+
+struct ExampleNativePlugin;
+
+impl NativePlugin for ExampleNativePlugin {
+    fn plugin_kind(&self) -> &str {
+        "examples.rust_native_policy"
+    }
+
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        // Validate JSON config and return structured diagnostics.
+        vec![]
+    }
+
+    fn register(
+        &mut self,
+        plugin_config: &Map<String, Json>,
+        ctx: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        let runtime = ctx.runtime();
+
+        ctx.register_subscriber("example_native_subscriber", move |event| {
+            // Subscriber callbacks receive typed Event DTOs.
+            let _ = event.name();
+        })?;
+
+        ctx.register_tool_request_intercept("example_tool_request", 20, false, {
+            let runtime = runtime.clone();
+            move |_name, args| {
+                runtime.emit_mark("example.native.tool_request.seen", None, None)?;
+                Ok(args)
+            }
+        })?;
+
+        ctx.register_llm_execution_intercept("example_llm_execution", 30, {
+            move |_name, request, next| next.call(request)
+        })?;
+
+        Ok(())
+    }
+}
+
+nemo_relay_plugin::nemo_relay_plugin!(
+    nemo_relay_register_plugin,
+    || ExampleNativePlugin
+);
+```
+
+See `examples/rust-native-plugin/src/lib.rs` for the complete implementation.
+It covers subscribers, tool sanitize/conditional/request/execution middleware,
+LLM sanitize/conditional/request/execution/stream middleware, runtime marks and
+scope lifecycle events, and isolated scope stacks.
+
+## Notes
+
+- Do not depend on the host `nemo-relay` runtime crate from the plugin dylib.
+- Use shared DTOs re-exported by `nemo-relay-plugin`.
+- Keep tests outside `src`; use integration fixtures under `tests/fixtures`.
+- Native plugins are trusted in-process code, not sandboxed extensions.

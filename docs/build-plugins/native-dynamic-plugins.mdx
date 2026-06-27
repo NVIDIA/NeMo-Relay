@@ -1,0 +1,148 @@
+---
+title: "Native Dynamic Plugins"
+description: ""
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Native dynamic plugins are trusted in-process shared libraries loaded by the
+`nemo-relay` gateway. Use them when plugin behavior must run in the host process
+while still following the normal NeMo Relay plugin contract: stable plugin kind,
+JSON component config, validation diagnostics, and behavior registration through
+a component-scoped plugin context.
+
+Native ABI v1 covers the current plugin registration surfaces: subscribers,
+tool guardrails and intercepts, LLM guardrails and intercepts, LLM stream
+execution intercepts, mark emission, scope start/end emission, and plugin-owned
+scope stacks for isolated visibility. It is not a full runtime API.
+
+<Warning>
+Native dynamic plugins are not sandboxed. They run in the gateway process, must
+not unwind across ABI callbacks, and remain loaded until their registered
+callbacks have been cleared.
+</Warning>
+
+## Manifest
+
+Native plugins are discovered from `relay-plugin.toml` and activated through
+`[[plugins.dynamic]]` records in `plugins.toml`.
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "acme.native_guardrails"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[load]
+library = "target/release/libacme_native_guardrails.dylib"
+symbol = "nemo_relay_register_plugin"
+
+[integrity]
+sha256 = "sha256:<hex-digest>"
+```
+
+The gateway validates:
+
+| Field | Notes |
+|---|---|
+| `plugin.kind` | Must be `rust_dynamic`. |
+| `compat.relay` | Any valid SemVer requirement matching the running Relay version. |
+| `compat.native_api` | Must be `"1"` for ABI v1. |
+| `load.library` | Resolved relative to the manifest file unless absolute. |
+| `load.symbol` | Entry symbol loaded from the shared library. |
+| `integrity.sha256` | Optional. When present, the loaded library digest must match. |
+
+The entry symbol must return a plugin descriptor whose `plugin_kind` exactly
+matches `[plugin].id`.
+
+## Activation
+
+Dynamic plugin records stay separate from generic `components` in resolved
+gateway config. During gateway startup, enabled native dynamic records are
+loaded first. The gateway then synthesizes in-memory component specs equivalent
+to:
+
+```toml
+[[components]]
+kind = "acme.native_guardrails"
+enabled = true
+
+[components.config]
+# copied from plugins.dynamic.config
+```
+
+Disabled dynamic records remain discoverable through `nemo-relay plugins list`,
+`inspect`, and `validate`, but they are not loaded or initialized.
+
+## ABI V1
+
+The host passes a `NemoRelayNativeHostApiV1` table into the plugin entry symbol.
+The plugin writes a `NemoRelayNativePluginV1` descriptor back to the host.
+
+```rust
+extern "C" fn nemo_relay_register_plugin(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus
+```
+
+All data crossing the ABI is represented as host-owned string handles containing
+UTF-8 text or JSON. Do not pass Rust types, trait objects, futures,
+`serde_json::Value`, or allocator-owned `char*` across the boundary.
+
+ABI v1 callbacks are synchronous at the native boundary. Execution intercept
+callbacks receive host continuation function pointers that may be called to run
+the next handler in the chain.
+
+The plugin context registration table covers subscribers, tool guardrails and
+intercepts, LLM guardrails and intercepts, and LLM stream execution intercepts.
+
+The host table also exposes scope and telemetry functions:
+
+| Capability | Notes |
+|---|---|
+| Current scope | Retrieve and free an opaque host-owned scope handle. |
+| Scope lifecycle | Push a scope to emit a start event, then pop the handle to emit the end event. |
+| Marks | Emit standalone mark events under the current or an explicit parent scope. |
+| Scope stacks | Create, free, set, capture, and restore independent scope stacks. |
+| Scoped stack callback | Run a native callback while a plugin-owned stack is visible to host runtime APIs. |
+
+Use `scope_stack_with_current` or the Rust SDK `ScopeStack::with_current` helper
+inside registered callbacks when the plugin needs a non-correlated visibility
+stack. This scoped override takes precedence over task-local and thread-local
+runtime scope stacks for the duration of the callback.
+
+## Rust SDK
+
+Rust plugin authors should depend on `nemo-relay-plugin`, not on the host
+`nemo-relay` runtime crate. The SDK mirrors the plugin model with a
+`NativePlugin` trait, `ConfigDiagnostic`, `PluginContext`, and the
+`nemo_relay_plugin!` export macro. It re-exports shared serializable Relay types
+from `nemo-relay-types`.
+
+See [Build a Rust Native Plugin](/build-plugins/rust-native-plugin-example)
+for an end-to-end Rust example.
+
+## Teardown Rules
+
+The gateway keeps the shared library handle alive while the plugin is active.
+On teardown it clears active plugin configuration first, deregistering
+middleware and subscribers, then deregisters the plugin kind and drops plugin
+state before unloading the library.
+
+Design native callbacks so they do not retain host-owned string handles after
+the callback returns. Copy data into plugin-owned memory when state must live
+longer than one callback.

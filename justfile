@@ -64,16 +64,21 @@ uv_python_executable() {
 activate_project_venv() {
     # Ensure PATH-based tool lookups (for example, `zig`) resolve from the
     # synced project environment without asking uv to resync the project.
-    if [[ -f "$NEMO_RELAY_REPO_ROOT/.venv/bin/activate" ]]; then
-        # shellcheck disable=SC1091
-        source "$NEMO_RELAY_REPO_ROOT/.venv/bin/activate"
-    elif [[ -f "$NEMO_RELAY_REPO_ROOT/.venv/Scripts/activate" ]]; then
-        # shellcheck disable=SC1091
-        source "$NEMO_RELAY_REPO_ROOT/.venv/Scripts/activate"
+    local venv_dir=""
+    local venv_bin=""
+    if [[ -x "$NEMO_RELAY_REPO_ROOT/.venv/bin/python" ]]; then
+        venv_dir="$NEMO_RELAY_REPO_ROOT/.venv"
+        venv_bin="$venv_dir/bin"
+    elif [[ -x "$NEMO_RELAY_REPO_ROOT/.venv/Scripts/python.exe" ]]; then
+        venv_dir="$NEMO_RELAY_REPO_ROOT/.venv"
+        venv_bin="$venv_dir/Scripts"
     else
-        echo "ERROR: expected project virtualenv activation script under .venv" >&2
+        echo "ERROR: expected project virtualenv Python executable under .venv" >&2
         exit 1
     fi
+    export VIRTUAL_ENV="$venv_dir"
+    export PATH="$venv_bin:$PATH"
+    unset PYTHONHOME
 }
 
 project_python_executable() {
@@ -564,6 +569,7 @@ set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
+    set_python_plugin_package_version "$version"
     set_coding_agent_plugin_versions "$version"
 }
 
@@ -653,6 +659,62 @@ print(f"crates/python/Cargo.toml version updated to {cargo_version}")
 PY
 }
 
+set_python_plugin_package_version() {
+    local version="$1"
+    local python_executable=""
+    python_executable="$(uv_python_executable)"
+
+    "$python_executable" - "$version" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+def semver_to_pep440(version: str) -> str:
+    pattern = re.compile(
+        r"^(?P<release>\d+\.\d+\.\d+)"
+        r"(?:-(?P<pre_label>alpha|beta|rc)(?:\.(?P<pre_num>\d+))?)?"
+        r"(?:\+(?P<local>[0-9A-Za-z.-]+))?$"
+    )
+    match = pattern.fullmatch(version)
+    if not match:
+        raise SystemExit(
+            "Unsupported Python package version format. Expected SemVer with optional "
+            "alpha/beta/rc prerelease and optional build metadata."
+        )
+
+    pep440 = match.group("release")
+    pre_label = match.group("pre_label")
+    if pre_label:
+        pre_map = {"alpha": "a", "beta": "b", "rc": "rc"}
+        pre_num = match.group("pre_num") or "0"
+        pep440 += f"{pre_map[pre_label]}{pre_num}"
+
+    local = match.group("local")
+    if local:
+        normalized_local = ".".join(part.lower() for part in re.split(r"[._-]+", local) if part)
+        if not normalized_local:
+            raise SystemExit("Python package local version metadata cannot be empty")
+        pep440 += f"+{normalized_local}"
+
+    return pep440
+
+version = semver_to_pep440(sys.argv[1])
+path = Path("python/plugin/pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'^version = "(.*)"$',
+    f'version = "{version}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("Failed to update version in python/plugin/pyproject.toml")
+path.write_text(updated)
+print(f"python/plugin/pyproject.toml version updated to {version}")
+PY
+}
+
 published_cargo_packages() {
     printf '%s\n' \
         nemo-relay-types \
@@ -691,6 +753,63 @@ python_wheel_build_args() {
             exit 1
             ;;
     esac
+}
+
+python_plugin_grpc_dependencies_supported() {
+    local python_executable="$1"
+    "$python_executable" - <<'PY'
+import platform
+import sys
+
+is_windows_arm64 = sys.platform == "win32" and platform.machine().lower() in {"arm64", "aarch64"}
+raise SystemExit(1 if is_windows_arm64 else 0)
+PY
+}
+
+install_python_plugin_sdk() {
+    local python_executable="$1"
+    if python_plugin_grpc_dependencies_supported "$python_executable"; then
+        uv pip install --python "$python_executable" -e python/plugin
+    else
+        echo "Skipping nemo-relay-plugin grpc dependencies on Windows ARM64; plugin SDK tests will be skipped"
+        export NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS=1
+        uv pip install --python "$python_executable" --no-deps -e python/plugin
+    fi
+}
+
+generate_python_worker_proto_files() {
+    local output_dir="$1"
+    local proto_root="crates/worker-proto/proto/nemo/relay/worker/v1"
+    local proto_file="$proto_root/plugin_worker.proto"
+
+    mkdir -p "$output_dir"
+    uvx --from grpcio-tools==1.81.1 python -m grpc_tools.protoc \
+        -I "$proto_root" \
+        --python_out="$output_dir" \
+        --grpc_python_out="$output_dir" \
+        "$proto_file"
+    python3 - "$output_dir" <<'PY'
+from pathlib import Path
+import sys
+
+spdx = (
+    "# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n"
+    "# SPDX-License-Identifier: Apache-2.0\n\n"
+)
+output_dir = Path(sys.argv[1])
+
+for filename in ("plugin_worker_pb2.py", "plugin_worker_pb2_grpc.py"):
+    path = output_dir / filename
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("# NO CHECKED-IN PROTOBUF GENCODE\n", "")
+    text = text.replace(
+        "import plugin_worker_pb2 as plugin__worker__pb2",
+        "from . import plugin_worker_pb2 as plugin__worker__pb2",
+    )
+    if not text.startswith("# SPDX-FileCopyrightText:"):
+        text = spdx + text
+    path.write_text(text, encoding="utf-8")
+PY
 }
 
 prepend_go_bin_to_path() {
@@ -789,6 +908,39 @@ build-python:
     python_executable="$(project_python_executable)"
     "$python_executable" -m maturin develop
 
+build-python-plugin:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --inexact --no-install-project --no-install-package nemo-relay
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    install_python_plugin_sdk "$python_executable"
+    if python_plugin_grpc_dependencies_supported "$python_executable"; then
+        "$python_executable" -c 'import nemo_relay_plugin; print(f"nemo-relay-plugin import ok: {nemo_relay_plugin.__name__}")'
+    else
+        "$python_executable" -c 'import importlib.metadata; print(importlib.metadata.version("nemo-relay-plugin"))'
+    fi
+
+generate-python-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    generate_python_worker_proto_files python/plugin/src/nemo_relay_plugin/_proto
+
+check-python-worker-proto:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    tmp_dir="$(mktemp -d)"
+    cleanup_proto_tmp() {
+        rm -rf "$tmp_dir"
+    }
+    trap cleanup_proto_tmp EXIT
+    generate_python_worker_proto_files "$tmp_dir"
+    diff -u python/plugin/src/nemo_relay_plugin/_proto/plugin_worker_pb2.py "$tmp_dir/plugin_worker_pb2.py"
+    diff -u python/plugin/src/nemo_relay_plugin/_proto/plugin_worker_pb2_grpc.py "$tmp_dir/plugin_worker_pb2_grpc.py"
+
 
 # --set [ci=true|false]
 build-go:
@@ -828,7 +980,7 @@ build-wasm:
         NEMO_RELAY_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-relay-wasm
     fi
 
-build-all: build-rust build-python build-go build-node build-wasm
+build-all: build-rust build-python build-python-plugin build-go build-node build-wasm
 
 # remove local build and test artifacts
 clean:
@@ -861,9 +1013,21 @@ clean:
         python/nemo_relay/*.so \
         python/nemo_relay/__pycache__ \
         python/nemo_relay/_native*.pyd \
+        python/plugin/build \
+        python/plugin/dist \
+        python/plugin/src/nemo_relay_plugin/__pycache__ \
+        python/plugin/src/nemo_relay_plugin/_proto/__pycache__ \
+        python/plugin/src/nemo_relay_plugin.egg-info \
+        python/tests/__pycache__ \
+        python/tests/plugin/__pycache__ \
+        examples/python-grpc-worker-plugin/.pytest_cache \
+        examples/python-grpc-worker-plugin/.venv \
+        examples/python-grpc-worker-plugin/build \
+        examples/python-grpc-worker-plugin/dist \
+        examples/python-grpc-worker-plugin/__pycache__ \
+        examples/python-grpc-worker-plugin/*.egg-info \
         examples/rust-native-plugin/Cargo.lock \
         examples/rust-native-plugin/target \
-        python/tests/__pycache__ \
         target
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -937,7 +1101,7 @@ test-python:
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact python-coverage.xml)"
         junit_out="$(prepare_artifact python-junit.xml)"
-        pytest_cmd+=(--cov=nemo_relay --cov-report term-missing --cov-report "xml:$coverage_out")
+        pytest_cmd+=(--cov=nemo_relay --cov=nemo_relay_plugin --cov-report term-missing --cov-report "xml:$coverage_out")
         pytest_cmd+=(--junit-xml "$junit_out")
         export_uv_python_runtime
         if rust_source_coverage_supported; then
@@ -948,9 +1112,11 @@ test-python:
     fi
     uv sync --inexact --no-install-project --no-install-package nemo-relay
     activate_project_venv
+    export_uv_python_runtime
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
     "$python_executable" -m maturin develop --skip-install
+    install_python_plugin_sdk "$python_executable"
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
@@ -960,6 +1126,20 @@ test-python:
             --output-path "$rust_coverage_out"
     fi
 
+test-python-plugin:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    uv sync --inexact --no-install-project --no-install-package nemo-relay
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    install_python_plugin_sdk "$python_executable"
+    "$python_executable" -m pytest \
+        python/tests/plugin \
+        --cov=nemo_relay_plugin \
+        --cov-report term-missing \
+        --cov-fail-under=95
+
 test-python-langchain:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -967,6 +1147,7 @@ test-python-langchain:
     cd "$NEMO_RELAY_REPO_ROOT"
     uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
     activate_project_venv
+    export_uv_python_runtime
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
     "$python_executable" -m maturin develop --skip-install
@@ -1315,6 +1496,33 @@ package-python:
     wheels=("$package_dir"/*.whl)
     if ((${#wheels[@]} == 0)); then
         echo "Error: No wheels found in $package_dir"
+        exit 1
+    fi
+
+# --set [output_dir=<path>] [ref_name=<name>]
+package-python-plugin:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    output_dir="{{ output_dir }}"
+    cd "$NEMO_RELAY_REPO_ROOT"
+    package_dir="$(prepare_package_dir plugin-wheels)"
+    uv sync --inexact --no-install-project --no-install-package nemo-relay
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_workspace_version)"
+        echo "Non-release build: appending commit hash to version"
+        set_python_plugin_package_version "${version}+${sha}"
+    else
+        echo "Using explicit version {{ ref_name }}"
+        set_python_plugin_package_version "{{ ref_name }}"
+    fi
+    uv build --wheel --out-dir "$package_dir" python/plugin
+    shopt -s nullglob
+    wheels=("$package_dir"/*.whl)
+    if ((${#wheels[@]} == 0)); then
+        echo "Error: No Python plugin wheels found in $package_dir"
         exit 1
     fi
 
