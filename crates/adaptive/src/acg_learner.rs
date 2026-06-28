@@ -219,6 +219,10 @@ impl Learner for AcgLearner {
                     .as_ref()
                     .map(|config| config.stability_window.max(3))
                     .unwrap_or(3);
+                let convergence_enabled = self
+                    .convergence
+                    .as_ref()
+                    .is_some_and(|config| config.enabled);
 
                 // If the profile has already converged, reuse the cached
                 // stability result and skip loading or adding observations.
@@ -226,9 +230,7 @@ impl Learner for AcgLearner {
                 // the normal repair path. Requests whose span topology changed
                 // under the same learning key also reopen learning.
                 if let Some(cached) = existing_stability.as_ref().filter(|stability| {
-                    self.convergence
-                        .as_ref()
-                        .is_some_and(|config| config.enabled)
+                    convergence_enabled
                         && stability.converged
                         && stability.total_observations as usize >= stability_window
                         && new_observations.iter().all(|observation| {
@@ -259,6 +261,19 @@ impl Learner for AcgLearner {
                         }),
                     );
                     continue;
+                }
+
+                if convergence_enabled
+                    && existing_stability
+                        .as_ref()
+                        .is_some_and(|stability| stability.converged)
+                {
+                    let mut detectors = self.convergence_detectors.write().map_err(|error| {
+                        AdaptiveError::Internal(format!(
+                            "convergence detector lock poisoned: {error}"
+                        ))
+                    })?;
+                    detectors.remove(&profile_key);
                 }
 
                 let existing = backend.load_observations(&profile_key).await?;

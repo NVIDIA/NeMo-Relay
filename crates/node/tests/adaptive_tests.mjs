@@ -218,6 +218,19 @@ describe('adaptive helpers', () => {
       epsilon: 0.001,
       stability_window: 3,
     });
+    assert.deepEqual(adaptive.governorConfig(null), {
+      enabled: false,
+      epsilon: 1.0,
+    });
+    assert.deepEqual(adaptive.driftConfig(null), {
+      enabled: false,
+      threshold: 0.75,
+    });
+    assert.deepEqual(adaptive.convergenceConfig(null), {
+      enabled: false,
+      epsilon: 0.001,
+      stability_window: 3,
+    });
     assert.deepEqual(adaptive.governorConfig({ enabled: true, epsilon: undefined }), {
       enabled: true,
       epsilon: 1.0,

@@ -82,7 +82,7 @@ function telemetryConfig(config = {}) {
 
 function mergeDefined(defaults, config = {}) {
   const merged = { ...defaults };
-  for (const [key, value] of Object.entries(config)) {
+  for (const [key, value] of Object.entries(config ?? {})) {
     if (value !== undefined) {
       merged[key] = value;
     }

@@ -749,6 +749,55 @@ async fn acg_learner_does_not_reuse_converged_stability_when_convergence_disable
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn acg_learner_resets_convergence_detector_when_cached_profile_reopens() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let backend = SeedObservationBackend::empty();
+    let hot_cache = empty_cache();
+
+    for _ in 0..4 {
+        learner
+            .process_run(&sample_run(vec![request.clone()]), &backend, &hot_cache)
+            .await
+            .unwrap();
+    }
+
+    let mut stale_stability = backend
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .expect("profile should have stored stability");
+    assert!(stale_stability.converged);
+    stale_stability.stable_prefix_fingerprint = Some("stale-prefix-fingerprint".to_string());
+    backend.seed_stability(&learning_key, stale_stability);
+
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    let reopened_stability = backend
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .expect("reopened profile should store recomputed stability");
+    assert!(
+        !reopened_stability.converged,
+        "reopened learning should require a fresh stability window"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn acg_learner_reuses_converged_profile_when_suffix_topology_changes() {
     let learner = AcgLearner::new_with_convergence(
         "agent-a",
