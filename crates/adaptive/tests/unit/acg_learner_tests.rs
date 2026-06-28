@@ -284,6 +284,7 @@ struct SeedObservationBackend {
     observations: std::sync::RwLock<HashMap<String, Vec<PromptIR>>>,
     stability: std::sync::RwLock<HashMap<String, crate::acg::stability::StabilityAnalysisResult>>,
     fail_observation_store: AtomicBool,
+    fail_stability_store: AtomicBool,
     load_observation_count: AtomicUsize,
 }
 
@@ -293,6 +294,7 @@ impl SeedObservationBackend {
             observations: std::sync::RwLock::new(HashMap::new()),
             stability: std::sync::RwLock::new(HashMap::new()),
             fail_observation_store: AtomicBool::new(false),
+            fail_stability_store: AtomicBool::new(false),
             load_observation_count: AtomicUsize::new(0),
         }
     }
@@ -313,6 +315,14 @@ impl SeedObservationBackend {
 
     fn allow_observation_stores(&self) {
         self.fail_observation_store.store(false, Ordering::SeqCst);
+    }
+
+    fn fail_stability_stores(&self) {
+        self.fail_stability_store.store(true, Ordering::SeqCst);
+    }
+
+    fn allow_stability_stores(&self) {
+        self.fail_stability_store.store(false, Ordering::SeqCst);
     }
 
     fn seed_stability(
@@ -418,6 +428,11 @@ impl StorageBackendDyn for SeedObservationBackend {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let result = result.clone();
         Box::pin(async move {
+            if self.fail_stability_store.load(Ordering::SeqCst) {
+                return Err(AdaptiveError::Storage(
+                    "forced stability storage failure".to_string(),
+                ));
+            }
             self.stability
                 .write()
                 .unwrap()
@@ -763,6 +778,45 @@ async fn acg_learner_reuses_converged_stability_without_loading_observations() {
     assert!(guard.acg_stability.as_ref().unwrap().converged);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_persists_cached_winner_as_agent_stability() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let seed_observation = build_prompt_ir(&request).unwrap();
+    let observations = vec![
+        seed_observation.clone(),
+        seed_observation.clone(),
+        seed_observation.clone(),
+    ];
+    let mut converged_stability = analyze_stability(&observations, &StabilityThresholds::default());
+    converged_stability.converged = true;
+
+    let backend = SeedObservationBackend::new(&learning_key, observations);
+    backend.seed_stability(&learning_key, converged_stability.clone());
+
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &empty_cache())
+        .await
+        .unwrap();
+
+    let agent_stability = backend
+        .load_stability("agent-a")
+        .await
+        .unwrap()
+        .expect("cached aggregate winner should be persisted under the base agent id");
+    assert_eq!(agent_stability, converged_stability);
+}
+
 #[test]
 fn acg_learner_keeps_stronger_cached_aggregate_over_weaker_normal_candidate() {
     let cached = crate::acg::stability::StabilityAnalysisResult {
@@ -892,6 +946,60 @@ async fn acg_learner_resets_convergence_detector_when_cached_profile_reopens() {
     assert!(
         !reopened_stability.converged,
         "reopened learning should require a fresh stability window"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn acg_learner_rolls_back_convergence_detector_when_stability_store_fails() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let backend = SeedObservationBackend::empty();
+    let hot_cache = empty_cache();
+
+    learner
+        .process_run(&sample_run(vec![request.clone()]), &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    let epoch_before_failure = learner
+        .convergence_detectors
+        .read()
+        .unwrap()
+        .get(&learning_key)
+        .expect("first successful run should create a detector")
+        .epoch();
+    assert_eq!(epoch_before_failure, 1);
+
+    backend.fail_stability_stores();
+    let error = learner
+        .process_run(&sample_run(vec![request]), &backend, &hot_cache)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, AdaptiveError::Storage(message) if message.contains("forced stability storage failure"))
+    );
+    backend.allow_stability_stores();
+
+    let epoch_after_failure = learner
+        .convergence_detectors
+        .read()
+        .unwrap()
+        .get(&learning_key)
+        .expect("failed stability persistence should restore the previous detector")
+        .epoch();
+    assert_eq!(
+        epoch_after_failure, epoch_before_failure,
+        "failed stability persistence must not leave the in-memory detector ahead of storage"
     );
 }
 

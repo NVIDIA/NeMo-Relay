@@ -192,6 +192,32 @@ impl AcgLearner {
         let enough_epochs = detector.epoch() as usize >= stability_window;
         Ok(detector.is_converged() && enough_epochs)
     }
+
+    fn snapshot_convergence_detector(
+        &self,
+        profile_key: &str,
+    ) -> Result<Option<ConvergenceDetector>> {
+        let detectors = self.convergence_detectors.read().map_err(|error| {
+            AdaptiveError::Internal(format!("convergence detector lock poisoned: {error}"))
+        })?;
+        Ok(detectors.get(profile_key).copied())
+    }
+
+    fn restore_convergence_detector(
+        &self,
+        profile_key: &str,
+        previous: Option<ConvergenceDetector>,
+    ) -> Result<()> {
+        let mut detectors = self.convergence_detectors.write().map_err(|error| {
+            AdaptiveError::Internal(format!("convergence detector lock poisoned: {error}"))
+        })?;
+        if let Some(detector) = previous {
+            detectors.insert(profile_key.to_string(), detector);
+        } else {
+            detectors.remove(profile_key);
+        }
+        Ok(())
+    }
 }
 
 impl Learner for AcgLearner {
@@ -262,6 +288,9 @@ impl Learner for AcgLearner {
                     let replace_best =
                         Self::should_replace_aggregate(cached, best_aggregate_stability.as_ref());
                     if replace_best {
+                        // Cached reuse has no fresh aggregate observation seed; clear any
+                        // older seed so it cannot be paired with the cached winner.
+                        best_profile_seed = None;
                         best_aggregate_stability = Some(cached.clone());
                     }
                     acg_debug::emit(
@@ -304,6 +333,12 @@ impl Learner for AcgLearner {
                     .store_observations(&profile_key, &observations_vec)
                     .await?;
 
+                let detector_before_epoch = if convergence_enabled {
+                    Some(self.snapshot_convergence_detector(&profile_key)?)
+                } else {
+                    None
+                };
+
                 if reopen_converged_profile {
                     let mut detectors = self.convergence_detectors.write().map_err(|error| {
                         AdaptiveError::Internal(format!(
@@ -315,15 +350,30 @@ impl Learner for AcgLearner {
 
                 let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
 
-                let converged_now = self.record_stability_epoch(&profile_key, &stability_result)?;
+                let converged_now =
+                    match self.record_stability_epoch(&profile_key, &stability_result) {
+                        Ok(converged_now) => converged_now,
+                        Err(error) => {
+                            if let Some(previous) = detector_before_epoch {
+                                self.restore_convergence_detector(&profile_key, previous)?;
+                            }
+                            return Err(error);
+                        }
+                    };
 
                 if converged_now {
                     stability_result.converged = true;
                 }
 
-                backend
+                if let Err(error) = backend
                     .store_stability(&profile_key, &stability_result)
-                    .await?;
+                    .await
+                {
+                    if let Some(previous) = detector_before_epoch {
+                        self.restore_convergence_detector(&profile_key, previous)?;
+                    }
+                    return Err(error);
+                }
 
                 acg_debug::emit(
                     "learner_profile_updated",
@@ -351,13 +401,14 @@ impl Learner for AcgLearner {
                 }
             }
 
-            if let Some((aggregate_observations, aggregate_stability)) = best_profile_seed.as_ref()
-            {
+            if let Some((aggregate_observations, _)) = best_profile_seed.as_ref() {
                 // Persist the runtime seed entry under plain agent_id so registration can
                 // rehydrate HotCache without scanning profile-specific keys.
                 backend
                     .store_observations(&self.agent_id, aggregate_observations)
                     .await?;
+            }
+            if let Some(aggregate_stability) = best_aggregate_stability.as_ref() {
                 backend
                     .store_stability(&self.agent_id, aggregate_stability)
                     .await?;
