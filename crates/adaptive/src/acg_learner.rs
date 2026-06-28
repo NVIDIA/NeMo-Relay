@@ -148,8 +148,15 @@ impl AcgLearner {
     ) -> bool {
         current
             .map(|current| {
-                (candidate.stable_prefix_length, candidate.total_observations)
-                    > (current.stable_prefix_length, current.total_observations)
+                (
+                    candidate.stable_prefix_length,
+                    candidate.converged,
+                    candidate.total_observations,
+                ) > (
+                    current.stable_prefix_length,
+                    current.converged,
+                    current.total_observations,
+                )
             })
             .unwrap_or(true)
     }
@@ -288,7 +295,6 @@ impl Learner for AcgLearner {
                 }
 
                 let observations_vec: Vec<PromptIR> = window.into_iter().collect();
-                let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
 
                 // Store the observations that produced this stability result.
                 // On the epoch that first declares convergence these
@@ -306,6 +312,8 @@ impl Learner for AcgLearner {
                     })?;
                     detectors.remove(&profile_key);
                 }
+
+                let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
 
                 let converged_now = self.record_stability_epoch(&profile_key, &stability_result)?;
 

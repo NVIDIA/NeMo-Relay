@@ -786,6 +786,29 @@ fn acg_learner_keeps_stronger_cached_aggregate_over_weaker_normal_candidate() {
     );
 }
 
+#[test]
+fn acg_learner_keeps_converged_aggregate_when_prefix_ties_non_converged_candidate() {
+    let current = crate::acg::stability::StabilityAnalysisResult {
+        scores: vec![stable_score(0), stable_score(1), stable_score(2)],
+        stable_prefix_length: 3,
+        stable_prefix_fingerprint: None,
+        total_observations: 3,
+        converged: true,
+    };
+    let candidate = crate::acg::stability::StabilityAnalysisResult {
+        scores: vec![stable_score(0), stable_score(1), stable_score(2)],
+        stable_prefix_length: 3,
+        stable_prefix_fingerprint: None,
+        total_observations: 20,
+        converged: false,
+    };
+
+    assert!(
+        !AcgLearner::should_replace_aggregate(&candidate, Some(&current)),
+        "a converged aggregate should not regress to a non-converged candidate when the stable prefix ties"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn acg_learner_does_not_reuse_converged_stability_when_convergence_disabled() {
     let learner = AcgLearner::new_with_convergence(
