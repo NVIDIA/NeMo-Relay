@@ -823,7 +823,18 @@ fn eprint_border_line(left: char, right: char, inner_width: usize, color: bool) 
 fn transparent_hook_executable() -> String {
     std::env::current_exe()
         .ok()
-        .and_then(|path| path.to_str().map(str::to_owned))
+        .and_then(|path| {
+            path.to_str().map(|s| {
+                #[cfg(windows)]
+                {
+                    s.replace('\\', "/")
+                }
+                #[cfg(not(windows))]
+                {
+                    s.to_owned()
+                }
+            })
+        })
         .unwrap_or_else(|| "nemo-relay".to_string())
 }
 
