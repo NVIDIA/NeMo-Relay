@@ -142,6 +142,18 @@ impl AcgLearner {
                 .all(|(score, block)| score.span_id == block.span_id)
     }
 
+    fn should_replace_aggregate(
+        candidate: &crate::acg::stability::StabilityAnalysisResult,
+        current: Option<&crate::acg::stability::StabilityAnalysisResult>,
+    ) -> bool {
+        current
+            .map(|current| {
+                (candidate.stable_prefix_length, candidate.total_observations)
+                    > (current.stable_prefix_length, current.total_observations)
+            })
+            .unwrap_or(true)
+    }
+
     /// Update the per-profile topological convergence detector and return
     /// whether the profile has converged.
     fn record_stability_epoch(
@@ -240,13 +252,8 @@ impl Learner for AcgLearner {
                     profile_counts.insert(profile_key.clone(), cached.total_observations);
                     profile_stability.insert(profile_key.clone(), cached.clone());
 
-                    let replace_best = best_aggregate_stability
-                        .as_ref()
-                        .map(|current| {
-                            (cached.stable_prefix_length, cached.total_observations)
-                                > (current.stable_prefix_length, current.total_observations)
-                        })
-                        .unwrap_or(true);
+                    let replace_best =
+                        Self::should_replace_aggregate(cached, best_aggregate_stability.as_ref());
                     if replace_best {
                         best_aggregate_stability = Some(cached.clone());
                     }
@@ -263,18 +270,10 @@ impl Learner for AcgLearner {
                     continue;
                 }
 
-                if convergence_enabled
+                let reopen_converged_profile = convergence_enabled
                     && existing_stability
                         .as_ref()
-                        .is_some_and(|stability| stability.converged)
-                {
-                    let mut detectors = self.convergence_detectors.write().map_err(|error| {
-                        AdaptiveError::Internal(format!(
-                            "convergence detector lock poisoned: {error}"
-                        ))
-                    })?;
-                    detectors.remove(&profile_key);
-                }
+                        .is_some_and(|stability| stability.converged);
 
                 let existing = backend.load_observations(&profile_key).await?;
 
@@ -291,8 +290,6 @@ impl Learner for AcgLearner {
                 let observations_vec: Vec<PromptIR> = window.into_iter().collect();
                 let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
 
-                let converged_now = self.record_stability_epoch(&profile_key, &stability_result)?;
-
                 // Store the observations that produced this stability result.
                 // On the epoch that first declares convergence these
                 // observations are preserved; on subsequent runs the cached
@@ -300,6 +297,17 @@ impl Learner for AcgLearner {
                 backend
                     .store_observations(&profile_key, &observations_vec)
                     .await?;
+
+                if reopen_converged_profile {
+                    let mut detectors = self.convergence_detectors.write().map_err(|error| {
+                        AdaptiveError::Internal(format!(
+                            "convergence detector lock poisoned: {error}"
+                        ))
+                    })?;
+                    detectors.remove(&profile_key);
+                }
+
+                let converged_now = self.record_stability_epoch(&profile_key, &stability_result)?;
 
                 if converged_now {
                     stability_result.converged = true;
@@ -325,15 +333,10 @@ impl Learner for AcgLearner {
                 profile_counts.insert(profile_key.clone(), stability_result.total_observations);
                 profile_stability.insert(profile_key.clone(), stability_result.clone());
 
-                let replace_best = best_profile_seed
-                    .as_ref()
-                    .map(|(_, current)| {
-                        (
-                            stability_result.stable_prefix_length,
-                            stability_result.total_observations,
-                        ) > (current.stable_prefix_length, current.total_observations)
-                    })
-                    .unwrap_or(true);
+                let replace_best = Self::should_replace_aggregate(
+                    &stability_result,
+                    best_aggregate_stability.as_ref(),
+                );
                 if replace_best {
                     best_profile_seed = Some((observations_vec.clone(), stability_result.clone()));
                     best_aggregate_stability = Some(stability_result.clone());

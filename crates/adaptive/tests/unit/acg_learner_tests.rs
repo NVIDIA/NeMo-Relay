@@ -311,6 +311,10 @@ impl SeedObservationBackend {
         self.fail_observation_store.store(true, Ordering::SeqCst);
     }
 
+    fn allow_observation_stores(&self) {
+        self.fail_observation_store.store(false, Ordering::SeqCst);
+    }
+
     fn seed_stability(
         &self,
         agent_id: &str,
@@ -585,6 +589,54 @@ async fn acg_learner_does_not_persist_converged_stability_when_observation_store
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn acg_learner_does_not_advance_convergence_epoch_when_observation_store_fails() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: true,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let backend = SeedObservationBackend::empty();
+    let hot_cache = empty_cache();
+
+    learner
+        .process_run(&sample_run(vec![request.clone()]), &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    backend.fail_observation_stores();
+    let error = learner
+        .process_run(&sample_run(vec![request.clone()]), &backend, &hot_cache)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, AdaptiveError::Storage(message) if message.contains("forced observation storage failure"))
+    );
+
+    backend.allow_observation_stores();
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    let recovered_stability = backend
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .expect("stability should be stored after recovery");
+    assert!(
+        !recovered_stability.converged,
+        "failed observation storage must not advance the in-memory convergence epoch"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn acg_learner_repairs_converged_stability_without_observations() {
     let learner = AcgLearner::new_with_convergence(
         "agent-a",
@@ -709,6 +761,29 @@ async fn acg_learner_reuses_converged_stability_without_loading_observations() {
     assert_eq!(guard.acg_profiles.len(), 1);
     assert_eq!(guard.acg_observation_count, 3);
     assert!(guard.acg_stability.as_ref().unwrap().converged);
+}
+
+#[test]
+fn acg_learner_keeps_stronger_cached_aggregate_over_weaker_normal_candidate() {
+    let cached = crate::acg::stability::StabilityAnalysisResult {
+        scores: vec![stable_score(0), stable_score(1), stable_score(2)],
+        stable_prefix_length: 3,
+        stable_prefix_fingerprint: None,
+        total_observations: 3,
+        converged: true,
+    };
+    let weaker_normal = crate::acg::stability::StabilityAnalysisResult {
+        scores: vec![stable_score(0)],
+        stable_prefix_length: 1,
+        stable_prefix_fingerprint: None,
+        total_observations: 20,
+        converged: false,
+    };
+
+    assert!(
+        !AcgLearner::should_replace_aggregate(&weaker_normal, Some(&cached)),
+        "normal candidates should compare against the current cached aggregate winner"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
