@@ -504,11 +504,7 @@ async fn runtime_integration_acg_learner_reuses_learning_buckets_across_growing_
     let requests = sample_growing_chat_requests("claude-3-5-sonnet");
     let learner = AcgLearner::new(agent_id, 8, StabilityThresholds::default());
     let learning_key = format!(
-        "{agent_id}::model=claude-3-5-sonnet::seed={}::system={}::tools=no-tools",
-        short_hash(&format!(
-            "user:{}",
-            nemo_relay_adaptive::acg::sha256_hex("Summarize the latest findings")
-        )),
+        "{agent_id}::model=claude-3-5-sonnet::scaffold=stable::system={}::tools=no-tools",
         short_hash(&nemo_relay_adaptive::acg::sha256_hex(
             "You are a careful planner"
         )),
@@ -675,6 +671,7 @@ async fn test_adaptive_plugin_rejects_unsupported_mode_with_strict_policy() {
                 tool_parallelism: Some(ToolParallelismComponentConfig {
                     priority: 100,
                     mode: "broken".into(),
+                    drift: None,
                 }),
                 ..AdaptiveConfig::default()
             })

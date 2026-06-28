@@ -14,26 +14,37 @@ const HASH_PREFIX_LEN: usize = 16;
 struct AcgKeyParts<'a> {
     model: &'a str,
     system_hash: String,
+    anchor_hash: String,
     tool_hash: String,
+    contract_hash: String,
 }
 
 /// Derive the stable ACG learning key used to bucket observations and hot-cache state.
 ///
 /// The learning key intentionally excludes the full role sequence because normal
-/// multi-turn conversations grow every request. Instead it uses a coarse
-/// conversation class plus the stable template fingerprints that should remain
-/// distinct across prompt families.
+/// multi-turn conversations grow every request. When the request has a stable
+/// scaffold such as system policy, tool schemas, or an output contract, the key
+/// follows that cacheable scaffold and leaves volatile work-item text out of
+/// the bucket. One-off prompts without any scaffold retain a seed hash so
+/// unrelated direct prompts are not collapsed together.
 pub(crate) fn derive_acg_learning_key(
     agent_id: &str,
     annotated_request: &AnnotatedLlmRequest,
 ) -> String {
     let parts = derive_key_parts(annotated_request);
-    let seed_fingerprint = learning_seed_fingerprint(annotated_request);
-    let seed_hash = short_hash(&seed_fingerprint);
-    format!(
-        "{agent_id}::model={}::seed={seed_hash}::system={}::tools={}",
-        parts.model, parts.system_hash, parts.tool_hash
-    )
+    if has_cacheable_scaffold(&parts) {
+        format!(
+            "{agent_id}::model={}::scaffold=stable::system={}::tools={}",
+            parts.model, parts.system_hash, parts.tool_hash
+        )
+    } else {
+        let seed_fingerprint = learning_seed_fingerprint(annotated_request);
+        let seed_hash = short_hash(&seed_fingerprint);
+        format!(
+            "{agent_id}::model={}::seed={seed_hash}::system={}::tools={}",
+            parts.model, parts.system_hash, parts.tool_hash
+        )
+    }
 }
 
 /// Derive the exact ACG profile key used for diagnostics and debug output.
@@ -45,11 +56,6 @@ pub(crate) fn derive_acg_profile_key(
     annotated_request: &AnnotatedLlmRequest,
 ) -> String {
     let parts = derive_key_parts(annotated_request);
-    let anchor_fingerprint = layered_anchor_fingerprint(annotated_request);
-    let anchor_hash = anchor_fingerprint
-        .as_deref()
-        .map(short_hash)
-        .unwrap_or("no-anchor");
     let role_signature = annotated_request
         .messages
         .iter()
@@ -57,20 +63,35 @@ pub(crate) fn derive_acg_profile_key(
         .collect::<Vec<_>>()
         .join(".");
     format!(
-        "{agent_id}::model={}::roles={role_signature}::system={}::anchor={}::tools={}",
-        parts.model, parts.system_hash, anchor_hash, parts.tool_hash
+        "{agent_id}::model={}::roles={role_signature}::system={}::anchor={}::tools={}::contract={}",
+        parts.model, parts.system_hash, parts.anchor_hash, parts.tool_hash, parts.contract_hash
     )
 }
 
 fn derive_key_parts(annotated_request: &AnnotatedLlmRequest) -> AcgKeyParts<'_> {
     let system_fingerprint = system_prompt_fingerprint(annotated_request);
+    let anchor_fingerprint = layered_anchor_fingerprint(annotated_request);
     let tool_fingerprint = tool_schema_fingerprint(annotated_request.tools.as_deref());
+    let contract_fingerprint = output_contract_fingerprint(annotated_request);
 
     AcgKeyParts {
         model: annotated_request.model.as_deref().unwrap_or("unknown"),
         system_hash: short_hash(&system_fingerprint).to_string(),
+        anchor_hash: anchor_fingerprint
+            .as_deref()
+            .map(short_hash)
+            .unwrap_or("no-anchor")
+            .to_string(),
         tool_hash: short_hash(&tool_fingerprint).to_string(),
+        contract_hash: short_hash(&contract_fingerprint).to_string(),
     }
+}
+
+fn has_cacheable_scaffold(parts: &AcgKeyParts<'_>) -> bool {
+    parts.system_hash != "no-system"
+        || parts.anchor_hash != "no-anchor"
+        || !matches!(parts.tool_hash.as_str(), "no-tools" | "tools-unavailab")
+        || parts.contract_hash != "no-contract"
 }
 
 fn message_role_tag(message: &Message) -> &'static str {
@@ -181,6 +202,16 @@ fn tool_schema_fingerprint(tools: Option<&[ToolDefinition]>) -> String {
     } else {
         sha256_hex(&canonical_tools)
     }
+}
+
+fn output_contract_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String {
+    let Some(contract) = annotated_request.extra.get("response_format") else {
+        return "no-contract".to_string();
+    };
+
+    canonicalize_value(contract)
+        .map(|canonical| sha256_hex(&canonical))
+        .unwrap_or_else(|_| "contract-unavailable".to_string())
 }
 
 fn extract_text(content: &MessageContent) -> String {

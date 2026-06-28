@@ -14,6 +14,7 @@ use serde_json::json;
 use crate::acg::economics;
 use crate::acg::plugin::{PluginInput, ProviderPlugin};
 use crate::acg::request_surfaces::{RequestSurface, resolve_request_surface_from_request};
+use crate::acg::stability::prompt_prefix_fingerprint;
 use crate::acg::translation::anthropic::AnthropicHintTranslator;
 use crate::acg::translation::openai::OpenAIHintTranslator;
 use crate::acg::translation::{HintPlan, HintTranslation, HintTranslator};
@@ -144,6 +145,19 @@ fn build_intent_bundle(
         );
         return None;
     }
+    if !stable_prefix_fingerprint_matches_prompt_ir(stability, prompt_ir) {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({
+                "reason": "stable_prefix_fingerprint_mismatch",
+                "agent_id": agent_id,
+                "provider": provider,
+                "observation_count": observation_count,
+                "stable_prefix_length": stability.stable_prefix_length,
+            }),
+        );
+        return None;
+    }
 
     let toolset_hash = annotated_request
         .tools
@@ -208,6 +222,18 @@ fn build_intent_bundle(
         intents,
         created_at: Utc::now(),
     })
+}
+
+fn stable_prefix_fingerprint_matches_prompt_ir(
+    stability: &StabilityAnalysisResult,
+    prompt_ir: &crate::acg::PromptIR,
+) -> bool {
+    let Some(fingerprint) = stability.stable_prefix_fingerprint.as_deref() else {
+        return stability.stable_prefix_length == 0;
+    };
+
+    prompt_prefix_fingerprint(prompt_ir, stability.stable_prefix_length).as_deref()
+        == Some(fingerprint)
 }
 
 fn build_cache_stability_intent(

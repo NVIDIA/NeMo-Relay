@@ -19,7 +19,9 @@ use crate::storage::traits::StorageBackendDyn;
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::LlmExecutionNextFn;
 use nemo_relay::api::runtime::LlmStreamExecutionNextFn;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::request::{
+    AnnotatedLlmRequest, FunctionDefinition, Message, MessageContent, ToolDefinition,
+};
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 
@@ -48,7 +50,12 @@ fn sample_hot_cache() -> Arc<RwLock<HotCache>> {
                 },
             ],
             stable_prefix_length: 2,
+            stable_prefix_fingerprint: prompt_fingerprint_for_llm_request(
+                &sample_openai_responses_request(),
+                2,
+            ),
             total_observations: 8,
+            converged: false,
         }),
         acg_observation_count: 8,
     }))
@@ -115,6 +122,102 @@ fn sample_annotated_request(model: &str) -> AnnotatedLlmRequest {
     }
 }
 
+fn pipe_tool_definition() -> ToolDefinition {
+    ToolDefinition {
+        tool_type: "function".to_string(),
+        function: FunctionDefinition {
+            name: "policy_lookup".to_string(),
+            description: Some("Look up policy guidance for a moderation item.".to_string()),
+            parameters: Some(json!({
+                "type": "object",
+                "properties": {
+                    "policy_area": {"type": "string"}
+                },
+                "required": ["policy_area"]
+            })),
+        },
+    }
+}
+
+fn pipe_response_format(include_severity: bool) -> Value {
+    let mut properties = json!({
+        "decision": {"type": "string"},
+        "reason": {"type": "string"}
+    });
+    let mut required = vec![
+        Value::String("decision".to_string()),
+        Value::String("reason".to_string()),
+    ];
+    if include_severity {
+        properties["severity"] = json!({"type": "string"});
+        required.push(Value::String("severity".to_string()));
+    }
+
+    json!({
+        "type": "json_schema",
+        "json_schema": {
+            "name": "moderation_decision",
+            "schema": {
+                "type": "object",
+                "properties": properties,
+                "required": required
+            }
+        }
+    })
+}
+
+fn sample_agent_pipe_request(work_item: &str, include_severity: bool) -> AnnotatedLlmRequest {
+    let mut extra = serde_json::Map::new();
+    extra.insert(
+        "response_format".to_string(),
+        pipe_response_format(include_severity),
+    );
+
+    AnnotatedLlmRequest {
+        messages: vec![
+            Message::System {
+                content: MessageContent::Text("Apply the moderation policy exactly.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text(
+                    "Use the reusable moderation workflow before judging the item.".to_string(),
+                ),
+                name: None,
+            },
+            Message::Assistant {
+                content: Some(MessageContent::Text(
+                    "I will return only the required moderation decision object.".to_string(),
+                )),
+                tool_calls: None,
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text(work_item.to_string()),
+                name: None,
+            },
+        ],
+        model: Some("gpt-4o".to_string()),
+        params: None,
+        tools: Some(vec![pipe_tool_definition()]),
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra,
+    }
+}
+
 fn sample_openai_responses_request() -> LlmRequest {
     LlmRequest {
         headers: serde_json::Map::new(),
@@ -172,6 +275,51 @@ fn sample_layered_anthropic_request() -> LlmRequest {
             ]
         }),
     }
+}
+
+fn prompt_ir_for_llm_request(request: &LlmRequest) -> PromptIR {
+    let semantic_request_view =
+        build_semantic_request_view(request).expect("request should decode to semantic view");
+    crate::acg::ir_builder::build_prompt_ir(&semantic_request_view.annotated_request)
+        .expect("semantic request should build PromptIR")
+}
+
+fn prompt_fingerprint_for_llm_request(request: &LlmRequest, prefix_len: usize) -> Option<String> {
+    let prompt_ir = prompt_ir_for_llm_request(request);
+    crate::acg::stability::prompt_prefix_fingerprint(&prompt_ir, prefix_len)
+}
+
+fn stability_with_prefix_for_prompt(
+    prefix_len: u32,
+    observations: u32,
+    prompt_ir: &PromptIR,
+) -> StabilityAnalysisResult {
+    let mut stability = stability_with_prefix(prefix_len, observations);
+    stability.stable_prefix_fingerprint =
+        crate::acg::stability::prompt_prefix_fingerprint(prompt_ir, prefix_len as usize);
+    stability
+}
+
+fn stability_with_prefix_for_llm_request(
+    prefix_len: u32,
+    observations: u32,
+    request: &LlmRequest,
+) -> StabilityAnalysisResult {
+    let prompt_ir = prompt_ir_for_llm_request(request);
+    stability_with_prefix_for_prompt(prefix_len, observations, &prompt_ir)
+}
+
+fn layered_stability_result_for_prompt(
+    observation_count: u32,
+    prompt_ir: &PromptIR,
+) -> StabilityAnalysisResult {
+    let mut stability = layered_stability_result(observation_count);
+    let stable_prefix_length = stability.stable_prefix_length.min(prompt_ir.blocks.len());
+    stability.scores.truncate(stable_prefix_length);
+    stability.stable_prefix_length = stable_prefix_length;
+    stability.stable_prefix_fingerprint =
+        crate::acg::stability::prompt_prefix_fingerprint(prompt_ir, stable_prefix_length);
+    stability
 }
 
 fn marker_positions(req: &LlmRequest) -> Vec<(String, usize)> {
@@ -232,12 +380,14 @@ fn stability_with_prefix(prefix_len: u32, observations: u32) -> StabilityAnalysi
             })
             .collect(),
         stable_prefix_length: prefix_len as usize,
+        stable_prefix_fingerprint: None,
         total_observations: observations,
+        converged: false,
     }
 }
 
 fn layered_stability_result(observation_count: u32) -> StabilityAnalysisResult {
-    StabilityAnalysisResult {
+    let mut stability = StabilityAnalysisResult {
         scores: vec![
             BlockStabilityScore {
                 span_id: SpanId("block-0".to_string()),
@@ -262,8 +412,13 @@ fn layered_stability_result(observation_count: u32) -> StabilityAnalysisResult {
             },
         ],
         stable_prefix_length: 3,
+        stable_prefix_fingerprint: None,
         total_observations: observation_count,
-    }
+        converged: false,
+    };
+    stability.stable_prefix_fingerprint =
+        prompt_fingerprint_for_llm_request(&sample_layered_anthropic_request(), 3);
+    stability
 }
 
 fn sample_prompt_ir(span: &str) -> PromptIR {
@@ -407,7 +562,15 @@ impl StorageBackendDyn for FailingStabilityBackend {
 #[test]
 fn acg_component_translate_request_degrades_when_provider_semantics_do_not_match_request_surface() {
     let request = sample_openai_chat_request();
-    let hot_cache = sample_hot_cache();
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: Some(stability_with_prefix_for_llm_request(2, 8, &request)),
+        acg_observation_count: 8,
+    }));
     let plugin = build_provider_plugin("anthropic").expect("anthropic plugin should build");
 
     let translated = translate_request(
@@ -443,7 +606,15 @@ fn acg_component_translate_request_applies_openai_semantics_on_resolved_request_
 #[test]
 fn acg_component_translate_request_passes_through_when_planner_finds_no_profitable_breakpoints() {
     let request = sample_anthropic_request();
-    let hot_cache = sample_hot_cache();
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: Some(stability_with_prefix_for_llm_request(2, 8, &request)),
+        acg_observation_count: 8,
+    }));
     let plugin = build_provider_plugin("anthropic").expect("anthropic plugin should build");
 
     let translated = translate_request(
@@ -483,7 +654,7 @@ fn acg_component_translate_request_errors_are_fail_open() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(layered_stability_result(6)),
+        acg_stability: Some(stability_with_prefix_for_llm_request(2, 6, &request)),
         acg_observation_count: 6,
     }));
 
@@ -549,7 +720,7 @@ fn rewrite_request_with_hot_cache_adaptive_placement_differs_by_state() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(stability_with_prefix(1, 8)),
+        acg_stability: Some(stability_with_prefix_for_llm_request(1, 8, &request)),
         acg_observation_count: 8,
     }));
     let translated_short =
@@ -562,7 +733,7 @@ fn rewrite_request_with_hot_cache_adaptive_placement_differs_by_state() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(stability_with_prefix(3, 8)),
+        acg_stability: Some(stability_with_prefix_for_llm_request(3, 8, &request)),
         acg_observation_count: 8,
     }));
     let translated_long =
@@ -691,7 +862,9 @@ fn acg_component_build_intent_bundle_requires_at_least_two_observations() {
             },
         ],
         stable_prefix_length: 2,
+        stable_prefix_fingerprint: crate::acg::stability::prompt_prefix_fingerprint(&prompt_ir, 2),
         total_observations: 1,
+        converged: false,
     };
 
     let intent_bundle = build_intent_bundle(
@@ -722,6 +895,87 @@ fn acg_component_build_intent_bundle_requires_at_least_two_observations() {
     assert!(
         intent_bundle.is_none(),
         "anthropic planning should still fail open when the prompt cannot clear the economics gate"
+    );
+}
+
+#[test]
+fn acg_component_build_intent_bundle_rejects_stale_output_contract_stability() {
+    let plugin = build_provider_plugin("openai").expect("openai plugin should build");
+    let observations = ["#1", "#2", "#3"]
+        .into_iter()
+        .map(|suffix| {
+            crate::acg::ir_builder::build_prompt_ir(&sample_agent_pipe_request(
+                &format!("Review forum post {suffix}"),
+                false,
+            ))
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let stability = crate::acg::stability::analyze_stability(
+        &observations,
+        &crate::acg::stability::StabilityThresholds::default(),
+    );
+    assert_eq!(stability.stable_prefix_length, 5);
+    assert!(stability.stable_prefix_fingerprint.is_some());
+
+    let changed_contract = sample_agent_pipe_request("Review forum post #4", true);
+    let changed_prompt_ir = crate::acg::ir_builder::build_prompt_ir(&changed_contract).unwrap();
+
+    let intent_bundle = build_intent_bundle(
+        "agent-1",
+        "openai",
+        plugin.as_ref(),
+        RequestSurface::OpenAIChat,
+        &changed_contract,
+        &changed_prompt_ir,
+        &stability,
+        3,
+    );
+
+    assert!(
+        intent_bundle.is_none(),
+        "request-time ACG hints must fail open when cached stability was learned from a different output contract"
+    );
+}
+
+#[test]
+fn acg_component_build_intent_bundle_rejects_missing_prefix_fingerprint_stability() {
+    let plugin = build_provider_plugin("openai").expect("openai plugin should build");
+    let observations = ["#1", "#2", "#3"]
+        .into_iter()
+        .map(|suffix| {
+            crate::acg::ir_builder::build_prompt_ir(&sample_agent_pipe_request(
+                &format!("Review forum post {suffix}"),
+                false,
+            ))
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut stability = crate::acg::stability::analyze_stability(
+        &observations,
+        &crate::acg::stability::StabilityThresholds::default(),
+    );
+    assert_eq!(stability.stable_prefix_length, 5);
+    assert!(stability.stable_prefix_fingerprint.is_some());
+    stability.stable_prefix_fingerprint = None;
+
+    let request = sample_agent_pipe_request("Review forum post #4", false);
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&request).unwrap();
+
+    let intent_bundle = build_intent_bundle(
+        "agent-1",
+        "openai",
+        plugin.as_ref(),
+        RequestSurface::OpenAIChat,
+        &request,
+        &prompt_ir,
+        &stability,
+        3,
+    );
+
+    assert!(
+        intent_bundle.is_none(),
+        "request-time ACG hints must fail open when cached stability cannot prove the stable prefix fingerprint"
     );
 }
 
@@ -865,7 +1119,7 @@ fn acg_component_build_intent_bundle_supports_openai_and_rejects_unknown_provide
     let request = sample_annotated_request("gpt-4o");
     let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&request).unwrap();
     let plugin = build_provider_plugin("openai").unwrap();
-    let stability = layered_stability_result(4);
+    let stability = layered_stability_result_for_prompt(4, &prompt_ir);
 
     let bundle = build_intent_bundle(
         "agent-openai",
@@ -949,7 +1203,7 @@ fn acg_component_build_hint_translation_and_apply_hint_translation_cover_passthr
     let prompt_ir =
         crate::acg::ir_builder::build_prompt_ir(&semantic_view.annotated_request).unwrap();
     let plugin = build_provider_plugin("openai").unwrap();
-    let stability = layered_stability_result(4);
+    let stability = layered_stability_result_for_prompt(4, &prompt_ir);
     let bundle = build_intent_bundle(
         "agent-openai",
         "openai",
@@ -1004,7 +1258,10 @@ fn acg_component_translate_request_uses_profile_specific_stability_and_fails_ope
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::from([(
             learning_key.clone(),
-            layered_stability_result(6),
+            layered_stability_result_for_prompt(
+                6,
+                &crate::acg::ir_builder::build_prompt_ir(&semantic_view.annotated_request).unwrap(),
+            ),
         )]),
         acg_profile_observation_counts: std::collections::HashMap::from([(learning_key, 6)]),
         acg_stability: None,
@@ -1148,7 +1405,7 @@ fn acg_component_build_hint_translation_succeeds_for_openai_and_anthropic() {
         RequestSurface::OpenAIChat,
         &openai_view.annotated_request,
         &openai_prompt_ir,
-        &layered_stability_result(4),
+        &layered_stability_result_for_prompt(4, &openai_prompt_ir),
         4,
     )
     .unwrap();
@@ -1189,7 +1446,7 @@ fn acg_component_build_hint_translation_succeeds_for_openai_and_anthropic() {
         RequestSurface::AnthropicMessages,
         &anthropic_view.annotated_request,
         &anthropic_prompt_ir,
-        &layered_stability_result(6),
+        &layered_stability_result_for_prompt(6, &anthropic_prompt_ir),
         6,
     )
     .unwrap();

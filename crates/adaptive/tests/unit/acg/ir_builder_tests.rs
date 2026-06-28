@@ -155,6 +155,92 @@ fn build_prompt_ir_appends_tool_blocks_when_request_contains_only_system_message
 }
 
 #[test]
+fn build_prompt_ir_inserts_tool_schema_and_output_contract_before_workflow_scaffold() {
+    let mut extra = serde_json::Map::new();
+    extra.insert(
+        "response_format".to_string(),
+        serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "moderation_decision",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "decision": {"type": "string"},
+                        "reason": {"type": "string"}
+                    },
+                    "required": ["decision", "reason"]
+                }
+            }
+        }),
+    );
+    let request = AnnotatedLlmRequest {
+        messages: vec![
+            Message::System {
+                content: MessageContent::Text("Apply policy exactly.".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Use the moderation workflow.".to_string()),
+                name: None,
+            },
+            Message::Assistant {
+                content: Some(MessageContent::Text(
+                    "I will return the required moderation decision object.".to_string(),
+                )),
+                tool_calls: None,
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("Review this changing post.".to_string()),
+                name: None,
+            },
+        ],
+        model: Some("gpt-4o".to_string()),
+        params: None,
+        tools: Some(vec![sample_tool_definition("policy_lookup")]),
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra,
+    };
+
+    let prompt_ir = build_prompt_ir(&request).unwrap();
+
+    assert_eq!(prompt_ir.blocks.len(), 6);
+    assert_eq!(prompt_ir.blocks[0].content_type, BlockContentType::Text);
+    assert_eq!(
+        prompt_ir.blocks[1].content_type,
+        BlockContentType::ToolSchema
+    );
+    assert_eq!(
+        prompt_ir.blocks[2].content_type,
+        BlockContentType::StructuredOutput
+    );
+    assert_eq!(prompt_ir.blocks[3].role, PromptRole::User);
+    assert_eq!(prompt_ir.blocks[4].role, PromptRole::Assistant);
+    assert_eq!(prompt_ir.blocks[5].role, PromptRole::User);
+    assert!(
+        prompt_ir
+            .structured_output_schema_id
+            .as_deref()
+            .is_some_and(|schema_id| schema_id.starts_with("sha256:"))
+    );
+    assert!(prompt_ir.blocks[2].content.contains("moderation_decision"));
+}
+
+#[test]
 fn build_prompt_ir_omits_tool_schema_hashes_when_no_tools_are_present() {
     let request = AnnotatedLlmRequest {
         messages: vec![Message::User {

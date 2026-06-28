@@ -444,7 +444,9 @@ impl AdaptiveRuntime {
                 config,
                 agent_id.to_string(),
                 self.runtime_id,
+                self.config.tool_parallelism.clone(),
                 self.config.acg.clone(),
+                self.config.convergence.clone(),
             )));
         }
         if let Some(config) = self.config.adaptive_hints.clone() {
@@ -542,13 +544,21 @@ impl TelemetryFeature {
         config: TelemetryComponentConfig,
         agent_id: String,
         runtime_id: Uuid,
+        tool_parallelism_config: Option<ToolParallelismComponentConfig>,
         acg_config: Option<AcgComponentConfig>,
+        convergence: Option<crate::config::ConvergenceConfig>,
     ) -> Self {
         let subscriber_name = config
             .subscriber_name
             .unwrap_or_else(|| format!("adaptive_{runtime_id}_subscriber"));
         Self {
-            learners: build_learners(&agent_id, &config.learners, acg_config.as_ref()),
+            learners: build_learners(
+                &agent_id,
+                &config.learners,
+                tool_parallelism_config.as_ref(),
+                acg_config.as_ref(),
+                convergence.as_ref(),
+            ),
             agent_id,
             subscriber_name,
         }
@@ -597,6 +607,7 @@ struct AdaptiveHintsFeature {
     break_chain: bool,
     hot_cache: Arc<RwLock<HotCache>>,
     agent_id: String,
+    governor: Option<crate::config::GovernorConfig>,
 }
 
 impl AdaptiveHintsFeature {
@@ -612,6 +623,7 @@ impl AdaptiveHintsFeature {
             break_chain: config.break_chain,
             hot_cache,
             agent_id,
+            governor: config.governor,
         }
     }
 }
@@ -622,8 +634,11 @@ impl AdaptiveFeature for AdaptiveHintsFeature {
         ctx: &'a mut RegistrationContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let adaptive_hints =
-                AdaptiveHintsIntercept::new(self.hot_cache.clone(), self.agent_id.clone());
+            let adaptive_hints = AdaptiveHintsIntercept::with_governor(
+                self.hot_cache.clone(),
+                self.agent_id.clone(),
+                self.governor.clone(),
+            );
             ctx.register_llm_request_intercept(
                 &self.name,
                 self.priority,
@@ -770,7 +785,9 @@ impl AdaptiveFeature for AcgFeature {
 fn build_learners(
     agent_id: &str,
     learners: &[String],
+    tool_parallelism_config: Option<&ToolParallelismComponentConfig>,
     acg_config: Option<&AcgComponentConfig>,
+    convergence: Option<&crate::config::ConvergenceConfig>,
 ) -> Vec<Box<dyn Learner>> {
     let mut built: Vec<Box<dyn Learner>> = vec![];
     for learner in learners {
@@ -779,13 +796,21 @@ fn build_learners(
                 agent_id,
                 crate::trie::builder::SensitivityConfig::default(),
             ))),
-            "tool_parallelism" => built.push(Box::new(ToolParallelismLearner::new(agent_id))),
+            "tool_parallelism" => {
+                let drift = tool_parallelism_config.and_then(|config| config.drift.clone());
+                built.push(Box::new(ToolParallelismLearner::new_with_drift(
+                    agent_id, drift,
+                )));
+            }
             "acg" => {
                 if let Some(config) = acg_config {
-                    built.push(Box::new(AcgLearner::new(
+                    let profile_convergence =
+                        config.convergence.clone().or_else(|| convergence.cloned());
+                    built.push(Box::new(AcgLearner::new_with_convergence(
                         agent_id,
                         config.observation_window,
                         config.stability_thresholds.clone(),
+                        profile_convergence,
                     )));
                 }
             }

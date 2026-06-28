@@ -34,6 +34,11 @@ redis-backend = ["redis"]
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync", "time", "test-util", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", default-features = false }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "convergence_bench"
+harness = false
 
 [[test]]
 name = "redis_integration"
@@ -46,3 +51,11 @@ path = "tests/integration/runtime_integration_tests.rs"
 [[test]]
 name = "acg_module_surface"
 path = "tests/integration/acg_module_surface_tests.rs"
+
+[[test]]
+name = "topology_convergence"
+path = "tests/integration/topology_convergence_tests.rs"
+
+[[test]]
+name = "tool_parallelism_plan"
+path = "tests/integration/tool_parallelism_plan_tests.rs"

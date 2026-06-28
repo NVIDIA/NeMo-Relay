@@ -14,10 +14,10 @@ use nemo_relay::api::runtime::global_context;
 use nemo_relay::plugin::{DiagnosticLevel, UnsupportedBehavior, clear_plugin_configuration};
 use nemo_relay::plugin::{Plugin, PluginRegistrationContext, rollback_registrations};
 use serde_json::json;
-use tokio::sync::Mutex as AsyncMutex;
+
+use crate::test_support::GLOBAL_RUNTIME_TEST_MUTEX;
 
 static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-static ASYNC_TEST_MUTEX: AsyncMutex<()> = AsyncMutex::const_new(());
 
 fn test_mutex() -> &'static Mutex<()> {
     TEST_MUTEX.get_or_init(|| Mutex::new(()))
@@ -92,6 +92,7 @@ fn validate_adaptive_plugin_config_reports_unknown_fields_and_backend_errors() {
 #[test]
 fn register_adaptive_component_is_idempotent_and_deregisters_cleanly() {
     let _guard = test_mutex().lock().unwrap();
+    let _runtime_guard = GLOBAL_RUNTIME_TEST_MUTEX.blocking_lock();
     let _ = clear_plugin_configuration();
     let _ = deregister_adaptive_component();
 
@@ -349,9 +350,40 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
     }));
 }
 
+#[test]
+fn validate_adaptive_plugin_config_accepts_topology_sections() {
+    let config = json!({
+        "version": 1,
+        "adaptive_hints": {
+            "governor": {"enabled": true, "epsilon": 2.0}
+        },
+        "tool_parallelism": {
+            "mode": "observe_only",
+            "drift": {"enabled": true, "threshold": 0.5}
+        },
+        "acg": {
+            "provider": "anthropic",
+            "convergence": {"enabled": true, "epsilon": 0.01, "stability_window": 3}
+        },
+        "convergence": {"enabled": true, "epsilon": 0.01, "stability_window": 3},
+        "policy": {
+            "unknown_field": "error",
+            "unsupported_value": "error"
+        }
+    });
+
+    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diag| diag.code != "adaptive.unknown_field"),
+        "topology config fields should not be reported as unknown: {diagnostics:?}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
-    let _guard = ASYNC_TEST_MUTEX.lock().await;
+    let _guard = GLOBAL_RUNTIME_TEST_MUTEX.lock().await;
     reset_global();
 
     let plugin = AdaptivePlugin;
