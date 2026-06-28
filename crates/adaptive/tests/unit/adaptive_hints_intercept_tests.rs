@@ -383,9 +383,12 @@ fn test_adaptive_hints_governor_sheds_low_sensitivity_hints_but_keeps_manual_ove
         None,
     )
     .unwrap();
+    let manual_latency_sensitivity =
+        &manual_request.content["nvext"]["agent_hints"]["latency_sensitivity"];
+    assert_eq!(manual_latency_sensitivity, &serde_json::json!(11.0));
     assert_eq!(
-        manual_request.content["nvext"]["agent_hints"]["latency_sensitivity"],
-        serde_json::json!(11.0)
+        &manual_request.headers[AGENT_HINTS_HEADER_KEY]["latency_sensitivity"],
+        manual_latency_sensitivity
     );
 
     reset_root_metadata();

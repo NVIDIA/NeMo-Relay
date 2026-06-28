@@ -218,6 +218,26 @@ describe('adaptive helpers', () => {
       epsilon: 0.001,
       stability_window: 3,
     });
+    assert.deepEqual(adaptive.governorConfig({ enabled: true, epsilon: undefined }), {
+      enabled: true,
+      epsilon: 1.0,
+    });
+    assert.deepEqual(adaptive.driftConfig({ enabled: true, threshold: undefined }), {
+      enabled: true,
+      threshold: 0.75,
+    });
+    assert.deepEqual(
+      adaptive.convergenceConfig({
+        enabled: true,
+        epsilon: undefined,
+        stability_window: undefined,
+      }),
+      {
+        enabled: true,
+        epsilon: 0.001,
+        stability_window: 3,
+      },
+    );
 
     const config = adaptive.defaultConfig();
     config.state = { backend: adaptive.inMemoryBackend() };

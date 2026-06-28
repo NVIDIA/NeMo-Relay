@@ -356,6 +356,28 @@ async fn process_run_invalidates_existing_plan_when_tool_cohort_topology_drifts(
                 "test".to_string(),
             ]
     }));
+
+    let cached_plan = hot_cache
+        .read()
+        .unwrap()
+        .plan
+        .clone()
+        .expect("hot cache should be refreshed with the drifted plan");
+    assert!(
+        !cached_plan
+            .parallel_groups
+            .iter()
+            .any(|group| group.group_id == "fanout:existing"),
+        "drifted cohort topology should invalidate stale cached plan groups"
+    );
+    assert!(cached_plan.parallel_groups.iter().any(|group| {
+        group.tool_names
+            == vec![
+                "compile".to_string(),
+                "lint".to_string(),
+                "test".to_string(),
+            ]
+    }));
 }
 
 #[tokio::test]

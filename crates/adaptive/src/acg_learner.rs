@@ -226,7 +226,10 @@ impl Learner for AcgLearner {
                 // the normal repair path. Requests whose span topology changed
                 // under the same learning key also reopen learning.
                 if let Some(cached) = existing_stability.as_ref().filter(|stability| {
-                    stability.converged
+                    self.convergence
+                        .as_ref()
+                        .is_some_and(|config| config.enabled)
+                        && stability.converged
                         && stability.total_observations as usize >= stability_window
                         && new_observations.iter().all(|observation| {
                             Self::prompt_topology_matches_stability(stability, observation)

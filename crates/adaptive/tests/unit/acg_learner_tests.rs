@@ -712,6 +712,43 @@ async fn acg_learner_reuses_converged_stability_without_loading_observations() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn acg_learner_does_not_reuse_converged_stability_when_convergence_disabled() {
+    let learner = AcgLearner::new_with_convergence(
+        "agent-a",
+        20,
+        StabilityThresholds::default(),
+        Some(ConvergenceConfig {
+            enabled: false,
+            epsilon: 0.001,
+            stability_window: 3,
+        }),
+    );
+    let request = sample_request("gpt-4o", "Stable system", "Stable prompt");
+    let learning_key = derive_acg_learning_key("agent-a", &request);
+    let seed_observation = build_prompt_ir(&request).unwrap();
+    let observations = vec![
+        seed_observation.clone(),
+        seed_observation.clone(),
+        seed_observation.clone(),
+    ];
+    let mut converged_stability = analyze_stability(&observations, &StabilityThresholds::default());
+    converged_stability.converged = true;
+
+    let backend = SeedObservationBackend::new(&learning_key, observations);
+    backend.seed_stability(&learning_key, converged_stability);
+
+    learner
+        .process_run(&sample_run(vec![request]), &backend, &empty_cache())
+        .await
+        .unwrap();
+
+    assert!(
+        backend.load_observation_count() > 0,
+        "disabled convergence must not reuse cached converged stability"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn acg_learner_reuses_converged_profile_when_suffix_topology_changes() {
     let learner = AcgLearner::new_with_convergence(
         "agent-a",

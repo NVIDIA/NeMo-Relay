@@ -41,9 +41,9 @@ fn sample_stability_result() -> StabilityAnalysisResult {
             observation_count: 4,
         }],
         stable_prefix_length: 1,
-        stable_prefix_fingerprint: None,
+        stable_prefix_fingerprint: Some("stable-prefix-sha256".to_string()),
         total_observations: 4,
-        converged: false,
+        converged: true,
     }
 }
 
@@ -195,7 +195,15 @@ fn hot_cache_serialization_keeps_acg_field_names_stable() {
     let decoded: HotCache = serde_json::from_value(encoded).unwrap();
     assert_eq!(decoded.acg_profiles["profile-a"].stable_prefix_length, 1);
     assert_eq!(
+        decoded.acg_profiles["profile-a"]
+            .stable_prefix_fingerprint
+            .as_deref(),
+        Some("stable-prefix-sha256")
+    );
+    assert!(decoded.acg_profiles["profile-a"].converged);
+    assert_eq!(
         decoded.acg_stability.as_ref().unwrap().total_observations,
         4
     );
+    assert!(decoded.acg_stability.as_ref().unwrap().converged);
 }
