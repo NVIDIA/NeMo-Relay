@@ -50,6 +50,12 @@ For the most deterministic verification path, place `plugins.toml` next to the
 gateway `config.toml` you want this run to use, then launch the wrapper with
 that explicit config root. For example:
 
+```text
+path/to/
+  config.toml
+  plugins.toml
+```
+
 ```bash
 nemo-relay --config path/to/config.toml run -- codex
 ```
@@ -60,7 +66,7 @@ the configuration being demonstrated here; `--config` only tells the gateway
 which config root to use for this run. If you prefer implicit discovery, place
 the file at `./.nemo-relay/plugins.toml` or another discovered location and
 ensure no higher-precedence plugin file overrides the exporter you want to
-verify. See [CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper
+verify. Refer to [CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper
 command shapes.
 
 ## What Success Looks Like
@@ -242,7 +248,8 @@ across files. A higher-precedence component with the same `kind` merges into the
 lower-precedence component. A component with a different `kind` is added to the
 effective configuration.
 
-The `pricing` component has one additional merge rule: when both lower and
+Most components follow the general merge rules above. The built-in `pricing`
+component has one additional merge rule: when both lower and
 higher-precedence layers define `components.config.sources`, the
 higher-precedence sources are placed before lower-precedence sources instead of
 replacing them. This lets a user or project file override one model while still
