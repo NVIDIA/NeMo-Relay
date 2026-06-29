@@ -74,7 +74,11 @@ pub(crate) fn run_request_intercepts_with_codec(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
-) -> Result<(LlmRequest, Option<Arc<AnnotatedLlmRequest>>)> {
+) -> Result<(
+    LlmRequest,
+    Option<Arc<AnnotatedLlmRequest>>,
+    Vec<crate::api::event::PendingMarkSpec>,
+)> {
     let original = request.clone();
     let annotated = match &codec {
         Some(codec) => Some(codec.decode(&request)?),
@@ -94,18 +98,19 @@ pub(crate) fn run_request_intercepts_with_codec(
         state.llm_request_intercept_entries(&scope_locals)
     };
 
-    let (intercepted_request, intercepted_annotated) =
+    let outcome =
         crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain(
             name, request, annotated, &entries,
         )?;
+    let pending_marks = outcome.pending_marks;
 
-    match (codec, intercepted_annotated) {
+    match (codec, outcome.annotated_request) {
         (Some(codec), Some(annotated)) => {
             let mut encoded = codec.encode(&annotated, &original)?;
-            encoded.headers = intercepted_request.headers;
-            Ok((encoded, Some(Arc::new(annotated))))
+            encoded.headers = outcome.request.headers;
+            Ok((encoded, Some(Arc::new(annotated)), pending_marks))
         }
-        _ => Ok((intercepted_request, None)),
+        _ => Ok((outcome.request, None, pending_marks)),
     }
 }
 

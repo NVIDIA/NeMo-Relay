@@ -5,9 +5,9 @@
 //! intercepts, and subscribers.
 
 use crate::api::runtime::{
-    LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmRequestInterceptWithMarksFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
@@ -547,14 +547,30 @@ global_guardrail_registry_api!(
     LlmConditionalFn
 );
 global_intercept_registry_api!(
-    /// Register a global LLM request intercept.
-    /// Request intercepts can rewrite or annotate the outgoing LLM request.
-    register_llm_request_intercept,
+    /// Register a global LLM request intercept that can schedule lifecycle marks.
+    register_llm_request_intercept_with_marks,
     /// Deregister a global LLM request intercept.
     deregister_llm_request_intercept,
     llm_request_intercepts,
-    LlmRequestInterceptFn
+    LlmRequestInterceptWithMarksFn
 );
+
+/// Register a global LLM request intercept without pending marks.
+pub fn register_llm_request_intercept(
+    name: &str,
+    priority: i32,
+    break_chain: bool,
+    callable: LlmRequestInterceptFn,
+) -> Result<()> {
+    register_llm_request_intercept_with_marks(
+        name,
+        priority,
+        break_chain,
+        std::sync::Arc::new(move |name, request, annotated| {
+            callable(name, request, annotated).map(Into::into)
+        }),
+    )
+}
 global_execution_registry_api!(
     /// Register a global LLM execution intercept.
     /// Execution intercepts can wrap or replace the non-streaming provider
@@ -653,15 +669,32 @@ scope_guardrail_registry_api!(
     LlmConditionalFn
 );
 scope_intercept_registry_api!(
-    /// Register a scope-local LLM request intercept.
-    /// Request intercepts can rewrite or annotate LLM requests inside the
-    /// owning scope.
-    scope_register_llm_request_intercept,
+    /// Register a scope-local LLM request intercept that can schedule lifecycle marks.
+    scope_register_llm_request_intercept_with_marks,
     /// Deregister a scope-local LLM request intercept.
     scope_deregister_llm_request_intercept,
     llm_request_intercepts,
-    LlmRequestInterceptFn
+    LlmRequestInterceptWithMarksFn
 );
+
+/// Register a scope-local LLM request intercept without pending marks.
+pub fn scope_register_llm_request_intercept(
+    scope_uuid: &uuid::Uuid,
+    name: &str,
+    priority: i32,
+    break_chain: bool,
+    callable: LlmRequestInterceptFn,
+) -> Result<()> {
+    scope_register_llm_request_intercept_with_marks(
+        scope_uuid,
+        name,
+        priority,
+        break_chain,
+        std::sync::Arc::new(move |name, request, annotated| {
+            callable(name, request, annotated).map(Into::into)
+        }),
+    )
+}
 scope_execution_registry_api!(
     /// Register a scope-local LLM execution intercept.
     /// Execution intercepts can wrap or replace the non-streaming provider

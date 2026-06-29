@@ -14,16 +14,16 @@ use std::sync::{
 
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmJsonStream, LlmNext,
-    LlmRequest, LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PluginContext, PluginRuntime, ScopeType,
-    ToolNext,
+    LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSubscriberCb,
+    NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb,
+    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
+    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -4382,6 +4382,70 @@ fn typed_llm_request_intercept_round_trips_request_and_annotations() {
     );
     unsafe {
         (host.string_free)(stale_annotated);
+        (host.string_free)(name);
+        (host.string_free)(request);
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_llm_request_intercept_with_marks_uses_tagged_annotation_envelope() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_llm_request_intercept_with_marks(
+        "llm",
+        23,
+        false,
+        |_name, mut request, annotated| {
+            request.content["rewritten"] = json!(true);
+            Ok(
+                LlmRequestInterceptOutcome::new(request, annotated).with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("plugin.request.rewritten")
+                        .data(json!({ "saved_tokens": 7 }))
+                        .build(),
+                ),
+            )
+        },
+    )
+    .unwrap();
+
+    let registration = take_llm_request_intercept_registration();
+    assert_eq!(registration.priority, 23);
+    assert!(!registration.break_chain);
+    let name = host_string(&host, "llm");
+    let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
+    let mut out_request = ptr::null_mut();
+    let mut out_annotated = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            name,
+            request,
+            ptr::null(),
+            &mut out_request,
+            &mut out_annotated,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    let out_request = read_json_and_free(&host, out_request);
+    assert_eq!(out_request["content"]["rewritten"], true);
+    assert!(
+        out_request
+            .pointer("/content/__nemo_relay_llm_intercept_outcome")
+            .is_none()
+    );
+    let metadata = read_json_and_free(&host, out_annotated);
+    assert_eq!(metadata["__nemo_relay_llm_intercept_outcome"], true);
+    assert_eq!(metadata["annotated_request"], Json::Null);
+    assert_eq!(
+        metadata["pending_marks"][0]["name"],
+        "plugin.request.rewritten"
+    );
+    assert_eq!(metadata["pending_marks"][0]["data"]["saved_tokens"], 7);
+
+    unsafe {
         (host.string_free)(name);
         (host.string_free)(request);
         registration.free();

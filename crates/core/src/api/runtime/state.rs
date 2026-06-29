@@ -20,10 +20,10 @@ use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::callbacks::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmRequestInterceptWithMarksFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs,
+    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
@@ -63,7 +63,7 @@ pub struct NemoRelayContextState {
     /// Global LLM guardrails that can reject execution before the provider callback runs.
     pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// Global LLM request intercepts that can rewrite or annotate requests.
-    pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptWithMarksFn>>,
     /// Global non-streaming LLM execution intercepts that wrap callback execution.
     pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Global streaming LLM execution intercepts that wrap stream-producing callbacks.
@@ -1011,8 +1011,8 @@ impl NemoRelayContextState {
     /// are released.
     pub(crate) fn llm_request_intercept_entries(
         &self,
-        scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
-    ) -> Vec<Intercept<LlmRequestInterceptFn>> {
+        scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptWithMarksFn>>],
+    ) -> Vec<Intercept<LlmRequestInterceptWithMarksFn>> {
         merge_intercept_entries(&self.llm_request_intercepts, scope_locals)
             .into_iter()
             .cloned()
@@ -1041,20 +1041,25 @@ impl NemoRelayContextState {
         name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
-        entries: &[Intercept<LlmRequestInterceptFn>],
-    ) -> crate::error::Result<(LlmRequest, Option<AnnotatedLlmRequest>)> {
+        entries: &[Intercept<LlmRequestInterceptWithMarksFn>],
+    ) -> crate::error::Result<crate::api::llm::LlmRequestInterceptOutcome> {
         let mut request_value = request;
         let mut annotated_value = annotated;
+        let mut pending_marks = Vec::new();
         for entry in entries {
-            let (new_request, new_annotated) =
-                (entry.payload.callable)(name, request_value, annotated_value)?;
-            request_value = new_request;
-            annotated_value = new_annotated;
+            let outcome = (entry.payload.callable)(name, request_value, annotated_value)?;
+            request_value = outcome.request;
+            annotated_value = outcome.annotated_request;
+            pending_marks.extend(outcome.pending_marks);
             if entry.payload.break_chain {
                 break;
             }
         }
-        Ok((request_value, annotated_value))
+        Ok(crate::api::llm::LlmRequestInterceptOutcome {
+            request: request_value,
+            annotated_request: annotated_value,
+            pending_marks,
+        })
     }
 
     /// Build the composed non-streaming LLM execution continuation chain.

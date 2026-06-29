@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
+    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptWithMarksFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -41,7 +41,7 @@ pub(crate) struct ScopeLocalRegistries {
     /// LLM guardrails that can reject execution before the provider callback runs.
     pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// LLM request intercepts that can rewrite or annotate requests.
-    pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptWithMarksFn>>,
     /// Non-streaming LLM execution intercepts that wrap callback execution.
     pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Streaming LLM execution intercepts that wrap stream-producing callbacks.

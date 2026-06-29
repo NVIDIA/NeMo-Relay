@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio_stream::Stream;
 
 use crate::api::event::Event;
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::Result;
 use crate::json::Json;
@@ -174,6 +174,16 @@ pub type LlmRequestInterceptFn = Arc<
             LlmRequest,
             Option<AnnotatedLlmRequest>,
         ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+        + Send
+        + Sync,
+>;
+/// Rewrite or annotate an LLM request and schedule marks under its future scope.
+///
+/// This callback has the same inputs as [`LlmRequestInterceptFn`] but returns a
+/// structured outcome whose pending marks are emitted after the LLM-start
+/// event and before provider execution.
+pub type LlmRequestInterceptWithMarksFn = Arc<
+    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;

@@ -161,20 +161,22 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     )
     .unwrap();
 
-    let (request_without_codec, annotated_without_codec) = run_request_intercepts_with_codec(
-        "shared",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"prompt": "hello"}),
-        },
-        None,
-    )
-    .unwrap();
+    let (request_without_codec, annotated_without_codec, pending_marks_without_codec) =
+        run_request_intercepts_with_codec(
+            "shared",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "hello"}),
+            },
+            None,
+        )
+        .unwrap();
     assert_eq!(
         request_without_codec.headers.get("x-no-codec"),
         Some(&json!(true))
     );
     assert!(annotated_without_codec.is_none());
+    assert!(pending_marks_without_codec.is_empty());
     deregister_llm_request_intercept("shared-none").unwrap();
 
     register_llm_request_intercept(
@@ -191,15 +193,16 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     .unwrap();
 
     let codec: Arc<dyn LlmCodec> = Arc::new(SharedTestCodec);
-    let (request_with_codec, annotated_with_codec) = run_request_intercepts_with_codec(
-        "shared",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"prompt": "hello"}),
-        },
-        Some(codec),
-    )
-    .unwrap();
+    let (request_with_codec, annotated_with_codec, pending_marks_with_codec) =
+        run_request_intercepts_with_codec(
+            "shared",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "hello"}),
+            },
+            Some(codec),
+        )
+        .unwrap();
 
     assert_eq!(
         request_with_codec.headers.get("x-codec"),
@@ -215,6 +218,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
             .and_then(|annotated| annotated.model.as_deref()),
         Some("intercepted-model")
     );
+    assert!(pending_marks_with_codec.is_empty());
 
     deregister_llm_request_intercept("shared-codec").unwrap();
     reset_global();

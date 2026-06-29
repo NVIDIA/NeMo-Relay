@@ -14,12 +14,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::event::{
+    CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
-    llm_stream_call_execute,
+    llm_request_intercepts_with_marks, llm_stream_call_execute,
 };
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
@@ -28,13 +30,14 @@ use nemo_relay::api::registry::{
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
     deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
     register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_request_intercept,
-    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
-    scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
-    scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
-    scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
+    register_llm_request_intercept_with_marks, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail, scope_register_llm_conditional_execution_guardrail,
+    scope_register_llm_execution_intercept, scope_register_llm_request_intercept,
+    scope_register_llm_sanitize_request_guardrail, scope_register_llm_sanitize_response_guardrail,
+    scope_register_llm_stream_execution_intercept,
     scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
@@ -2586,6 +2589,195 @@ async fn test_llm_request_intercept_transforms() {
 
     // Cleanup
     deregister_llm_request_intercept("llm_req_i").unwrap();
+}
+
+#[test]
+fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    for (name, priority, break_chain, mark_name) in [
+        ("pending_first", 1, false, "first"),
+        ("pending_break", 2, true, "second"),
+        ("pending_skipped", 3, false, "skipped"),
+    ] {
+        register_llm_request_intercept_with_marks(
+            name,
+            priority,
+            break_chain,
+            Arc::new(move |_name, request, annotated| {
+                Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_pending_mark(PendingMarkSpec::builder().name(mark_name).build()))
+            }),
+        )
+        .unwrap();
+    }
+
+    let outcome = llm_request_intercepts_with_marks(
+        "llm",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome
+            .pending_marks
+            .iter()
+            .map(|mark| mark.name.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(outcome.request.content["prompt"], "hello");
+
+    for name in ["pending_first", "pending_break", "pending_skipped"] {
+        deregister_llm_request_intercept(name).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_managed_llm_emits_pending_marks_under_started_scope() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "pending_mark_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    register_llm_request_intercept_with_marks(
+        "pending_managed",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Ok(
+                LlmRequestInterceptOutcome::new(request, annotated).with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("request.optimized")
+                        .category(EventCategory::custom())
+                        .category_profile(
+                            CategoryProfile::builder()
+                                .subtype("optimizer.saved_tokens")
+                                .build(),
+                        )
+                        .data(json!({"saved_tokens": 12}))
+                        .build(),
+                ),
+            )
+        }),
+    )
+    .unwrap();
+
+    let provider_request = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured_request = provider_request.clone();
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("pending-managed-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(move |request| {
+                *captured_request.lock().unwrap() = Some(request);
+                Box::pin(async { Ok(json!({"response": "done"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let provider_request = provider_request.lock().unwrap().clone().unwrap();
+    assert!(
+        serde_json::to_value(provider_request)
+            .unwrap()
+            .get("__nemo_relay_llm_intercept_outcome")
+            .is_none()
+    );
+
+    let captured = captured_events_snapshot(&events);
+    let start = captured
+        .iter()
+        .find(|event| {
+            event.name() == "pending-managed-llm"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    let mark = captured
+        .iter()
+        .find(|event| event.name() == "request.optimized")
+        .unwrap();
+    assert_eq!(mark.parent_uuid(), Some(start.uuid()));
+    assert!(mark.timestamp() > start.timestamp());
+    assert_eq!(mark.data().unwrap()["saved_tokens"], 12);
+
+    deregister_llm_request_intercept("pending_managed").unwrap();
+    deregister_subscriber("pending_mark_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_failed_request_intercept_does_not_emit_pending_marks_or_start_scope() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "failed_pending_mark_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_request_intercept_with_marks(
+        "pending_before_failure",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()))
+        }),
+    )
+    .unwrap();
+    register_llm_request_intercept_with_marks(
+        "pending_failure",
+        2,
+        false,
+        Arc::new(|_name, _request, _annotated| {
+            Err(FlowError::Internal("request intercept failed".into()))
+        }),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = provider_called.clone();
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("failed-pending-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(move |_request| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({"response": "unexpected"})) })
+            }))
+            .build(),
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert!(!provider_called.load(Ordering::SeqCst));
+    assert!(captured_events_snapshot(&events).is_empty());
+
+    deregister_llm_request_intercept("pending_before_failure").unwrap();
+    deregister_llm_request_intercept("pending_failure").unwrap();
+    deregister_subscriber("failed_pending_mark_observer").unwrap();
 }
 
 /// LLM execution intercept middleware chain with next().

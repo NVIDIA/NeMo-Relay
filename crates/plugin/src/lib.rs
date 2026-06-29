@@ -16,8 +16,10 @@ use std::ptr;
 use std::sync::Mutex;
 
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::{Event, ScopeCategory};
-pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
+pub use nemo_relay_types::api::event::{
+    CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+};
+pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 pub use nemo_relay_types::api::tool::ToolAttributes;
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
@@ -1490,6 +1492,39 @@ impl<'a> PluginContext<'a> {
         finish_typed_registration::<F>(self.host, status, user_data, "llm request intercept")
     }
 
+    /// Registers a typed LLM request intercept that can schedule lifecycle marks.
+    pub fn register_llm_request_intercept_with_marks<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        break_chain: bool,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let user_data = typed_callback_user_data(self.host, callback);
+        let status = unsafe {
+            self.register_llm_request_intercept_raw(
+                name,
+                priority,
+                break_chain,
+                typed_llm_request_intercept_with_marks_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
+            )
+        };
+        finish_typed_registration::<F>(
+            self.host,
+            status,
+            user_data,
+            "LLM request intercept with marks",
+        )
+    }
+
     /// Registers a typed LLM execution intercept.
     pub fn register_llm_execution_intercept<F>(
         &mut self,
@@ -2186,6 +2221,74 @@ where
         Ok(Ok(status)) => status,
         Ok(Err(status)) => status,
         Err(_) => callback_panic(&state.host, "LLM request intercept callback"),
+    }
+}
+
+#[derive(Serialize)]
+struct NativeLlmRequestInterceptOutcome<'a> {
+    #[serde(rename = "__nemo_relay_llm_intercept_outcome")]
+    marked_outcome: bool,
+    annotated_request: &'a Option<AnnotatedLlmRequest>,
+    pending_marks: &'a [PendingMarkSpec],
+}
+
+unsafe extern "C" fn typed_llm_request_intercept_with_marks_trampoline<F>(
+    user_data: *mut c_void,
+    name: *const NemoRelayNativeString,
+    request_json: *const NemoRelayNativeString,
+    annotated_json: *const NemoRelayNativeString,
+    out_request_json: *mut *mut NemoRelayNativeString,
+    out_annotated_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus
+where
+    F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
+        + Send
+        + Sync
+        + 'static,
+{
+    if user_data.is_null() || out_request_json.is_null() || out_annotated_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe {
+        *out_request_json = ptr::null_mut();
+        *out_annotated_json = ptr::null_mut();
+    }
+    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let name = read_required_host_string(&state.host, name, "LLM name")?;
+        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
+        let annotated: Option<AnnotatedLlmRequest> =
+            read_optional_json_value(&state.host, annotated_json, "annotated LLM request")?;
+        match (state.callback)(&name, request, annotated) {
+            Ok(outcome) => {
+                let Some(request) = HostString::from_json(&state.host, &outcome.request) else {
+                    set_last_error(&state.host, "failed to allocate LLM request output");
+                    return Ok(NemoRelayStatus::Internal);
+                };
+                let metadata = NativeLlmRequestInterceptOutcome {
+                    marked_outcome: true,
+                    annotated_request: &outcome.annotated_request,
+                    pending_marks: &outcome.pending_marks,
+                };
+                let Some(metadata) = HostString::from_json(&state.host, &metadata) else {
+                    set_last_error(&state.host, "failed to allocate marked LLM outcome");
+                    return Ok(NemoRelayStatus::Internal);
+                };
+                unsafe {
+                    *out_request_json = request.ptr;
+                    *out_annotated_json = metadata.ptr;
+                }
+                std::mem::forget(request);
+                std::mem::forget(metadata);
+                Ok(NemoRelayStatus::Ok)
+            }
+            Err(message) => Ok(callback_error(&state.host, message)),
+        }
+    }));
+    match result {
+        Ok(Ok(status)) => status,
+        Ok(Err(status)) => status,
+        Err(_) => callback_panic(&state.host, "LLM request intercept with marks callback"),
     }
 }
 

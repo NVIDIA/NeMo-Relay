@@ -3,12 +3,13 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -28,7 +29,7 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 
-pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
+pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 
 /// Runtime-owned handle identifying an active or completed LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -295,6 +296,35 @@ fn emit_llm_start(
         state.build_llm_start_event(handle, Some(input), annotated_request)
     };
     NemoRelayContextState::emit_event(&event, &subscribers);
+    Ok(())
+}
+
+fn emit_pending_request_marks(handle: &LlmHandle, marks: Vec<PendingMarkSpec>) -> Result<()> {
+    if marks.is_empty() {
+        return Ok(());
+    }
+    ensure_runtime_owner()?;
+    let subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    for (index, mark) in marks.into_iter().enumerate() {
+        let timestamp = handle.started_at
+            + TimeDelta::microseconds(i64::try_from(index).unwrap_or_default() + 1);
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name(mark.name)
+                .parent_uuid(handle.uuid)
+                .timestamp(timestamp)
+                .data_opt(mark.data)
+                .metadata_opt(mark.metadata)
+                .build(),
+            mark.category,
+            mark.category_profile,
+        ));
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     Ok(())
 }
 
@@ -587,7 +617,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
-    let (intercepted_request, annotated_request) =
+    let (intercepted_request, annotated_request, pending_marks) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
     let handle = create_llm_handle(
@@ -606,6 +636,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         annotated_request.clone(),
         request_codec.as_deref(),
     )?;
+    emit_pending_request_marks(&handle, pending_marks)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -743,7 +774,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
-    let (intercepted_request, annotated_request) =
+    let (intercepted_request, annotated_request, pending_marks) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
     let handle = create_llm_handle(
@@ -762,6 +793,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         annotated_request,
         request_codec.as_deref(),
     )?;
+    emit_pending_request_marks(&handle, pending_marks)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -818,6 +850,17 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 /// Conditional guardrails, codecs, and execution intercepts are not run by
 /// this helper.
 pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequest> {
+    Ok(llm_request_intercepts_with_marks(name, request)?.request)
+}
+
+/// Run the LLM request-intercept chain and return pending lifecycle marks.
+///
+/// This helper does not emit the returned marks because it does not own an LLM
+/// lifecycle. Callers must attach them to the lifecycle they own.
+pub fn llm_request_intercepts_with_marks(
+    name: &str,
+    request: LlmRequest,
+) -> Result<LlmRequestInterceptOutcome> {
     ensure_runtime_owner()?;
     let entries = {
         let scope_stack = current_scope_stack();
@@ -830,10 +873,7 @@ pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequ
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_request_intercept_entries(&scope_locals)
     };
-    let (request, _) = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
-        name, request, None, &entries,
-    )?;
-    Ok(request)
+    NemoRelayContextState::llm_request_intercepts_snapshot_chain(name, request, None, &entries)
 }
 
 /// Run only the LLM conditional-execution guardrail chain.

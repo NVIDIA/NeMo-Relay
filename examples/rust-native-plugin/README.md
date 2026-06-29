@@ -70,9 +70,18 @@ The example registers the following runtime behavior:
 - Request and execution intercepts for tools that mutate JSON payloads and call
   continuations.
 - LLM sanitize request/response guardrails.
-- LLM request, execution, and stream execution intercepts.
+- An LLM request intercept that rewrites the request and schedules a mark. Relay
+  emits that mark after the LLM start event with the LLM scope as its parent.
+- LLM execution and stream execution intercepts.
 - Runtime mark and scope events.
 - A plugin-owned isolated scope stack for non-correlated visibility.
 
 Native plugins are not sandboxed. They run in the Relay process and must not
 unwind across ABI callbacks.
+
+Request intercepts do not own an LLM lifecycle because they run before Relay
+creates the LLM scope. Use `register_llm_request_intercept_with_marks` to return
+`PendingMarkSpec` values. Relay emits them in interceptor order after the LLM
+start event and before provider execution. The legacy
+`register_llm_request_intercept` API remains available for intercepts that only
+rewrite requests.

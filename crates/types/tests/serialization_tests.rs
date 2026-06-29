@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use nemo_relay_types::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, ScopeCategory, ScopeEvent,
+    BaseEvent, CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings,
 };
-use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};
@@ -77,4 +77,37 @@ fn event_round_trips_with_annotated_llm_profiles() {
             .and_then(|response| response.id.as_deref()),
         Some("resp_1")
     );
+}
+
+#[test]
+fn llm_request_intercept_outcome_round_trips_pending_marks() {
+    let outcome = LlmRequestInterceptOutcome::new(
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({ "prompt": "hello" }),
+        },
+        None,
+    )
+    .with_pending_mark(
+        PendingMarkSpec::builder()
+            .name("request.optimized")
+            .category(EventCategory::custom())
+            .category_profile(
+                CategoryProfile::builder()
+                    .subtype("optimizer.saved_tokens")
+                    .build(),
+            )
+            .data(json!({ "saved_tokens": 12 }))
+            .metadata(json!({ "source": "test" }))
+            .build(),
+    );
+
+    let encoded = serde_json::to_value(&outcome).expect("outcome should serialize");
+    assert_eq!(encoded["pending_marks"][0]["name"], "request.optimized");
+    assert_eq!(encoded["pending_marks"][0]["category"], "custom");
+    assert!(encoded.get("annotated_request").is_none());
+
+    let decoded: LlmRequestInterceptOutcome =
+        serde_json::from_value(encoded).expect("outcome should deserialize");
+    assert_eq!(decoded, outcome);
 }

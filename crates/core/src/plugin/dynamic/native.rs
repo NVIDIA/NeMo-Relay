@@ -26,18 +26,19 @@ use nemo_relay_plugin::{
     NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
+use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 
-use crate::api::event::Event;
-use crate::api::llm::LlmRequest;
+use crate::api::event::{Event, PendingMarkSpec};
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    LlmRequestInterceptWithMarksFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -1332,7 +1333,7 @@ unsafe extern "C" fn native_plugin_context_register_llm_request_intercept(
         Ok(name) => name,
         Err(status) => return status,
     };
-    match ctx.register_llm_request_intercept(
+    match ctx.register_llm_request_intercept_with_marks(
         &name,
         priority,
         break_chain,
@@ -1690,7 +1691,7 @@ fn wrap_llm_request_intercept_fn(
     cb: NemoRelayNativeLlmRequestInterceptCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
-) -> LlmRequestInterceptFn {
+) -> LlmRequestInterceptWithMarksFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, request, annotated| {
         clear_native_last_error();
@@ -1756,15 +1757,40 @@ fn wrap_llm_request_intercept_fn(
         let annotated_json = annotated_json?;
         let request: LlmRequest = serde_json::from_value(request_json)
             .map_err(|err| FlowError::Internal(format!("invalid LLM request JSON: {err}")))?;
-        let annotated = annotated_json
-            .map(|annotated_json| {
-                serde_json::from_value::<AnnotatedLlmRequest>(annotated_json).map_err(|err| {
-                    FlowError::Internal(format!("invalid annotated request JSON: {err}"))
-                })
-            })
-            .transpose()?;
-        Ok((request, annotated))
+        let (annotated_request, pending_marks) = match annotated_json {
+            Some(value)
+                if value.get(nemo_relay_types::api::llm::NATIVE_LLM_INTERCEPT_OUTCOME_FIELD)
+                    == Some(&Json::Bool(true)) =>
+            {
+                let metadata: NativeLlmRequestInterceptOutcome = serde_json::from_value(value)
+                    .map_err(|err| {
+                        FlowError::Internal(format!("invalid marked LLM outcome JSON: {err}"))
+                    })?;
+                (metadata.annotated_request, metadata.pending_marks)
+            }
+            Some(value) => {
+                let annotated =
+                    serde_json::from_value::<AnnotatedLlmRequest>(value).map_err(|err| {
+                        FlowError::Internal(format!("invalid annotated request JSON: {err}"))
+                    })?;
+                (Some(annotated), Vec::new())
+            }
+            None => (None, Vec::new()),
+        };
+        Ok(LlmRequestInterceptOutcome {
+            request,
+            annotated_request,
+            pending_marks,
+        })
     })
+}
+
+#[derive(Deserialize)]
+struct NativeLlmRequestInterceptOutcome {
+    #[serde(rename = "__nemo_relay_llm_intercept_outcome")]
+    _marked_outcome: bool,
+    annotated_request: Option<AnnotatedLlmRequest>,
+    pending_marks: Vec<PendingMarkSpec>,
 }
 
 fn wrap_llm_execution_fn(
