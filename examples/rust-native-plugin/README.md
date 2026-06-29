@@ -22,9 +22,9 @@ Run this command from the example directory:
 cargo build
 ```
 
-Before you register the plugin, replace `<platform-library-file>` in
-`relay-plugin.toml` with the file name that `cargo build` creates for your
-platform:
+Before you register the plugin, copy `relay-plugin.toml` to a local manifest and
+replace both occurrences of `<platform-library-file>` with the file name that
+`cargo build` creates for your platform:
 
 | Platform | Library path |
 |---|---|
@@ -32,12 +32,26 @@ platform:
 | Linux | `target/debug/libnemo_relay_rust_native_plugin_example.so` |
 | Windows | `target/debug/nemo_relay_rust_native_plugin_example.dll` |
 
+The copied manifest must use the same relative path for `source.artifact` and
+`load.library`. Calculate the library's SHA-256 digest and replace
+`<artifact-sha256>` with the lowercase hexadecimal value:
+
+| Platform | Digest command |
+|---|---|
+| macOS | `shasum -a 256 <library-path>` |
+| Linux | `sha256sum <library-path>` |
+| Windows PowerShell | `(Get-FileHash <library-path> -Algorithm SHA256).Hash.ToLower()` |
+
+Keep the `sha256:` prefix in the manifest. For example, a digest of `abc123`
+is written as `sha256:abc123`.
+
 ## Register With Relay
 
-After updating `load.library`, run these commands from the repository root:
+After materializing the library path and digest, run these commands from the
+repository root using the copied manifest path:
 
 ```bash
-nemo-relay plugins add ./examples/rust-native-plugin/relay-plugin.toml
+nemo-relay plugins add ./examples/rust-native-plugin/relay-plugin.local.toml
 nemo-relay plugins enable examples.rust_native_policy
 ```
 
@@ -45,7 +59,7 @@ You can also reference the manifest manually from `plugins.toml`:
 
 ```toml
 [[plugins.dynamic]]
-manifest = "./examples/rust-native-plugin/relay-plugin.toml"
+manifest = "./examples/rust-native-plugin/relay-plugin.local.toml"
 
 [plugins.dynamic.config]
 tag = "demo"
@@ -57,7 +71,7 @@ emit_isolated_scope = true
 Start the gateway normally after the dynamic record is enabled:
 
 ```bash
-nemo-relay gateway
+nemo-relay --bind 127.0.0.1:4040
 ```
 
 ## What the Example Registers
