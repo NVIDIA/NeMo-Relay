@@ -258,7 +258,8 @@ Tables inside component config merge recursively.
 ## Configuration Layering
 
 Plugin settings come from files and code. Files form the base layer, and code
-sits on top. When the two conflict, code wins. Layering works as follows:
+sits on top. When the two conflict, code takes precedence. Layering works as
+follows:
 
 1. Discover and merge the `plugins.toml` files from lowest to highest precedence
    (system → project → user), using the [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
