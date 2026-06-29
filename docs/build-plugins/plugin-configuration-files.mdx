@@ -103,9 +103,7 @@ without process-level plugin activation.
 
 ## Editing Files
 
-Use the interactive editor for the built-in Observability, Adaptive, NeMo
-Guardrails, and PII Redaction plugins. The editor also supports dynamic plugins
-that are declared in the selected file:
+Use the interactive editor for Observability and Adaptive plugin configuration:
 
 ```bash
 nemo-relay plugins edit
@@ -145,8 +143,6 @@ The editor menus support these controls:
 | Key | Behavior |
 |---|---|
 | Arrow keys, `j`, `k` | Move through menu items. |
-| Page Up, Page Down | Move by one visible page. |
-| Home, End | Move to the first or last item. |
 | `Enter`, `Space` | Select or toggle the highlighted item. |
 | `Backspace`, `Delete` | Clear the highlighted optional field. |
 | `r` | Reset the highlighted field or section to its default. |
@@ -155,65 +151,8 @@ The editor menus support these controls:
 | `?` | Show help. |
 | `q`, `Esc` | Go back or cancel without saving. |
 
-The top-level menu contains one entry for each plugin. Select an entry to edit
-that plugin's fields. Text and JSON value prompts use normal line editing. Use
-the surrounding field menu to reset or clear a value. Preview and save remain
-available from the top-level menu.
-
-### Dynamic Plugin Configuration Schemas
-
-A dynamic plugin can expose structured editor fields by declaring the
-`config_schema` capability in `relay-plugin.toml` and referencing a local JSON
-Schema file:
-
-```toml
-[capabilities]
-items = ["plugin_native", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-```
-
-Declare the capability and the `[config_schema]` section together. A manifest
-that declares only one of them is invalid. The `plugin_native` capability in the
-example applies to a native plugin; worker manifests continue to declare
-`plugin_worker` alongside `config_schema`.
-
-The editor resolves a relative schema path from the directory that contains
-`relay-plugin.toml`. It reads the schema without loading a native library or
-starting a worker. `nemo-relay plugins add`, `nemo-relay plugins validate`, and
-`nemo-relay plugins edit` reject a declared schema that is missing or invalid.
-
-Declare `$schema` as JSON Schema Draft 7 or Draft 2020-12, and describe an
-object at the schema root. Only same-document fragment references beginning
-with `#`, such as `#/$defs/auth`, are supported. Relative files, network URLs,
-and file URLs in `$ref` are not supported. Draft 2020-12 dynamic references
-and anchors (`$dynamicRef` and `$dynamicAnchor`) are not supported. The editor provides structured
-controls for booleans, strings, numbers, string enums, nested objects, and
-string-valued maps. It uses a raw JSON control for arrays, unions, and other
-complex values, then validates the result against the complete schema before
-saving.
-
-Use JSON Schema keywords and the NeMo Relay editor extension to improve the
-editor:
-
-- `title` supplies the field label.
-- `description` supplies field help.
-- `default` supplies the reset value.
-- `required` identifies fields that must be configured.
-- `writeOnly: true` masks a string value in menus and previews and uses hidden
-  terminal input for replacements. An existing value remains unchanged unless
-  you explicitly replace or clear it.
-- `x-nemo-relay-order` optionally lists properties in editor order. Properties
-  that are not listed follow in alphabetical order.
-
-Dynamic plugins without `config_schema` remain available through a raw JSON
-object editor. That fallback has no schema validation or secret-field metadata.
-Dynamic enablement remains separate: use `nemo-relay plugins enable` and
-`nemo-relay plugins disable` to change lifecycle state.
-
-Static schema validation complements runtime plugin validation. Runtime plugin
-validation remains authoritative when the plugin is activated.
+Text and JSON value prompts use normal line editing. Use the surrounding field
+menu to reset, clear, preview, or save.
 
 ## Precedence And Merge Behavior
 

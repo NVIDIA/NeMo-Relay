@@ -44,7 +44,6 @@ A plugin needs a stable shape before operators can activate it from config:
 | Validation hook | Operators need diagnostics before runtime behavior changes. |
 | Registration hook | Runtime behavior should be installed through `PluginContext` for name qualification and rollback. |
 | Runtime ownership | The plugin should clearly own subscribers, middleware, adaptive behavior, or a small bundle of related surfaces. |
-| Optional configuration schema | Dynamic plugins can reference JSON Schema from `relay-plugin.toml` to provide structured fields in `nemo-relay plugins edit`. |
 
 Keep runtime objects out of config. Provider clients, callbacks, file handles, caches, and credentials should be created inside plugin code or resolved from safe references during registration.
 
@@ -133,12 +132,6 @@ The top-level config document has `version`, `components`, and `policy`. Each co
 ```
 
 Use this document as the boundary between operator intent and plugin implementation. Keep business logic in the plugin code, not in the config parser.
-
-Dynamic plugins can also expose this component-local shape to the CLI editor.
-Declare the `config_schema` capability in `relay-plugin.toml` and reference a
-local Draft 7 or Draft 2020-12 JSON Schema file. Refer to [Plugin Configuration
-Files](/build-plugins/plugin-configuration-files#dynamic-plugin-configuration-schemas)
-for the manifest shape and supported editor controls.
 
 ## Design Checklist
 

@@ -111,11 +111,6 @@ plugin config with:
 nemo-relay plugins edit
 ```
 
-The top-level editor menu contains one entry per supported built-in, followed by
-the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
-plugins with a manifest-declared JSON Schema provide structured field controls.
-Other dynamic plugins use a raw JSON object editor.
-
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or
 `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Project config lives at
