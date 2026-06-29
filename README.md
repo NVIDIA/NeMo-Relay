@@ -71,9 +71,10 @@ nemo-relay plugins edit --project
 ```
 
 The editor creates or updates the nearest project plugin file at
-`.nemo-relay/plugins.toml`. In the menu:
+`.nemo-relay/plugins.toml`. In the top-level menu, select **Observability**,
+then configure these sections:
 
-1. Enable the `Observability` component.
+1. Toggle the Observability component on.
 2. Open `ATOF`, toggle the section `[on]`
 
    Optionally set:
@@ -85,7 +86,7 @@ The editor creates or updates the nearest project plugin file at
    Optionally set:
    - `output_directory` to `.nemo-relay/atif`
    - `filename_template` to `trajectory-{session_id}.json`
-4. Press `p` to preview the generated TOML.
+4. Return to the top-level menu and press `p` to preview the generated TOML.
 5. Press `s` to save.
 
 > [!NOTE]
