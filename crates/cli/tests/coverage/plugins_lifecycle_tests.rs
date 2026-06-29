@@ -406,6 +406,52 @@ fn tracked_native_plugin_example_satisfies_default_trust_policy() {
 }
 
 #[test]
+fn tracked_native_plugin_example_rejects_tampered_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("native-example");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    materialize_native_example_manifest(&plugin_dir);
+    std::fs::write(
+        plugin_dir
+            .join("target")
+            .join("debug")
+            .join("libnemo_relay_rust_native_plugin_example.so"),
+        b"tampered native plugin example fixture",
+    )
+    .unwrap();
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err();
+
+    match error {
+        CliError::PluginLifecycle {
+            kind: PluginLifecycleFailureKind::Refused,
+            code: Some("integrity_failed"),
+            message,
+            ..
+        } => assert!(message.contains("failed integrity verification")),
+        other => panic!("unexpected integrity add error: {other}"),
+    }
+    assert!(
+        resolve_plugins_config(None)
+            .unwrap()
+            .dynamic_plugins
+            .is_empty()
+    );
+}
+
+#[test]
 fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
