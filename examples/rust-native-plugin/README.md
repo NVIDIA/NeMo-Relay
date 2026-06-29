@@ -71,7 +71,7 @@ emit_isolated_scope = true
 Start the gateway normally after the dynamic record is enabled:
 
 ```bash
-nemo-relay gateway
+nemo-relay --bind 127.0.0.1:4040
 ```
 
 ## What the Example Registers
