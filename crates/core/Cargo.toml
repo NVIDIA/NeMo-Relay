@@ -30,7 +30,7 @@ atof-streaming = [
     "tokio/rt-multi-thread",
     "tokio/time",
 ]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "nemo-relay-types/schema"]
 guardrails-remote = [
     "dep:reqwest",
     "dep:rustls",
@@ -73,8 +73,24 @@ openinference = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
 ]
+worker-grpc = [
+    "dep:nemo-relay-worker-proto",
+    "dep:hyper-util",
+    "dep:tower",
+    "dep:tonic",
+    "tokio-stream/net",
+    "tonic/codegen",
+    "tonic/router",
+    "tonic/transport",
+    "tokio/io-util",
+    "tokio/net",
+    "tokio/process",
+    "tokio/rt-multi-thread",
+]
 
 [dependencies]
+nemo-relay-types.workspace = true
+nemo-relay-worker-proto = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -116,6 +132,15 @@ name = "context_isolation_integration"
 path = "tests/integration/context_isolation_tests.rs"
 
 [[test]]
+name = "native_plugin_integration"
+path = "tests/integration/native_plugin_tests.rs"
+
+[[test]]
+name = "worker_plugin_integration"
+path = "tests/integration/worker_plugin_tests.rs"
+required-features = ["worker-grpc"]
+
+[[test]]
 name = "middleware_integration"
 path = "tests/integration/middleware_tests.rs"
 
@@ -148,9 +173,15 @@ required-features = ["object-store"]
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nemo-relay-plugin.workspace = true
+libloading = "0.8"
+semver = "1"
+sha2 = "0.11"
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "stream"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tonic = { version = "0.14.1", default-features = false, optional = true }
 object_store = { version = "0.13", default-features = false, features = ["aws"], optional = true }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }

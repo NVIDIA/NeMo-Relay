@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_native_policy"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[load]
+# Replace `<platform-library-file>` with the file built by `cargo build` for
+# your platform. Refer to README.md for the expected debug artifact names.
+library = "target/debug/<platform-library-file>"
+symbol = "nemo_relay_register_plugin"

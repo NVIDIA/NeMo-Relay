@@ -10,9 +10,9 @@ use serde_json::{Map, json};
 use uuid::{Uuid, Version};
 
 use crate::api::event::{
-    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, MarkEvent, ScopeCategory,
-    ScopeEvent, attributes_from_handle, llm_attributes_to_strings, scope_attributes_to_strings,
-    tool_attributes_to_strings,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventNormalizationExt, MarkEvent,
+    ScopeCategory, ScopeEvent, attributes_from_handle, llm_attributes_to_strings,
+    scope_attributes_to_strings, tool_attributes_to_strings,
 };
 use crate::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeHandle, ScopeType};

@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-rust-native-plugin-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Example Rust native dynamic plugin for NeMo Relay"
+
+[workspace]
+
+[lib]
+name = "nemo_relay_rust_native_plugin_example"
+crate-type = ["cdylib"]
+
+[dependencies]
+nemo-relay-plugin = { path = "../../crates/plugin" }
+serde_json = "1"

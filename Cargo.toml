@@ -4,6 +4,10 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/types",
+    "crates/plugin",
+    "crates/worker-proto",
+    "crates/worker",
     "crates/adaptive",
     "crates/pii-redaction",
     "crates/cli",
@@ -24,6 +28,10 @@ repository = "https://github.com/NVIDIA/NeMo-Relay"
 
 [workspace.dependencies]
 nemo-relay = { version = "0.5.0", path = "crates/core", default-features = false }
+nemo-relay-types = { version = "0.5.0", path = "crates/types" }
+nemo-relay-plugin = { version = "0.5.0", path = "crates/plugin" }
+nemo-relay-worker-proto = { version = "0.5.0", path = "crates/worker-proto" }
+nemo-relay-worker = { version = "0.5.0", path = "crates/worker" }
 nemo-relay-adaptive = { version = "0.5.0", path = "crates/adaptive" }
 nemo-relay-pii-redaction = { version = "0.5.0", path = "crates/pii-redaction" }
 nemo-relay-ffi = { version = "0.5.0", path = "crates/ffi" }

@@ -6,14 +6,12 @@
 //! is present.
 
 use crate::api::llm::LlmRequest;
+use crate::error::Result;
 use crate::json::Json;
 
-use super::anthropic::AnthropicMessagesCodec;
-use super::openai_chat::OpenAIChatCodec;
-use super::openai_responses::OpenAIResponsesCodec;
 use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
-use super::traits::{LlmCodec, LlmResponseCodec};
+use super::{anthropic, openai_chat, openai_responses};
 
 /// A built-in provider request/response surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +24,28 @@ pub enum ProviderSurface {
     AnthropicMessages,
 }
 
+/// Request shape detector; the optional `&str` is a provider hint a codec may use
+/// to claim an otherwise-ambiguous shape.
+type RequestDetector = fn(&serde_json::Map<String, Json>, Option<&str>) -> bool;
+type ResponseDetector = fn(&serde_json::Map<String, Json>) -> bool;
+
+pub(crate) struct SurfaceDescriptor {
+    pub(crate) surface: ProviderSurface,
+    pub(crate) detect_request: RequestDetector,
+    pub(crate) detect_response: ResponseDetector,
+    pub(crate) decode_request: fn(&LlmRequest) -> Result<AnnotatedLlmRequest>,
+    pub(crate) decode_response: fn(&Json) -> Result<AnnotatedLlmResponse>,
+}
+
+/// Built-in surfaces in request-detection priority order (first match wins):
+/// Responses > Anthropic > Chat. The order is authoritative — a hint-aware
+/// detector must stay after any stronger-signal surface it could shadow.
+static REGISTRY: &[SurfaceDescriptor] = &[
+    openai_responses::SURFACE_DESCRIPTOR,
+    anthropic::SURFACE_DESCRIPTOR,
+    openai_chat::SURFACE_DESCRIPTOR,
+];
+
 /// Detect the request surface from a raw request body by top-level key.
 ///
 /// Priority: OpenAI Responses (`input`/`instructions`) > Anthropic Messages
@@ -35,15 +55,38 @@ pub enum ProviderSurface {
 /// and classifies as `OpenAIChat`.
 #[must_use]
 pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
+    detect_request_surface_with_hint(body, None)
+}
+
+/// Like [`detect_request_surface`], but a recognized `provider_hint` resolves the
+/// one ambiguous shape (an Anthropic request without a top-level `system`,
+/// otherwise read as OpenAI Chat). Today, `"anthropic"` is the only hint that
+/// changes detection; `None` or any other value is ignored and detection stays
+/// shape-only.
+#[must_use]
+pub fn detect_request_surface_with_hint(
+    body: &Json,
+    provider_hint: Option<&str>,
+) -> Option<ProviderSurface> {
     let obj = body.as_object()?;
-    if obj.contains_key("input") || obj.contains_key("instructions") {
-        Some(ProviderSurface::OpenAIResponses)
-    } else if obj.contains_key("system") {
-        Some(ProviderSurface::AnthropicMessages)
-    } else if obj.contains_key("messages") {
-        Some(ProviderSurface::OpenAIChat)
-    } else {
-        None
+    REGISTRY
+        .iter()
+        .find(|d| (d.detect_request)(obj, provider_hint))
+        .map(|d| d.surface)
+}
+
+/// Classify a response object to exactly one built-in surface descriptor: the
+/// single source of truth shared by [`detect_response_surface`] and
+/// [`normalize_response`]. Zero or multiple matches yield `None` (the built-in
+/// codecs accept minimal objects, so decode success alone is not a reliable
+/// classifier).
+fn detect_response_descriptor(
+    obj: &serde_json::Map<String, Json>,
+) -> Option<&'static SurfaceDescriptor> {
+    let mut matches = REGISTRY.iter().filter(|d| (d.detect_response)(obj));
+    match (matches.next(), matches.next()) {
+        (Some(descriptor), None) => Some(descriptor),
+        _ => None,
     }
 }
 
@@ -52,41 +95,22 @@ pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
 /// objects, so decode success alone is not a reliable classifier).
 #[must_use]
 pub fn detect_response_surface(raw: &Json) -> Option<ProviderSurface> {
-    let obj = raw.as_object()?;
-    let is_chat = obj.get("choices").is_some_and(Json::is_array);
-    let is_responses = obj.get("output").is_some_and(Json::is_array)
-        || obj.get("output_text").is_some_and(Json::is_string);
-    let is_anthropic = obj.get("type").and_then(Json::as_str) == Some("message")
-        && obj.get("content").is_some_and(Json::is_array);
-
-    match (is_chat, is_responses, is_anthropic) {
-        (true, false, false) => Some(ProviderSurface::OpenAIChat),
-        (false, true, false) => Some(ProviderSurface::OpenAIResponses),
-        (false, false, true) => Some(ProviderSurface::AnthropicMessages),
-        _ => None,
-    }
+    detect_response_descriptor(raw.as_object()?).map(|d| d.surface)
 }
 
 /// Best-effort decode of a raw request into [`AnnotatedLlmRequest`] (fail-open).
 #[must_use]
 pub fn normalize_request(request: &LlmRequest) -> Option<AnnotatedLlmRequest> {
-    match detect_request_surface(&request.content)? {
-        ProviderSurface::OpenAIChat => OpenAIChatCodec.decode(request),
-        ProviderSurface::OpenAIResponses => OpenAIResponsesCodec.decode(request),
-        ProviderSurface::AnthropicMessages => AnthropicMessagesCodec.decode(request),
-    }
-    .ok()
+    let obj = request.content.as_object()?;
+    let descriptor = REGISTRY.iter().find(|d| (d.detect_request)(obj, None))?;
+    (descriptor.decode_request)(request).ok()
 }
 
 /// Best-effort decode of a raw response into [`AnnotatedLlmResponse`] (fail-open).
 #[must_use]
 pub fn normalize_response(raw: &Json) -> Option<AnnotatedLlmResponse> {
-    match detect_response_surface(raw)? {
-        ProviderSurface::OpenAIChat => OpenAIChatCodec.decode_response(raw),
-        ProviderSurface::OpenAIResponses => OpenAIResponsesCodec.decode_response(raw),
-        ProviderSurface::AnthropicMessages => AnthropicMessagesCodec.decode_response(raw),
-    }
-    .ok()
+    let descriptor = detect_response_descriptor(raw.as_object()?)?;
+    (descriptor.decode_response)(raw).ok()
 }
 
 #[cfg(test)]

@@ -374,6 +374,10 @@ jobs:
           set -euo pipefail
           version="${{ github.ref_name }}"
           packages=(
+            nemo-relay-types
+            nemo-relay-plugin
+            nemo-relay-worker-proto
+            nemo-relay-worker
             nemo-relay
             nemo-relay-adaptive
             nemo-relay-pii-redaction

@@ -1057,6 +1057,20 @@ fn helper_functions_cover_additional_otel_branches() {
         llm_attributes.get("nemo_relay.model_name"),
         Some(&"demo-model".to_string())
     );
+    let raw_model_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        Some(json!({"model": "raw-model", "answer": "ok"})),
+        None,
+    );
+    let raw_model_attributes = attr_map(&common_attributes(&raw_model_event));
+    assert_eq!(
+        raw_model_attributes.get("nemo_relay.model_name"),
+        Some(&"raw-model".to_string())
+    );
 
     let tool_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()

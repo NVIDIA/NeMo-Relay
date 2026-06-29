@@ -20,17 +20,18 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{estimate_cost_for_response_or_requested_model, manual};
-use crate::api::event::{Event, ScopeCategory};
+use super::{
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
+    merge_usage, model_name_for_llm_event,
+};
+use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::request::{
     AnnotatedLlmRequest, ContentPart, Message, MessageContent, ToolDefinition,
 };
-use crate::codec::response::{
-    AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage, estimate_cost_for_provider,
-};
+use crate::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use crate::error::FlowError;
 use crate::json::Json;
 use chrono::{DateTime, Utc};
@@ -788,24 +789,6 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-// Merge two usage sources field by field, preferring `primary` (codec-normalized)
-// and filling gaps from `secondary` (manual scraper). This keeps provider-derived
-// fields without dropping anything either source alone would have reported.
-fn merge_usage(primary: Option<&Usage>, secondary: Option<&Usage>) -> Option<Usage> {
-    match (primary, secondary) {
-        (None, None) => None,
-        (None, Some(usage)) | (Some(usage), None) => Some(usage.clone()),
-        (Some(primary), Some(secondary)) => Some(Usage {
-            prompt_tokens: primary.prompt_tokens.or(secondary.prompt_tokens),
-            completion_tokens: primary.completion_tokens.or(secondary.completion_tokens),
-            total_tokens: primary.total_tokens.or(secondary.total_tokens),
-            cache_read_tokens: primary.cache_read_tokens.or(secondary.cache_read_tokens),
-            cache_write_tokens: primary.cache_write_tokens.or(secondary.cache_write_tokens),
-            cost: primary.cost.clone().or_else(|| secondary.cost.clone()),
-        }),
-    }
-}
-
 fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usage>) {
     let Some(usage) = usage else {
         return;
@@ -1104,7 +1087,7 @@ fn push_raw_output_tool_calls(
             attributes,
             message_index,
             call_index,
-            tool_call.get("id").and_then(Json::as_str),
+            raw_tool_call_id(tool_call),
             raw_tool_call_name(tool_call),
             raw_tool_call_arguments(tool_call).and_then(|value| {
                 value
@@ -1116,13 +1099,29 @@ fn push_raw_output_tool_calls(
     }
 }
 
+// Raw replay payloads are an OpenInference-local fallback. Provider-shaped
+// responses should use codec-normalized response tool calls instead.
+fn raw_tool_call_id(tool_call: &Json) -> Option<&str> {
+    tool_call
+        .get("id")
+        .or_else(|| tool_call.get("tool_call_id"))
+        .or_else(|| tool_call.get("call_id"))
+        .and_then(Json::as_str)
+}
+
 fn raw_tool_call_name(tool_call: &Json) -> Option<&str> {
     tool_call
-        .get("function")
-        .and_then(|function| function.get("name"))
+        .get("name")
         .and_then(Json::as_str)
-        .or_else(|| tool_call.get("name").and_then(Json::as_str))
         .or_else(|| tool_call.get("toolName").and_then(Json::as_str))
+        .or_else(|| tool_call.get("tool_name").and_then(Json::as_str))
+        .or_else(|| {
+            tool_call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Json::as_str)
+        })
+        .or_else(|| tool_call.get("function_name").and_then(Json::as_str))
 }
 
 fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
@@ -1130,6 +1129,7 @@ fn raw_tool_call_arguments(tool_call: &Json) -> Option<&Json> {
         .get("function")
         .and_then(|function| function.get("arguments"))
         .or_else(|| tool_call.get("arguments"))
+        .or_else(|| tool_call.get("args"))
         .or_else(|| tool_call.get("input"))
 }
 
@@ -1182,12 +1182,6 @@ fn cost_total_from_llm_event(
     normalized_response: Option<&AnnotatedLlmResponse>,
     fallback_usage: Option<&Usage>,
 ) -> Option<f64> {
-    if let Some(cost) =
-        manual::cost_from_manual_llm_output(event.output(), true).map(|(total, _)| total)
-    {
-        return Some(cost);
-    }
-
     if let Some(response) = normalized_response
         && let Some(usage) = response.usage.as_ref()
     {
@@ -1201,12 +1195,21 @@ fn cost_total_from_llm_event(
         }
     }
 
+    if let Some(cost) =
+        manual::cost_from_manual_llm_output(event.output(), manual::ManualCostPolicy::UsdOnly)
+            .map(|(total, _)| total)
+    {
+        return Some(cost);
+    }
+
     let usage = fallback_usage?;
-    let model_name = event
-        .model_name()
-        .or_else(|| manual::model_name_from_manual_llm_output(event.output()))?;
-    estimate_cost_for_provider(Some(event.name()), model_name, usage)
-        .and_then(|cost| cost.total_for_currency("USD"))
+    estimate_cost_for_response_or_model(
+        Some(event.name()),
+        event.model_name(),
+        manual::model_name_from_manual_llm_output(event.output()),
+        usage,
+    )
+    .and_then(|cost| cost.total_for_currency("USD"))
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
@@ -1255,8 +1258,8 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
         ),
     ];
 
-    if let Some(model_name) = event.model_name() {
-        attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name.to_string()));
+    if let Some(model_name) = model_name_for_llm_event(event) {
+        attributes.push(KeyValue::new(oi::llm::MODEL_NAME, model_name));
     }
     if let Some(tool_call_id) = event.tool_call_id() {
         attributes.push(KeyValue::new(oi::tool_call::ID, tool_call_id.to_string()));

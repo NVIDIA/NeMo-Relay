@@ -9,7 +9,13 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, WorkerPluginActivation,
+    WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
+};
+use nemo_relay::plugin::{
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use reqwest::Client;
@@ -21,6 +27,7 @@ use crate::adapters::{claude_code, codex, cursor, hermes};
 use crate::config::GatewayConfig;
 use crate::error::CliError;
 use crate::gateway;
+use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::session::SessionManager;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -35,11 +42,11 @@ pub(crate) struct AppState {
     pub(crate) last_activity: Arc<Mutex<Instant>>,
 }
 
-/// Binds the configured address and serves until the process is stopped.
-///
-/// Tests and transparent run mode use `serve_listener` directly so they can supply an already
-/// bound ephemeral listener and optional shutdown channel.
-pub(crate) async fn serve(config: GatewayConfig) -> Result<(), CliError> {
+/// Binds the configured address and activates enabled dynamic plugins before serving.
+pub(crate) async fn serve_with_dynamic(
+    config: GatewayConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+) -> Result<(), CliError> {
     let listener = TcpListener::bind(config.bind).await.map_err(|err| {
         // Translate the common bind-failure (port already in use) into an actionable message.
         // Plain `io error: Address already in use (os error 48)` is unhelpful; the friendly
@@ -58,19 +65,31 @@ pub(crate) async fn serve(config: GatewayConfig) -> Result<(), CliError> {
             CliError::Io(err)
         }
     })?;
-    serve_listener(listener, config, None).await
+    serve_listener_with_dynamic(listener, config, dynamic_plugins, None).await
 }
 
 /// Serves the gateway router on a caller-owned listener with optional graceful shutdown.
 ///
 /// A provided shutdown receiver is best-effort: the send side may be dropped after the child agent
 /// exits, and either receiving or channel closure is enough to let Axum drain the listener.
+#[cfg(test)]
 pub(crate) async fn serve_listener(
     listener: TcpListener,
     config: GatewayConfig,
     shutdown: Option<oneshot::Receiver<()>>,
 ) -> Result<(), CliError> {
-    let plugin_activation = PluginActivation::initialize(config.plugin_config.clone()).await?;
+    serve_listener_with_dynamic(listener, config, Vec::new(), shutdown).await
+}
+
+/// Serves the gateway router and activates enabled dynamic plugin components.
+pub(crate) async fn serve_listener_with_dynamic(
+    listener: TcpListener,
+    config: GatewayConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    shutdown: Option<oneshot::Receiver<()>>,
+) -> Result<(), CliError> {
+    let plugin_activation =
+        PluginActivation::initialize(config.plugin_config.clone(), dynamic_plugins).await?;
     let state = AppState::new(config);
     let sessions = state.sessions.clone();
     let last_activity = state.last_activity.clone();
@@ -197,12 +216,21 @@ async fn idle_shutdown_future(
 
 struct PluginActivation {
     active: bool,
+    native: Option<NativePluginActivation>,
+    worker: Option<WorkerPluginActivation>,
 }
 
 impl PluginActivation {
-    async fn initialize(config: Option<Value>) -> Result<Self, CliError> {
-        let Some(config) = config else {
-            return Ok(Self { active: false });
+    async fn initialize(
+        config: Option<Value>,
+        dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    ) -> Result<Self, CliError> {
+        if config.is_none() && dynamic_plugins.is_empty() {
+            return Ok(Self {
+                active: false,
+                native: None,
+                worker: None,
+            });
         };
         register_adaptive_component().map_err(|error| {
             CliError::Config(format!("adaptive plugin registration failed: {error}"))
@@ -210,22 +238,94 @@ impl PluginActivation {
         register_pii_redaction_component().map_err(|error| {
             CliError::Config(format!("PII redaction plugin registration failed: {error}"))
         })?;
+        let native_specs = dynamic_plugins
+            .iter()
+            .filter(|plugin| plugin.kind == DynamicPluginKind::RustDynamic)
+            .map(|plugin| {
+                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
+                    CliError::Config(format!(
+                        "native dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                        plugin.plugin_id
+                    ))
+                })?;
+                Ok(NativePluginLoadSpec {
+                    plugin_id: plugin.plugin_id.clone(),
+                    manifest_ref,
+                })
+            })
+            .collect::<Result<Vec<_>, CliError>>()?;
+        let worker_specs = dynamic_plugins
+            .iter()
+            .filter(|plugin| plugin.kind == DynamicPluginKind::Worker)
+            .map(|plugin| {
+                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
+                    CliError::Config(format!(
+                        "worker dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                        plugin.plugin_id
+                    ))
+                })?;
+                Ok(WorkerPluginLoadSpec {
+                    plugin_id: plugin.plugin_id.clone(),
+                    manifest_ref,
+                    config: plugin.config.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, CliError>>()?;
+        let native =
+            if native_specs.is_empty() {
+                None
+            } else {
+                Some(load_native_plugins(native_specs).map_err(|error| {
+                    CliError::Config(format!("native plugin load failed: {error}"))
+                })?)
+            };
+        let worker =
+            if worker_specs.is_empty() {
+                None
+            } else {
+                Some(load_worker_plugins(worker_specs).map_err(|error| {
+                    CliError::Config(format!("worker plugin load failed: {error}"))
+                })?)
+            };
         // Gateway already resolved its config; activate exactly (no re-discovery).
-        let plugin_config: PluginConfig = serde_json::from_value(config)
-            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?;
+        let mut plugin_config: PluginConfig = match config {
+            Some(config) => serde_json::from_value(config)
+                .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
+            None => PluginConfig::default(),
+        };
+        plugin_config
+            .components
+            .extend(
+                dynamic_plugins
+                    .into_iter()
+                    .map(|plugin| PluginComponentSpec {
+                        kind: plugin.plugin_id,
+                        enabled: true,
+                        config: plugin.config,
+                    }),
+            );
         initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        Ok(Self { active: true })
+        Ok(Self {
+            active: true,
+            native,
+            worker,
+        })
     }
 
     fn clear(mut self) -> Result<(), CliError> {
-        if self.active {
+        let result = if self.active {
             self.active = false;
             clear_plugin_configuration()
                 .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))?;
-        }
-        Ok(())
+            Ok(())
+        } else {
+            Ok(())
+        };
+        self.native.take();
+        self.worker.take();
+        result
     }
 }
 

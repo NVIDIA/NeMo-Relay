@@ -2,16 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::test_support::CwdTestScope as CwdScope;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-
-// Current-directory changes are process-wide, so tests that enter a temp workspace
-// must run serially with respect to each other.
-fn cwd_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
 
 // Tests that exercise the global-config write path clear `$XDG_CONFIG_HOME`
 // because CI runners commonly set it to a real `/home/runner/.config` path.
@@ -44,29 +37,6 @@ impl Drop for XdgScope {
                 None => std::env::remove_var("XDG_CONFIG_HOME"),
             }
         }
-    }
-}
-
-struct CwdScope {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    prev: PathBuf,
-}
-
-impl CwdScope {
-    fn enter(path: &std::path::Path) -> Self {
-        let guard = cwd_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(path).unwrap();
-        Self {
-            _guard: guard,
-            prev,
-        }
-    }
-}
-
-impl Drop for CwdScope {
-    fn drop(&mut self) {
-        std::env::set_current_dir(&self.prev).unwrap();
     }
 }
 

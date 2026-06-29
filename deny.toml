@@ -24,5 +24,6 @@ allow = [
     "MIT",
     "MPL-2.0",
     "Unicode-3.0",
+    "Zlib",        # required by foldhash through tonic-prost-build/prost-build
 ]
 private = { ignore = true }

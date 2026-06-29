@@ -220,17 +220,23 @@ fn codex_plugin_registered(
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<bool, String> {
-    let output = run_capture_command(
-        "codex",
-        &["plugin".into(), "list".into(), "--json".into()],
-        options,
-        runner,
-    )?;
-    let plugins = parse_json_command_output("codex plugin list --json", output)?;
-    Ok(plugins
-        .get("installed")
-        .and_then(Value::as_array)
-        .is_some_and(|plugins| plugins.iter().any(plugin_entry_matches)))
+    // Codex `plugin list` has no `--json` flag (unlike Claude Code).
+    let output = run_capture_command("codex", &["plugin".into(), "list".into()], options, runner)?;
+    let plugin_id = format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}");
+    Ok(output
+        .stdout
+        .lines()
+        .any(|line| codex_plugin_line_installed(line, &plugin_id)))
+}
+
+fn codex_plugin_line_installed(line: &str, plugin_id: &str) -> bool {
+    let mut columns = line.split_whitespace();
+    if columns.next() != Some(plugin_id) {
+        return false;
+    }
+    columns
+        .next()
+        .is_some_and(|status| status.starts_with("installed"))
 }
 
 fn codex_marketplace_registered(

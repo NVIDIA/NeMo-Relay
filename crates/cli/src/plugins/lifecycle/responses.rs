@@ -11,17 +11,20 @@
 use std::collections::HashMap;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginKind, DynamicPluginManifest,
+    DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailurePhase,
+    DynamicPluginKind, DynamicPluginManifest, DynamicPluginStartupClass,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::config::ResolvedDynamicPluginConfig;
+use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
 use crate::error::{CliError, PluginLifecycleFailureKind};
+use crate::plugins::policy::EvaluatedDynamicPluginHostPolicy;
 
 use super::state::ScopedDynamicPluginRecord;
+use super::trust::EvaluatedDynamicPluginTrust;
 use super::{
-    host_config_status, inspect_compat_data, inspect_load_data, redacted_host_config_json,
+    inspect_compat_data, inspect_load_data, list_validation_state, redacted_host_config_json,
 };
 
 #[derive(Debug)]
@@ -34,6 +37,8 @@ pub(super) struct ValidateResponseInput<'a> {
     pub(super) manifest_ref: &'a str,
     pub(super) entry: Option<&'a ScopedDynamicPluginRecord>,
     pub(super) host_config: Option<&'a ResolvedDynamicPluginConfig>,
+    pub(super) policy: &'a EvaluatedDynamicPluginHostPolicy,
+    pub(super) trust: &'a EvaluatedDynamicPluginTrust,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,15 +70,17 @@ pub(super) struct ListEntryResponse {
     enabled: bool,
     tombstoned: bool,
     validation_state: DynamicPluginCheckState,
+    policy_state: DynamicPluginCheckState,
     runtime_state: String,
-    startup: Option<String>,
+    startup_class: Option<DynamicPluginStartupClass>,
+    attestation_mode: Option<DynamicPluginAttestationMode>,
     last_error: Option<LastErrorResponse>,
-    host_config: String,
+    host_config: DynamicPluginHostConfigStatus,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct LastErrorResponse {
-    phase: String,
+    phase: DynamicPluginFailurePhase,
     code: String,
     message: String,
 }
@@ -94,7 +101,10 @@ pub(super) struct InspectResponse {
     source: Value,
     spec: Value,
     status: Value,
-    host_config_status: String,
+    policy_state: DynamicPluginCheckState,
+    startup_class: Option<DynamicPluginStartupClass>,
+    attestation_mode: Option<DynamicPluginAttestationMode>,
+    host_config_status: DynamicPluginHostConfigStatus,
     host_config: Value,
 }
 
@@ -108,8 +118,13 @@ pub(super) struct ValidateResponse {
     notes: Vec<String>,
     manifest_ref: String,
     kind: DynamicPluginKind,
+    policy_state: DynamicPluginCheckState,
+    integrity_state: DynamicPluginCheckState,
+    authenticity_state: DynamicPluginCheckState,
+    startup_class: DynamicPluginStartupClass,
+    attestation_mode: DynamicPluginAttestationMode,
     desired_enabled: Option<bool>,
-    host_config_status: String,
+    host_config_status: DynamicPluginHostConfigStatus,
 }
 
 pub(super) fn print_response_json<T: Serialize>(value: &T) -> Result<(), CliError> {
@@ -139,23 +154,28 @@ pub(super) fn list_success(
                     kind: record.metadata.kind,
                     enabled: record.spec.enabled,
                     tombstoned: record.is_tombstoned(),
-                    validation_state: record.status.validation.manifest,
+                    validation_state: list_validation_state(record),
+                    policy_state: record.status.validation.policy_satisfied,
                     runtime_state: if record.is_tombstoned() {
                         "tombstoned".into()
                     } else {
                         <&'static str>::from(record.status.runtime.state).into()
                     },
-                    startup: record.status.startup_class.map(|value| value.to_string()),
+                    startup_class: record.status.startup_class,
+                    attestation_mode: record.status.attestation_mode,
                     last_error: record
                         .status
                         .last_error
                         .as_ref()
                         .map(|error| LastErrorResponse {
-                            phase: error.phase.to_string(),
+                            phase: error.phase,
                             code: error.code.clone(),
                             message: error.message.clone(),
                         }),
-                    host_config: host_config_status(host_config_by_id.get(&record.metadata.id)),
+                    host_config: host_config_by_id
+                        .get(&record.metadata.id)
+                        .map(ResolvedDynamicPluginConfig::host_config_status)
+                        .unwrap_or(DynamicPluginHostConfigStatus::Absent),
                 }
             })
             .collect(),
@@ -207,7 +227,12 @@ pub(super) fn inspect_data(
         spec: serde_json::to_value(&record.spec).expect("dynamic plugin spec serializes to JSON"),
         status: serde_json::to_value(&record.status)
             .expect("dynamic plugin status serializes to JSON"),
-        host_config_status: host_config_status(host_config),
+        policy_state: record.status.validation.policy_satisfied,
+        startup_class: record.status.startup_class,
+        attestation_mode: record.status.attestation_mode,
+        host_config_status: host_config
+            .map(ResolvedDynamicPluginConfig::host_config_status)
+            .unwrap_or(DynamicPluginHostConfigStatus::Absent),
         host_config: host_config
             .map(redacted_host_config_json)
             .unwrap_or(Value::Null),
@@ -222,6 +247,22 @@ pub(super) fn validate_success(
         .and_then(|entry| entry.record.status.validation.message.clone())
         .into_iter()
         .collect::<Vec<_>>();
+    let valid = input.policy.policy_satisfied && input.trust.is_satisfied();
+    let errors = input
+        .policy
+        .failure()
+        .map(|failure| {
+            failure
+                .display(input.manifest.plugin.id.as_str())
+                .to_string()
+        })
+        .into_iter()
+        .chain(input.trust.failure().map(|failure| {
+            failure
+                .display(input.manifest.plugin.id.as_str())
+                .to_string()
+        }))
+        .collect::<Vec<_>>();
 
     success(
         input.command,
@@ -232,14 +273,22 @@ pub(super) fn validate_success(
                 .resolved_plugin_id
                 .unwrap_or(input.manifest.plugin.id.as_str())
                 .to_owned(),
-            valid: true,
-            errors: Vec::new(),
+            valid,
+            errors,
             warnings: Vec::new(),
             notes,
             manifest_ref: input.manifest_ref.into(),
             kind: input.manifest.plugin.kind,
+            policy_state: input.policy.check_state(),
+            integrity_state: input.trust.integrity,
+            authenticity_state: input.trust.authenticity,
+            startup_class: input.policy.startup_class,
+            attestation_mode: input.policy.attestation_mode,
             desired_enabled: input.entry.map(|entry| entry.record.spec.enabled),
-            host_config_status: host_config_status(input.host_config),
+            host_config_status: input
+                .host_config
+                .map(ResolvedDynamicPluginConfig::host_config_status)
+                .unwrap_or(DynamicPluginHostConfigStatus::Absent),
         },
     )
 }
@@ -248,6 +297,7 @@ pub(super) fn failure(
     command: &'static str,
     target: Option<&str>,
     kind: PluginLifecycleFailureKind,
+    code: Option<&'static str>,
     message: &str,
 ) -> ResponseEnvelope<Value> {
     ResponseEnvelope {
@@ -258,7 +308,7 @@ pub(super) fn failure(
         warnings: Vec::new(),
         data: None,
         error: Some(ResponseError {
-            code: failure_code(kind),
+            code: code.unwrap_or_else(|| failure_code(kind)),
             kind,
             message: message.to_owned(),
             details: Map::new(),
@@ -271,7 +321,13 @@ pub(super) fn generic_failure(
     target: Option<&str>,
     message: &str,
 ) -> ResponseEnvelope<Value> {
-    failure(command, target, PluginLifecycleFailureKind::Failed, message)
+    failure(
+        command,
+        target,
+        PluginLifecycleFailureKind::Failed,
+        None,
+        message,
+    )
 }
 
 fn success<T: Serialize>(

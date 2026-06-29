@@ -9,6 +9,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
+use base64::Engine;
+use ring::rand::SystemRandom;
+use ring::signature::{Ed25519KeyPair, KeyPair};
+use sha2::{Digest, Sha256};
+
 fn gateway_bin() -> &'static str {
     env!("CARGO_BIN_EXE_nemo-relay")
 }
@@ -34,7 +39,33 @@ fn toml_basic_string(value: &str) -> String {
 }
 
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
+    write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
+}
+
+fn write_dynamic_plugin_manifest_with_options(
+    dir: &std::path::Path,
+    plugin_id: &str,
+    capabilities: &[&str],
+    signature_ref: Option<&str>,
+) {
     std::fs::create_dir_all(dir).unwrap();
+    let artifact_body = format!("def register():\n    return {plugin_id:?}\n");
+    std::fs::write(dir.join("plugin.py"), &artifact_body).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(artifact_body.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let capabilities = capabilities
+        .iter()
+        .map(|capability| toml_basic_string(capability))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let signature_line = signature_ref
+        .map(|signature_ref| format!("signature = {}\n", toml_basic_string(signature_ref)))
+        .unwrap_or_default();
     std::fs::write(
         dir.join("relay-plugin.toml"),
         format!(
@@ -46,23 +77,61 @@ kind = "worker"
 
 [compat]
 relay = "0.5"
-worker_protocol = "1"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = [{capabilities}]
+
+[source]
+artifact = "plugin.py"
+
+[integrity]
+sha256 = {digest}
+{signature_line}
 
 [load]
 runtime = "python"
 entrypoint = {entrypoint}
 "#,
+            capabilities = capabilities,
+            signature_line = signature_line,
+            digest = toml_basic_string(&digest),
             plugin_id = toml_basic_string(plugin_id),
             entrypoint = toml_basic_string(&format!("{plugin_id}.plugin:register")),
         ),
     )
     .unwrap();
+}
+
+fn write_detached_ed25519_signature(dir: &std::path::Path, signature_name: &str) -> String {
+    std::fs::create_dir_all(dir).unwrap();
+    let artifact = std::fs::read(dir.join("plugin.py")).unwrap();
+    let pkcs8 =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate ed25519 keypair");
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse ed25519 keypair");
+    let signature = key_pair.sign(&artifact);
+    let signature_text = format!(
+        "ed25519:{}\n",
+        base64::engine::general_purpose::STANDARD.encode(signature.as_ref())
+    );
+    std::fs::write(dir.join(signature_name), signature_text).unwrap();
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
+    )
+}
+
+fn generate_ed25519_public_key() -> String {
+    let pkcs8 =
+        Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("generate ed25519 keypair");
+    let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse ed25519 keypair");
+    format!(
+        "ed25519:{}",
+        base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref())
+    )
 }
 
 #[test]
@@ -156,6 +225,10 @@ fn cli_plugins_validate_json_emits_versioned_success_output() {
     assert_eq!(parsed["command"], "plugins validate");
     assert_eq!(parsed["data"]["target_kind"], "path");
     assert_eq!(parsed["data"]["resolved_plugin_id"], "acme.cli-json");
+    assert_eq!(parsed["data"]["valid"], true);
+    assert_eq!(parsed["data"]["policy_state"], "valid");
+    assert_eq!(parsed["data"]["startup_class"], "optional");
+    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
 }
 
 #[test]
@@ -250,6 +323,367 @@ fn cli_plugins_list_all_json_includes_tombstoned_records() {
     assert_eq!(parsed["data"][0]["id"], "acme.tombstoned");
     assert_eq!(parsed["data"][0]["tombstoned"], true);
     assert_eq!(parsed["data"][0]["runtime_state"], "tombstoned");
+    assert_eq!(parsed["data"][0]["policy_state"], "valid");
+    assert_eq!(parsed["data"][0]["startup_class"], "optional");
+    assert_eq!(parsed["data"][0]["attestation_mode"], "integrity_only");
+}
+
+#[test]
+fn cli_plugins_validate_json_reports_blocked_policy_for_path_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let xdg = temp.path().join("xdg");
+    let user_config_dir = xdg.join("nemo-relay");
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-path");
+    std::fs::write(
+        user_config_dir.join("plugins.toml"),
+        r#"
+[plugins.policy.defaults]
+allowed = false
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["target_kind"], "path");
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["policy_state"], "invalid");
+    assert_eq!(parsed["data"]["startup_class"], "optional");
+    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
+    assert!(
+        parsed["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("blocked by host policy")
+    );
+}
+
+#[test]
+fn cli_plugins_validate_json_reports_verified_signature_for_path_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let xdg = temp.path().join("xdg");
+    let user_config_dir = xdg.join("nemo-relay");
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    write_dynamic_plugin_manifest_with_options(
+        &plugin_dir,
+        "acme.cli-signed-path",
+        &["plugin_worker"],
+        Some("plugin.py.sig"),
+    );
+    let trusted_public_key = write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    std::fs::write(
+        user_config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[plugins.policy.defaults]\n",
+                "attestation = \"signature_required\"\n",
+                "trusted_public_keys = [{}]\n"
+            ),
+            toml_basic_string(&trusted_public_key)
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["valid"], true);
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"]["authenticity_state"], "valid");
+}
+
+#[test]
+fn cli_plugins_validate_json_reports_invalid_signature_for_wrong_trusted_key() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let xdg = temp.path().join("xdg");
+    let user_config_dir = xdg.join("nemo-relay");
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    write_dynamic_plugin_manifest_with_options(
+        &plugin_dir,
+        "acme.cli-signed-wrong-key",
+        &["plugin_worker"],
+        Some("plugin.py.sig"),
+    );
+    write_detached_ed25519_signature(&plugin_dir, "plugin.py.sig");
+    let wrong_public_key = generate_ed25519_public_key();
+    std::fs::write(
+        user_config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[plugins.policy.defaults]\n",
+                "attestation = \"signature_required\"\n",
+                "trusted_public_keys = [{}]\n"
+            ),
+            toml_basic_string(&wrong_public_key)
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["plugins", "validate"])
+        .arg(&plugin_dir)
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"]["authenticity_state"], "invalid");
+    assert!(
+        parsed["data"]["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap()
+                .contains("failed signature verification"))
+    );
+}
+
+#[test]
+fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    let config_dir = cwd.join(".nemo-relay");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-list");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n",
+                "allowed = false\n"
+            ),
+            toml_basic_string(plugin_dir.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let list = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        list.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"][0]["id"], "acme.cli-blocked-list");
+    assert_eq!(parsed["data"][0]["validation_state"], "invalid");
+    assert_eq!(parsed["data"][0]["policy_state"], "invalid");
+    assert_eq!(parsed["data"][0]["startup_class"], "required");
+    assert_eq!(parsed["data"][0]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"][0]["last_error"]["phase"], "policy");
+
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(
+        state["records"][0]["status"]["validation"]["policy_satisfied"],
+        "invalid"
+    );
+    assert_eq!(
+        state["records"][0]["status"]["last_error"]["phase"],
+        "policy"
+    );
+}
+
+#[test]
+fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    let config_dir = cwd.join(".nemo-relay");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-trust-list");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n"
+            ),
+            toml_basic_string(plugin_dir.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let list = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "list", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        list.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"][0]["id"], "acme.cli-trust-list");
+    assert_eq!(parsed["data"][0]["validation_state"], "invalid");
+    assert_eq!(parsed["data"][0]["policy_state"], "valid");
+    assert_eq!(parsed["data"][0]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"][0]["last_error"]["phase"], "validation");
+}
+
+#[test]
+fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    let config_dir = cwd.join(".nemo-relay");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-id");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n",
+                "allowed = false\n"
+            ),
+            toml_basic_string(plugin_dir.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let validate = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate", "acme.cli-blocked-id", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        validate.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&validate.stdout).unwrap();
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["target_kind"], "plugin_id");
+    assert_eq!(parsed["data"]["valid"], false);
+    assert_eq!(parsed["data"]["policy_state"], "invalid");
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"]["desired_enabled"], false);
+    assert!(
+        parsed["data"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("blocked by host policy")
+    );
 }
 
 #[test]
@@ -295,8 +729,85 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
     assert_eq!(parsed["data"]["id"], "acme.inspect-json");
     assert_eq!(parsed["data"]["kind"], "worker");
     assert_eq!(parsed["data"]["scope"], "project");
+    assert_eq!(parsed["data"]["policy_state"], "valid");
+    assert_eq!(parsed["data"]["startup_class"], "optional");
+    assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
     assert_eq!(parsed["data"]["host_config_status"], "absent");
     assert!(parsed["data"]["source"]["manifest_ref"].is_string());
+}
+
+#[test]
+fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    let config_dir = cwd.join(".nemo-relay");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_dynamic_plugin_manifest(&plugin_dir, "acme.inspect-blocked");
+
+    let add = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "add", "--project"])
+        .arg(&plugin_dir)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            concat!(
+                "[[plugins.dynamic]]\n",
+                "manifest = {}\n\n",
+                "[plugins.policy.defaults]\n",
+                "startup = \"required\"\n",
+                "attestation = \"signature_required\"\n",
+                "allowed = false\n"
+            ),
+            toml_basic_string(plugin_dir.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let validate = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "validate", "acme.inspect-blocked"])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let inspect = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["plugins", "inspect", "acme.inspect-blocked", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        inspect.status.success(),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert_eq!(parsed["data"]["id"], "acme.inspect-blocked");
+    assert_eq!(parsed["data"]["policy_state"], "invalid");
+    assert_eq!(parsed["data"]["startup_class"], "required");
+    assert_eq!(parsed["data"]["attestation_mode"], "signature_required");
+    assert_eq!(parsed["data"]["status"]["last_error"]["phase"], "policy");
 }
 
 #[test]
@@ -884,6 +1395,8 @@ fn cli_bare_invocation_reports_invalid_config_resolution() {
 fn cli_run_dry_run_resolves_config_and_command() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config.toml");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
     std::fs::write(
         &config,
         r#"
@@ -898,6 +1411,8 @@ command = "hermes --yolo chat"
     .unwrap();
 
     let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -948,6 +1463,7 @@ command = "codex --full-auto"
     let output = Command::new(gateway_bin())
         .current_dir(&nested)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
         .env("NEMO_RELAY_GATEWAY_BIND", "127.0.0.1:0")
         .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
         .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")

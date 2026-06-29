@@ -196,8 +196,12 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
     //   `nemo-relay config` remains the reconfiguration path.
     if server_args.requested_daemon_mode() {
-        let config = config::resolve_server_config(server_args)?;
-        server::serve(config.gateway).await?;
+        let resolved = config::resolve_server_config(server_args)?;
+        let dynamic_plugins = plugins::lifecycle::active_dynamic_plugin_components(
+            server_args.config.as_ref(),
+            &resolved,
+        )?;
+        server::serve_with_dynamic(resolved.gateway, dynamic_plugins).await?;
         Ok(ExitCode::SUCCESS)
     } else if config::any_config_file_exists() {
         doctor::run_doctor(None, false).await
@@ -209,9 +213,61 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
 
 #[cfg(test)]
 mod test_support {
+    #[must_use]
+    pub(crate) struct CwdTestScope {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        prev: Option<std::path::PathBuf>,
+    }
+
+    impl CwdTestScope {
+        pub(crate) fn locked() -> Self {
+            Self {
+                _guard: lock_cwd(),
+                prev: None,
+            }
+        }
+
+        pub(crate) fn enter(path: &std::path::Path) -> Self {
+            let guard = lock_cwd();
+            let prev = std::env::current_dir().unwrap();
+            std::env::set_current_dir(path).unwrap();
+            Self {
+                _guard: guard,
+                prev: Some(prev),
+            }
+        }
+    }
+
+    impl Drop for CwdTestScope {
+        fn drop(&mut self) {
+            if let Some(prev) = &self.prev
+                && let Err(error) = std::env::set_current_dir(prev)
+            {
+                CWD_RESTORE_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+                if std::thread::panicking() {
+                    eprintln!("failed to restore current_dir to {prev:?}: {error}");
+                } else {
+                    panic!("failed to restore current_dir to {prev:?}: {error}");
+                }
+            }
+        }
+    }
+
+    pub(crate) static CWD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static CWD_RESTORE_FAILED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
     pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     pub(crate) static PLUGIN_CONFIG_TEST_LOCK: tokio::sync::Mutex<()> =
         tokio::sync::Mutex::const_new(());
+
+    fn lock_cwd() -> std::sync::MutexGuard<'static, ()> {
+        let guard = CWD_TEST_LOCK.lock().expect("CWD_TEST_LOCK poisoned");
+        assert!(
+            !CWD_RESTORE_FAILED.load(std::sync::atomic::Ordering::SeqCst),
+            "current_dir restore failed in a previous test; aborting to prevent cross-test contamination",
+        );
+        guard
+    }
 }
 
 #[cfg(test)]

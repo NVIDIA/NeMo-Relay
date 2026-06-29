@@ -35,13 +35,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::event::Event;
+use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::flush_subscribers;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::response::{AnnotatedLlmResponse, Usage, estimate_cost_for_provider};
+use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
+
+use super::{estimate_cost_for_response_or_model, manual, merge_usage, model_name_for_llm_event};
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
@@ -666,15 +668,29 @@ fn collect_openai_responses_content_text(
 const TOKEN_USAGE_KNOWN_KEYS: &[&str] = &[
     "prompt_tokens",
     "input_tokens",
+    "inputTokens",
+    "input",
     "completion_tokens",
     "output_tokens",
+    "completionTokens",
+    "outputTokens",
+    "output",
     "cached_tokens",
+    "cachedTokens",
+    "cache_read_tokens",
+    "cacheReadTokens",
     "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "cacheRead",
     "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
     "cache_write_tokens",
+    "cacheWriteTokens",
+    "cacheWrite",
     "cost_usd",
     "cost",
     "prompt_tokens_details",
+    "input_tokens_details",
     "prompt_token_ids",
     "completion_token_ids",
     "logprobs",
@@ -689,59 +705,74 @@ fn extract_metrics(
     output: &Json,
     provider: Option<&str>,
     model_name: Option<&str>,
+    normalized_response: Option<&AnnotatedLlmResponse>,
 ) -> Option<AtifMetrics> {
-    let usage = token_usage_object(output)?;
-    let prompt = usage_u64(usage, &["prompt_tokens", "input_tokens"]);
-    let completion = usage_u64(usage, &["completion_tokens", "output_tokens"]);
-    let cache_read = usage_u64(usage, &["cached_tokens"])
-        .or_else(|| prompt_tokens_detail_u64(usage, "cached_tokens"))
-        .or_else(|| input_tokens_detail_u64(usage, "cached_tokens"))
-        .or_else(|| usage_u64(usage, &["cache_read_input_tokens"]));
-    let cache_write = usage_u64(
-        usage,
-        &["cache_creation_input_tokens", "cache_write_tokens"],
-    );
+    let raw_usage = token_usage_object(output);
+    let fallback_usage = manual::usage_from_manual_llm_output(Some(output));
+    let normalized_usage = normalized_response.and_then(|response| response.usage.as_ref());
+    let merged_usage = merge_usage(normalized_usage, fallback_usage.as_ref());
+    let prompt = merged_usage.as_ref().and_then(|usage| usage.prompt_tokens);
+    let completion = merged_usage
+        .as_ref()
+        .and_then(|usage| usage.completion_tokens);
+    let cache_read = merged_usage
+        .as_ref()
+        .and_then(|usage| usage.cache_read_tokens);
+    let cache_write = merged_usage
+        .as_ref()
+        .and_then(|usage| usage.cache_write_tokens);
     let cached = sum_options(cache_read, cache_write);
-    let explicit_cost = usage
-        .get("cost_usd")
-        .and_then(Json::as_f64)
-        .or_else(|| usage.get("cost").and_then(cost_usd_from_cost_object));
-    let has_reported_cost = usage.get("cost").is_some();
+    let normalized_cost_source = normalized_usage.and_then(|usage| usage.cost.as_ref());
+    let normalized_cost =
+        normalized_cost_source.and_then(|cost| cost.total_or_component_sum_for_currency("USD"));
+    let manual_cost =
+        manual::cost_from_manual_llm_output(Some(output), manual::ManualCostPolicy::AtifUsdOnly)
+            .map(|(total, _)| total);
+    let explicit_cost = if normalized_cost_source.is_some() {
+        normalized_cost
+    } else {
+        manual_cost
+    };
+    let has_reported_cost = normalized_cost_source.is_some()
+        || raw_usage.is_some_and(|usage| usage.get("cost").is_some());
     let cost = if has_reported_cost {
         explicit_cost
     } else {
         explicit_cost.or_else(|| {
-            let model_name = model_name.or_else(|| response_model_name(output))?;
-            estimate_cost_for_provider(
+            let usage = merged_usage.as_ref()?;
+            estimate_cost_for_response_or_model(
                 provider,
                 model_name,
-                &Usage {
-                    prompt_tokens: prompt,
-                    completion_tokens: completion,
-                    total_tokens: usage_u64(usage, &["total_tokens"]),
-                    cache_read_tokens: cache_read,
-                    cache_write_tokens: cache_write,
-                    cost: None,
-                },
+                normalized_response
+                    .and_then(|response| response.model.as_deref())
+                    .or_else(|| response_model_name(output)),
+                usage,
             )
             .and_then(|cost| cost.total_for_currency("USD"))
         })
     };
-    let prompt_ids = usage
-        .get("prompt_token_ids")
+    let prompt_ids = raw_usage
+        .and_then(|usage| usage.get("prompt_token_ids"))
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_u64).collect());
-    let completion_ids = usage
-        .get("completion_token_ids")
+    let completion_ids = raw_usage
+        .and_then(|usage| usage.get("completion_token_ids"))
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_u64).collect());
-    let logprobs = usage
-        .get("logprobs")
+    let logprobs = raw_usage
+        .and_then(|usage| usage.get("logprobs"))
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_f64).collect());
     let known: std::collections::HashSet<&str> = TOKEN_USAGE_KNOWN_KEYS.iter().copied().collect();
-    let extra_map: serde_json::Map<String, Json> = usage
-        .iter()
+    let extra_map: serde_json::Map<String, Json> = output
+        .as_object()
+        .into_iter()
+        .flat_map(|output| {
+            ["usage", "token_usage"]
+                .into_iter()
+                .filter_map(|key| output.get(key).and_then(Json::as_object))
+        })
+        .flat_map(|usage| usage.iter())
         .filter(|(k, _)| !known.contains(k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
@@ -762,30 +793,6 @@ fn extract_metrics(
         completion_token_ids: completion_ids,
         logprobs,
         extra,
-    })
-}
-
-fn cost_usd_from_cost_object(cost: &Json) -> Option<f64> {
-    let cost = cost.as_object()?;
-    let currency = cost.get("currency").and_then(Json::as_str);
-    let is_relay_normalized_cost = cost
-        .get("source")
-        .and_then(Json::as_str)
-        .is_some_and(|source| matches!(source, "provider_reported" | "model_pricing"));
-    let has_legacy_provider_total =
-        currency.is_none() && cost.get("total").and_then(Json::as_f64).is_some();
-    let is_usd_cost = currency.is_some_and(|currency| currency.eq_ignore_ascii_case("USD"))
-        || currency.is_none() && (is_relay_normalized_cost || has_legacy_provider_total);
-    if !is_usd_cost {
-        return None;
-    }
-
-    cost.get("total").and_then(Json::as_f64).or_else(|| {
-        let (has_component, component_total) = ["input", "output", "cache_read", "cache_write"]
-            .iter()
-            .filter_map(|field| cost.get(*field).and_then(Json::as_f64))
-            .fold((false, 0.0), |(_, total), value| (true, total + value));
-        has_component.then_some(component_total)
     })
 }
 
@@ -854,11 +861,6 @@ fn token_usage_object(output: &Json) -> Option<&serde_json::Map<String, Json>> {
         .and_then(Json::as_object)
 }
 
-fn usage_u64(usage: &serde_json::Map<String, Json>, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| usage.get(*key).and_then(Json::as_u64))
-}
-
 fn response_model_name(output: &Json) -> Option<&str> {
     output
         .as_object()
@@ -871,22 +873,6 @@ fn sum_options(left: Option<u64>, right: Option<u64>) -> Option<u64> {
         (Some(value), None) | (None, Some(value)) => Some(value),
         (None, None) => None,
     }
-}
-
-fn prompt_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
-    usage
-        .get("prompt_tokens_details")
-        .and_then(Json::as_object)
-        .and_then(|details| details.get(key))
-        .and_then(Json::as_u64)
-}
-
-fn input_tokens_detail_u64(usage: &serde_json::Map<String, Json>, key: &str) -> Option<u64> {
-    usage
-        .get("input_tokens_details")
-        .and_then(Json::as_object)
-        .and_then(|details| details.get(key))
-        .and_then(Json::as_u64)
 }
 
 /// Extract `reasoning_effort` from an LLM request (string or number).
@@ -1022,11 +1008,11 @@ fn extract_tool_calls(output: &Json) -> Option<Vec<AtifToolCall>> {
             .and_then(Json::as_str)
             .unwrap_or("")
             .to_string();
-        // The function details live under "function".
         let func = tc_obj.get("function").and_then(Json::as_object);
         let name = func
             .and_then(|f| f.get("name"))
             .or_else(|| tc_obj.get("name"))
+            .or_else(|| tc_obj.get("toolName"))
             .or_else(|| tc_obj.get("tool_name"))
             .or_else(|| tc_obj.get("function_name"))
             .and_then(Json::as_str)
@@ -1327,6 +1313,7 @@ fn json_string_at(value: &Json, path: &[&str]) -> Option<String> {
 struct EventLookupMaps {
     name_map: std::collections::HashMap<Uuid, String>,
     start_ts_map: std::collections::HashMap<Uuid, DateTime<Utc>>,
+    llm_start_model_names: HashMap<Uuid, String>,
     tool_call_ids: std::collections::HashMap<Uuid, String>,
     suppressed_llm_events: HashSet<Uuid>,
     supplemental_llm_metrics: HashMap<Uuid, AtifMetrics>,
@@ -1353,16 +1340,23 @@ impl EventLookupMaps {
     ) -> Self {
         let mut name_map = std::collections::HashMap::new();
         let mut start_ts_map = std::collections::HashMap::new();
+        let mut llm_start_model_names = HashMap::new();
         for event in events {
             if is_start_event(event) {
                 name_map.insert(event.uuid(), event.name().to_string());
                 start_ts_map.insert(event.uuid(), *event.timestamp());
+                if event.category().map(|category| category.as_str()) == Some("llm")
+                    && let Some(model_name) = model_name_for_llm_event(event)
+                {
+                    llm_start_model_names.insert(event.uuid(), model_name);
+                }
             }
         }
         let llm_dedupe = build_llm_dedupe(llm_dedupe_events);
         Self {
             name_map,
             start_ts_map,
+            llm_start_model_names,
             tool_call_ids: build_tool_call_correlations(tool_correlation_events),
             suppressed_llm_events: llm_dedupe.suppressed_events,
             supplemental_llm_metrics: llm_dedupe.supplemental_metrics,
@@ -1454,11 +1448,24 @@ impl LlmSpanCandidate {
             model_name: start
                 .model_name()
                 .or_else(|| end.model_name())
-                .map(ToOwned::to_owned),
+                .map(ToOwned::to_owned)
+                .or_else(|| model_name_for_llm_event(start))
+                .or_else(|| model_name_for_llm_event(end)),
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
-            end_metrics: end
-                .data()
-                .and_then(|output| extract_metrics(output, Some(end.name()), end.model_name())),
+            end_metrics: end.data().and_then(|output| {
+                let normalized_response = end.normalized_llm_response();
+                let requested_model = start
+                    .model_name()
+                    .map(ToOwned::to_owned)
+                    .or_else(|| model_name_for_llm_event(start))
+                    .or_else(|| end.model_name().map(ToOwned::to_owned));
+                extract_metrics(
+                    output,
+                    Some(end.name()),
+                    requested_model.as_deref(),
+                    normalized_response.as_deref(),
+                )
+            }),
             hook_instrumentation: is_hook_instrumented_llm_event(start)
                 || is_hook_instrumented_llm_event(end),
             gateway_instrumentation: is_gateway_instrumented_llm_event(start)
@@ -2271,6 +2278,10 @@ impl StepConversionState {
         let reasoning_effort = self.current_reasoning_effort.take();
         let reasoning_content = extract_reasoning_content(output);
         let start_ts = lookups.start_ts_map.get(&event.uuid()).cloned();
+        let paired_start_model = lookups
+            .llm_start_model_names
+            .get(&event.uuid())
+            .map(String::as_str);
         let ancestry = build_ancestry(event, &lookups.name_map);
         let invocation = build_invocation_info(
             start_ts,
@@ -2280,7 +2291,15 @@ impl StepConversionState {
         );
 
         let metrics = merge_metrics(
-            extract_metrics(output, Some(event.name()), event.model_name()),
+            {
+                let normalized_response = event.normalized_llm_response();
+                extract_metrics(
+                    output,
+                    Some(event.name()),
+                    paired_start_model.or_else(|| event.model_name()),
+                    normalized_response.as_deref(),
+                )
+            },
             lookups.supplemental_llm_metrics.get(&event.uuid()),
         );
 
@@ -2292,7 +2311,7 @@ impl StepConversionState {
                 .and_then(|response| atif_message_from_annotated_response(response))
                 .unwrap_or_else(|| extract_llm_response_message(output)),
             timestamp: Some(event.timestamp().to_rfc3339()),
-            model_name: event.model_name().map(ToOwned::to_owned),
+            model_name: model_name_for_llm_event(event),
             reasoning_effort,
             reasoning_content,
             tool_calls,

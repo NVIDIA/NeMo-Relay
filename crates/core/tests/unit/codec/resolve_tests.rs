@@ -186,6 +186,10 @@ fn normalize_response_none_for_unrecognized_shape() {
     assert!(normalize_response(&json!({"foo": 1})).is_none());
     // Ambiguous/empty objects do not classify, so they do not decode.
     assert!(normalize_response(&json!({})).is_none());
+    // Multiple matching shapes are ambiguous: detection and normalization share
+    // one exactly-one rule, so normalization must also decline (guards the
+    // shared classifier against divergence).
+    assert!(normalize_response(&json!({"choices": [], "output": []})).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +219,98 @@ fn normalize_request_decodes_detected_anthropic() {
 }
 
 #[test]
+fn normalize_request_decodes_detected_responses() {
+    // `input` selects the OpenAI Responses surface (priority over chat/anthropic).
+    let request = req(json!({
+        "model": "gpt-4o",
+        "input": "Hello, world!"
+    }));
+    let decoded = normalize_request(&request).expect("responses request decodes");
+    assert!(!decoded.messages.is_empty());
+}
+
+#[test]
 fn normalize_request_none_for_unknown_shape() {
     assert!(normalize_request(&req(json!({"foo": 1}))).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// detect_request_surface_with_hint (provider hint upgrades the ambiguous shape)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hint_none_matches_plain_detection() {
+    for body in [
+        json!({"input": []}),
+        json!({"instructions": "x"}),
+        json!({"system": "x", "messages": []}),
+        json!({"messages": []}),
+        json!({"input": [], "system": "x", "messages": []}),
+        json!({}),
+        json!({"foo": 1}),
+        json!([1, 2, 3]),
+    ] {
+        assert_eq!(
+            detect_request_surface_with_hint(&body, None),
+            detect_request_surface(&body),
+            "hint=None must match plain detection for {body:?}",
+        );
+    }
+}
+
+#[test]
+fn hint_anthropic_upgrades_system_less_messages() {
+    assert_eq!(
+        detect_request_surface(&json!({"messages": []})),
+        Some(ProviderSurface::OpenAIChat)
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(&json!({"messages": []}), Some("anthropic")),
+        Some(ProviderSurface::AnthropicMessages)
+    );
+}
+
+#[test]
+fn hint_other_or_unknown_provider_stays_chat() {
+    for hint in [Some("openai"), Some("passthrough"), Some("gemini"), None] {
+        assert_eq!(
+            detect_request_surface_with_hint(&json!({"messages": []}), hint),
+            Some(ProviderSurface::OpenAIChat),
+            "messages-only with hint {hint:?} should stay OpenAIChat",
+        );
+    }
+}
+
+#[test]
+fn hint_never_overrides_strong_signals() {
+    assert_eq!(
+        detect_request_surface_with_hint(&json!({"input": [], "messages": []}), Some("anthropic")),
+        Some(ProviderSurface::OpenAIResponses)
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(
+            &json!({"instructions": "x", "messages": []}),
+            Some("anthropic")
+        ),
+        Some(ProviderSurface::OpenAIResponses)
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(
+            &json!({"system": "x", "messages": []}),
+            Some("anthropic")
+        ),
+        Some(ProviderSurface::AnthropicMessages)
+    );
+}
+
+#[test]
+fn hint_does_not_classify_non_object_or_keyless() {
+    assert_eq!(
+        detect_request_surface_with_hint(&json!({}), Some("anthropic")),
+        None
+    );
+    assert_eq!(
+        detect_request_surface_with_hint(&json!([1, 2]), Some("anthropic")),
+        None
+    );
 }

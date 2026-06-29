@@ -453,7 +453,11 @@ output = []
 changed = []
 found_workspace_version = False
 local_dependencies = (
+    "nemo-relay-types",
+    "nemo-relay-worker-proto",
+    "nemo-relay-worker",
     "nemo-relay",
+    "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
     "nemo-relay-ffi",
@@ -647,6 +651,19 @@ else:
 path.write_text(updated)
 print(f"crates/python/Cargo.toml version updated to {cargo_version}")
 PY
+}
+
+published_cargo_packages() {
+    printf '%s\n' \
+        nemo-relay-types \
+        nemo-relay-plugin \
+        nemo-relay-worker-proto \
+        nemo-relay-worker \
+        nemo-relay \
+        nemo-relay-adaptive \
+        nemo-relay-pii-redaction \
+        nemo-relay-ffi \
+        nemo-relay-cli
 }
 
 # Keep local wheel packaging aligned with the CI matrix without requiring raw
@@ -844,6 +861,8 @@ clean:
         python/nemo_relay/*.so \
         python/nemo_relay/__pycache__ \
         python/nemo_relay/_native*.pyd \
+        examples/rust-native-plugin/Cargo.lock \
+        examples/rust-native-plugin/target \
         python/tests/__pycache__ \
         target
 
@@ -1116,6 +1135,73 @@ set-version version="":
     fi
     cd "$NEMO_RELAY_REPO_ROOT"
     set_project_version "$version"
+
+# --set [output_dir=<path>] [ref_name=<name>]
+package-rust:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    output_dir="{{ output_dir }}"
+    cd "$NEMO_RELAY_REPO_ROOT"
+    package_dir="$(prepare_package_dir crates)"
+    package_target_dir="$(mktemp -d)"
+    cleanup_package_target_dir() {
+        rm -rf "$package_target_dir"
+    }
+    trap cleanup_package_target_dir EXIT
+    ref_name={{ quote(ref_name) }}
+    if [[ -n "$ref_name" ]]; then
+        echo "Using explicit version $ref_name"
+        set_cargo_workspace_version "$ref_name"
+    fi
+    while IFS= read -r package; do
+        cargo_package_config=()
+        cargo_package_args=(--locked --package "$package" --target-dir "$package_target_dir")
+        if [[ -n "$ref_name" ]]; then
+            cargo_package_args+=(--allow-dirty)
+        fi
+        case "$package" in
+            nemo-relay)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-adaptive)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-worker)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                ;;
+            nemo-relay-plugin)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                ;;
+            nemo-relay-pii-redaction)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                ;;
+            nemo-relay-ffi|nemo-relay-cli)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
+                ;;
+        esac
+        if ((${#cargo_package_config[@]} == 0)); then
+            cargo package "${cargo_package_args[@]}"
+        else
+            cargo package "${cargo_package_args[@]}" "${cargo_package_config[@]}"
+        fi
+    done < <(published_cargo_packages)
+    find "$package_target_dir/package" -maxdepth 1 -type f -name '*.crate' -exec cp {} "$package_dir"/ \;
+    shopt -s nullglob
+    packages=("$package_dir"/*.crate)
+    if ((${#packages[@]} == 0)); then
+        echo "Error: No Cargo package artifacts found in $package_dir"
+        exit 1
+    fi
 
 # --set [output_dir=<path>] [ref_name=<name>]
 package-node:

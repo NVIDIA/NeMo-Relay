@@ -533,13 +533,14 @@ async fn collect_agents_filters_target_and_records_version() {
     std::fs::write(&codex, "#!/bin/sh\nprintf 'codex 1.2.3\\n'\n").unwrap();
     make_executable(&codex);
 
-    let _env = EnvScope::set(&[("PATH", Some(temp.path().as_os_str()))]);
-    let resolved = ResolvedConfig::default();
+    let mut resolved = ResolvedConfig::default();
+    resolved.agents.codex.command = Some(codex.to_string_lossy().into_owned());
     let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
 
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].name, "codex");
-    assert_eq!(agents[0].status, Status::Warn);
+    assert_eq!(agents[0].status, Status::Pass);
+    assert_eq!(agents[0].path.as_deref(), Some(codex.as_path()));
     assert_eq!(agents[0].version.as_deref(), Some("codex 1.2.3"));
 }
 

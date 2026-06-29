@@ -120,6 +120,16 @@ fn expect_not_found(error: FlowError, needle: &str) {
 }
 
 #[test]
+fn shared_type_reexports_keep_existing_core_paths() {
+    let request: LlmRequest = make_llm_request(json!({ "prompt": "hello" }));
+    let _shared_request: nemo_relay_types::api::llm::LlmRequest = request;
+    let scope_type: ScopeType = nemo_relay_types::api::scope::ScopeType::Agent;
+    assert_eq!(scope_type.as_str(), "agent");
+    let attributes: ToolAttributes = nemo_relay_types::api::tool::ToolAttributes::REMOTE;
+    assert!(attributes.contains(ToolAttributes::REMOTE));
+}
+
+#[test]
 fn test_manual_lifecycle_timestamp_overrides() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

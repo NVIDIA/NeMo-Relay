@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use bitflags::bitflags;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -29,16 +28,7 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 
-bitflags! {
-    /// Bitflags that modify LLM-call behavior and observability.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    pub struct LlmAttributes: u32 {
-        /// Marks the request as stateful from the runtime's perspective.
-        const STATEFUL = 0b01;
-        /// Marks the request as streaming.
-        const STREAMING = 0b10;
-    }
-}
+pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
 
 /// Runtime-owned handle identifying an active or completed LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -68,15 +58,6 @@ pub struct LlmHandle {
     /// Optional normalized model name for observability.
     #[builder(default, setter(into))]
     pub model_name: Option<String>,
-}
-
-/// JSON-shaped LLM request payload passed through the runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmRequest {
-    /// Provider-specific request headers.
-    pub headers: serde_json::Map<String, Json>,
-    /// Provider-specific request body.
-    pub content: Json,
 }
 
 /// Builder parameters for [`NemoRelayContextState::create_llm_handle`].

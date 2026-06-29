@@ -1298,6 +1298,91 @@ fn openclaw_replay_payloads_emit_flattened_openinference_llm_attributes() {
 }
 
 #[test]
+fn openclaw_replay_tool_call_alias_fields_emit_openinference_attributes() {
+    let (provider, exporter) = make_provider();
+    let mut processor =
+        OpenInferenceEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "content": {
+                "messages": [{"role": "user", "content": "Find docs."}],
+                "source": "openclaw.llm_output"
+            }
+        })),
+    ));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "openclaw-model-call",
+        ScopeType::Llm,
+        Some(json!({
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "call_id": "call-search-docs",
+                    "name": "top_level_search",
+                    "toolName": "camel_search",
+                    "function": {
+                        "name": "nested_search",
+                        "arguments": {"query": "docs"}
+                    }
+                },
+                {
+                    "call_id": "call-read-docs",
+                    "toolName": "read_docs",
+                    "args": {"path": "README.md"}
+                }
+            ],
+            "openclaw": {
+                "assistant_tool_call_names": ["top_level_search", "read_docs"]
+            }
+        })),
+    ));
+
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id",
+        "call-search-docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name",
+        "top_level_search",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments",
+        "{\"query\":\"docs\"}",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.1.tool_call.id",
+        "call-read-docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.name",
+        "read_docs",
+    );
+    assert_attr(
+        &attributes,
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments",
+        "{\"path\":\"README.md\"}",
+    );
+}
+
+#[test]
 fn openclaw_subagent_scopes_preserve_nested_and_fallback_parent_linkage() {
     let (provider, exporter) = make_provider();
     let mut processor =
@@ -1703,6 +1788,24 @@ fn output_value_extracts_chat_completion_display_text() {
         Some(&"2".to_string())
     );
     assert_eq!(attributes.get("llm.cost.total"), Some(&"0.001".to_string()));
+}
+
+#[test]
+fn display_text_from_tool_calls_preserves_legacy_name_precedence() {
+    assert_eq!(
+        display_text_from_tool_calls(&json!([
+            {
+                "name": "top_level",
+                "toolName": "camel",
+                "function": {"name": "nested"}
+            },
+            {
+                "toolName": "camel_without_top_level",
+                "function": {"name": "nested_without_top_level"}
+            }
+        ])),
+        Some("Requested tools: top_level, camel_without_top_level".to_string())
+    );
 }
 
 #[test]
@@ -2403,6 +2506,21 @@ fn helper_functions_cover_additional_openinference_branches() {
     assert_eq!(
         llm_attributes.get(oi::llm::MODEL_NAME.as_str()),
         Some(&"demo-model".to_string())
+    );
+    let raw_model_end = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("raw-llm")
+            .data(json!({"model": "raw-model", "answer": "ok"}))
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        None,
+    ));
+    let raw_model_attributes = attr_map(&common_attributes(&raw_model_end));
+    assert_eq!(
+        raw_model_attributes.get(oi::llm::MODEL_NAME.as_str()),
+        Some(&"raw-model".to_string())
     );
     assert_eq!(
         llm_attributes.get(oi::METADATA.as_str()),

@@ -1,0 +1,298 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package nemo.relay.worker.v1;
+
+service PluginWorker {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc InvokeStream(InvokeRequest) returns (stream StreamChunk);
+  rpc CancelInvocation(CancelInvocationRequest) returns (WorkerAck);
+  rpc Shutdown(ShutdownRequest) returns (WorkerAck);
+}
+
+service RelayHostRuntime {
+  rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
+  rpc PopScope(PopScopeRequest) returns (HostAck);
+  rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
+  rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
+  rpc ToolNext(ToolNextRequest) returns (JsonResult);
+  rpc LlmNext(LlmNextRequest) returns (JsonResult);
+  rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
+}
+
+message JsonEnvelope {
+  string schema = 1;
+  bytes json = 2;
+}
+
+enum RegistrationSurface {
+  REGISTRATION_SURFACE_UNSPECIFIED = 0;
+  SUBSCRIBER = 1;
+  TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
+  TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
+  TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
+  TOOL_REQUEST_INTERCEPT = 13;
+  TOOL_EXECUTION_INTERCEPT = 14;
+  LLM_SANITIZE_REQUEST_GUARDRAIL = 20;
+  LLM_SANITIZE_RESPONSE_GUARDRAIL = 21;
+  LLM_CONDITIONAL_EXECUTION_GUARDRAIL = 22;
+  LLM_REQUEST_INTERCEPT = 23;
+  LLM_EXECUTION_INTERCEPT = 24;
+  LLM_STREAM_EXECUTION_INTERCEPT = 25;
+}
+
+enum ScopeType {
+  SCOPE_TYPE_UNSPECIFIED = 0;
+  AGENT = 1;
+  FUNCTION = 2;
+  TOOL = 3;
+  LLM = 4;
+  RETRIEVER = 5;
+  EMBEDDER = 6;
+  RERANKER = 7;
+  GUARDRAIL = 8;
+  EVALUATOR = 9;
+  CUSTOM = 10;
+  UNKNOWN = 11;
+}
+
+message HandshakeRequest {
+  string activation_id = 1;
+  string plugin_id = 2;
+  string relay_version = 3;
+  string worker_protocol = 4;
+  string auth_token = 5;
+  string host_endpoint = 6;
+}
+
+message HandshakeResponse {
+  string plugin_id = 1;
+  string plugin_kind = 2;
+  bool allows_multiple_components = 3;
+  string worker_protocol = 4;
+  string sdk_name = 5;
+  string sdk_version = 6;
+  string runtime_name = 7;
+  string runtime_version = 8;
+  repeated RegistrationSurface supported_surfaces = 9;
+}
+
+message HealthRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+}
+
+message HealthResponse {
+  bool ok = 1;
+  string message = 2;
+  string plugin_id = 3;
+  string worker_protocol = 4;
+  string sdk_name = 5;
+  string sdk_version = 6;
+  string runtime_name = 7;
+  string runtime_version = 8;
+}
+
+message ValidateRequest {
+  string activation_id = 1;
+  string plugin_id = 2;
+  string auth_token = 3;
+  JsonEnvelope config = 4;
+}
+
+message ValidateResponse {
+  JsonEnvelope diagnostics = 1;
+  WorkerError error = 2;
+}
+
+message RegisterRequest {
+  string activation_id = 1;
+  string plugin_id = 2;
+  string auth_token = 3;
+  JsonEnvelope config = 4;
+}
+
+message RegisterResponse {
+  repeated Registration registrations = 1;
+  WorkerError error = 2;
+}
+
+message Registration {
+  string local_name = 1;
+  RegistrationSurface surface = 2;
+  int32 priority = 3;
+  bool break_chain = 4;
+}
+
+message InvokeRequest {
+  string activation_id = 1;
+  string invocation_id = 2;
+  string registration_name = 3;
+  RegistrationSurface surface = 4;
+  string continuation_id = 5;
+  ScopeContext scope = 6;
+  string auth_token = 7;
+
+  oneof payload {
+    JsonEnvelope event = 10;
+    ToolInvocation tool = 11;
+    LlmInvocation llm = 12;
+  }
+}
+
+message ToolInvocation {
+  string tool_name = 1;
+  JsonEnvelope value = 2;
+}
+
+message LlmInvocation {
+  string model_name = 1;
+  JsonEnvelope request = 2;
+  JsonEnvelope annotated_request = 3;
+  JsonEnvelope response = 4;
+}
+
+message InvokeResponse {
+  oneof result {
+    EmptyResult empty = 1;
+    JsonResult json = 2;
+    GuardrailResult guardrail = 3;
+    LlmRequestInterceptResult llm_request = 4;
+    WorkerError error = 5;
+  }
+}
+
+message EmptyResult {}
+
+message JsonResult {
+  JsonEnvelope value = 1;
+  WorkerError error = 2;
+}
+
+message GuardrailResult {
+  string block_reason = 1;
+}
+
+message LlmRequestInterceptResult {
+  JsonEnvelope request = 1;
+  JsonEnvelope annotated_request = 2;
+  bool has_annotated_request = 3;
+}
+
+message StreamChunk {
+  oneof item {
+    JsonEnvelope value = 1;
+    WorkerError error = 2;
+  }
+}
+
+message CancelInvocationRequest {
+  string activation_id = 1;
+  string invocation_id = 2;
+  string auth_token = 3;
+  string reason = 4;
+}
+
+message ShutdownRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string reason = 3;
+}
+
+message WorkerAck {
+  bool accepted = 1;
+  string message = 2;
+}
+
+message HostAck {
+  bool ok = 1;
+  WorkerError error = 2;
+}
+
+message WorkerError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message ScopeContext {
+  string scope_stack_id = 1;
+  string parent_scope_id = 2;
+}
+
+message EmitMarkRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  ScopeContext scope = 3;
+  string name = 4;
+  JsonEnvelope data = 5;
+  JsonEnvelope metadata = 6;
+}
+
+message PushScopeRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  ScopeContext scope = 3;
+  string name = 4;
+  ScopeType scope_type = 5;
+  JsonEnvelope data = 6;
+  JsonEnvelope metadata = 7;
+  JsonEnvelope input = 8;
+}
+
+message PushScopeResponse {
+  string scope_handle_id = 1;
+  WorkerError error = 2;
+}
+
+message PopScopeRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string scope_handle_id = 3;
+  JsonEnvelope output = 4;
+  JsonEnvelope metadata = 5;
+}
+
+message CreateScopeStackRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+}
+
+message CreateScopeStackResponse {
+  string scope_stack_id = 1;
+  WorkerError error = 2;
+}
+
+message DropScopeStackRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string scope_stack_id = 3;
+}
+
+message ToolNextRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string continuation_id = 3;
+  JsonEnvelope value = 4;
+}
+
+message LlmNextRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string continuation_id = 3;
+  JsonEnvelope request = 4;
+}
+
+message LlmStreamNextRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+  string continuation_id = 3;
+  JsonEnvelope request = 4;
+}

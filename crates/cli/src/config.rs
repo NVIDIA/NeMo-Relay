@@ -11,10 +11,12 @@ use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use strum::Display;
+use strum::{Display, IntoStaticStr};
 
 use crate::error::CliError;
 use crate::plugin_shim::PluginShimCommand;
+use crate::plugins::lifecycle::enforce_required_dynamic_plugin_startup;
+use crate::plugins::policy::DynamicPluginHostPolicy;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "nemo-relay")]
@@ -590,6 +592,7 @@ pub(crate) struct ResolvedConfig {
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
+    pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -601,7 +604,7 @@ pub(crate) struct ResolvedDynamicPluginConfig {
     pub(crate) source: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub(crate) enum DynamicPluginHostConfigStatus {
@@ -731,6 +734,7 @@ impl Default for GatewayConfig {
 pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, CliError> {
     let mut resolved = load_shared_config(args.config.as_ref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
+    enforce_required_dynamic_plugin_startup(args.config.as_ref(), &resolved)?;
     Ok(resolved)
 }
 
@@ -771,6 +775,9 @@ pub(crate) fn resolve_run_config(
     resolved.gateway.bind = "127.0.0.1:0"
         .parse()
         .expect("valid transparent bind address");
+    if !command.dry_run {
+        enforce_required_dynamic_plugin_startup(config, &resolved)?;
+    }
     Ok(resolved)
 }
 
@@ -1041,6 +1048,7 @@ fn apply_file_plugins_config(gateway: &mut GatewayConfig, plugins: Option<FilePl
 struct PluginTomlConfig {
     value: Option<Value>,
     dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
+    dynamic_plugin_policy: DynamicPluginHostPolicy,
     sources: Vec<PathBuf>,
 }
 
@@ -1048,6 +1056,8 @@ struct PluginTomlConfig {
 struct PluginTomlPluginsSection {
     #[serde(default)]
     dynamic: Vec<FileDynamicPluginConfig>,
+    #[serde(default)]
+    policy: Option<crate::plugins::policy::FileDynamicPluginHostPolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1070,6 +1080,7 @@ where
 {
     let paths = paths.into_iter().collect::<Vec<_>>();
     let mut dynamic_plugins = Vec::new();
+    let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
     let mut seen_plugin_ids = HashSet::new();
     let mut runtime_documents = Vec::new();
 
@@ -1087,14 +1098,13 @@ where
                     path.display()
                 ))
             })?;
-        dynamic_plugins.extend(resolve_dynamic_plugin_refs(
-            path,
-            &mut parsed,
-            &mut seen_plugin_ids,
-        )?);
+        let resolved_plugins =
+            resolve_dynamic_plugin_refs(path, &mut parsed, &mut seen_plugin_ids)?;
+        dynamic_plugins.extend(resolved_plugins.dynamic_plugins);
+        dynamic_plugin_policy.merge_from(resolved_plugins.dynamic_plugin_policy);
         runtime_documents.push((
             path.clone(),
-            serde_json::to_value(remove_dynamic_plugin_section(parsed))
+            serde_json::to_value(remove_dynamic_plugin_sections(parsed))
                 .expect("toml value serializes to JSON"),
         ));
     }
@@ -1109,11 +1119,15 @@ where
         Some((value, sources)) => Ok(Some(PluginTomlConfig {
             value: plugin_toml_runtime_value(value),
             dynamic_plugins,
+            dynamic_plugin_policy,
             sources,
         })),
-        None => Ok((!dynamic_plugins.is_empty()).then_some(PluginTomlConfig {
+        None => Ok((!dynamic_plugins.is_empty()
+            || dynamic_plugin_policy != DynamicPluginHostPolicy::default())
+        .then_some(PluginTomlConfig {
             value: None,
             dynamic_plugins,
+            dynamic_plugin_policy,
             sources: Vec::new(),
         })),
     }
@@ -1140,21 +1154,33 @@ fn apply_plugin_toml_config(
         resolved.gateway.plugin_config = Some(value);
     }
     resolved.dynamic_plugins = plugin_toml.dynamic_plugins;
+    resolved.dynamic_plugin_policy = plugin_toml.dynamic_plugin_policy;
     Ok(())
+}
+
+struct ResolvedDynamicPluginRefs {
+    dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
+    dynamic_plugin_policy: DynamicPluginHostPolicy,
 }
 
 fn resolve_dynamic_plugin_refs(
     source: &Path,
     value: &mut toml::Value,
     seen_plugin_ids: &mut HashSet<String>,
-) -> Result<Vec<ResolvedDynamicPluginConfig>, CliError> {
+) -> Result<ResolvedDynamicPluginRefs, CliError> {
     let Some(root) = value.as_table_mut() else {
-        return Ok(Vec::new());
+        return Ok(ResolvedDynamicPluginRefs {
+            dynamic_plugins: Vec::new(),
+            dynamic_plugin_policy: DynamicPluginHostPolicy::default(),
+        });
     };
 
     let plugins_value = root.get("plugins").cloned();
     let Some(plugins_value) = plugins_value else {
-        return Ok(Vec::new());
+        return Ok(ResolvedDynamicPluginRefs {
+            dynamic_plugins: Vec::new(),
+            dynamic_plugin_policy: DynamicPluginHostPolicy::default(),
+        });
     };
 
     let plugins: PluginTomlPluginsSection = plugins_value.try_into().map_err(|error| {
@@ -1166,6 +1192,7 @@ fn resolve_dynamic_plugin_refs(
 
     if let Some(toml::Value::Table(plugins_table)) = root.get_mut("plugins") {
         plugins_table.remove("dynamic");
+        plugins_table.remove("policy");
         if plugins_table.is_empty() {
             root.remove("plugins");
         }
@@ -1191,7 +1218,10 @@ fn resolve_dynamic_plugin_refs(
             source: source.to_path_buf(),
         });
     }
-    Ok(resolved)
+    Ok(ResolvedDynamicPluginRefs {
+        dynamic_plugins: resolved,
+        dynamic_plugin_policy: plugins.policy.map(Into::into).unwrap_or_default(),
+    })
 }
 
 fn resolve_dynamic_manifest_path(source: &Path, manifest: &str) -> PathBuf {
@@ -1213,11 +1243,12 @@ fn plugin_toml_runtime_value(value: Value) -> Option<Value> {
     }
 }
 
-fn remove_dynamic_plugin_section(mut value: toml::Value) -> toml::Value {
+fn remove_dynamic_plugin_sections(mut value: toml::Value) -> toml::Value {
     if let Some(root) = value.as_table_mut()
         && let Some(toml::Value::Table(plugins)) = root.get_mut("plugins")
     {
         plugins.remove("dynamic");
+        plugins.remove("policy");
         if plugins.is_empty() {
             root.remove("plugins");
         }

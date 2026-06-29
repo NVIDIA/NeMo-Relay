@@ -23,6 +23,7 @@ use crate::error::CliError;
 pub(crate) mod config_io;
 mod editor_model;
 pub(crate) mod lifecycle;
+pub(crate) mod policy;
 
 use self::config_io::*;
 use self::editor_model::*;

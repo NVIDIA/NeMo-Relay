@@ -54,6 +54,28 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
+    - component_id: plugin_sdk
+      name: Plugin SDK
+      paths:
+        - "crates/plugin/src"
+        - "crates/worker-proto/src"
+        - "crates/worker/src"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
+    - component_id: shared_types
+      name: Shared DTO Types
+      paths:
+        - "crates/types/src"
+      statuses:
+        - type: project
+          target: auto
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
     - component_id: cli
       name: CLI
       paths:

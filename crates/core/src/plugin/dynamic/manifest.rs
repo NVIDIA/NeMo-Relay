@@ -19,6 +19,8 @@ use super::{
 };
 use crate::plugin::{PluginError, Result};
 
+const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v1";
+
 /// Authored `relay-plugin.toml` manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -431,6 +433,8 @@ fn required_trimmed_string<'a>(value: Option<&'a str>, field: &str) -> Result<&'
             "{field} must not be empty"
         )));
     }
+    // Validate trimmed content while returning the original slice so each caller
+    // can decide whether preserving or normalizing whitespace is correct.
     Ok(value)
 }
 
@@ -511,7 +515,7 @@ fn validate_load_shape(kind: DynamicPluginKind, load: &DynamicPluginManifestLoad
         (DynamicPluginKind::Worker, DynamicPluginManifestLoad::Worker(load)) => {
             required_trimmed_string(load.entrypoint.as_deref(), "load.entrypoint")?;
             match load.runtime {
-                Some(WorkerRuntime::Python) => {}
+                Some(WorkerRuntime::Python | WorkerRuntime::Rust | WorkerRuntime::Command) => {}
                 None => {
                     return Err(PluginError::InvalidConfig(
                         "worker plugins must declare load.runtime".into(),
@@ -570,7 +574,15 @@ fn validate_compat_shape(
             }
         }
         DynamicPluginKind::Worker => {
-            required_trimmed_string(compat.worker_protocol.as_deref(), "compat.worker_protocol")?;
+            let worker_protocol = required_trimmed_string(
+                compat.worker_protocol.as_deref(),
+                "compat.worker_protocol",
+            )?;
+            if worker_protocol.trim() != SUPPORTED_WORKER_PROTOCOL {
+                return Err(PluginError::InvalidConfig(format!(
+                    "worker plugins must declare compat.worker_protocol = \"{SUPPORTED_WORKER_PROTOCOL}\""
+                )));
+            }
             if compat.native_api.is_some() {
                 return Err(PluginError::InvalidConfig(
                     "worker plugins must not declare compat.native_api".into(),
