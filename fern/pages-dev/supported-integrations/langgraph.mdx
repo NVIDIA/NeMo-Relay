@@ -101,6 +101,14 @@ pip install "nemo-relay[langgraph,langchain-nvidia]"
 
 </Tabs>
 
+## Verify the Integration
+
+The integration is wired correctly when:
+
+- `graph.invoke(...)` returns the incremented state from the example.
+- The `langgraph-request` scope contains the LangGraph run.
+- Nested LangChain agents inherit the same callback config when you pass the LangGraph `config` through.
+
 ## Observability
 
 Refer to [Observability](/observability-plugin/about) for details on exporting NeMo Relay observability data to third-party systems.
