@@ -52,6 +52,9 @@ This records the local source in the application's `pyproject.toml` through
 ## Run One Scope, One Tool Call, and One LLM Call
 
 The example below runs one minimal instrumented workflow through the binding.
+Save it as `quickstart.py` in the same Python project where you installed
+`nemo-relay`, then run `uv run python quickstart.py`. If you are not using
+`uv`, run it with the same Python environment where you installed the package.
 
 ```python
 import asyncio
@@ -97,7 +100,7 @@ asyncio.run(main())
 
 You should see:
 
-- Event lines for the scope, tool, LLM, and mark lifecycle
+- Event lines for the scope, tool, and LLM lifecycles, plus the `initialized` mark event
 - `{'echo': 'hello'}` from the tool call
 - A final object containing `ok: True` and the echoed message payload from the LLM callback
 

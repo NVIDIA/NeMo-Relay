@@ -22,11 +22,15 @@ mod manifest;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 mod registry;
+#[cfg(all(feature = "worker-grpc", not(target_arch = "wasm32")))]
+mod worker;
 
 pub use manifest::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
 pub use registry::*;
+#[cfg(all(feature = "worker-grpc", not(target_arch = "wasm32")))]
+pub use worker::*;
 
 /// Plugin execution lane.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]

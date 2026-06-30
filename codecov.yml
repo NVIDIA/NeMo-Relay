@@ -54,18 +54,6 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
-    - component_id: plugin_sdk
-      name: Plugin SDK
-      paths:
-        - "crates/plugin/src"
-        - "crates/worker-proto/src"
-        - "crates/worker/src"
-      statuses:
-        - type: project
-          target: 95%
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: shared_types
       name: Shared DTO Types
       paths:
@@ -128,6 +116,20 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
+    - component_id: plugin_sdk
+      name: Dynamic Plugin SDKs
+      paths:
+        - "crates/types/src"
+        - "crates/plugin/src"
+        - "crates/worker-proto/src"
+        - "crates/worker/src"
+        - "python/plugin/src/nemo_relay_plugin"
+      statuses:
+        - type: project
+          target: 95%
+          threshold: 0.5%
+          base: auto
+          if_ci_failed: error
 
 comment:
   after_n_builds: 22
@@ -157,6 +159,7 @@ ignore:
   - "target/"
   - "**/*.d.ts"
   - "**/*.pyi"
+  - "python/plugin/src/nemo_relay_plugin/_proto/**"
   - "python/nemo_relay/lib_native*.dylib.dSYM/**"
   # WebAssembly Rust wrappers are covered through wasm-pack execution and
   # reported through generated package JavaScript coverage.

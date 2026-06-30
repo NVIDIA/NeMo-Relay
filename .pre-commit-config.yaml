@@ -52,9 +52,15 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check . --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/**
+        entry: uv run ty check . --extra-search-path python/plugin/src --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/** --exclude python/plugin/src/nemo_relay_plugin/_proto/**
         language: system
         types: [python]
+        pass_filenames: false
+      - id: ty-python-plugin-example
+        name: ty (Python plugin example)
+        entry: uv run ty check examples/python-grpc-worker-plugin/nemo_relay_python_grpc_worker_example --extra-search-path python/plugin/src --exclude python/plugin/src/nemo_relay_plugin/_proto/**
+        language: system
+        files: '^(examples/python-grpc-worker-plugin/nemo_relay_python_grpc_worker_example/.*\.py|python/plugin/src/nemo_relay_plugin/.*\.py)$'
         pass_filenames: false
 
   # Documentation — external link validation
@@ -102,7 +108,14 @@ repos:
         name: uv.lock is up to date
         entry: uv lock
         language: system
-        files: '^(pyproject\.toml|uv\.lock)$'
+        files: '^(pyproject\.toml|python/plugin/pyproject\.toml|uv\.lock)$'
+        pass_filenames: false
+
+      - id: python-worker-proto-check
+        name: Python worker protobuf bindings are compatible
+        entry: just check-python-worker-proto
+        language: system
+        files: '^(crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker\.proto|python/plugin/(build_backend\.py|pyproject\.toml)|justfile)$'
         pass_filenames: false
 
       - id: node-lockfile-check

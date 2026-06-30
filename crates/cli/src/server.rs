@@ -10,7 +10,8 @@ use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, load_native_plugins,
+    DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, WorkerPluginActivation,
+    WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
 };
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
@@ -216,6 +217,7 @@ async fn idle_shutdown_future(
 struct PluginActivation {
     active: bool,
     native: Option<NativePluginActivation>,
+    worker: Option<WorkerPluginActivation>,
 }
 
 impl PluginActivation {
@@ -227,6 +229,7 @@ impl PluginActivation {
             return Ok(Self {
                 active: false,
                 native: None,
+                worker: None,
             });
         };
         register_adaptive_component().map_err(|error| {
@@ -251,12 +254,37 @@ impl PluginActivation {
                 })
             })
             .collect::<Result<Vec<_>, CliError>>()?;
+        let worker_specs = dynamic_plugins
+            .iter()
+            .filter(|plugin| plugin.kind == DynamicPluginKind::Worker)
+            .map(|plugin| {
+                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
+                    CliError::Config(format!(
+                        "worker dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                        plugin.plugin_id
+                    ))
+                })?;
+                Ok(WorkerPluginLoadSpec {
+                    plugin_id: plugin.plugin_id.clone(),
+                    manifest_ref,
+                    config: plugin.config.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, CliError>>()?;
         let native =
             if native_specs.is_empty() {
                 None
             } else {
                 Some(load_native_plugins(native_specs).map_err(|error| {
                     CliError::Config(format!("native plugin load failed: {error}"))
+                })?)
+            };
+        let worker =
+            if worker_specs.is_empty() {
+                None
+            } else {
+                Some(load_worker_plugins(worker_specs).map_err(|error| {
+                    CliError::Config(format!("worker plugin load failed: {error}"))
                 })?)
             };
         // Gateway already resolved its config; activate exactly (no re-discovery).
@@ -282,6 +310,7 @@ impl PluginActivation {
         Ok(Self {
             active: true,
             native,
+            worker,
         })
     }
 
@@ -295,6 +324,7 @@ impl PluginActivation {
             Ok(())
         };
         self.native.take();
+        self.worker.take();
         result
     }
 }

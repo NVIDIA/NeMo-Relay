@@ -5,14 +5,13 @@
 
 use std::future::Future;
 use std::net::{SocketAddr, TcpListener};
+use std::path::Path;
 #[cfg(unix)]
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Duration;
-#[cfg(unix)]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
@@ -453,6 +452,8 @@ async fn worker_service_invokes_every_registration_surface() {
     let calls = host.calls();
     assert!(calls.contains(&"mark:tool-exec:stack-1:parent-1".into()));
     assert!(calls.contains(&"create_scope_stack".into()));
+    assert!(calls.contains(&"mark:tool-exec-isolated:isolated-stack:".into()));
+    assert!(calls.contains(&"mark:tool-exec-restored:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:worker-scope:stack-1:parent-1".into()));
     assert!(calls.contains(&"pop:scope-handle-1".into()));
     assert!(calls.contains(&"drop:isolated-stack".into()));
@@ -687,6 +688,46 @@ async fn worker_service_validates_env_and_endpoints() {
         .expect_err("unix endpoint with missing parent fails during bind");
         assert_error_contains(bind_err, "failed to bind worker socket");
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_announces_ephemeral_tcp_endpoint_file() {
+    const ENVS: &[&str] = &[
+        "NEMO_RELAY_WORKER_SOCKET",
+        "NEMO_RELAY_HOST_SOCKET",
+        "NEMO_RELAY_WORKER_ID",
+        "NEMO_RELAY_WORKER_TOKEN",
+        "NEMO_RELAY_WORKER_ENDPOINT_FILE",
+    ];
+    let _env_guard = ENV_LOCK.lock().await;
+    let snapshot = EnvSnapshot::capture(ENVS);
+    let endpoint_file = unique_temp_file("nrw-endpoint");
+    let _ = std::fs::remove_file(&endpoint_file);
+
+    set_required_envs();
+    set_env("NEMO_RELAY_WORKER_SOCKET", "tcp://127.0.0.1:0");
+    set_env(
+        "NEMO_RELAY_WORKER_ENDPOINT_FILE",
+        endpoint_file.to_str().expect("endpoint path utf-8"),
+    );
+    let handle = tokio::spawn(serve_plugin_arc(Arc::new(MinimalPlugin)));
+    let endpoint = wait_for_endpoint_file(&endpoint_file).await;
+    assert!(endpoint.starts_with("http://127.0.0.1:"));
+
+    let mut client = connect_worker(&endpoint).await;
+    let health = client
+        .health(Request::new(HealthRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect("announced endpoint should accept connections")
+        .into_inner();
+    assert!(health.ok);
+
+    handle.abort();
+    let _ = std::fs::remove_file(endpoint_file);
+    snapshot.restore();
 }
 
 #[cfg(unix)]
@@ -1202,6 +1243,15 @@ impl WorkerPlugin for SurfacePlugin {
             async move {
                 runtime.emit_mark("tool-exec", None, None).await?;
                 let stack_id = runtime.create_scope_stack().await?;
+                let isolated_runtime = runtime.clone();
+                runtime
+                    .with_scope_stack(&stack_id, || async move {
+                        isolated_runtime
+                            .emit_mark("tool-exec-isolated", None, None)
+                            .await
+                    })
+                    .await?;
+                runtime.emit_mark("tool-exec-restored", None, None).await?;
                 let handle = runtime
                     .push_scope(None, "worker-scope", ScopeType::Function, None, None, None)
                     .await?;
@@ -1685,6 +1735,16 @@ async fn wait_for_port(endpoint: &str) {
     panic!("server did not start at {endpoint}");
 }
 
+async fn wait_for_endpoint_file(path: &Path) -> String {
+    for _ in 0..50 {
+        match std::fs::read_to_string(path) {
+            Ok(endpoint) if !endpoint.trim().is_empty() => return endpoint,
+            Ok(_) | Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    panic!("endpoint file was not written at {}", path.display());
+}
+
 #[cfg(unix)]
 async fn wait_for_unix_socket(path: &Path) {
     for _ in 0..50 {
@@ -2070,6 +2130,14 @@ fn remove_env(name: &str) {
     unsafe {
         std::env::remove_var(name);
     }
+}
+
+fn unique_temp_file(prefix: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
 
 #[cfg(unix)]

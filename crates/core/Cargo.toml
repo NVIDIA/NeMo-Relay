@@ -73,9 +73,24 @@ openinference = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
 ]
+worker-grpc = [
+    "dep:nemo-relay-worker-proto",
+    "dep:hyper-util",
+    "dep:tower",
+    "dep:tonic",
+    "tokio-stream/net",
+    "tonic/codegen",
+    "tonic/router",
+    "tonic/transport",
+    "tokio/io-util",
+    "tokio/net",
+    "tokio/process",
+    "tokio/rt-multi-thread",
+]
 
 [dependencies]
 nemo-relay-types.workspace = true
+nemo-relay-worker-proto = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
@@ -121,6 +136,11 @@ name = "native_plugin_integration"
 path = "tests/integration/native_plugin_tests.rs"
 
 [[test]]
+name = "worker_plugin_integration"
+path = "tests/integration/worker_plugin_tests.rs"
+required-features = ["worker-grpc"]
+
+[[test]]
 name = "middleware_integration"
 path = "tests/integration/middleware_tests.rs"
 
@@ -163,3 +183,5 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tonic = { version = "0.14.1", default-features = false, optional = true }
 object_store = { version = "0.13", default-features = false, features = ["aws"], optional = true }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }

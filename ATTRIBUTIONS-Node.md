@@ -6432,7 +6432,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## fern-api - 5.37.10
+## fern-api - 5.57.0
 **Repository URL**: https://github.com/fern-api/fern
 **License Type(s)**: Apache*
 ### License: https://opensource.org/licenses/

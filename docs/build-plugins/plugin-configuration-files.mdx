@@ -24,6 +24,63 @@ generic plugin document and component-local `config` objects use canonical
 
 </Note>
 
+## Shortest Path Example
+
+Use this minimal `plugins.toml` when you want the CLI gateway to start with one
+plugin-managed observability exporter and no extra layering:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "append"
+```
+
+For the most deterministic verification path, keep `plugins.toml` in the same
+directory as the gateway `config.toml` file for this run, then launch the
+wrapper with that explicit config path. For example:
+
+```text
+path/to/
+  config.toml
+  plugins.toml
+```
+
+```bash
+nemo-relay --config path/to/config.toml run -- codex
+```
+
+This keeps plugin discovery scoped to the colocated `plugins.toml` instead of
+relying on implicit project, user, or system plugin files. The plugin file is
+the configuration being demonstrated here; `--config` only tells the gateway
+which config root to use for this run. If you prefer implicit discovery, place
+the file at `./.nemo-relay/plugins.toml` or another discovered location and
+ensure no higher-precedence plugin file overrides the exporter you want to
+verify. Refer to [CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper
+command shapes.
+
+## What Success Looks Like
+
+The shortest-path setup is working when:
+
+- `nemo-relay` starts without plugin validation or activation errors.
+- The observability component activates the ATOF exporter configured in this
+  file.
+- An instrumented gateway run writes ATOF JSONL output to `logs/events.jsonl`.
+
+After that path works, expand the config with additional components, policies,
+or higher-precedence files as needed.
+
 ## File Shape
 
 `plugins.toml` uses the canonical plugin document shape:
@@ -191,7 +248,8 @@ across files. A higher-precedence component with the same `kind` merges into the
 lower-precedence component. A component with a different `kind` is added to the
 effective configuration.
 
-The `pricing` component has one additional merge rule: when both lower and
+Most components follow the general merge rules above. The built-in `pricing`
+component has one additional merge rule: when both lower and
 higher-precedence layers define `components.config.sources`, the
 higher-precedence sources are placed before lower-precedence sources instead of
 replacing them. This lets a user or project file override one model while still
@@ -206,10 +264,9 @@ Tables inside component config merge recursively.
 
 ## Configuration Layering
 
-Plugin settings can come from files and the code. The files are the
-configuration base layer and the code sits on top of it. If there is a
-conflict, the code will always take precedence over the files. The layering
-process is as follows:
+Plugin settings come from files and code. Files form the base layer, and code
+sits on top. When the two conflict, code takes precedence. Layering works as
+follows:
 
 1. Discover and merge the `plugins.toml` files from lowest to highest precedence
    (system → project → user), using the [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
@@ -224,12 +281,12 @@ Files and code differ only in how they treat a setting you **omit**:
 | `version`, `policy`, or the `enabled` flag of a component you declare | Inherited from a lower-precedence file | **Always taken from code** — its default if you did not set it |
 | A whole component kind, or a key inside a component's `config` | Inherited from a lower-precedence file | Inherited from the file layer |
 
-In other words, a file's gaps are filled by the layers beneath it, but code's
-typed fields are never gaps — they always carry a value, so they always take precedence.
-Only the open-ended parts of your code config (which components you include, and
-the keys within each component's `config`) merge with the files.
+In other words, the layers beneath a file fill its gaps. Code's typed fields
+are never gaps because they always carry a value, so they always take
+precedence. Only the open-ended parts of your code config (which components you
+include and the keys within each component's `config`) merge with the files.
 
-Without a filesystem — for example, a WebAssembly (wasm) build — no files are
+Without a filesystem, such as a WebAssembly (wasm) build, no files are
 read, so the base is empty and only your `initialize` config applies.
 
 ## Explicit Defaults And Overrides
@@ -249,7 +306,7 @@ enabled = false
 mode = "append"
 ```
 
-The merged config may still contain inherited ATOF sibling fields such as
+The merged config may still contain inherited ATOF sibling fields, such as
 `output_directory`, but the runtime ignores the section because `enabled =
 false`.
 
@@ -284,7 +341,7 @@ endpoints, and checks reachable OTLP endpoints when those settings are present.
 For Pricing, doctor validates enabled file and inline sources and fails when a
 source is unreadable or the catalog schema is invalid.
 
-## Relationship To `config.toml`
+## Relationship to `config.toml`
 
 `config.toml` owns gateway and agent setup, such as upstream provider base URLs
 and agent command configuration. `plugins.toml` owns reusable runtime behavior

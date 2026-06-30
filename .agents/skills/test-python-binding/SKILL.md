@@ -1,6 +1,6 @@
 ---
 name: test-python-binding
-description: Build and test the NeMo Relay Python binding; use this for python/nemo_relay or crates/python changes
+description: Build and test the NeMo Relay Python binding and worker plugin SDK; use for python/nemo_relay, python/plugin, or crates/python changes
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -15,18 +15,21 @@ work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
 Use this skill when the change is primarily in `python/nemo_relay`,
-`python/tests`, `crates/python`, or Python-facing docs/examples.
+`python/plugin`, `python/tests`, `crates/python`, or Python-facing
+docs/examples.
 
 ## Default Path
 
-1. Format changed Python wrapper and test files with `uv run ruff format python`.
+1. Format changed Python wrapper and test files with `uv run ruff format python python/plugin`.
 2. Run focused `pytest` first when you know the affected area.
-3. Run the full Python suite with `just test-python` before review.
-4. If any Rust files changed as part of the Python work, also run
+3. Run `just test-python-plugin` when the Python worker SDK changed.
+4. Run the full Python suite with `just test-python` before review.
+5. If any Rust files changed as part of the Python work, also run
    `cargo fmt --all`, `just test-rust`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
-5. Use `just build-python` when you want an explicit build-only pass.
-6. If the native Rust bridge changed, add the Rust crate tests for
+6. Use `just build-python` when you want an explicit build-only pass.
+7. Use `just build-python-plugin` when the Python worker SDK changed.
+8. If the native Rust bridge changed, add the Rust crate tests for
    `nemo-relay-python`.
 
 ## Python Test Style
@@ -54,8 +57,11 @@ Use this skill when the change is primarily in `python/nemo_relay`,
 # Focused test loop
 uv run pytest -k "<pattern>"
 
+# Focused Python worker plugin SDK suite
+just test-python-plugin
+
 # Format Python files
-uv run ruff format python
+uv run ruff format python python/plugin
 
 # Full Python suite
 just test-python
@@ -68,6 +74,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 # Rebuild the editable package plus native extension
 just build-python
 
+# Rebuild/install the Python worker plugin SDK
+just build-python-plugin
+
 # Native extension crate when crates/python changed
 cargo test -p nemo-relay-python
 ```
@@ -76,6 +85,8 @@ cargo test -p nemo-relay-python
 
 - If `crates/core`, `crates/adaptive`, or shared runtime semantics changed,
   also use `validate-change`.
+- If `python/plugin` or worker protocol behavior changed, also use
+  `maintain-dynamic-plugins`.
 - If the change is actually about docs only, prefer `contribute-docs`
   plus targeted command checks.
 
@@ -85,6 +96,9 @@ cargo test -p nemo-relay-python
 - `crates/python/Cargo.toml`
 - `crates/python/README.md`
 - `python/nemo_relay/README.md`
-- `docs/getting-started/python.md`
-- `docs/contribute/testing-and-docs.md`
+- `python/plugin/pyproject.toml`
+- `python/plugin/src/nemo_relay_plugin`
+- `python/tests/plugin`
+- `docs/getting-started/quick-start/python.mdx`
+- `docs/contribute/testing-and-docs.mdx`
 - `validate-change`

@@ -581,6 +581,7 @@ async fn adaptive_runtime_build_cache_request_facts_keeps_missing_stability_sema
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_bind_scope_requires_registration_and_passes_through_without_state() {
+    let _guard = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     reset_runtime_context();
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
         agent_id: Some("agent-1".to_string()),

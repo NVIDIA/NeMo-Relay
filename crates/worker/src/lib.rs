@@ -11,7 +11,6 @@ use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
-#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -38,9 +37,11 @@ use nemo_relay_worker_proto::v1::{
     WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::OnceCell;
+use tokio_stream::wrappers::TcpListenerStream;
 #[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server};
@@ -501,6 +502,24 @@ impl PluginRuntime {
         ack_to_result(response.ok, response.error)
     }
 
+    /// Runs an async operation with runtime calls bound to a specific host-owned scope stack.
+    ///
+    /// This is useful for isolated stacks created with [`Self::create_scope_stack`]. The previous
+    /// worker invocation scope is restored after the future completes.
+    pub async fn with_scope_stack<F, Fut, T>(&self, scope_stack_id: &str, f: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let scope = Some(scope_context(scope_stack_id));
+        TASK_SCOPE_CONTEXT
+            .scope(scope.clone(), async move {
+                let future = with_thread_scope(&scope, f);
+                future.await
+            })
+            .await
+    }
+
     /// Pushes a scope through the host runtime.
     pub async fn push_scope(
         &self,
@@ -683,7 +702,12 @@ pub async fn serve_plugin_arc(plugin: Arc<dyn WorkerPlugin>) -> Result<()> {
         activation_id: required_env("NEMO_RELAY_WORKER_ID")?,
         auth_token: required_env("NEMO_RELAY_WORKER_TOKEN")?,
     };
-    serve_plugin_arc_with_config(plugin, config).await
+    serve_plugin_arc_with_endpoint_file(
+        plugin,
+        config,
+        optional_env("NEMO_RELAY_WORKER_ENDPOINT_FILE").map(PathBuf::from),
+    )
+    .await
 }
 
 /// Serves a shared worker plugin using explicit endpoint and authentication configuration.
@@ -698,6 +722,14 @@ pub async fn serve_plugin_arc_with_config(
     plugin: Arc<dyn WorkerPlugin>,
     config: WorkerServerConfig,
 ) -> Result<()> {
+    serve_plugin_arc_with_endpoint_file(plugin, config, None).await
+}
+
+async fn serve_plugin_arc_with_endpoint_file(
+    plugin: Arc<dyn WorkerPlugin>,
+    config: WorkerServerConfig,
+    endpoint_file: Option<PathBuf>,
+) -> Result<()> {
     let runtime = PluginRuntime {
         activation_id: config.activation_id,
         auth_token: config.auth_token,
@@ -709,11 +741,15 @@ pub async fn serve_plugin_arc_with_config(
         runtime,
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
     };
-    serve_worker_service(service, &config.worker_endpoint).await
+    serve_worker_service(service, &config.worker_endpoint, endpoint_file.as_deref()).await
 }
 
 #[cfg(unix)]
-async fn serve_worker_service(service: WorkerService, endpoint: &str) -> Result<()> {
+async fn serve_worker_service(
+    service: WorkerService,
+    endpoint: &str,
+    endpoint_file: Option<&Path>,
+) -> Result<()> {
     if endpoint.starts_with("unix://") {
         let path = parse_unix_endpoint(endpoint)?;
         remove_stale_socket(&path)?;
@@ -726,24 +762,41 @@ async fn serve_worker_service(service: WorkerService, endpoint: &str) -> Result<
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()));
     }
-    serve_tcp_worker_service(service, endpoint).await
+    serve_tcp_worker_service(service, endpoint, endpoint_file).await
 }
 
 #[cfg(not(unix))]
-async fn serve_worker_service(service: WorkerService, endpoint: &str) -> Result<()> {
+async fn serve_worker_service(
+    service: WorkerService,
+    endpoint: &str,
+    endpoint_file: Option<&Path>,
+) -> Result<()> {
     if endpoint.starts_with("unix://") {
         return Err(WorkerSdkError::InvalidInput(
             "unix endpoints are not supported on this platform".into(),
         ));
     }
-    serve_tcp_worker_service(service, endpoint).await
+    serve_tcp_worker_service(service, endpoint, endpoint_file).await
 }
 
-async fn serve_tcp_worker_service(service: WorkerService, endpoint: &str) -> Result<()> {
+async fn serve_tcp_worker_service(
+    service: WorkerService,
+    endpoint: &str,
+    endpoint_file: Option<&Path>,
+) -> Result<()> {
     let addr = parse_tcp_endpoint(endpoint)?;
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|err| WorkerSdkError::Transport(format!("failed to bind worker socket: {err}")))?;
+    if let Some(path) = endpoint_file {
+        let local_addr = listener.local_addr().map_err(|err| {
+            WorkerSdkError::Transport(format!("failed to inspect worker socket: {err}"))
+        })?;
+        write_endpoint_file(path, &format!("http://{local_addr}"))?;
+    }
     Server::builder()
         .add_service(PluginWorkerServer::new(service))
-        .serve(addr)
+        .serve_with_incoming(TcpListenerStream::new(listener))
         .await
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
 }
@@ -1602,6 +1655,29 @@ fn remove_stale_socket(path: &Path) -> Result<()> {
 fn required_env(name: &str) -> Result<String> {
     std::env::var(name).map_err(|_| {
         WorkerSdkError::InvalidInput(format!("environment variable {name} is required"))
+    })
+}
+
+fn optional_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn write_endpoint_file(path: &Path, endpoint: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            WorkerSdkError::Transport(format!(
+                "failed to create worker endpoint file directory '{}': {err}",
+                parent.display()
+            ))
+        })?;
+    }
+    std::fs::write(path, endpoint).map_err(|err| {
+        WorkerSdkError::Transport(format!(
+            "failed to write worker endpoint file '{}': {err}",
+            path.display()
+        ))
     })
 }
 

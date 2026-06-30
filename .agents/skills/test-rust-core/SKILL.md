@@ -1,6 +1,6 @@
 ---
 name: test-rust-core
-description: Build and test the NeMo Relay Rust core and adaptive crates; use this for crates/core, crates/adaptive, or shared runtime semantics changes
+description: Build and test NeMo Relay Rust core, adaptive, and dynamic plugin crates; use for crates/core, crates/adaptive, crates/plugin, crates/worker, crates/worker-proto, crates/types, or shared runtime changes
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -15,7 +15,7 @@ work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
 Use this skill when a change is primarily in `crates/core`, `crates/adaptive`,
-or shared Rust runtime semantics.
+dynamic plugin Rust crates, or shared Rust runtime semantics.
 
 ## Default Path
 
@@ -46,6 +46,13 @@ cargo test -p nemo-relay
 # Adaptive crate when touched
 cargo test -p nemo-relay-adaptive
 
+# Dynamic plugin crates when touched
+cargo test -p nemo-relay-types
+cargo test -p nemo-relay-plugin
+cargo test -p nemo-relay-worker-proto
+cargo test -p nemo-relay-worker
+cargo test -p nemo-relay --features worker-grpc --test native_plugin_integration --test worker_plugin_integration
+
 # Compile sweep
 just build-rust
 
@@ -57,6 +64,9 @@ just ci=true test-rust
 
 - If a public API, event shape, middleware behavior, plugin semantics, or any
   `crates/core`/`crates/adaptive` behavior changed, also use `validate-change`.
+- If native dynamic plugins, gRPC workers, `nemo-relay-plugin`,
+  `nemo-relay-worker`, `nemo-relay-worker-proto`, or `nemo-relay-types` changed,
+  also use `maintain-dynamic-plugins`.
 - If the change is isolated to one binding wrapper on top of unchanged Rust
   semantics, prefer that binding's build/test skill instead.
 
@@ -67,5 +77,6 @@ just ci=true test-rust
 - `crates/adaptive/Cargo.toml`
 - `crates/core/README.md`
 - `crates/adaptive/README.md`
-- `docs/contribute/testing-and-docs.md`
+- `docs/contribute/testing-and-docs.mdx`
 - `validate-change`
+- `maintain-dynamic-plugins`

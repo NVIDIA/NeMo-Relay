@@ -351,6 +351,103 @@ symbol = "nemo_relay_fixture_native_plugin"
     manifest_path
 }
 
+fn materialize_native_example_manifest(dir: &Path) -> (PathBuf, PathBuf) {
+    let artifact_name = format!(
+        "{}nemo_relay_rust_native_plugin_example{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
+    let artifact_relative = Path::new("target").join("debug").join(&artifact_name);
+    let artifact_path = dir.join(&artifact_relative);
+    std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+    let artifact_body = b"native plugin example fixture";
+    std::fs::write(&artifact_path, artifact_body).unwrap();
+    let digest = Sha256::digest(artifact_body)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let template = std::fs::read_to_string(
+        repository_root.join("examples/rust-native-plugin/relay-plugin.toml"),
+    )
+    .unwrap();
+    let manifest = template
+        .replace("<platform-library-file>", &artifact_name)
+        .replace("<artifact-sha256>", &digest);
+    let manifest_path = dir.join("relay-plugin.toml");
+    std::fs::write(&manifest_path, manifest).unwrap();
+    (manifest_path, artifact_path)
+}
+
+#[test]
+fn tracked_native_plugin_example_satisfies_default_trust_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("native-example");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    materialize_native_example_manifest(&plugin_dir);
+
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    assert_eq!(resolved.dynamic_plugins.len(), 1);
+    assert_eq!(
+        resolved.dynamic_plugins[0].plugin_id,
+        "examples.rust_native_policy"
+    );
+}
+
+#[test]
+fn tracked_native_plugin_example_rejects_tampered_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("native-example");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let (_, artifact_path) = materialize_native_example_manifest(&plugin_dir);
+    std::fs::write(artifact_path, b"tampered native plugin example fixture").unwrap();
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err();
+
+    match error {
+        CliError::PluginLifecycle {
+            kind: PluginLifecycleFailureKind::Refused,
+            code: Some("integrity_failed"),
+            message,
+            ..
+        } => assert!(message.contains("failed integrity verification")),
+        other => panic!("unexpected integrity add error: {other}"),
+    }
+    assert!(
+        resolve_plugins_config(None)
+            .unwrap()
+            .dynamic_plugins
+            .is_empty()
+    );
+}
+
 #[test]
 fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
