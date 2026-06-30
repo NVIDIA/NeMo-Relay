@@ -27,7 +27,7 @@ or branding text updates that must preserve functional identifiers.
 - Node package names
 - WebAssembly crate or generated package names
 - C header names and symbol prefixes
-- Docs, examples, CI, and patch artifacts
+- Docs, examples, CI, and integration packages
 
 ## Rules
 
@@ -43,7 +43,7 @@ or branding text updates that must preserve functional identifiers.
 - [ ] Manifests updated
 - [ ] Source imports and symbol names updated
 - [ ] Docs and examples updated
-- [ ] Patch files and scripts updated
+- [ ] Integration packages and scripts updated
 - [ ] No stale old names remain in tracked files where they would break behavior
 - [ ] Full multi-language validation passes
 

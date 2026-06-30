@@ -3,7 +3,6 @@
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
-pub(crate) mod cursor;
 pub(crate) mod hermes;
 
 use axum::http::HeaderMap;
@@ -122,13 +121,11 @@ pub(crate) trait AgentPayloadExtractor {
 
 pub(super) struct ClaudeCodePayloadExtractor;
 pub(super) struct CodexPayloadExtractor;
-pub(super) struct CursorPayloadExtractor;
 pub(super) struct HermesPayloadExtractor;
 
 pub(super) static CLAUDE_CODE_PAYLOAD_EXTRACTOR: ClaudeCodePayloadExtractor =
     ClaudeCodePayloadExtractor;
 pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadExtractor;
-pub(super) static CURSOR_PAYLOAD_EXTRACTOR: CursorPayloadExtractor = CursorPayloadExtractor;
 pub(super) static HERMES_PAYLOAD_EXTRACTOR: HermesPayloadExtractor = HermesPayloadExtractor;
 
 impl AgentPayloadExtractor for ClaudeCodePayloadExtractor {
@@ -225,53 +222,6 @@ impl AgentPayloadExtractor for CodexPayloadExtractor {
     }
 }
 
-impl AgentPayloadExtractor for CursorPayloadExtractor {
-    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_session_id(
-            headers,
-            payload,
-            SessionHeaderPolicy::RelayOnly,
-            CURSOR_SESSION_ID_PATHS,
-        )
-    }
-
-    fn event_name(&self, payload: &Value) -> Option<String> {
-        agent_event_name(payload, CURSOR_EVENT_NAME_PATHS)
-    }
-
-    fn metadata(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        kind: AgentKind,
-        event_name: &str,
-    ) -> Value {
-        agent_metadata(payload, headers, kind, event_name)
-    }
-
-    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_subagent_id(payload, headers, CURSOR_SUBAGENT_ID_PATHS)
-    }
-
-    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
-        agent_llm_hint(payload, self.subagent_id(payload, headers))
-    }
-
-    fn tool_call(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        event_name: &str,
-    ) -> ExtractedToolCall {
-        agent_tool_call(
-            payload,
-            self.subagent_id(payload, headers),
-            event_name,
-            CURSOR_TOOL_PATHS,
-        )
-    }
-}
-
 impl AgentPayloadExtractor for HermesPayloadExtractor {
     fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
         // Hermes pre-tool correlation already treats the Claude installed-mode
@@ -358,17 +308,6 @@ const CODEX_SESSION_ID_PATHS: &[&[&str]] = &[
     &["extra", "session_id"],
     &["extra", "task_id"],
 ];
-const CURSOR_SESSION_ID_PATHS: &[&[&str]] = &[
-    &["session_id"],
-    &["sessionId"],
-    &["session", "id"],
-    &["conversation_id"],
-    &["conversationId"],
-    &["parent_session_id"],
-    &["task_id"],
-    &["extra", "session_id"],
-    &["extra", "task_id"],
-];
 const HERMES_SESSION_ID_PATHS: &[&[&str]] = &[
     &["session_id"],
     &["sessionId"],
@@ -396,20 +335,6 @@ const CLAUDE_EVENT_NAME_PATHS: &[&[&str]] = &[
     &["extra", "name"],
 ];
 const CODEX_EVENT_NAME_PATHS: &[&[&str]] = &[
-    &["hook_event_name"],
-    &["event_name"],
-    &["eventName"],
-    &["event"],
-    &["type"],
-    &["name"],
-    &["extra", "hook_event_name"],
-    &["extra", "event_name"],
-    &["extra", "eventName"],
-    &["extra", "event"],
-    &["extra", "type"],
-    &["extra", "name"],
-];
-const CURSOR_EVENT_NAME_PATHS: &[&[&str]] = &[
     &["hook_event_name"],
     &["event_name"],
     &["eventName"],
@@ -471,22 +396,6 @@ const CODEX_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["extra", "subagent", "id"],
     &["extra", "agent", "id"],
 ];
-const CURSOR_SUBAGENT_ID_PATHS: &[&[&str]] = &[
-    &["subagent_id"],
-    &["subagentId"],
-    &["child_subagent_id"],
-    &["childSubagentId"],
-    &["agent_id"],
-    &["subagent", "id"],
-    &["agent", "id"],
-    &["extra", "subagent_id"],
-    &["extra", "subagentId"],
-    &["extra", "child_subagent_id"],
-    &["extra", "childSubagentId"],
-    &["extra", "agent_id"],
-    &["extra", "subagent", "id"],
-    &["extra", "agent", "id"],
-];
 const HERMES_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["child_subagent_id"],
     &["childSubagentId"],
@@ -516,17 +425,6 @@ const CLAUDE_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["id"],
 ];
 const CODEX_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
-    &["tool_call_id"],
-    &["toolCallId"],
-    &["tool_use_id"],
-    &["call_id"],
-    &["extra", "tool_call_id"],
-    &["extra", "call_id"],
-    &["tool", "id"],
-    &["tool_input", "id"],
-    &["id"],
-];
-const CURSOR_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["tool_call_id"],
     &["toolCallId"],
     &["tool_use_id"],
@@ -580,13 +478,6 @@ const CODEX_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
     call_id: CODEX_TOOL_CALL_ID_PATHS,
     name: TOOL_NAME_PATHS,
     arguments: CODEX_TOOL_ARGUMENT_PATHS,
-    result: TOOL_RESULT_PATHS,
-    status: TOOL_STATUS_PATHS,
-};
-const CURSOR_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
-    call_id: CURSOR_TOOL_CALL_ID_PATHS,
-    name: TOOL_NAME_PATHS,
-    arguments: TOOL_ARGUMENT_PATHS,
     result: TOOL_RESULT_PATHS,
     status: TOOL_STATUS_PATHS,
 };

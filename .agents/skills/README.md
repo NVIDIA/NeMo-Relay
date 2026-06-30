@@ -11,7 +11,7 @@ itself.
 Use these skills for repository work such as:
 
 - Changing core or binding APIs
-- Maintaining patches, packaging, CI, and docs
+- Maintaining integrations, packaging, CI, and docs
 - Extending middleware or observability internals
 - Validating library changes across bindings
 

@@ -200,7 +200,7 @@ Before opening a PR, check the following:
 1. `README.md` still reflects the current workspace members and top-level docs.
 2. The relevant reference docs are updated for any public API change.
 3. The relevant crate or package README is updated when that surface changed.
-4. Embedded documentation snippets, patch docs, and binding-support notes are updated if examples or supported bindings changed.
+4. Embedded documentation snippets, integration docs, and binding-support notes are updated if examples or supported bindings changed.
 5. For docs site changes, run `just docs` (or `./scripts/build-docs.sh html` as a compatibility wrapper) — it regenerates ignored Fern API reference pages before validation.
 
 For documentation-heavy changes, prefer small targeted commits so the history
@@ -223,7 +223,7 @@ Complete these checks before opening or updating a pull request.
 
 1. Ensure all pre-commit hooks pass.
 2. Run the relevant test suites and confirm they pass.
-3. Verify your changes compile cleanly with the relevant `./scripts/build*.sh` entrypoint.
+3. Verify your changes compile cleanly with the relevant target-specific build recipe, such as `just build-rust` or `just build-python`.
 4. Update the relevant documentation entry points and references.
 5. Rebase your branch on the latest `main` to avoid merge conflicts.
 

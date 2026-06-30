@@ -31,8 +31,6 @@ environment variables, or shared TOML config.
   uses hook-supervised lazy sidecar startup only, with no wrapper, user-level daemon,
   login item, launchd agent, systemd user service, scheduled task, or persistent
   supervisor.
-- `cursor/` installs a Cursor `.cursor/hooks.json` bundle targeting
-  `POST /hooks/cursor`.
 - Hermes does not require a static bundle in this directory. The setup wizard
   (`nemo-relay config`) merges hook commands into `.hermes/config.yaml` when
   hermes is selected.
@@ -48,11 +46,10 @@ down when the agent exits.
 ```bash
 nemo-relay run -- claude
 nemo-relay run -- codex
-nemo-relay run -- cursor-agent
 nemo-relay run -- hermes
 ```
 
-Use `--agent claude|codex|cursor|hermes` when a wrapper hides the agent
+Use `--agent claude|codex|hermes` when a wrapper hides the agent
 command name. Use `--dry-run --print` to inspect generated config without
 launching.
 

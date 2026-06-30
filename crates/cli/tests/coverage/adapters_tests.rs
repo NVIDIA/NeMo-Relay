@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::adapters::{claude_code, codex, cursor, hermes};
+use crate::adapters::{claude_code, codex, hermes};
 
 #[test]
 fn maps_claude_canonical_tool_payload() {
@@ -164,9 +164,9 @@ fn maps_claude_stop_response_shape() {
     );
 }
 
-// Stop hook on Claude/Codex/Cursor (per-turn boundary) must yield a TurnEnded event so the
-// session manager can snapshot ATIF without closing the agent scope. Codex needs this because
-// it has no SessionEnd hook; Claude/Cursor get it for free for resilience.
+// Stop hooks on Claude/Codex (per-turn boundary) must yield a TurnEnded event so the session
+// manager can snapshot ATIF without closing the agent scope. Codex needs this because it has no
+// SessionEnd hook; Claude gets it for free for resilience.
 #[test]
 fn stop_hook_emits_turn_ended_for_codex() {
     let outcome = codex::adapt(
@@ -213,29 +213,6 @@ fn stop_hook_emits_turn_ended_for_claude() {
             .iter()
             .any(|e| matches!(e, NormalizedEvent::TurnEnded(_))),
         "claude Stop must produce a TurnEnded event for ATIF snapshot"
-    );
-}
-
-// Cursor classifies `stop` as AgentEnded (its existing per-adapter rule). The TurnEnded path
-// must NOT also fire there — flush_observers already writes ATIF on agent-end, and a follow-up
-// snapshot on a removed session would recreate an empty session and overwrite the freshly
-// written file with an empty trajectory.
-#[test]
-fn stop_hook_does_not_double_emit_for_cursor_agent_end() {
-    let outcome = cursor::adapt(
-        json!({ "session_id": "cursor-session", "hook_event_name": "stop" }),
-        &HeaderMap::new(),
-    );
-    assert!(
-        matches!(outcome.events.first(), Some(NormalizedEvent::AgentEnded(_))),
-        "cursor stop must classify as AgentEnded"
-    );
-    assert!(
-        !outcome
-            .events
-            .iter()
-            .any(|e| matches!(e, NormalizedEvent::TurnEnded(_))),
-        "cursor stop must NOT also produce TurnEnded — would double-write ATIF then wipe it"
     );
 }
 
@@ -301,12 +278,6 @@ fn agent_extractors_keep_fallbacks_at_adapter_boundary() {
     assert_fallbacks(
         &CODEX_PAYLOAD_EXTRACTOR,
         AgentKind::Codex,
-        &payload,
-        &headers,
-    );
-    assert_fallbacks(
-        &CURSOR_PAYLOAD_EXTRACTOR,
-        AgentKind::Cursor,
         &payload,
         &headers,
     );
@@ -379,7 +350,6 @@ fn agent_extractors_prefer_extra_call_ids_over_structural_ids() {
     for extractor in [
         &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
         &CODEX_PAYLOAD_EXTRACTOR,
-        &CURSOR_PAYLOAD_EXTRACTOR,
         &HERMES_PAYLOAD_EXTRACTOR,
     ] {
         assert_eq!(
@@ -404,7 +374,6 @@ fn agent_extractors_keep_hook_event_name_precedence() {
     for extractor in [
         &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
         &CODEX_PAYLOAD_EXTRACTOR,
-        &CURSOR_PAYLOAD_EXTRACTOR,
         &HERMES_PAYLOAD_EXTRACTOR,
     ] {
         assert_eq!(
@@ -459,34 +428,6 @@ fn codex_extractor_prefers_codex_specific_fields() {
 }
 
 #[test]
-fn cursor_extractor_keeps_cursor_session_and_nested_subagent_paths() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-claude-code-session-id",
-        "claude-session".parse().unwrap(),
-    );
-    let payload = json!({
-        "parent_session_id": "cursor-parent",
-        "extra": {
-            "subagent": { "id": "cursor-worker" }
-        }
-    });
-
-    assert_eq!(
-        CURSOR_PAYLOAD_EXTRACTOR
-            .session_id(&payload, &headers)
-            .as_deref(),
-        Some("cursor-parent")
-    );
-    assert_eq!(
-        CURSOR_PAYLOAD_EXTRACTOR
-            .subagent_id(&payload, &headers)
-            .as_deref(),
-        Some("cursor-worker")
-    );
-}
-
-#[test]
 fn hermes_extractor_prefers_child_subagent_and_claude_session_header() {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -523,38 +464,6 @@ fn hermes_extractor_prefers_child_subagent_and_claude_session_header() {
             .as_deref(),
         Some("nested-subagent")
     );
-}
-
-#[test]
-fn maps_cursor_subagent_and_permission_response() {
-    let headers = HeaderMap::new();
-    let outcome = cursor::adapt(
-        json!({
-            "session_id": "cursor-session",
-            "project_dir": "/repo",
-            "user_email": "dev@example.com",
-            "hook_event_name": "beforeShellExecution",
-            "subagent": { "id": "worker" },
-            "tool_call_id": "shell-1",
-            "tool_name": "shell",
-            "input": { "command": "cargo test" }
-        }),
-        &headers,
-    );
-    match &outcome.events[0] {
-        NormalizedEvent::ToolStarted(event) => {
-            assert_eq!(event.session_id, "cursor-session");
-            assert_eq!(event.subagent_id.as_deref(), Some("worker"));
-            assert!(event.metadata.get("project_dir").is_none());
-            assert!(event.metadata.get("user_email").is_none());
-            assert_eq!(event.payload["project_dir"], json!("/repo"));
-            assert_eq!(event.payload["user_email"], json!("dev@example.com"));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-    assert_eq!(outcome.response["permission"], json!("allow"));
-    assert!(outcome.response.get("user_message").is_none());
-    assert!(outcome.response.get("agent_message").is_none());
 }
 
 #[test]
@@ -989,7 +898,7 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         ("Notification", "notification"),
         ("Unrecognized.Event", "hook"),
     ] {
-        let outcome = cursor::adapt(
+        let outcome = codex::adapt(
             json!({
                 "eventName": event_name,
                 "model": "model-a",
@@ -1127,14 +1036,4 @@ fn stop_responses_preserve_vendor_shapes() {
     );
     assert!(matches!(codex.events[0], NormalizedEvent::LlmHint(_)));
     assert_eq!(codex.response, json!({}));
-
-    let cursor = cursor::adapt(
-        json!({
-            "session_id": "cursor-session",
-            "hook_event_name": "stop"
-        }),
-        &headers,
-    );
-    assert!(matches!(cursor.events[0], NormalizedEvent::AgentEnded(_)));
-    assert_eq!(cursor.response, json!({ "continue": true }));
 }

@@ -21,12 +21,12 @@ configuration.
 
 Use these guides when you need to:
 
-- Observe Claude Code, Codex, Cursor, or Hermes Agent sessions locally.
+- Observe Claude Code, Codex, or Hermes Agent sessions locally.
 - Configure coding-agent hooks for NeMo Relay lifecycle events.
 - Route model-provider traffic through the local NeMo Relay gateway.
 - Install persistent Claude Code or Codex host plugins without wrapping the
   agent command.
-- Validate and install model-pricing catalog sources for local cost estimates.
+- Validate and install model pricing catalog sources for local cost estimates.
 - Export local sessions to Agent Trajectory Interchange Format (ATIF), Agent
   Trajectory Observability Format (ATOF) JSONL, OpenTelemetry, or
   OpenInference.
@@ -48,7 +48,6 @@ controls.
 | Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
 | Codex | Yes | Yes | Partial | Hook forwarding and gateway-routed LLM optimization are supported after hooks are reviewed and activated. The missing session-end hook limits full coverage. |
 | Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool guardrails, and Hermes API-request telemetry are supported. Optimization depends on Hermes shell and API-request hook coverage. |
-| Cursor | Partial | Limited | No | Hook forwarding is supported. Gateway observability is limited. Missing hooks under `cursor-agent` limit full feature coverage. |
 
 ## Guides
 
@@ -63,8 +62,6 @@ Use these guide links to move from CLI setup into agent-specific instructions.
   application modes.
 - [Codex](/nemo-relay-cli/codex) covers transparent Codex CLI runs, local
   GUI/app caveats, model provider routing, and remote-task limits.
-- [Cursor](/nemo-relay-cli/cursor) covers transparent Cursor runs, temporary
-  hook patching, GUI and CLI smoke tests, and gateway routing limits.
 - [Hermes Agent](/nemo-relay-cli/hermes) covers Hermes shell hook installation,
   dynamic gateway URL handling, session-finalize behavior, and hook consent
   caveats.

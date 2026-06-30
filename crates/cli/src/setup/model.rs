@@ -60,7 +60,6 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
     let candidates = [
         (CodingAgent::ClaudeCode, "claude"),
         (CodingAgent::Codex, "codex"),
-        (CodingAgent::Cursor, "cursor-agent"),
         (CodingAgent::Hermes, "hermes"),
     ];
     candidates
@@ -387,7 +386,6 @@ pub(super) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
         let agent = match key {
             "claude" => Some(CodingAgent::ClaudeCode),
             "codex" => Some(CodingAgent::Codex),
-            "cursor" => Some(CodingAgent::Cursor),
             "hermes" => Some(CodingAgent::Hermes),
             _ => None,
         };
@@ -402,7 +400,6 @@ pub(super) fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'stat
     match agent {
         CodingAgent::ClaudeCode => ("claude", "claude"),
         CodingAgent::Codex => ("codex", "codex"),
-        CodingAgent::Cursor => ("cursor", "cursor-agent"),
         CodingAgent::Hermes => ("hermes", "hermes"),
     }
 }

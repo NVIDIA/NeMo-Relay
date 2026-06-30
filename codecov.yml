@@ -144,7 +144,6 @@ github_checks:
 
 ignore:
   - "**/examples/**"
-  - "third_party/"
   - "**/tests/**"
   - "crates/cli/tests/"
   # CLI TTY shells are exercised by smoke tests, but their prompt loops are

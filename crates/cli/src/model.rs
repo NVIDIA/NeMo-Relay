@@ -7,7 +7,6 @@ use serde_json::Value;
 pub(crate) enum AgentKind {
     Codex,
     ClaudeCode,
-    Cursor,
     Hermes,
     Gateway,
 }
@@ -19,7 +18,6 @@ impl AgentKind {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
-            Self::Cursor => "cursor",
             Self::Hermes => "hermes",
             Self::Gateway => "gateway",
         }
@@ -31,7 +29,7 @@ pub(crate) enum NormalizedEvent {
     AgentStarted(SessionEvent),
     AgentEnded(SessionEvent),
     /// Conversation-turn boundary that the gateway uses to snapshot ATIF without closing the
-    /// agent scope. Emitted alongside `LlmHint` for `Stop` hooks (Claude/Codex/Cursor).
+    /// agent scope. Emitted alongside `LlmHint` for `Stop` hooks (Claude/Codex).
     /// Required for codex 0.129 transparent runs because codex has no `SessionEnd`-equivalent
     /// event — the last `Stop` of the session leaves an up-to-date ATIF on disk. Multi-turn
     /// sessions write progressively complete trajectories; the underlying `AtifExporter::export()`

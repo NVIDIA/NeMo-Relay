@@ -294,10 +294,6 @@ A **stream execution intercept** is the streaming LLM variant of an execution in
 
 A **subscriber** is a consumer of emitted events. Subscribers receive the runtime event stream and can use it for in-process analytics, forwarding, or export. Examples include: - Custom event consumers - ATIF export - OpenTelemetry export - OpenInference export
 
-**Third-Party Integration Patch**
-
-A **third-party integration patch** is a repository patch maintained for an upstream framework under ``patches/`` and applied to the matching submodule under ``third_party/``.
-
 **Tool Call**
 
 A **tool call** is an instrumented invocation of a named tool or function-like operation. Managed tool calls emit start and end events, run tool middleware, and can carry an optional provider-specific ``tool_call_id``.

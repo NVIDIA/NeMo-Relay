@@ -17,9 +17,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: '^(ATTRIBUTIONS-(Rust|Python|Node)\.md|patches/.*\.patch)$'
+        exclude: '^ATTRIBUTIONS-(Rust|Python|Node)\.md$'
       - id: end-of-file-fixer
-        exclude: '^(ATTRIBUTIONS-(Rust|Python|Node)\.md|patches/.*\.patch)$'
+        exclude: '^ATTRIBUTIONS-(Rust|Python|Node)\.md$'
       - id: check-executables-have-shebangs
       - id: check-shebang-scripts-are-executable
       - id: check-yaml
@@ -52,7 +52,7 @@ repos:
     hooks:
       - id: ty
         name: ty (type check)
-        entry: uv run ty check . --extra-search-path python/plugin/src --exclude docs/** --exclude fern/** --exclude third_party/** --exclude ./examples/** --exclude .cache/** --exclude .claude/** --exclude python/plugin/src/nemo_relay_plugin/_proto/**
+        entry: uv run ty check . --extra-search-path python/plugin/src --exclude docs/** --exclude fern/** --exclude ./examples/** --exclude .cache/** --exclude .claude/** --exclude python/plugin/src/nemo_relay_plugin/_proto/**
         language: system
         types: [python]
         pass_filenames: false

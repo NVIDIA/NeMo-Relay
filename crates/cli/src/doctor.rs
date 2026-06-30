@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use futures_util::SinkExt;
 use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
-use nemo_relay::codec::pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
+use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
@@ -295,7 +295,6 @@ async fn collect_agents(
     let supported = [
         (CodingAgent::ClaudeCode, "claude", "claude"),
         (CodingAgent::Codex, "codex", "codex"),
-        (CodingAgent::Cursor, "cursor", "cursor-agent"),
         (CodingAgent::Hermes, "hermes", "hermes"),
     ];
     let mut out = Vec::with_capacity(supported.len());
@@ -372,7 +371,6 @@ fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option
     match agent {
         CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
-        CodingAgent::Cursor => agents.cursor.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
     }
 }
@@ -386,7 +384,6 @@ fn configured_agent_names(agents: &AgentConfigs) -> Vec<String> {
     [
         (CodingAgent::ClaudeCode, "claude"),
         (CodingAgent::Codex, "codex"),
-        (CodingAgent::Cursor, "cursor"),
         (CodingAgent::Hermes, "hermes"),
     ]
     .into_iter()
@@ -422,15 +419,6 @@ fn hook_status(
         CodingAgent::ClaudeCode | CodingAgent::Codex => {
             (Status::Pass, "hooks: injected during run".into())
         }
-        CodingAgent::Cursor if agents.cursor.patch_restore_hooks => {
-            (Status::Pass, "hooks: patched during run".into())
-        }
-        CodingAgent::Cursor => hook_file_status(
-            cursor_hooks_path(),
-            CodingAgent::Cursor,
-            readiness_required,
-            "hooks: user-managed",
-        ),
         CodingAgent::Hermes => match agents.hermes.hooks_path.as_deref() {
             Some(path) => hook_file_status(
                 Ok(path.to_path_buf()),
@@ -463,9 +451,6 @@ fn hook_file_status(
         }
     };
     match std::fs::read_to_string(&path) {
-        Ok(raw) if matches!(agent, CodingAgent::Cursor) => {
-            cursor_hook_file_status(&raw, &path, readiness_required, label)
-        }
         Ok(raw) if raw.contains(&format!("hook-forward {}", agent.as_arg())) => (
             Status::Pass,
             format!("{label}: installed at {}", path.display()),
@@ -489,115 +474,6 @@ fn hook_file_status(
             format!("{label}: could not read {}: {error}", path.display()),
         ),
     }
-}
-
-fn cursor_hook_file_status(
-    raw: &str,
-    path: &Path,
-    readiness_required: bool,
-    label: &str,
-) -> (Status, String) {
-    let has_nemo_hook = raw.contains("hook-forward cursor");
-    if !has_nemo_hook {
-        if readiness_required {
-            return (
-                Status::Fail,
-                format!("{label}: missing NeMo Relay hook in {}", path.display()),
-            );
-        }
-        return (
-            Status::Info,
-            format!("{label}: no NeMo Relay hook in {}", path.display()),
-        );
-    }
-
-    let parsed: Value = match serde_json::from_str(raw) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            return (
-                Status::Fail,
-                format!(
-                    "{label}: invalid Cursor hooks JSON in {}: {err}",
-                    path.display()
-                ),
-            );
-        }
-    };
-
-    if parsed.get("version").and_then(Value::as_u64) != Some(1) {
-        return (
-            Status::Fail,
-            format!(
-                "{label}: Cursor hook file {} must set top-level `version` to 1",
-                path.display()
-            ),
-        );
-    }
-
-    let Some(hooks) = parsed.get("hooks").and_then(Value::as_object) else {
-        return (
-            Status::Fail,
-            format!(
-                "{label}: Cursor hook file {} has no hooks object",
-                path.display()
-            ),
-        );
-    };
-    let has_direct_nemo_hook = hooks.values().any(cursor_event_has_direct_nemo_hook);
-    if has_nested_hook_group(&parsed) {
-        return (
-            Status::Fail,
-            format!(
-                "{label}: Cursor hook file {} uses nested hook groups; Cursor CLI requires direct command entries",
-                path.display()
-            ),
-        );
-    }
-    if !has_direct_nemo_hook {
-        return (
-            Status::Fail,
-            format!(
-                "{label}: Cursor hook file {} has no direct NeMo Relay command entries",
-                path.display()
-            ),
-        );
-    }
-
-    (
-        Status::Pass,
-        format!("{label}: installed at {}", path.display()),
-    )
-}
-
-fn cursor_event_has_direct_nemo_hook(event_hooks: &Value) -> bool {
-    event_hooks.as_array().is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry
-                .get("command")
-                .and_then(Value::as_str)
-                .is_some_and(|command| command.contains("hook-forward cursor"))
-        })
-    })
-}
-
-fn has_nested_hook_group(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => {
-            let nested_here = object.get("hooks").is_some_and(Value::is_array);
-            nested_here || object.values().any(has_nested_hook_group)
-        }
-        Value::Array(items) => items.iter().any(has_nested_hook_group),
-        _ => false,
-    }
-}
-
-fn cursor_hooks_path() -> Result<PathBuf, CliError> {
-    let cwd = std::env::current_dir()?;
-    let project = cwd
-        .ancestors()
-        .find(|ancestor| ancestor.join(".cursor").is_dir())
-        .unwrap_or(cwd.as_path());
-    Ok(project.join(".cursor/hooks.json"))
 }
 
 async fn probe_version(binary: &Path) -> Option<String> {
@@ -784,7 +660,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
         .find(|component| component.kind == PRICING_PLUGIN_KIND)
     else {
         checks.push(Check {
-            name: "Pricing",
+            name: "Model pricing",
             status: Status::Info,
             details: "component not configured".into(),
         });
@@ -793,7 +669,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
 
     if !component.enabled {
         checks.push(Check {
-            name: "Pricing",
+            name: "Model pricing",
             status: Status::Info,
             details: "component disabled".into(),
         });
@@ -805,7 +681,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
             Ok(config) => config,
             Err(error) => {
                 checks.push(Check {
-                    name: "Pricing",
+                    name: "Model pricing",
                     status: Status::Fail,
                     details: format!("invalid config: {error}"),
                 });
@@ -815,7 +691,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
 
     if config.sources.is_empty() {
         checks.push(Check {
-            name: "Pricing",
+            name: "Model pricing",
             status: Status::Info,
             details: "component configured with no sources".into(),
         });
@@ -830,14 +706,14 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
 fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
     match source {
         PricingSourceConfig::Inline { catalog } => Check {
-            name: "Pricing source",
+            name: "Model pricing source",
             status: Status::Pass,
             details: format!("inline:{index} valid ({} entries)", catalog.entries.len()),
         },
         PricingSourceConfig::File { path } => match std::fs::read_to_string(path) {
             Ok(raw) => match PricingCatalog::from_json_str(&raw) {
                 Ok(catalog) => Check {
-                    name: "Pricing source",
+                    name: "Model pricing source",
                     status: Status::Pass,
                     details: format!(
                         "file:{} valid ({} entries)",
@@ -846,13 +722,13 @@ fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
                     ),
                 },
                 Err(error) => Check {
-                    name: "Pricing source",
+                    name: "Model pricing source",
                     status: Status::Fail,
                     details: format!("file:{} invalid catalog: {error}", path.display()),
                 },
             },
             Err(error) => Check {
-                name: "Pricing source",
+                name: "Model pricing source",
                 status: Status::Fail,
                 details: format!("file:{} unreadable: {error}", path.display()),
             },

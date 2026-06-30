@@ -23,7 +23,7 @@ body:
         - Middleware or guardrails
         - Plugins
         - Observability or exporters
-        - Third-party integration patches
+        - Framework integrations
         - Build, packaging, or CI
         - Documentation or examples
         - Not sure

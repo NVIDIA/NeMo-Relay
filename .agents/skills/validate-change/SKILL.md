@@ -53,14 +53,13 @@ surfaces touched by a change.
   Use `test-wasm-binding`.
 - **FFI surface change**
   Use `test-ffi-surface`.
+- **Framework integration change**
+  Run the relevant language test target and focused integration tests or smoke
+  path.
 - **Dynamic plugin loader, SDK, or protocol change**
   Use `maintain-dynamic-plugins`. Run the targeted plugin crates and
   `just test-python-plugin` first, then escalate to the core validation matrix
   when runtime behavior or `crates/core` changed.
-- **Third-party integration or patch change**
-  Run patch validation with `./scripts/apply-patches.sh --check` and the relevant
-  integration tests. Keep the root `./scripts/*.sh` wrappers for third-party
-  flows; build and test entrypoints now live in the repository `justfile`.
 - **Docs-only change**
   Run targeted checks only if commands, package names, or examples changed.
   Use `just docs` for docs-site builds and `just docs-linkcheck` when links
@@ -109,10 +108,6 @@ npm run format --workspace=nemo-relay-node
 just build-wasm
 just test-wasm
 npm run precommit:format --workspace=nemo-relay-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
-
-# Third-party patches
-./scripts/bootstrap-third-party.sh
-./scripts/apply-patches.sh --check
 
 # Docs site
 just docs
@@ -181,6 +176,3 @@ If the change is large or public-facing, also verify:
 - Testing guide: `docs/contribute/testing-and-docs.mdx`
 - Contributor guide: `CONTRIBUTING.md`
 - Build and test dispatchers: `justfile`
-- Patch helpers: `scripts/apply-patches.sh`, `scripts/generate-patches.sh`
-- Third-party script implementations: `scripts/third-party/`
-- Dynamic plugin guidance: `maintain-dynamic-plugins`

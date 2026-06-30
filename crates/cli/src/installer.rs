@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io::Read;
-use std::path::Path;
 use std::time::Duration;
 
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -32,23 +31,6 @@ const HOOK_EVENTS: &[&str] = &[
     "SessionEnd",
 ];
 
-const CURSOR_HOOK_EVENTS: &[&str] = &[
-    "sessionStart",
-    "beforeSubmitPrompt",
-    "preToolUse",
-    "beforeShellExecution",
-    "beforeMCPExecution",
-    "postToolUse",
-    "afterShellExecution",
-    "afterMCPExecution",
-    "subagentStart",
-    "subagentStop",
-    "afterAgentResponse",
-    "afterAgentThought",
-    "preCompact",
-    "stop",
-    "sessionEnd",
-];
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 
 const HERMES_HOOK_EVENTS: &[&str] = &[
@@ -216,12 +198,11 @@ fn resolve_hook_gateway_url(
 /// Generates native hook configuration for the selected agent.
 ///
 /// The returned value always has a top-level `hooks` object. Claude/Codex use command hook
-/// groups with optional tool matchers, while Cursor and Hermes use direct command entries.
+/// groups with optional tool matchers, while Hermes uses direct command entries.
 pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
     match agent {
         CodingAgent::ClaudeCode => claude_hooks(command),
         CodingAgent::Codex => codex_hooks(command),
-        CodingAgent::Cursor => cursor_hooks(command),
         CodingAgent::Hermes => hermes_hooks(command),
     }
 }
@@ -229,7 +210,7 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
 // Returns the shell command a hook should run to forward an event to the gateway. Callers must
 // pass the executable they want hooks to invoke. Transparent-run callers should pass the absolute
 // path of the currently running gateway binary so spawned hook subprocesses do not depend on the
-// user's `PATH` (which Codex/Claude/Cursor inherit but which typically does not include
+// user's `PATH` (which Codex/Claude inherit but which typically does not include
 // `target/debug` or other dev locations); persistent-install callers can pass the bare name
 // `"nemo-relay"` because the user is expected to have the binary on `PATH` after install.
 pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> String {
@@ -242,10 +223,6 @@ fn claude_hooks(command: &str) -> Value {
 
 fn codex_hooks(command: &str) -> Value {
     hooks_for_events(HOOK_EVENTS, command, true)
-}
-
-fn cursor_hooks(command: &str) -> Value {
-    direct_command_hooks_for_events(CURSOR_HOOK_EVENTS, command)
 }
 
 // Generates Hermes YAML-compatible hook groups. Hermes expects direct command entries rather than
@@ -294,29 +271,8 @@ fn hooks_for_events(events: &[&str], command: &str, matcher_for_tools: bool) -> 
     json!({ "hooks": Value::Object(hooks) })
 }
 
-// Cursor CLI 2026.05 accepts direct command entries in `.cursor/hooks.json`; it does not execute
-// the nested hook-group shape used by Claude Code and Codex.
-fn direct_command_hooks_for_events(events: &[&str], command: &str) -> Value {
-    let hooks: serde_json::Map<String, Value> = events
-        .iter()
-        .map(|event| {
-            (
-                (*event).to_string(),
-                json!([{
-                    "command": command,
-                    "timeout": 30
-                }]),
-            )
-        })
-        .collect();
-    json!({
-        "version": 1,
-        "hooks": Value::Object(hooks)
-    })
-}
-
 // Identifies hook events that should receive wildcard tool matchers. The list includes current
-// Claude/Codex spellings. Cursor uses direct command hooks and does not call this helper.
+// Claude/Codex spellings.
 fn event_matches_tools(event: &str) -> bool {
     matches!(
         event,
@@ -404,20 +360,6 @@ pub(crate) fn merge_hermes_config(existing: &str, generated: Value) -> Result<St
     };
     let merged = merge_hooks(existing, generated)?;
     serde_yaml::to_string(&merged).map_err(|error| CliError::Install(error.to_string()))
-}
-
-/// Reads a JSON config file, returning `Null` for missing files.
-///
-/// Missing hook files are normal during first install and are merged as empty configs; malformed
-/// JSON fails closed with the path in the error so callers do not overwrite bad input.
-pub(crate) fn read_json_file(path: &Path) -> Result<Value, CliError> {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw).map_err(|error| {
-            CliError::Install(format!("invalid JSON in {}: {error}", path.display()))
-        }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-        Err(error) => Err(CliError::Io(error)),
-    }
 }
 
 // Validates optional JSON strings before they are embedded into hook-forward headers. Catches

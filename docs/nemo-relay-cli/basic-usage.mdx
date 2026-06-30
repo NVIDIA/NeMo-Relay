@@ -13,7 +13,7 @@ passthrough LLM gateway so NeMo Relay owns both the agent lifecycle and the mode
 request lifecycle.
 
 Use the gateway when you need one observability boundary for OpenAI Codex,
-Claude Code, Cursor, and Hermes without replacing each agent's canonical hook
+Claude Code, and Hermes without replacing each agent's canonical hook
 payload.
 
 ## Hook Endpoints
@@ -26,9 +26,6 @@ the payload in a shared gateway envelope.
 - `POST /hooks/claude-code` accepts Claude Code hook JSON and returns
   Claude-compatible fields such as `continue` and permission decisions when the
   hook event supports them.
-- `POST /hooks/cursor` accepts Cursor hook JSON and returns Cursor-compatible
-  fields such as `continue`, `permission`, `user_message`, and `agent_message`
-  when the hook event supports them.
 - `POST /hooks/hermes` accepts Hermes shell hook JSON and returns the empty JSON
   object expected by Hermes hook commands.
 
@@ -62,7 +59,6 @@ agent exits.
 ```bash
 nemo-relay codex
 nemo-relay claude
-nemo-relay cursor
 nemo-relay hermes
 ```
 
@@ -75,7 +71,7 @@ nemo-relay run -- codex
 
 If a launcher or wrapper hides the real agent name, set that wrapper as the
 configured command and pass `--agent`. The same pattern applies to Claude Code,
-Codex, Cursor, and Hermes:
+Codex, and Hermes:
 
 ```toml
 [agents.codex]
@@ -149,10 +145,6 @@ command = "claude"
 [agents.codex]
 command = "codex"
 
-[agents.cursor]
-command = "cursor-agent"
-patch_restore_hooks = true
-
 [agents.hermes]
 command = "hermes"
 ```
@@ -177,18 +169,18 @@ enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
-## Add Pricing For Cost Estimates
+## Add Model Pricing for Cost Estimates
 
-Pricing is configured with the same `plugins.toml` discovery path as
+Model pricing is configured with the same `plugins.toml` discovery path as
 Observability. The configured sources apply to transparent agent runs,
 standalone gateway runs, and evals or custom agents that initialize the same
-gateway plugin config. Framework patches, harnesses, and custom integrations do
-not need their own pricing logic when they emit managed LLM calls with response
-codecs: Relay attaches cost to the annotated response when the provider reports
-cost or when a configured pricing source matches the response model and token
-usage.
+gateway plugin config. Framework integrations, harnesses, and custom hosts do
+not need their own model pricing logic when they emit managed LLM calls with
+response codecs: Relay attaches cost to the annotated response when the
+provider reports cost or when a configured model pricing source matches the
+response model and token usage.
 
-Create a Relay pricing catalog JSON file:
+Create a Relay model pricing catalog JSON file:
 
 ```json
 {
@@ -218,43 +210,44 @@ Create a Relay pricing catalog JSON file:
 Validate and add the file-backed source:
 
 ```bash
-nemo-relay pricing validate /path/to/pricing.json
-nemo-relay pricing init --project
-nemo-relay pricing add-source /path/to/pricing.json --project
+nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing init --project
+nemo-relay model-pricing add-source /path/to/pricing.json --project
 ```
 
 Use `--user` instead of `--project` for a device-wide user config, or
-`--global` for `/etc/nemo-relay/plugins.toml`. `pricing add-source` prepends the
-source by default, so the new file becomes the highest-priority source for that
-scope. Use `--append` to add it as a lower-priority fallback.
+`--global` for `/etc/nemo-relay/plugins.toml`. `model-pricing add-source`
+prepends the source by default, so the new file becomes the highest-priority
+source for that scope. Use `--append` to add it as a lower-priority fallback.
 
 Resolve a model before running an agent:
 
 ```bash
-nemo-relay pricing resolve gpt-4o-mini \
+nemo-relay model-pricing resolve gpt-4o-mini \
   --provider openai \
   --prompt-tokens 1000 \
   --completion-tokens 500
 ```
 
-`pricing resolve` prints the source that won, the matched provider/model, and an
-estimated total when token counts are supplied. Use it to debug overlapping
-fleet, project, and user pricing files.
+`model-pricing resolve` prints the source that won, the matched provider/model,
+and an estimated total when token counts are supplied. Use it to debug
+overlapping fleet, project, and user model pricing files.
 
-Run doctor to validate the active pricing sources alongside exporter checks:
+Run doctor to validate the active model pricing sources alongside exporter
+checks:
 
 ```bash
 nemo-relay doctor codex
 ```
 
-Doctor fails when an enabled pricing source is unreadable or contains an invalid
-catalog, and it reports passing sources as `Pricing source`.
+Doctor fails when an enabled model pricing source is unreadable or contains an
+invalid catalog, and it reports passing sources as `Model pricing source`.
 
 Relay does not ship a canonical price catalog. Unknown models and missing token
 fields leave cost absent instead of defaulting to zero. For the catalog schema,
-provider-aware lookup behavior, threshold pricing, and custom `PricingSource`
-integrations, see
-[Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+provider-aware lookup behavior, threshold-based model pricing, and custom
+`PricingSource` integrations, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
 
 Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
 port is discovered by the wrapper and exposed to hooks through
@@ -342,20 +335,15 @@ Generated hook bundles subscribe to the events needed for that mapping:
 | --- | --- | --- |
 | Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
 | Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
-| Cursor | `beforeSubmitPrompt`, `afterAgentResponse`, `afterAgentThought` | `sessionStart`, `sessionEnd`, `subagentStart`, `subagentStop`, `preToolUse`, `postToolUse`, `beforeShellExecution`, `afterShellExecution`, `beforeMCPExecution`, `afterMCPExecution`, `preCompact`, `stop` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 
 Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks
 map to NeMo Relay LLM start/end events when present. Hermes `pre_llm_call` and
 `post_llm_call` remain private correlation hints.
 
-Cursor hook-only mode observes agent, subagent, and tool lifecycle. To observe
-Cursor LLM lifecycle completely, configure Cursor model traffic to use the
-gateway.
-
 ## Hook Forwarding
 
-Hooks generated by the wrapper (Claude/Codex/Cursor ephemeral, Hermes via
+Hooks generated by the wrapper (Claude/Codex ephemeral, Hermes via
 setup) invoke `nemo-relay hook-forward <agent>` from stdin. Inside the wrapper
 the gateway URL comes from `NEMO_RELAY_GATEWAY_URL` injected on every run;
 outside the wrapper (Hermes standalone, IDE-launched Claude/Codex) the hook
@@ -385,7 +373,6 @@ application-mode caveats.
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
 - [Plugin Installation](/nemo-relay-cli/plugin-installation)
-- [Cursor](/nemo-relay-cli/cursor)
 - [Hermes Agent](/nemo-relay-cli/hermes)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,

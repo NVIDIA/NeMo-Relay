@@ -108,7 +108,7 @@ nemo-relay-plugin = { workspace = true }
 members = ["python/plugin"]
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "third_party/langgraph_tests"]
+testpaths = ["python/tests"]
 asyncio_mode = "auto"
 pythonpath = ["python"]
 
