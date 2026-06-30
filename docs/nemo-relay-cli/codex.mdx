@@ -57,6 +57,18 @@ nemo-relay run \
   -- codex
 ```
 
+<Warning>
+Place Codex `--config` overrides before the `exec` subcommand:
+
+```bash
+nemo-relay codex -- --config 'model_reasoning_effort="high"' exec "Summarize this repository."
+```
+
+Codex accepts overrides before or after `exec`, but treats overrides after
+`exec` as command-specific and gives them higher precedence than root-level
+overrides which can conflict with `--config` settings provided by Relay.
+</Warning>
+
 ## Persistent Plugin Install
 
 Install the persistent plugin for Codex. It should start normally and load
