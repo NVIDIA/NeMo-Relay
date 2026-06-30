@@ -1182,6 +1182,22 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
 }
 
 #[test]
+fn cli_rejects_removed_cursor_entry_points() {
+    let output = Command::new(gateway_bin()).arg("cursor").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand 'cursor'"));
+
+    let output = Command::new(gateway_bin())
+        .args(["hook-forward", "cursor"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid value 'cursor'"));
+}
+
+#[test]
 fn cli_help_lists_plugin_install_commands() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
