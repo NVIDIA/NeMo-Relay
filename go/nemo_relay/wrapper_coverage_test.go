@@ -112,12 +112,12 @@ func TestStandaloneMiddlewareHelpers(t *testing.T) {
 	}
 
 	if err := RegisterLlmRequestIntercept("go_standalone_llm_req", 1, false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			var payload map[string]interface{}
-			_ = json.Unmarshal(content, &payload)
+			_ = json.Unmarshal(request.Content, &payload)
 			payload["intercepted"] = true
-			out, _ := json.Marshal(payload)
-			return headers, out, annotated, nil
+			request.Content, _ = json.Marshal(payload)
+			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept failed: %v", err)
@@ -131,7 +131,7 @@ func TestStandaloneMiddlewareHelpers(t *testing.T) {
 	var llmPayload struct {
 		Content map[string]interface{} `json:"content"`
 	}
-	if err := json.Unmarshal(request, &llmPayload); err != nil {
+	if err := json.Unmarshal(request.Request.Content, &llmPayload.Content); err != nil {
 		t.Fatalf("unmarshal llm request: %v", err)
 	}
 	if llmPayload.Content["intercepted"] != true {

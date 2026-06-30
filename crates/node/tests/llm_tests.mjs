@@ -592,7 +592,7 @@ describe('LLM intercepts', () => {
             null,
             null,
           ),
-        /expected object with 'request' and 'annotated' fields/i,
+        /invalid JS LLM request intercept outcome/i,
       );
     } finally {
       deregisterLlmRequestIntercept('node_llm_req_bad');
@@ -826,11 +826,32 @@ describe('LLM intercepts', () => {
       return {
         request,
         annotated,
+        pendingMarks: [
+          { name: 'request.first', data: { order: 1 } },
+          { name: 'request.second', metadata: { source: 'node' } },
+        ],
       };
     });
 
     const result = await llmRequestIntercepts('helper_llm', makeNative());
-    assert.equal(result.content.helper, true);
+    assert.equal(result.request.content.helper, true);
+    assert.equal(result.annotated, null);
+    assert.deepEqual(result.pendingMarks, [
+      {
+        name: 'request.first',
+        category: null,
+        category_profile: null,
+        data: { order: 1 },
+        metadata: null,
+      },
+      {
+        name: 'request.second',
+        category: null,
+        category_profile: null,
+        data: null,
+        metadata: { source: 'node' },
+      },
+    ]);
     deregisterLlmRequestIntercept('node_llm_req_helper');
   });
 

@@ -1207,9 +1207,12 @@ fn tool_conditional_execution(name: &str, args: &Bound<'_, PyAny>) -> PyResult<(
 /// Returns:
 ///     The (possibly transformed) ``LlmRequest``.
 #[pyfunction]
-fn llm_request_intercepts(name: &str, request: PyLLMRequest) -> PyResult<PyLLMRequest> {
+fn llm_request_intercepts(
+    name: &str,
+    request: PyLLMRequest,
+) -> PyResult<crate::py_types::PyLLMRequestInterceptOutcome> {
     let result = core_llm_api::llm_request_intercepts(name, request.inner).map_err(to_py_err)?;
-    Ok(PyLLMRequest { inner: result })
+    Ok(crate::py_types::PyLLMRequestInterceptOutcome { inner: result })
 }
 
 /// Run the registered LLM conditional execution guardrail chain.

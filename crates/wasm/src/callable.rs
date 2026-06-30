@@ -29,7 +29,9 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
 
 use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::LlmRequest;
+#[cfg(target_arch = "wasm32")]
+use nemo_relay::api::event::PendingMarkSpec;
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
@@ -266,7 +268,7 @@ pub fn wrap_js_tool_exec_fn(
 pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptFn {
     Arc::new(
         move |_name: &str, request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
-            Ok((request, annotated))
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
         },
     )
 }
@@ -278,7 +280,7 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLlmRequest>|
-              -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)> {
+              -> Result<LlmRequestInterceptOutcome> {
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let js_name = JsValue::from_str(name);
             let js_req = json_to_js(&req_json);
@@ -340,7 +342,24 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
                 )
             };
 
-            Ok((new_request, new_annotated))
+            let js_pending_marks =
+                js_sys::Reflect::get(&result, &JsValue::from_str("pendingMarks"))
+                    .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
+            let pending_marks = if js_pending_marks.is_null() || js_pending_marks.is_undefined() {
+                Vec::new()
+            } else {
+                let marks_json = js_to_json(&js_pending_marks)
+                    .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
+                serde_json::from_value::<Vec<PendingMarkSpec>>(marks_json).map_err(|e| {
+                    FlowError::Internal(format!("failed to deserialize pendingMarks: {e}"))
+                })?
+            };
+
+            Ok(LlmRequestInterceptOutcome {
+                request: new_request,
+                annotated_request: new_annotated,
+                pending_marks,
+            })
         },
     )
 }

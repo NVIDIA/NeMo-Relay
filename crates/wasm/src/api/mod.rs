@@ -2036,8 +2036,11 @@ pub fn llm_request_intercepts_wasm(
     let llm_request: CoreLlmRequest = serde_json::from_value(request_json)
         .map_err(|e| to_js_err(FlowError::Internal(e.to_string())))?;
     let result = relay_llm_api::llm_request_intercepts(name, llm_request).map_err(to_js_err)?;
-    let result_json =
-        serde_json::to_value(&result).map_err(|e| to_js_err(FlowError::Internal(e.to_string())))?;
+    let result_json = serde_json::json!({
+        "request": result.request,
+        "annotated": result.annotated_request,
+        "pendingMarks": result.pending_marks,
+    });
     Ok(json_to_js(&result_json))
 }
 

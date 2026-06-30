@@ -114,7 +114,7 @@ impl NativePlugin for FixtureNativePlugin {
             0,
             |_request| Ok(None),
         )?;
-        ctx.register_llm_request_intercept_with_marks(
+        ctx.register_llm_request_intercept(
             "fixture_llm_request_intercept",
             0,
             false,

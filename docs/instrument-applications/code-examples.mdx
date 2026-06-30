@@ -297,8 +297,8 @@ let request = LlmRequest {
     headers: Default::default(),
     content: json!({"messages": [{"role": "user", "content": "hello"}]}),
 };
-let rewritten = llm_request_intercepts("demo-provider", request)?;
-llm_conditional_execution(&rewritten)?;
+let outcome = llm_request_intercepts("demo-provider", request)?;
+llm_conditional_execution(&outcome.request)?;
 ```
 </Tab>
 

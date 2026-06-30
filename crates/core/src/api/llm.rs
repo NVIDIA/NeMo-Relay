@@ -14,7 +14,8 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
-    LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
+    EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
+    LlmStreamExecutionNextFn,
 };
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
@@ -261,20 +262,39 @@ fn emit_llm_start(
     request_codec: Option<&dyn LlmCodec>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
-    let (entries, subscribers) = {
+    let subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    emit_llm_start_with_subscribers(
+        handle,
+        request,
+        annotated_request,
+        request_codec,
+        &subscribers,
+    )
+}
+
+fn emit_llm_start_with_subscribers(
+    handle: &LlmHandle,
+    request: &LlmRequest,
+    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    request_codec: Option<&dyn LlmCodec>,
+    subscribers: &[EventSubscriberFn],
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let entries = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_sanitize_request_guardrails
         });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_sanitize_request_entries(&scope_locals);
-        (entries, subscribers)
+        state.llm_sanitize_request_entries(&scope_locals)
     };
     let sanitized_request =
         NemoRelayContextState::llm_sanitize_request_snapshot_chain(request.clone(), &entries);
@@ -295,23 +315,21 @@ fn emit_llm_start(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.build_llm_start_event(handle, Some(input), annotated_request)
     };
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, subscribers);
     Ok(())
 }
 
-fn emit_pending_request_marks(handle: &LlmHandle, marks: Vec<PendingMarkSpec>) -> Result<()> {
+fn emit_pending_request_marks(
+    handle: &LlmHandle,
+    marks: Vec<PendingMarkSpec>,
+    subscribers: &[EventSubscriberFn],
+) -> Result<()> {
     if marks.is_empty() {
         return Ok(());
     }
     ensure_runtime_owner()?;
-    let subscribers = {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
-    };
-    for (index, mark) in marks.into_iter().enumerate() {
-        let timestamp = handle.started_at
-            + TimeDelta::microseconds(i64::try_from(index).unwrap_or_default() + 1);
+    let timestamp = handle.started_at + TimeDelta::microseconds(1);
+    for mark in marks {
         let event = Event::Mark(MarkEvent::new(
             BaseEvent::builder()
                 .name(mark.name)
@@ -323,7 +341,7 @@ fn emit_pending_request_marks(handle: &LlmHandle, marks: Vec<PendingMarkSpec>) -
             mark.category,
             mark.category_profile,
         ));
-        NemoRelayContextState::emit_event(&event, &subscribers);
+        NemoRelayContextState::emit_event(&event, subscribers);
     }
     Ok(())
 }
@@ -417,12 +435,14 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
             response_codec_errors_fatal: true,
             attach_estimated_cost: false,
         },
+        None,
     )
 }
 
 fn llm_call_end_with_behavior(
     params: LlmCallEndParams<'_>,
     behavior: LlmCallEndBehavior,
+    lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     let LlmCallEndParams {
         handle,
@@ -441,7 +461,10 @@ fn llm_call_end_with_behavior(
             &registries.llm_sanitize_response_guardrails
         });
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        let subscribers = match lifecycle_subscribers {
+            Some(subscribers) => subscribers.to_vec(),
+            None => snapshot_event_subscribers(scope_subscribers)?,
+        };
         let context = global_context();
         let state = context
             .read()
@@ -501,13 +524,20 @@ fn llm_call_end_with_behavior(
     }
 }
 
-fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Result<()> {
+fn emit_llm_end_without_output(
+    handle: &LlmHandle,
+    metadata: Option<Json>,
+    lifecycle_subscribers: Option<&[EventSubscriberFn]>,
+) -> Result<()> {
     ensure_runtime_owner()?;
     let (event, subscribers) = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        let subscribers = match lifecycle_subscribers {
+            Some(subscribers) => subscribers.to_vec(),
+            None => snapshot_event_subscribers(scope_subscribers)?,
+        };
         let context = global_context();
         let state = context
             .read()
@@ -630,13 +660,19 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .model_name_opt(model_name)
             .build(),
     )?;
-    emit_llm_start(
+    let lifecycle_subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    emit_llm_start_with_subscribers(
         &handle,
         &intercepted_request,
         annotated_request.clone(),
         request_codec.as_deref(),
+        &lifecycle_subscribers,
     )?;
-    emit_pending_request_marks(&handle, pending_marks)?;
+    emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -664,13 +700,15 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                     response_codec_errors_fatal: false,
                     attach_estimated_cost: true,
                 },
+                Some(&lifecycle_subscribers),
             )?;
             Ok(response)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_llm_end_without_output(&handle, end_metadata);
+            let _ =
+                emit_llm_end_without_output(&handle, end_metadata, Some(&lifecycle_subscribers));
             Err(error)
         }
     }
@@ -787,13 +825,19 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             .model_name_opt(model_name)
             .build(),
     )?;
-    emit_llm_start(
+    let lifecycle_subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    emit_llm_start_with_subscribers(
         &handle,
         &intercepted_request,
         annotated_request,
         request_codec.as_deref(),
+        &lifecycle_subscribers,
     )?;
-    emit_pending_request_marks(&handle, pending_marks)?;
+    emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -810,21 +854,22 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 
     match execution(intercepted_request).await {
         Ok(raw_stream) => {
-            let wrapper = LlmStreamWrapper::new(
+            let wrapper = LlmStreamWrapper::new_managed(
                 raw_stream,
                 handle,
                 collector,
                 finalizer,
-                data,
                 metadata,
                 response_codec,
+                lifecycle_subscribers,
             );
             Ok(Box::pin(wrapper) as LlmJsonStream)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_llm_end_without_output(&handle, end_metadata);
+            let _ =
+                emit_llm_end_without_output(&handle, end_metadata, Some(&lifecycle_subscribers));
             Err(error)
         }
     }
@@ -849,15 +894,11 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 /// # Notes
 /// Conditional guardrails, codecs, and execution intercepts are not run by
 /// this helper.
-pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequest> {
-    Ok(llm_request_intercepts_with_marks(name, request)?.request)
-}
-
-/// Run the LLM request-intercept chain and return pending lifecycle marks.
+/// Run the LLM request-intercept chain and return its complete outcome.
 ///
 /// This helper does not emit the returned marks because it does not own an LLM
 /// lifecycle. Callers must attach them to the lifecycle they own.
-pub fn llm_request_intercepts_with_marks(
+pub fn llm_request_intercepts(
     name: &str,
     request: LlmRequest,
 ) -> Result<LlmRequestInterceptOutcome> {

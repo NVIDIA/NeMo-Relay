@@ -254,15 +254,14 @@ typedef char *(*NemoRelayLlmConditionalCb)(void *user_data, const struct FfiLLMR
  * C callback type for LLM request intercepts with unified annotated-aware
  * signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
  * optionally the annotated request as a JSON C string (null if no Codec
- * resolved). Writes transformed outputs to `out_request` and
- * `out_annotated_json`. Returns `NemoRelayStatus`.
+ * resolved). Writes one owned canonical outcome JSON string to
+ * `out_outcome_json`. Returns `NemoRelayStatus`.
  */
 typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
                                                           const char *name,
                                                           const struct FfiLLMRequest *request,
                                                           const char *annotated_json,
-                                                          struct FfiLLMRequest **out_request,
-                                                          char **out_annotated_json);
+                                                          char **out_outcome_json);
 
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
@@ -398,6 +397,25 @@ NemoRelayStatus nemo_relay_tool_conditional_execution(const char *name, const ch
 NemoRelayStatus nemo_relay_llm_request_intercepts(const char *name,
                                                   const char *native_json,
                                                   char **out);
+
+/**
+ * Allocate canonical JSON for a C LLM request-intercept callback result.
+ *
+ * `annotated_json` may be null. `pending_marks_json` may be null, in which
+ * case an empty list is serialized. The caller owns the returned string and
+ * must release it with [`nemo_relay_string_free`].
+ *
+ * # Safety
+ *
+ * `request` must point to a live [`FfiLLMRequest`], optional JSON inputs must
+ * be valid null-terminated strings when non-null, and `out_outcome_json` must
+ * be writable. The caller must free a successful output with
+ * [`nemo_relay_string_free`].
+ */
+NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new(const struct FfiLLMRequest *request,
+                                                                  const char *annotated_json,
+                                                                  const char *pending_marks_json,
+                                                                  char **out_outcome_json);
 
 /**
  * Run the registered LLM conditional execution guardrail chain.

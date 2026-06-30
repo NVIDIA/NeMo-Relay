@@ -63,7 +63,7 @@ func StreamExecute(name string, native interface{}, fn nemo_relay.LLMExecutionFu
 // RequestIntercepts runs the registered LLM request intercept chain on the
 // given request and returns the transformed request. This is a shorthand for
 // [nemo_relay.LlmRequestIntercepts].
-func RequestIntercepts(name string, request json.RawMessage) (json.RawMessage, error) {
+func RequestIntercepts(name string, request json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 	return nemo_relay.LlmRequestIntercepts(name, request)
 }
 

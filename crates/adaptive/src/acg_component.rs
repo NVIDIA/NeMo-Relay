@@ -598,7 +598,9 @@ pub(crate) fn create_acg_llm_request_intercept(
         let translated =
             translate_request(&request, &agent_id, &provider, plugin.as_ref(), &hot_cache)
                 .unwrap_or(request);
-        Ok((translated, annotated))
+        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            translated, annotated,
+        ))
     })
 }
 

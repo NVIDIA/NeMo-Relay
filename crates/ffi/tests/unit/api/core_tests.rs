@@ -6,6 +6,60 @@
 use super::*;
 
 #[test]
+fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
+    let headers = cstring(r#"{"x-test":true}"#);
+    let content = cstring(r#"{"model":"test"}"#);
+    let request = unsafe { nemo_relay_llm_request_new(headers.as_ptr(), content.as_ptr()) };
+    assert!(!request.is_null());
+
+    let marks = cstring(r#"[{"name":"first"},{"name":"second","data":{"order":2}}]"#);
+    let mut outcome_json = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_llm_request_intercept_outcome_json_new(
+                request,
+                ptr::null(),
+                marks.as_ptr(),
+                &mut outcome_json,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let outcome = unsafe { returned_json(outcome_json) };
+    assert_eq!(outcome["request"]["headers"]["x-test"], true);
+    assert_eq!(outcome["annotated_request"], Json::Null);
+    assert_eq!(outcome["pending_marks"][0]["name"], "first");
+    assert_eq!(outcome["pending_marks"][1]["data"]["order"], 2);
+
+    let malformed_marks = cstring(r#"{"name":"not-an-array"}"#);
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_llm_request_intercept_outcome_json_new(
+                request,
+                ptr::null(),
+                malformed_marks.as_ptr(),
+                &mut outcome_json,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(outcome_json.is_null());
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_llm_request_intercept_outcome_json_new(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut outcome_json,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+
+    unsafe { nemo_relay_llm_request_free(request) };
+}
+
+#[test]
 fn test_ffi_plugin_config_validate_initialize_and_clear() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();

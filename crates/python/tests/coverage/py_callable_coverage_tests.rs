@@ -60,7 +60,7 @@ def sync_llm_intercept(name, request, next):
     return {"name": name, "model": request.content["model"], "mode": "sync"}
 
 def request_echo(name, request, annotated):
-    return (request, annotated)
+    return Outcome(request, annotated)
 
 def request_bad_annotated(name, request, annotated):
     return (request, {"bad": True})
@@ -93,6 +93,12 @@ class RaisingResponseCodec:
         raise RuntimeError("decode boom")
 "#,
         );
+        module
+            .setattr(
+                "Outcome",
+                py.get_type::<crate::py_types::PyLLMRequestInterceptOutcome>(),
+            )
+            .unwrap();
 
         let tool_exec_py: Py<PyAny> = module.getattr("sync_tool_exec").unwrap().unbind();
         let tool_intercept_py: Py<PyAny> = module.getattr("sync_tool_intercept").unwrap().unbind();
@@ -142,9 +148,11 @@ class RaisingResponseCodec:
             "model": "codec-model"
         }))
         .unwrap();
-        let (_request, echoed_ann) =
-            request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
-        assert_eq!(echoed_ann.unwrap().last_user_message(), Some("annotated"));
+        let outcome = request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
+        assert_eq!(
+            outcome.annotated_request.unwrap().last_user_message(),
+            Some("annotated")
+        );
 
         let bad_request_intercept = wrap_py_llm_request_intercept_fn(
             module.getattr("request_bad_annotated").unwrap().unbind(),
@@ -153,7 +161,7 @@ class RaisingResponseCodec:
             bad_request_intercept("llm", make_request(), Some(annotated))
                 .unwrap_err()
                 .to_string()
-                .contains("result[1] is not AnnotatedLLMRequest")
+                .contains("must return LLMRequestInterceptOutcome")
         );
 
         let short_request_intercept = wrap_py_llm_request_intercept_fn(
@@ -163,7 +171,7 @@ class RaisingResponseCodec:
             short_request_intercept("llm", make_request(), None)
                 .unwrap_err()
                 .to_string()
-                .contains("result[1] extraction failed")
+                .contains("must return LLMRequestInterceptOutcome")
         );
 
         let mut collector = wrap_py_collector_fn(module.getattr("collector_ok").unwrap().unbind());

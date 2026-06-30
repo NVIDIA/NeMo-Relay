@@ -163,26 +163,12 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// - Third argument: Optional normalized request annotation to carry forward.
 ///
 /// # Returns
-/// A [`Result`] containing the transformed request and optional annotation.
+/// A [`Result`] containing the canonical request-intercept outcome.
 ///
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
 pub type LlmRequestInterceptFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
-        + Send
-        + Sync,
->;
-/// Rewrite or annotate an LLM request and schedule marks under its future scope.
-///
-/// This callback has the same inputs as [`LlmRequestInterceptFn`] but returns a
-/// structured outcome whose pending marks are emitted after the LLM-start
-/// event and before provider execution.
-pub type LlmRequestInterceptWithMarksFn = Arc<
     dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync,

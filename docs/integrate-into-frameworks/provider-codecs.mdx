@@ -87,7 +87,7 @@ from nemo_relay.codecs import OpenAIChatCodec
 
 def add_system_message(_name, request, annotated):
     if annotated is None:
-        return request, annotated
+        return nemo_relay.LLMRequestInterceptOutcome(request)
 
     # Attributes of the annotated request can be re-assigned, but cannot be modified in-place.
     # For example `annotated.messages.append(...)` would not work, but re-assigning
@@ -96,7 +96,7 @@ def add_system_message(_name, request, annotated):
         {"role": "system", "content": "Answer with concise technical detail."},
         *annotated.messages,
     ]
-    return request, annotated
+    return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
 
 nemo_relay.intercepts.register_llm_request(
     "framework.add_system_message",

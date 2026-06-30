@@ -194,7 +194,7 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
         stream: None,
         extra: serde_json::Map::new(),
     };
-    let (request, returned_annotated) = req_fn(
+    let outcome = req_fn(
         "model",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -203,6 +203,8 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
         Some(annotated.clone()),
     )
     .unwrap();
+    let request = outcome.request;
+    let returned_annotated = outcome.annotated_request;
 
     let body_hints = &request.content["nvext"]["agent_hints"];
     assert_eq!(body_hints["osl"], serde_json::json!(150));
@@ -256,7 +258,7 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
     }));
     let req_fn =
         AdaptiveHintsIntercept::new(hot_cache, "fallback-agent".to_string()).into_request_fn();
-    let (request, annotated) = req_fn(
+    let outcome = req_fn(
         "model",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -265,6 +267,8 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
         None,
     )
     .unwrap();
+    let request = outcome.request;
+    let annotated = outcome.annotated_request;
     assert_eq!(
         request.headers.get(AGENT_HINTS_HEADER_KEY),
         Some(&serde_json::to_value(&defaults).unwrap())
@@ -293,7 +297,7 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
     });
     let poisoned_req_fn =
         AdaptiveHintsIntercept::new(poisoned_cache, "fallback-agent".to_string()).into_request_fn();
-    let (poisoned_request, _) = poisoned_req_fn(
+    let poisoned_outcome = poisoned_req_fn(
         "model",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -302,6 +306,7 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
         None,
     )
     .unwrap();
+    let poisoned_request = poisoned_outcome.request;
     assert!(
         poisoned_request
             .headers

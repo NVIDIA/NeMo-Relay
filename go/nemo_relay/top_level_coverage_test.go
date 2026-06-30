@@ -270,15 +270,17 @@ func assertCodecEncodeCoverage(t *testing.T, request *LLMRequest) {
 func assertLlmRequestInterceptPayloadCoverage(t *testing.T, request *LLMRequest) {
 	t.Helper()
 
-	newHeaders, newContent, newAnnotated, err := llmRequestInterceptPayload(
-		func(name string, headers, content, annotatedJSON json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+	outcome, err := llmRequestInterceptPayload(
+		func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			if name != coverageInterceptName {
 				t.Fatalf("unexpected intercept name: %q", name)
 			}
 			if string(annotatedJSON) != `{"annotated":true}` {
 				t.Fatalf("unexpected annotated payload: %s", annotatedJSON)
 			}
-			return json.RawMessage(`{"updated":"headers"}`), json.RawMessage(`{"model":"updated"}`), json.RawMessage(`{"annotated":"updated"}`), nil
+			request.Headers = json.RawMessage(`{"updated":"headers"}`)
+			request.Content = json.RawMessage(`{"model":"updated"}`)
+			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: json.RawMessage(`{"annotated":"updated"}`)}, nil
 		},
 		coverageInterceptName,
 		request.Headers(),
@@ -288,22 +290,22 @@ func assertLlmRequestInterceptPayloadCoverage(t *testing.T, request *LLMRequest)
 	if err != nil {
 		t.Fatalf("expected intercept success, got %v", err)
 	}
-	if string(newHeaders) != `{"updated":"headers"}` {
-		t.Fatalf("unexpected output headers: %s", newHeaders)
+	if string(outcome.Request.Headers) != `{"updated":"headers"}` {
+		t.Fatalf("unexpected output headers: %s", outcome.Request.Headers)
 	}
-	if string(newContent) != `{"model":"updated"}` {
-		t.Fatalf("unexpected output content: %s", newContent)
+	if string(outcome.Request.Content) != `{"model":"updated"}` {
+		t.Fatalf("unexpected output content: %s", outcome.Request.Content)
 	}
-	if string(newAnnotated) != `{"annotated":"updated"}` {
-		t.Fatalf("unexpected output annotated json: %s", newAnnotated)
+	if string(outcome.AnnotatedRequest) != `{"annotated":"updated"}` {
+		t.Fatalf("unexpected output annotated json: %s", outcome.AnnotatedRequest)
 	}
 
-	_, _, _, err = llmRequestInterceptPayload(
-		func(name string, headers, content, annotatedJSON json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+	_, err = llmRequestInterceptPayload(
+		func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			if annotatedJSON != nil {
 				t.Fatalf("expected nil annotated JSON, got %s", annotatedJSON)
 			}
-			return nil, nil, nil, errors.New("forced intercept failure")
+			return LLMRequestInterceptOutcome{}, errors.New("forced intercept failure")
 		},
 		coverageInterceptName,
 		request.Headers(),
@@ -400,8 +402,8 @@ func assertLlmCodecInterceptCoverage(t *testing.T) {
 		},
 	}
 
-	if err := RegisterLlmRequestIntercept("coverage_llm_codec_success", 1, false, func(name string, headers, content, annotatedJSON json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-		return headers, content, json.RawMessage(`{"messages":[{"role":"user","content":"updated"}],"model":"updated-model"}`), nil
+	if err := RegisterLlmRequestIntercept("coverage_llm_codec_success", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: json.RawMessage(`{"messages":[{"role":"user","content":"updated"}],"model":"updated-model"}`)}, nil
 	}); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept success case failed: %v", err)
 	}
@@ -415,8 +417,8 @@ func assertLlmCodecInterceptCoverage(t *testing.T) {
 		t.Fatalf("expected codec-backed intercept success, got %v", err)
 	}
 
-	if err := RegisterLlmRequestIntercept("coverage_llm_codec_error", 1, false, func(name string, headers, content, annotatedJSON json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-		return nil, nil, nil, errors.New("forced codec-backed intercept failure")
+	if err := RegisterLlmRequestIntercept("coverage_llm_codec_error", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		return LLMRequestInterceptOutcome{}, errors.New("forced codec-backed intercept failure")
 	}); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept error case failed: %v", err)
 	}

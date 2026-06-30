@@ -20,8 +20,8 @@ use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::Event;
-pub use nemo_relay_types::api::llm::LlmRequest;
+pub use nemo_relay_types::api::event::{Event, PendingMarkSpec};
+pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -111,11 +111,7 @@ type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
 type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
 type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
 type LlmRequestFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;
@@ -350,11 +346,7 @@ impl PluginContext {
         break_chain: bool,
         callback: F,
     ) where
-        F: Fn(
-                &str,
-                LlmRequest,
-                Option<AnnotatedLlmRequest>,
-            ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
             + Send
             + Sync
             + 'static,
@@ -1111,10 +1103,10 @@ impl WorkerService {
                     .map(|value| decode_json_envelope::<AnnotatedLlmRequest>(&value))
                     .transpose()?;
                 let handler = self.llm_request(&request.registration_name)?;
-                let (request, annotated) = with_thread_scope(&scope, || {
+                let outcome = with_thread_scope(&scope, || {
                     handler(&payload.model_name, request_value, annotated)
                 })?;
-                Ok(llm_request_response(request, annotated)?)
+                Ok(llm_request_response(outcome)?)
             }
             RegistrationSurface::LlmExecutionIntercept => {
                 let payload = llm_payload(request.payload)?;
@@ -1368,20 +1360,15 @@ fn guardrail_response(reason: Option<String>) -> InvokeResponse {
     }
 }
 
-fn llm_request_response(
-    request: LlmRequest,
-    annotated: Option<AnnotatedLlmRequest>,
-) -> Result<InvokeResponse> {
+fn llm_request_response(outcome: LlmRequestInterceptOutcome) -> Result<InvokeResponse> {
     Ok(InvokeResponse {
         result: Some(
             nemo_relay_worker_proto::v1::invoke_response::Result::LlmRequest(
                 LlmRequestInterceptResult {
-                    request: Some(json_envelope("nemo.relay.LlmRequest@1", &request)?),
-                    annotated_request: annotated
-                        .as_ref()
-                        .map(|value| json_envelope("nemo.relay.AnnotatedLlmRequest@1", value))
-                        .transpose()?,
-                    has_annotated_request: annotated.is_some(),
+                    outcome: Some(json_envelope(
+                        "nemo.relay.LlmRequestInterceptOutcome@1",
+                        &outcome,
+                    )?),
                 },
             ),
         ),

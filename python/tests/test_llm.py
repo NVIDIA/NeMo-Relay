@@ -11,6 +11,7 @@ from nemo_relay import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
+    LLMRequestInterceptOutcome,
     ScopeEvent,
     ScopeType,
     guardrails,
@@ -285,20 +286,25 @@ class TestLLMGuardrailsAsync:
 class TestLLMIntercepts:
     def test_request_intercept(self):
         # Request intercepts now operate on LLMRequest
-        intercepts.register_llm_request("py_llm_req", 1, False, lambda name, request, annotated: (request, annotated))
+        intercepts.register_llm_request(
+            "py_llm_req",
+            1,
+            False,
+            lambda name, request, annotated: LLMRequestInterceptOutcome(request, annotated),
+        )
         assert intercepts.deregister_llm_request("py_llm_req")
 
     def test_request_intercepts_direct(self):
         def intercept_fn(name, request, annotated):
             content = request.content
             content["direct"] = True
-            return LLMRequest(request.headers, content), annotated
+            return LLMRequestInterceptOutcome(LLMRequest(request.headers, content), annotated)
 
         intercepts.register_llm_request("py_llm_req_direct", 1, False, intercept_fn)
         transformed = llm.request_intercepts("direct_llm", make_request())
         intercepts.deregister_llm_request("py_llm_req_direct")
 
-        assert transformed.content["direct"] is True
+        assert transformed.request.content["direct"] is True
 
     def test_request_intercept_raises_on_exception(self):
         intercepts.register_llm_request(
@@ -316,7 +322,7 @@ class TestLLMIntercepts:
     def test_request_intercept_raises_on_invalid_return(self):
         intercepts.register_llm_request("py_llm_req_bad_return", 1, False, lambda name, request, annotated: object())  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
         try:
-            with pytest.raises(RuntimeError, match="result\\[0\\] extraction failed"):
+            with pytest.raises(RuntimeError, match="must return LLMRequestInterceptOutcome"):
                 llm.request_intercepts("bad_return_llm", make_request())
         finally:
             intercepts.deregister_llm_request("py_llm_req_bad_return")
@@ -358,7 +364,7 @@ class TestLLMInterceptsAsync:
             # Request intercepts now operate on LLMRequest
             content = request.content
             content["intercepted"] = True
-            return LLMRequest(request.headers, content), annotated
+            return LLMRequestInterceptOutcome(LLMRequest(request.headers, content), annotated)
 
         intercepts.register_llm_request("py_llm_req_mod", 1, False, intercept_fn)
 

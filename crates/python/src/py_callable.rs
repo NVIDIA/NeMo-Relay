@@ -35,13 +35,15 @@ use serde_json::Value as Json;
 use tokio_stream::Stream;
 
 use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
 use crate::convert::{json_to_py, py_to_json};
-use crate::py_types::{PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest};
+use crate::py_types::{
+    PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
+};
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
@@ -643,13 +645,13 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
 /// Wrap a Python callable for unified LLM request intercepts.
 ///
 /// The Python function receives ``(name: str, request: LlmRequest, annotated: AnnotatedLLMRequest | None)``
-/// and must return ``(LlmRequest, AnnotatedLLMRequest | None)``.
+/// and must return ``LLMRequestInterceptOutcome``.
 pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
     Arc::new(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLLMRequest>|
-              -> FlowResult<(LlmRequest, Option<AnnotatedLLMRequest>)> {
+              -> FlowResult<LlmRequestInterceptOutcome> {
             Python::attach(|py| {
                 let py_req = PyLLMRequest {
                     inner: request.clone(),
@@ -673,42 +675,14 @@ pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestIntercept
                     FlowError::Internal(format!("LLM request intercept callable failed: {e}"))
                 })?;
 
-                // Extract the tuple (LlmRequest, AnnotatedLLMRequest | None)
-                let tuple = result.bind(py);
-                let new_req: PyLLMRequest = tuple
-                    .get_item(0)
+                result
+                    .extract::<PyLLMRequestInterceptOutcome>(py)
+                    .map(|value| value.inner)
                     .map_err(|e| {
                         FlowError::Internal(format!(
-                            "LLM request intercept result[0] extraction failed: {e}"
+                            "LLM request intercept must return LLMRequestInterceptOutcome: {e}"
                         ))
-                    })?
-                    .extract()
-                    .map_err(|e| {
-                        FlowError::Internal(format!(
-                            "LLM request intercept result[0] is not LlmRequest: {e}"
-                        ))
-                    })?;
-                let ann_item = tuple.get_item(1).map_err(|e| {
-                    FlowError::Internal(format!(
-                        "LLM request intercept result[1] extraction failed: {e}"
-                    ))
-                })?;
-                let new_ann = if ann_item.is_none() {
-                    None
-                } else {
-                    Some(
-                        ann_item
-                            .extract::<PyAnnotatedLLMRequest>()
-                            .map_err(|e| {
-                                FlowError::Internal(format!(
-                                    "LLM request intercept result[1] is not AnnotatedLLMRequest: {e}"
-                                ))
-                            })?
-                            .inner,
-                    )
-                };
-
-                Ok((new_req.inner, new_ann))
+                    })
             })
         },
     )

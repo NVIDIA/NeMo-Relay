@@ -19,7 +19,7 @@ use nemo_relay::api::event::{
 };
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
-    llm_request_intercepts_with_marks, llm_stream_call_execute,
+    llm_stream_call_execute,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry::{
@@ -30,14 +30,13 @@ use nemo_relay::api::registry::{
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
     deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
     register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_request_intercept_with_marks, register_llm_sanitize_request_guardrail,
-    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
-    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
-    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
-    register_tool_sanitize_response_guardrail, scope_register_llm_conditional_execution_guardrail,
-    scope_register_llm_execution_intercept, scope_register_llm_request_intercept,
-    scope_register_llm_sanitize_request_guardrail, scope_register_llm_sanitize_response_guardrail,
-    scope_register_llm_stream_execution_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    register_tool_execution_intercept, register_tool_request_intercept,
+    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
+    scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
+    scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
     scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
@@ -1703,13 +1702,17 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
                     Arc::new(move |_, request, annotated| {
                         record_middleware_callback(&tracked, "llm_request_late");
                         assert_middleware_callback_locks_are_free();
-                        Ok((request, annotated))
+                        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                            request, annotated,
+                        ))
                     }),
                 )
                 .unwrap();
             }
 
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -1722,7 +1725,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
         },
     )
     .unwrap();
-    assert_eq!(request.content["round"], 1);
+    assert_eq!(request.request.content["round"], 1);
     assert_middleware_callback_labels(&callbacks, &["llm_request_initial"]);
 
     callbacks.lock().unwrap().clear();
@@ -1734,7 +1737,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
         },
     )
     .unwrap();
-    assert_eq!(request.content["round"], 2);
+    assert_eq!(request.request.content["round"], 2);
     assert_middleware_callback_labels(&callbacks, &["llm_request_initial", "llm_request_late"]);
 
     deregister_llm_request_intercept("snapshot_llm_request_initial").unwrap();
@@ -1950,7 +1953,9 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, request, annotated| {
             record_middleware_callback(&tracked, "llm_request_global");
             assert_middleware_callback_locks_are_free();
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -1963,7 +1968,9 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, request, annotated| {
             record_middleware_callback(&tracked, "llm_request_scope");
             assert_middleware_callback_locks_are_free();
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -2574,7 +2581,9 @@ async fn test_llm_request_intercept_transforms() {
         false,
         Arc::new(|_name: &str, mut req: LlmRequest, annotated| {
             req.headers.insert("x-intercepted".into(), json!(true));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -2585,7 +2594,7 @@ async fn test_llm_request_intercept_transforms() {
     };
 
     let result = llm_request_intercepts("test_llm", request).unwrap();
-    assert_eq!(result.headers["x-intercepted"], true);
+    assert_eq!(result.request.headers["x-intercepted"], true);
 
     // Cleanup
     deregister_llm_request_intercept("llm_req_i").unwrap();
@@ -2602,7 +2611,7 @@ fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
         ("pending_break", 2, true, "second"),
         ("pending_skipped", 3, false, "skipped"),
     ] {
-        register_llm_request_intercept_with_marks(
+        register_llm_request_intercept(
             name,
             priority,
             break_chain,
@@ -2614,7 +2623,7 @@ fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
         .unwrap();
     }
 
-    let outcome = llm_request_intercepts_with_marks(
+    let outcome = llm_request_intercepts(
         "llm",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -2652,13 +2661,13 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
     )
     .unwrap();
 
-    register_llm_request_intercept_with_marks(
+    register_llm_request_intercept(
         "pending_managed",
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(
-                LlmRequestInterceptOutcome::new(request, annotated).with_pending_mark(
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_pending_mark(
                     PendingMarkSpec::builder()
                         .name("request.optimized")
                         .category(EventCategory::custom())
@@ -2669,8 +2678,12 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
                         )
                         .data(json!({"saved_tokens": 12}))
                         .build(),
-                ),
-            )
+                )
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("request.optimized.second")
+                        .build(),
+                ))
         }),
     )
     .unwrap();
@@ -2694,12 +2707,9 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
     .unwrap();
 
     let provider_request = provider_request.lock().unwrap().clone().unwrap();
-    assert!(
-        serde_json::to_value(provider_request)
-            .unwrap()
-            .get("__nemo_relay_llm_intercept_outcome")
-            .is_none()
-    );
+    let provider_json = serde_json::to_value(provider_request).unwrap();
+    assert!(provider_json.get("pending_marks").is_none());
+    assert!(provider_json.get("annotated_request").is_none());
 
     let captured = captured_events_snapshot(&events);
     let start = captured
@@ -2713,8 +2723,22 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         .iter()
         .find(|event| event.name() == "request.optimized")
         .unwrap();
+    let second_mark = captured
+        .iter()
+        .find(|event| event.name() == "request.optimized.second")
+        .unwrap();
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "pending-managed-llm"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
     assert_eq!(mark.parent_uuid(), Some(start.uuid()));
+    assert_eq!(second_mark.parent_uuid(), Some(start.uuid()));
     assert!(mark.timestamp() > start.timestamp());
+    assert_eq!(mark.timestamp(), second_mark.timestamp());
+    assert!(end.timestamp() >= mark.timestamp());
     assert_eq!(mark.data().unwrap()["saved_tokens"], 12);
 
     deregister_llm_request_intercept("pending_managed").unwrap();
@@ -2734,7 +2758,7 @@ async fn test_failed_request_intercept_does_not_emit_pending_marks_or_start_scop
         Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
     )
     .unwrap();
-    register_llm_request_intercept_with_marks(
+    register_llm_request_intercept(
         "pending_before_failure",
         1,
         false,
@@ -2744,7 +2768,7 @@ async fn test_failed_request_intercept_does_not_emit_pending_marks_or_start_scop
         }),
     )
     .unwrap();
-    register_llm_request_intercept_with_marks(
+    register_llm_request_intercept(
         "pending_failure",
         2,
         false,
@@ -2864,7 +2888,9 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
                 .as_object_mut()
                 .unwrap()
                 .insert("phase".into(), json!("request"));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -2956,7 +2982,9 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
                 .as_object_mut()
                 .unwrap()
                 .insert("phase".into(), json!("request"));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();

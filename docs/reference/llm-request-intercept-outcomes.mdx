@@ -1,0 +1,57 @@
+---
+title: "LLM Request Intercept Outcomes"
+description: "Canonical request-intercept result and managed lifecycle behavior."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Every LLM request intercept returns one canonical outcome:
+
+```json
+{
+  "request": {"headers": {}, "content": {}},
+  "annotated_request": null,
+  "pending_marks": []
+}
+```
+
+`request` is required. `annotated_request` defaults to `null` when omitted on
+input, and `pending_marks` defaults to an empty list. Canonical serialization
+includes all three fields. A pending mark contains only `name`, optional
+`category` and `category_profile`, and optional `data` and `metadata`. Relay
+owns event UUIDs, parent UUIDs, and timestamps.
+
+Python callbacks return `LLMRequestInterceptOutcome`; Rust callbacks return
+`LlmRequestInterceptOutcome`; Go callbacks return
+`LLMRequestInterceptOutcome`; and Node.js and WebAssembly callbacks return
+`{ request, annotated?, pendingMarks? }`. Public C callbacks write one owned
+canonical outcome JSON string. Native ABI v1 uses one host-owned outcome JSON
+string, and `grpc-v1` uses a `JsonEnvelope` whose schema is
+`nemo.relay.LlmRequestInterceptOutcome@1`.
+
+The standalone request-intercept helper returns the complete outcome but does
+not emit its pending marks because it does not own an LLM lifecycle.
+
+## Managed Lifecycle
+
+Managed execution runs all effective global and scope-local intercepts before
+creating the LLM handle. Each rewritten request and annotation feeds the next
+intercept, while pending marks append in middleware order. A breaking
+intercept's marks are retained. If any intercept fails or its boundary result
+is malformed, Relay discards all accumulated marks and creates no LLM
+lifecycle.
+
+After successful interception, Relay creates the handle and captures one
+subscriber snapshot. It emits the LLM start at `T`, every pending mark at
+`T + 1µs` in returned order with the LLM UUID as parent, and the LLM end no
+earlier than `T + 1µs`. Streaming and non-streaming calls use the same rules.
+Pending marks are never added to the provider request, annotated request,
+codec input, sanitizer input, or start payload.
+
+## Migration
+
+This finalizes unpublished native ABI v1 and `grpc-v1` contracts. Rebuild all
+development native plugins and workers. Replace tuple results, split C/Go
+outputs, metadata envelopes, and parallel mark-aware registrations with the
+canonical outcome and the existing `register_llm_request_intercept`
+registration name.

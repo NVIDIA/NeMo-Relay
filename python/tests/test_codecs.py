@@ -16,6 +16,7 @@ from nemo_relay import (
     AnnotatedLLMRequest,
     JsonObject,
     LLMRequest,
+    LLMRequestInterceptOutcome,
     intercepts,
     llm,
 )
@@ -267,7 +268,7 @@ class TestCodecPipeline:
                 *annotated.messages,
             ]
             annotated.messages = new_messages
-            return (request, annotated)
+            return LLMRequestInterceptOutcome(request, annotated)
 
         intercepts.register_llm_request("test-annot-intercept-pipeline", 1, False, annotated_intercept)
 
@@ -295,7 +296,7 @@ class TestCodecPipeline:
         def annotated_intercept(name, request, annotated):
             if annotated is not None:
                 intercept_data["extra"] = annotated.extra
-            return (request, annotated)
+            return LLMRequestInterceptOutcome(request, annotated)
 
         intercepts.register_llm_request("test-annot-intercept-cn", 1, False, annotated_intercept)
 
@@ -324,7 +325,7 @@ class TestCodecPipeline:
             assert annotated is not None
             assert isinstance(annotated, AnnotatedLLMRequest)
             assert isinstance(request, LLMRequest)
-            return (request, annotated)
+            return LLMRequestInterceptOutcome(request, annotated)
 
         intercepts.register_llm_request("test-annot-typed", 1, False, annotated_intercept)
 

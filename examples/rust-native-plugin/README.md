@@ -94,8 +94,6 @@ Native plugins are not sandboxed. They run in the Relay process and must not
 unwind across ABI callbacks.
 
 Request intercepts do not own an LLM lifecycle because they run before Relay
-creates the LLM scope. Use `register_llm_request_intercept_with_marks` to return
-`PendingMarkSpec` values. Relay emits them in interceptor order after the LLM
-start event and before provider execution. The legacy
-`register_llm_request_intercept` API remains available for intercepts that only
-rewrite requests.
+creates the LLM scope. `register_llm_request_intercept` returns one
+`LlmRequestInterceptOutcome`, whose `pending_marks` Relay emits in interceptor
+order after the LLM start event and before provider execution.

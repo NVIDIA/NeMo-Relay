@@ -105,7 +105,7 @@ fn llm_request_intercept_outcome_round_trips_pending_marks() {
     let encoded = serde_json::to_value(&outcome).expect("outcome should serialize");
     assert_eq!(encoded["pending_marks"][0]["name"], "request.optimized");
     assert_eq!(encoded["pending_marks"][0]["category"], "custom");
-    assert!(encoded.get("annotated_request").is_none());
+    assert!(encoded["annotated_request"].is_null());
 
     let mut encoded_without_pending_marks = encoded.clone();
     encoded_without_pending_marks
@@ -116,6 +116,23 @@ fn llm_request_intercept_outcome_round_trips_pending_marks() {
         serde_json::from_value(encoded_without_pending_marks)
             .expect("outcome without pending marks should deserialize");
     assert!(decoded_without_pending_marks.pending_marks.is_empty());
+
+    let decoded_defaults: LlmRequestInterceptOutcome = serde_json::from_value(json!({
+        "request": {"headers": {}, "content": {"prompt": "hello"}},
+        "future_field": true
+    }))
+    .expect("omitted optional fields and unknown fields should be accepted");
+    assert!(decoded_defaults.annotated_request.is_none());
+    assert!(decoded_defaults.pending_marks.is_empty());
+
+    assert!(
+        serde_json::from_value::<LlmRequestInterceptOutcome>(json!({
+            "annotated_request": null,
+            "pending_marks": []
+        }))
+        .is_err(),
+        "request is required"
+    );
 
     let decoded: LlmRequestInterceptOutcome =
         serde_json::from_value(encoded).expect("outcome should deserialize");

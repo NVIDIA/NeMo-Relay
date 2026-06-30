@@ -30,6 +30,8 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 1;
+/// Final canonical LLM request-intercept outcome contract version.
+pub const NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION: u32 = 1;
 
 /// Status codes returned by stable native ABI functions.
 #[repr(i32)]
@@ -253,8 +255,7 @@ pub type NemoRelayNativeLlmRequestInterceptCb = unsafe extern "C" fn(
     name: *const NemoRelayNativeString,
     request_json: *const NemoRelayNativeString,
     annotated_json: *const NemoRelayNativeString,
-    out_request_json: *mut *mut NemoRelayNativeString,
-    out_annotated_json: *mut *mut NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
 /// Native LLM execution intercept callback.
@@ -496,6 +497,8 @@ pub struct NemoRelayNativeHostApiV1 {
         cb: NemoRelayNativeWithScopeStackCb,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
+    /// Required canonical LLM request-intercept outcome contract version.
+    pub llm_request_intercept_outcome_contract_version: u32,
 }
 
 // The host API table is immutable after construction. Function pointers and
@@ -520,6 +523,8 @@ pub struct NemoRelayNativePluginV1 {
     pub register: Option<NemoRelayNativePluginRegisterFn>,
     /// Optional plugin-owned state destructor.
     pub drop: NemoRelayNativePluginDropFn,
+    /// Required canonical LLM request-intercept outcome contract version.
+    pub llm_request_intercept_outcome_contract_version: u32,
 }
 
 impl Default for NemoRelayNativePluginV1 {
@@ -532,6 +537,8 @@ impl Default for NemoRelayNativePluginV1 {
             validate: None,
             register: None,
             drop: None,
+            llm_request_intercept_outcome_contract_version:
+                NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
         }
     }
 }
@@ -1469,11 +1476,7 @@ impl<'a> PluginContext<'a> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(
-                &str,
-                LlmRequest,
-                Option<AnnotatedLlmRequest>,
-            ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
             + Send
             + Sync
             + 'static,
@@ -1490,39 +1493,6 @@ impl<'a> PluginContext<'a> {
             )
         };
         finish_typed_registration::<F>(self.host, status, user_data, "llm request intercept")
-    }
-
-    /// Registers a typed LLM request intercept that can schedule lifecycle marks.
-    pub fn register_llm_request_intercept_with_marks<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        break_chain: bool,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_request_intercept_raw(
-                name,
-                priority,
-                break_chain,
-                typed_llm_request_intercept_with_marks_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "LLM request intercept with marks",
-        )
     }
 
     /// Registers a typed LLM execution intercept.
@@ -2156,89 +2126,7 @@ unsafe extern "C" fn typed_llm_request_intercept_trampoline<F>(
     name: *const NemoRelayNativeString,
     request_json: *const NemoRelayNativeString,
     annotated_json: *const NemoRelayNativeString,
-    out_request_json: *mut *mut NemoRelayNativeString,
-    out_annotated_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
-        + Send
-        + Sync
-        + 'static,
-{
-    if user_data.is_null() || out_request_json.is_null() || out_annotated_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe {
-        *out_request_json = ptr::null_mut();
-        *out_annotated_json = ptr::null_mut();
-    }
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "LLM name")?;
-        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
-        let annotated: Option<AnnotatedLlmRequest> =
-            read_optional_json_value(&state.host, annotated_json, "annotated LLM request")?;
-        match (state.callback)(&name, request, annotated) {
-            Ok((request, annotated)) => {
-                let Some(request) = HostString::from_json(&state.host, &request) else {
-                    set_last_error(&state.host, "failed to allocate LLM request output");
-                    return Ok(NemoRelayStatus::Internal);
-                };
-                let annotated = match annotated.as_ref() {
-                    Some(annotated) => {
-                        let Some(annotated) = HostString::from_json(&state.host, annotated) else {
-                            set_last_error(
-                                &state.host,
-                                "failed to allocate annotated LLM request output",
-                            );
-                            return Ok(NemoRelayStatus::Internal);
-                        };
-                        Some(annotated)
-                    }
-                    None => None,
-                };
-                unsafe {
-                    *out_request_json = request.ptr;
-                    *out_annotated_json = annotated
-                        .as_ref()
-                        .map(|annotated| annotated.ptr)
-                        .unwrap_or(ptr::null_mut());
-                }
-                std::mem::forget(request);
-                if let Some(annotated) = annotated {
-                    std::mem::forget(annotated);
-                }
-                Ok(NemoRelayStatus::Ok)
-            }
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM request intercept callback"),
-    }
-}
-
-#[derive(Serialize)]
-struct NativeLlmRequestInterceptOutcome<'a> {
-    #[serde(rename = "__nemo_relay_llm_intercept_outcome")]
-    marked_outcome: bool,
-    annotated_request: &'a Option<AnnotatedLlmRequest>,
-    pending_marks: &'a [PendingMarkSpec],
-}
-
-unsafe extern "C" fn typed_llm_request_intercept_with_marks_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    request_json: *const NemoRelayNativeString,
-    annotated_json: *const NemoRelayNativeString,
-    out_request_json: *mut *mut NemoRelayNativeString,
-    out_annotated_json: *mut *mut NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
     F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
@@ -2246,12 +2134,11 @@ where
         + Sync
         + 'static,
 {
-    if user_data.is_null() || out_request_json.is_null() || out_annotated_json.is_null() {
+    if user_data.is_null() || out_outcome_json.is_null() {
         return NemoRelayStatus::NullPointer;
     }
     unsafe {
-        *out_request_json = ptr::null_mut();
-        *out_annotated_json = ptr::null_mut();
+        *out_outcome_json = ptr::null_mut();
     }
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -2261,25 +2148,14 @@ where
             read_optional_json_value(&state.host, annotated_json, "annotated LLM request")?;
         match (state.callback)(&name, request, annotated) {
             Ok(outcome) => {
-                let Some(request) = HostString::from_json(&state.host, &outcome.request) else {
-                    set_last_error(&state.host, "failed to allocate LLM request output");
-                    return Ok(NemoRelayStatus::Internal);
-                };
-                let metadata = NativeLlmRequestInterceptOutcome {
-                    marked_outcome: true,
-                    annotated_request: &outcome.annotated_request,
-                    pending_marks: &outcome.pending_marks,
-                };
-                let Some(metadata) = HostString::from_json(&state.host, &metadata) else {
-                    set_last_error(&state.host, "failed to allocate marked LLM outcome");
+                let Some(outcome) = HostString::from_json(&state.host, &outcome) else {
+                    set_last_error(&state.host, "failed to allocate LLM request outcome");
                     return Ok(NemoRelayStatus::Internal);
                 };
                 unsafe {
-                    *out_request_json = request.ptr;
-                    *out_annotated_json = metadata.ptr;
+                    *out_outcome_json = outcome.ptr;
                 }
-                std::mem::forget(request);
-                std::mem::forget(metadata);
+                std::mem::forget(outcome);
                 Ok(NemoRelayStatus::Ok)
             }
             Err(message) => Ok(callback_error(&state.host, message)),
@@ -2288,7 +2164,7 @@ where
     match result {
         Ok(Ok(status)) => status,
         Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM request intercept with marks callback"),
+        Err(_) => callback_panic(&state.host, "LLM request intercept callback"),
     }
 }
 
@@ -2779,6 +2655,11 @@ where
     if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {
         return NemoRelayStatus::InvalidArg;
     }
+    if host_ref.llm_request_intercept_outcome_contract_version
+        != NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
 
     export_plugin_checked(host_ref, out, constructor())
 }
@@ -2813,6 +2694,8 @@ fn export_plugin_checked<P: NativePlugin>(
             validate: Some(validate_trampoline::<P>),
             register: Some(register_trampoline::<P>),
             drop: Some(drop_plugin_state::<P>),
+            llm_request_intercept_outcome_contract_version:
+                NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
         };
     }
     std::mem::forget(kind_handle);

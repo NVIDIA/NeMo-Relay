@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, json};
 
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
@@ -158,7 +158,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
             request.headers.insert("x-no-codec".into(), json!(true));
             let mut annotated = SharedTestCodec.decode(&request)?;
             annotated.model = Some("interceptor-model".into());
-            Ok((request, Some(annotated)))
+            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
         }),
     )
     .unwrap();
@@ -194,7 +194,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
             let mut annotated = annotated.expect("codec should provide annotated request");
             annotated.model = Some("intercepted-model".into());
             request.headers.insert("x-codec".into(), json!(true));
-            Ok((request, Some(annotated)))
+            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
         }),
     )
     .unwrap();

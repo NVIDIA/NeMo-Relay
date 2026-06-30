@@ -381,7 +381,7 @@ fn test_ffi_helper_rejection_and_null_name_paths() {
             NemoRelayStatus::Ok
         );
         let llm_json = returned_json(llm_out);
-        assert_eq!(llm_json["content"]["model"], json!("ffi-model"));
+        assert_eq!(llm_json["request"]["content"]["model"], json!("ffi-model"));
 
         assert_eq!(
             nemo_relay_llm_request_intercepts(llm_name.as_ptr(), request.as_ptr(), ptr::null_mut()),
@@ -1536,7 +1536,10 @@ fn test_ffi_llm_execute_stream_and_atif_exporter() {
             NemoRelayStatus::Ok
         );
         let helper_json = returned_json(helper_out);
-        assert_eq!(helper_json["content"]["intercepted"], json!(true));
+        assert_eq!(
+            helper_json["request"]["content"]["intercepted"],
+            json!(true)
+        );
 
         assert_eq!(
             nemo_relay_llm_conditional_execution(request.as_ptr()),

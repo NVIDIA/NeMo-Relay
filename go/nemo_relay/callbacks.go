@@ -212,16 +212,34 @@ type CodecFunc struct {
 	Encode func(annotatedJSON json.RawMessage, originalHeadersJSON, originalContentJSON json.RawMessage) (json.RawMessage, error)
 }
 
-// LLMRequestInterceptFunc is a callback for LLM request intercepts with
-// the unified annotated-aware signature. It receives the intercept name,
-// request headers/content, and optionally the annotated request JSON (nil if
-// no Codec resolved). Returns the (possibly modified) headers, content, and
-// annotated JSON.
+// LLMRequestDTO is the JSON-shaped request used by request intercept outcomes.
+type LLMRequestDTO struct {
+	Headers json.RawMessage `json:"headers"`
+	Content json.RawMessage `json:"content"`
+}
+
+// PendingMarkSpec describes a mark Relay emits after starting a managed LLM call.
+type PendingMarkSpec struct {
+	Name            string          `json:"name"`
+	Category        *string         `json:"category,omitempty"`
+	CategoryProfile json.RawMessage `json:"category_profile,omitempty"`
+	Data            json.RawMessage `json:"data,omitempty"`
+	Metadata        json.RawMessage `json:"metadata,omitempty"`
+}
+
+// LLMRequestInterceptOutcome is the canonical result of an LLM request intercept.
+type LLMRequestInterceptOutcome struct {
+	Request          LLMRequestDTO     `json:"request"`
+	AnnotatedRequest json.RawMessage   `json:"annotated_request"`
+	PendingMarks     []PendingMarkSpec `json:"pending_marks"`
+}
+
+// LLMRequestInterceptFunc is a callback for LLM request intercepts.
 type LLMRequestInterceptFunc func(
 	name string,
-	headers, content json.RawMessage,
+	request LLMRequestDTO,
 	annotatedJSON json.RawMessage,
-) (newHeaders, newContent, newAnnotatedJSON json.RawMessage, err error)
+) (LLMRequestInterceptOutcome, error)
 
 func codecDecodePayload(codec *CodecFunc, headers, content json.RawMessage) (json.RawMessage, error) {
 	return codec.Decode(headers, content)
@@ -236,8 +254,8 @@ func llmRequestInterceptPayload(
 	name string,
 	headers, content json.RawMessage,
 	annotatedJSON json.RawMessage,
-) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-	return fn(name, headers, content, annotatedJSON)
+) (LLMRequestInterceptOutcome, error) {
+	return fn(name, LLMRequestDTO{Headers: headers, Content: content}, annotatedJSON)
 }
 
 func pluginValidatePayload(plugin Plugin, pluginConfigJSON json.RawMessage) (json.RawMessage, error) {
@@ -512,7 +530,7 @@ func goCodecEncodeTrampoline(userData unsafe.Pointer, annotatedJSON *C.char, ori
 //export goLlmRequestInterceptTrampoline
 func goLlmRequestInterceptTrampoline(
 	userData unsafe.Pointer, name *C.char, request *C.FfiLLMRequest,
-	annotatedJSON *C.char, outRequest **C.FfiLLMRequest, outAnnotatedJSON **C.char,
+	annotatedJSON *C.char, outOutcomeJSON **C.char,
 ) C.int32_t {
 	fn := lookupClosure(userData).(LLMRequestInterceptFunc)
 	goName := C.GoString(name)
@@ -526,20 +544,20 @@ func goLlmRequestInterceptTrampoline(
 	if annotatedJSON != nil {
 		goAnnotated = json.RawMessage(C.GoString(annotatedJSON))
 	}
-	newHeaders, newContent, newAnnotated, err := llmRequestInterceptPayload(fn, goName, goHeaders, goContent, goAnnotated)
+	outcome, err := llmRequestInterceptPayload(fn, goName, goHeaders, goContent, goAnnotated)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return 5 // NemoRelayStatus::Internal
 	}
-	// Create output FfiLLMRequest
-	cNewHeaders := C.CString(string(newHeaders))
-	cNewContent := C.CString(string(newContent))
-	defer C.free(unsafe.Pointer(cNewHeaders))
-	defer C.free(unsafe.Pointer(cNewContent))
-	*outRequest = C.nemo_relay_llm_request_new(cNewHeaders, cNewContent)
-	if newAnnotated != nil {
-		*outAnnotatedJSON = C.CString(string(newAnnotated))
+	if outcome.PendingMarks == nil {
+		outcome.PendingMarks = []PendingMarkSpec{}
 	}
+	outcomeJSON, err := jsonMarshal(outcome)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return 5
+	}
+	*outOutcomeJSON = C.CString(string(outcomeJSON))
 	return 0 // NemoRelayStatus::Ok
 }
 

@@ -51,10 +51,13 @@ class HeaderPlugin:
             name: str,
             request: nemo_relay.LLMRequest,
             annotated: nemo_relay.AnnotatedLLMRequest | None
-        ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+        ) -> nemo_relay.LLMRequestInterceptOutcome:
             headers = request.headers.copy()
             headers[plugin_config["header_name"]] = plugin_config["value"]
-            return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+            return nemo_relay.LLMRequestInterceptOutcome(
+                nemo_relay.LLMRequest(headers=headers, content=request.content),
+                annotated,
+            )
 
         context.register_llm_request_intercept("inject-header", 100, False, add_header)
 

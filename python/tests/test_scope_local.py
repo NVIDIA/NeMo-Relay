@@ -16,6 +16,7 @@ import pytest
 from nemo_relay import (
     JsonObject,
     LLMRequest,
+    LLMRequestInterceptOutcome,
     MarkEvent,
     ScopeEvent,
     ScopeType,
@@ -648,7 +649,10 @@ class TestScopeLocalLlmBehavior:
         request = LLMRequest({}, {"messages": [], "model": "scope-local"})
 
         def intercept(name, req, annotated):
-            return LLMRequest(req.headers, {**req.content, "intercepted": True}), annotated
+            return LLMRequestInterceptOutcome(
+                LLMRequest(req.headers, {**req.content, "intercepted": True}),
+                annotated,
+            )
 
         with scope.scope("sl_llm_request_scope", ScopeType.Agent) as handle:
             scope_local.register_llm_request(handle, "sl_llm_request", 1, False, intercept)

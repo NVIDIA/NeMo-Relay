@@ -15,30 +15,29 @@ use std::task::{Context, Poll};
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
+    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
+    NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
+    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
+    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
-use serde::Deserialize;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 
-use crate::api::event::{Event, PendingMarkSpec};
+use crate::api::event::Event;
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptWithMarksFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -49,7 +48,6 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
-use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -403,6 +401,13 @@ fn validate_plugin_descriptor(
             plugin.struct_size
         )));
     }
+    if plugin.llm_request_intercept_outcome_contract_version
+        != NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION
+    {
+        return Err(PluginError::InvalidConfig(format!(
+            "native plugin '{plugin_id}' returned an incompatible LLM request-intercept outcome contract"
+        )));
+    }
     if plugin.plugin_kind.is_null() {
         return Err(PluginError::InvalidConfig(format!(
             "native plugin '{plugin_id}' returned a null plugin_kind"
@@ -598,6 +603,8 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
         scope_stack_binding_free: native_scope_stack_binding_free,
         scope_stack_active: native_scope_stack_active,
         scope_stack_with_current: native_scope_stack_with_current,
+        llm_request_intercept_outcome_contract_version:
+            NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
     }) as *const _
 }
 
@@ -1333,7 +1340,7 @@ unsafe extern "C" fn native_plugin_context_register_llm_request_intercept(
         Ok(name) => name,
         Err(status) => return status,
     };
-    match ctx.register_llm_request_intercept_with_marks(
+    match ctx.register_llm_request_intercept(
         &name,
         priority,
         break_chain,
@@ -1691,7 +1698,7 @@ fn wrap_llm_request_intercept_fn(
     cb: NemoRelayNativeLlmRequestInterceptCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
-) -> LlmRequestInterceptWithMarksFn {
+) -> LlmRequestInterceptFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, request, annotated| {
         clear_native_last_error();
@@ -1713,16 +1720,14 @@ fn wrap_llm_request_intercept_fn(
             }
             None => ptr::null_mut(),
         };
-        let mut out_request = ptr::null_mut();
-        let mut out_annotated = ptr::null_mut();
+        let mut out_outcome = ptr::null_mut();
         let status = unsafe {
             cb(
                 user_data.ptr,
                 name_string,
                 request_string,
                 annotated_string,
-                &mut out_request,
-                &mut out_annotated,
+                &mut out_outcome,
             )
         };
         unsafe {
@@ -1732,78 +1737,24 @@ fn wrap_llm_request_intercept_fn(
         }
         if status != NemoRelayStatus::Ok {
             unsafe {
-                native_string_free(out_request);
-                native_string_free(out_annotated);
+                native_string_free(out_outcome);
             }
             return Err(flow_error_from_status(
                 status,
                 "native LLM request intercept failed",
             ));
         }
-        let request_json = json_from_native_string(
-            out_request,
-            "native LLM request intercept returned null request",
+        let outcome_json = json_from_native_string(
+            out_outcome,
+            "native LLM request intercept returned null outcome",
         );
-        let annotated_json = if out_annotated.is_null() {
-            Ok(None)
-        } else {
-            json_from_native_string(out_annotated, "invalid annotated request").map(Some)
-        };
         unsafe {
-            native_string_free(out_request);
-            native_string_free(out_annotated);
+            native_string_free(out_outcome);
         }
-        let request_json = request_json?;
-        let annotated_json = annotated_json?;
-        let request: LlmRequest = serde_json::from_value(request_json)
-            .map_err(|err| FlowError::Internal(format!("invalid LLM request JSON: {err}")))?;
-        let (annotated_request, pending_marks) = match annotated_json {
-            Some(value)
-                if value.get(nemo_relay_types::api::llm::NATIVE_LLM_INTERCEPT_OUTCOME_FIELD)
-                    == Some(&Json::Bool(true)) =>
-            {
-                let metadata: NativeLlmRequestInterceptOutcome = serde_json::from_value(value)
-                    .map_err(|err| {
-                        FlowError::Internal(format!("invalid marked LLM outcome JSON: {err}"))
-                    })?;
-                (metadata.annotated_request, metadata.pending_marks)
-            }
-            Some(value) => {
-                let annotated =
-                    serde_json::from_value::<AnnotatedLlmRequest>(value).map_err(|err| {
-                        FlowError::Internal(format!("invalid annotated request JSON: {err}"))
-                    })?;
-                (Some(annotated), Vec::new())
-            }
-            None => (None, Vec::new()),
-        };
-        Ok(LlmRequestInterceptOutcome {
-            request,
-            annotated_request,
-            pending_marks,
+        serde_json::from_value::<LlmRequestInterceptOutcome>(outcome_json?).map_err(|err| {
+            FlowError::Internal(format!("invalid LLM request intercept outcome JSON: {err}"))
         })
     })
-}
-
-#[derive(Deserialize)]
-struct NativeLlmRequestInterceptOutcome {
-    #[serde(rename = "__nemo_relay_llm_intercept_outcome")]
-    _marked_outcome: bool,
-    annotated_request: Option<AnnotatedLlmRequest>,
-    #[serde(default)]
-    pending_marks: Vec<PendingMarkSpec>,
-}
-
-#[cfg(test)]
-#[test]
-fn native_llm_request_intercept_outcome_defaults_omitted_pending_marks() {
-    let outcome: NativeLlmRequestInterceptOutcome = serde_json::from_value(serde_json::json!({
-        "__nemo_relay_llm_intercept_outcome": true
-    }))
-    .unwrap();
-
-    assert!(outcome.annotated_request.is_none());
-    assert!(outcome.pending_marks.is_empty());
 }
 
 fn wrap_llm_execution_fn(

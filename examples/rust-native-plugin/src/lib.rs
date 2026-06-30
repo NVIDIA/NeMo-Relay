@@ -233,7 +233,7 @@ impl NativePlugin for ExampleNativePlugin {
                 Ok(block_llms.then(|| "LLM call blocked by Rust native plugin".to_string()))
             }
         })?;
-        ctx.register_llm_request_intercept_with_marks("example_llm_request", 20, false, {
+        ctx.register_llm_request_intercept("example_llm_request", 20, false, {
             let tag = config.tag.clone();
             move |_name, request, annotated| {
                 Ok(LlmRequestInterceptOutcome::new(

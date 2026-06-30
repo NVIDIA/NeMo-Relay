@@ -206,6 +206,6 @@ func ToolRequestIntercepts(name string, args json.RawMessage) (json.RawMessage, 
 // LlmRequestIntercepts runs the registered LLM request intercept chain and
 // returns the transformed request. This is a shorthand for
 // [nemo_relay.LlmRequestIntercepts].
-func LlmRequestIntercepts(name string, request json.RawMessage) (json.RawMessage, error) {
+func LlmRequestIntercepts(name string, request json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 	return nemo_relay.LlmRequestIntercepts(name, request)
 }

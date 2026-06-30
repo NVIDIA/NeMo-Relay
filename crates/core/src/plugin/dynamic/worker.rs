@@ -1125,7 +1125,7 @@ impl WorkerPluginCallback {
         model_name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
-    ) -> FlowResult<(LlmRequest, Option<AnnotatedLlmRequest>)> {
+    ) -> FlowResult<crate::api::llm::LlmRequestInterceptOutcome> {
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmRequestIntercept,
@@ -1140,26 +1140,18 @@ impl WorkerPluginCallback {
         let response = self.invoke_blocking(invoke)?;
         match response.result {
             Some(invoke_response_result::Result::LlmRequest(result)) => {
-                let request = required_envelope(result.request, "llm request intercept request")?;
-                let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
-                    FlowError::Internal(format!("worker returned invalid LLM request: {err}"))
-                })?;
-                let annotated = if result.has_annotated_request {
-                    let envelope = required_envelope(
-                        result.annotated_request,
-                        "llm request intercept annotated request",
-                    )?;
-                    Some(
-                        decode_json_envelope::<AnnotatedLlmRequest>(&envelope).map_err(|err| {
-                            FlowError::Internal(format!(
-                                "worker returned invalid annotated LLM request: {err}"
-                            ))
-                        })?,
-                    )
-                } else {
-                    None
-                };
-                Ok((request, annotated))
+                let outcome = required_envelope(result.outcome, "llm request intercept outcome")?;
+                if outcome.schema != "nemo.relay.LlmRequestInterceptOutcome@1" {
+                    return Err(FlowError::Internal(format!(
+                        "worker returned unsupported LLM request intercept outcome schema: {}",
+                        outcome.schema
+                    )));
+                }
+                decode_json_envelope(&outcome).map_err(|err| {
+                    FlowError::Internal(format!(
+                        "worker returned invalid LLM request intercept outcome: {err}"
+                    ))
+                })
             }
             Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
             _ => Err(FlowError::Internal(

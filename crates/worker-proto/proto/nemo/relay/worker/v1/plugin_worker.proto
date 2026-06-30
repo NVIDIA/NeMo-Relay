@@ -181,9 +181,7 @@ message GuardrailResult {
 }
 
 message LlmRequestInterceptResult {
-  JsonEnvelope request = 1;
-  JsonEnvelope annotated_request = 2;
-  bool has_annotated_request = 3;
+  JsonEnvelope outcome = 1;
 }
 
 message StreamChunk {

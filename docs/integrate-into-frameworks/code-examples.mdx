@@ -208,7 +208,8 @@ use serde_json::json;
 
 let rewritten_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
 let request = LlmRequest { headers: Default::default(), content: json!({"messages": []}) };
-let rewritten_request = llm_request_intercepts("demo-provider", request)?;
+let outcome = llm_request_intercepts("demo-provider", request)?;
+let rewritten_request = outcome.request;
 ```
 </Tab>
 

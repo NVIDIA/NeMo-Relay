@@ -40,8 +40,7 @@ unsafe extern "C" fn llm_request_intercept_status_error_cb(
     _name: *const c_char,
     _request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    _out_request: *mut *mut FfiLLMRequest,
-    _out_annotated_json: *mut *mut c_char,
+    _out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Internal
 }
@@ -51,8 +50,7 @@ unsafe extern "C" fn llm_request_intercept_null_out_request_cb(
     _name: *const c_char,
     _request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    _out_request: *mut *mut FfiLLMRequest,
-    _out_annotated_json: *mut *mut c_char,
+    _out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
 }
@@ -60,15 +58,11 @@ unsafe extern "C" fn llm_request_intercept_null_out_request_cb(
 unsafe extern "C" fn llm_request_intercept_invalid_annotated_cb(
     _user_data: *mut libc::c_void,
     _name: *const c_char,
-    request: *const FfiLLMRequest,
+    _request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    out_request: *mut *mut FfiLLMRequest,
-    out_annotated_json: *mut *mut c_char,
+    out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
-    unsafe {
-        *out_request = Box::into_raw(Box::new(FfiLLMRequest((&*request).0.clone())));
-        *out_annotated_json = CString::new("not-json").unwrap().into_raw();
-    }
+    unsafe { *out_outcome_json = CString::new("not-json").unwrap().into_raw() };
     NemoRelayStatus::Ok
 }
 
@@ -217,16 +211,18 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
         None,
     );
     let err = intercept_null("llm", request.clone(), None).unwrap_err();
-    assert!(err.to_string().contains("null out_request"));
+    assert!(err.to_string().contains("null out_outcome_json"));
 
     let intercept_invalid_annotated = wrap_llm_request_intercept_fn(
         llm_request_intercept_invalid_annotated_cb,
         ptr::null_mut(),
         None,
     );
-    let (_request_out, annotated_out) = intercept_invalid_annotated("llm", request.clone(), None)
-        .expect("invalid annotated JSON should be tolerated as None");
-    assert!(annotated_out.is_none());
+    let err = intercept_invalid_annotated("llm", request.clone(), None).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("invalid LLM request intercept outcome JSON")
+    );
 
     let sanitize = wrap_llm_sanitize_request_fn(llm_request_passthrough_cb, ptr::null_mut(), None);
     let sanitized = sanitize(request.clone());

@@ -1308,7 +1308,10 @@ impl WorkerPlugin for SurfacePlugin {
                 .and_then(|blocked| blocked.then(|| "blocked-llm".into())))
         });
         ctx.register_llm_request_intercept("llm-request", 1, false, |_, request, annotated| {
-            Ok((set_llm_phase(request, "llm_request"), annotated))
+            Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
+                set_llm_phase(request, "llm_request"),
+                annotated,
+            ))
         });
 
         ctx.register_llm_execution_intercept(
@@ -1998,7 +2001,11 @@ async fn invoke_llm_request(
         .into_inner();
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::LlmRequest(result) => {
-            decode_json_envelope(&result.request.expect("llm request")).expect("decode LLM request")
+            decode_json_envelope::<nemo_relay_worker::LlmRequestInterceptOutcome>(
+                &result.outcome.expect("llm request outcome"),
+            )
+            .expect("decode LLM request outcome")
+            .request
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }

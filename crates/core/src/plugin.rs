@@ -27,16 +27,15 @@ use crate::api::registry::{
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
     deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
     register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_request_intercept_with_marks, register_llm_sanitize_request_guardrail,
-    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
-    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
-    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
-    register_tool_sanitize_response_guardrail,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    register_tool_execution_intercept, register_tool_request_intercept,
+    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmRequestInterceptWithMarksFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
-    LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -333,37 +332,6 @@ impl PluginRegistrationContext {
         register_llm_request_intercept(&qualified_name, priority, break_chain, callback).map_err(
             |err| PluginError::RegistrationFailed(format!("llm request intercept: {err}")),
         )?;
-
-        let name_owned = qualified_name;
-        self.registrations.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_request_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|err| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm request intercept deregistration failed: {err}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
-    }
-
-    /// Registers an LLM request intercept that can schedule lifecycle marks.
-    pub fn register_llm_request_intercept_with_marks(
-        &mut self,
-        name: &str,
-        priority: i32,
-        break_chain: bool,
-        callback: LlmRequestInterceptWithMarksFn,
-    ) -> Result<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_request_intercept_with_marks(&qualified_name, priority, break_chain, callback)
-            .map_err(|err| {
-                PluginError::RegistrationFailed(format!("llm request intercept: {err}"))
-            })?;
 
         let name_owned = qualified_name;
         self.registrations.push(PluginRegistration::new(

@@ -195,7 +195,7 @@ def llm_request_intercept(name, request, annotated):
     headers["x-intercepted"] = "1"
     content = dict(request.content)
     content["messages"] = [{"role": "user", "content": "hello from intercept"}]
-    return (LLMRequest(headers, content), annotated)
+    return LLMRequestInterceptOutcome(LLMRequest(headers, content), annotated)
 
 async def llm_exec(request):
     return {
@@ -323,6 +323,12 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         );
         helpers
             .setattr("LLMRequest", types_module.getattr("LLMRequest").unwrap())
+            .unwrap();
+        helpers
+            .setattr(
+                "LLMRequestInterceptOutcome",
+                types_module.getattr("LLMRequestInterceptOutcome").unwrap(),
+            )
             .unwrap();
         helpers
             .setattr(
@@ -457,7 +463,11 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
         };
         let intercepted_request = llm_request_intercepts("demo-llm", llm_request.clone()).unwrap();
         assert_eq!(
-            intercepted_request.inner.headers.get("x-intercepted"),
+            intercepted_request
+                .inner
+                .request
+                .headers
+                .get("x-intercepted"),
             Some(&json!("1"))
         );
         llm_conditional_execution(llm_request.clone()).unwrap();

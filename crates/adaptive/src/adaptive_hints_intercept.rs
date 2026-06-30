@@ -192,7 +192,9 @@ impl AdaptiveHintsIntercept {
                     inject_agent_hints(&mut request, &hints);
                 }
 
-                Ok((request, annotated))
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
             },
         )
     }

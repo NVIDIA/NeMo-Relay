@@ -378,7 +378,8 @@ def request_intercepts(name, request):
             intercept chain.
 
     Returns:
-        LLMRequest: The request produced by the final request intercept.
+        LLMRequestInterceptOutcome: The complete request, annotation, and
+        pending-mark outcome produced by the intercept chain.
 
     Notes:
         This runs only the request-intercept chain. It does not execute

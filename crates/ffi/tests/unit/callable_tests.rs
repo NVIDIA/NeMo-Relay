@@ -103,20 +103,24 @@ unsafe extern "C" fn llm_request_intercept_cb(
     _name: *const c_char,
     request: *const FfiLLMRequest,
     annotated_json: *const c_char,
-    out_request: *mut *mut FfiLLMRequest,
-    out_annotated_json: *mut *mut c_char,
+    out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     let mut req = unsafe { (&*request).0.clone() };
     req.content["intercepted"] = json!(true);
-    unsafe { *out_request = Box::into_raw(Box::new(FfiLLMRequest(req))) };
-    if annotated_json.is_null() {
-        unsafe { *out_annotated_json = std::ptr::null_mut() };
+    let annotated = if annotated_json.is_null() {
+        Json::Null
     } else {
         let s = unsafe { CStr::from_ptr(annotated_json) }
             .to_string_lossy()
             .into_owned();
-        unsafe { *out_annotated_json = CString::new(s).unwrap().into_raw() };
-    }
+        serde_json::from_str(&s).unwrap()
+    };
+    let outcome = json!({
+        "request": req,
+        "annotated_request": annotated,
+        "pending_marks": [],
+    });
+    unsafe { *out_outcome_json = CString::new(outcome.to_string()).unwrap().into_raw() };
     NemoRelayStatus::Ok
 }
 
@@ -283,8 +287,8 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
 fn test_wrap_llm_request_response_and_conditional_callbacks() {
     let request_intercept =
         wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
-    let (intercepted, _annotated) = request_intercept("llm", make_request(), None).unwrap();
-    assert_eq!(intercepted.content["intercepted"], json!(true));
+    let outcome = request_intercept("llm", make_request(), None).unwrap();
+    assert_eq!(outcome.request.content["intercepted"], json!(true));
 
     let sanitize_request =
         wrap_llm_sanitize_request_fn(llm_request_null_cb, std::ptr::null_mut(), None);
@@ -338,10 +342,11 @@ fn test_wrap_llm_request_intercept_with_annotated_input() {
         stream: None,
         extra: serde_json::Map::from_iter([("annotated".into(), json!(true))]),
     };
-    let (intercepted, annotated_out) =
-        request_intercept("llm", make_request(), Some(annotated)).unwrap();
-    assert_eq!(intercepted.content["intercepted"], json!(true));
-    let annotated_out = annotated_out.expect("expected annotated request output");
+    let outcome = request_intercept("llm", make_request(), Some(annotated)).unwrap();
+    assert_eq!(outcome.request.content["intercepted"], json!(true));
+    let annotated_out = outcome
+        .annotated_request
+        .expect("expected annotated request output");
     assert_eq!(annotated_out.model.as_deref(), Some("test-model"));
     assert_eq!(annotated_out.extra.get("annotated"), Some(&json!(true)));
 }

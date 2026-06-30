@@ -913,7 +913,7 @@ describe('Scope-local LLM intercepts', () => {
             null,
             null,
           ),
-        /expected object with 'request' and 'annotated' fields/i,
+        /invalid JS LLM request intercept outcome/i,
       );
     } finally {
       scopeDeregisterLlmRequestIntercept(scope.uuid, 'sl_llm_req_bad');

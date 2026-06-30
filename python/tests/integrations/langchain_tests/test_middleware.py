@@ -323,7 +323,7 @@ def test_model_call_applies_annotated_llm_request_intercept(
             else message
             for message in annotated.messages
         ]
-        return request, annotated
+        return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
 
     nemo_relay.intercepts.register_llm_request("test_langchain_change_request", 1, False, change_request)
     try:

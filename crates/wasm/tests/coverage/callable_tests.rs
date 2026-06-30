@@ -36,9 +36,10 @@ fn native_tool_and_llm_wrapper_fallbacks_are_stable() {
         content: json!({"messages": []}),
     };
     let llm_intercept = wrap_js_llm_request_intercept_fn(dummy_function());
-    let (request, annotated) = llm_intercept("llm", llm_request.clone(), None).unwrap();
-    assert_eq!(request.content, llm_request.content);
-    assert!(annotated.is_none());
+    let outcome = llm_intercept("llm", llm_request.clone(), None).unwrap();
+    assert_eq!(outcome.request.content, llm_request.content);
+    assert!(outcome.annotated_request.is_none());
+    assert!(outcome.pending_marks.is_empty());
 
     let llm_sanitize = wrap_js_llm_sanitize_request_fn(dummy_function());
     assert_eq!(

@@ -19,11 +19,12 @@ use nemo_relay::api::runtime::{
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
+use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::event::{Event, PendingMarkSpec};
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -208,7 +209,7 @@ pub fn wrap_js_tool_exec_fn(
 ///
 /// The JS callback receives a single JSON object
 /// `{ name: string, request: LlmRequest, annotated: AnnotatedLlmRequest | null }`
-/// and must return `{ request: LlmRequest, annotated: AnnotatedLlmRequest | null }`.
+/// and must return `{ request, annotated?, pendingMarks? }`.
 pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> LlmRequestInterceptFn {
@@ -217,7 +218,7 @@ pub fn wrap_js_llm_request_intercept_fn(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLlmRequest>|
-              -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)> {
+              -> Result<LlmRequestInterceptOutcome> {
             let func = func.clone();
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let annotated_json = annotated
@@ -245,32 +246,23 @@ pub fn wrap_js_llm_request_intercept_fn(
             }
             let result = recv_json_result(rx, "JS LLM request intercept callback failed")?;
 
-            // Validate expected shape: { "request": {...}, "annotated": ... }
-            let obj = result.as_object().ok_or_else(|| {
-                FlowError::Internal(
-                    "JS LLM request intercept: expected object with 'request' and 'annotated' fields".to_string(),
-                )
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct JsOutcome {
+                request: LlmRequest,
+                #[serde(default)]
+                annotated: Option<AnnotatedLlmRequest>,
+                #[serde(default)]
+                pending_marks: Vec<PendingMarkSpec>,
+            }
+            let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
+                FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
             })?;
-
-            let new_request: LlmRequest = serde_json::from_value(
-                obj.get("request").cloned().unwrap_or(Json::Null),
-            )
-            .map_err(|e| {
-                FlowError::Internal(format!(
-                    "JS LLM request intercept: failed to deserialize request: {e}"
-                ))
-            })?;
-
-            let new_annotated: Option<AnnotatedLlmRequest> = match obj.get("annotated") {
-                Some(Json::Null) | None => None,
-                Some(val) => Some(serde_json::from_value(val.clone()).map_err(|e| {
-                    FlowError::Internal(format!(
-                        "JS LLM request intercept: failed to deserialize annotated: {e}"
-                    ))
-                })?),
-            };
-
-            Ok((new_request, new_annotated))
+            Ok(LlmRequestInterceptOutcome {
+                request: outcome.request,
+                annotated_request: outcome.annotated,
+                pending_marks: outcome.pending_marks,
+            })
         },
     )
 }

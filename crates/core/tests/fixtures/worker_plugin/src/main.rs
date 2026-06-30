@@ -188,7 +188,10 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                         .insert("worker_plugin_annotated_request".into(), json!(true));
                     annotated
                 });
-                Ok((mark_llm_request(request, "worker_plugin_llm_request_intercept"), annotated))
+                Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
+                    mark_llm_request(request, "worker_plugin_llm_request_intercept"),
+                    annotated,
+                ))
             },
         );
         ctx.register_llm_execution_intercept(

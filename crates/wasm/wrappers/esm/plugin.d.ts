@@ -82,7 +82,14 @@ export interface PluginContext {
     breakChain: boolean,
     callback: (args: { name: string; request: Json; annotated: Json | null }) => {
       request: Json;
-      annotated: Json | null;
+      annotated?: Json | null;
+      pendingMarks?: Array<{
+        name: string;
+        category?: string | null;
+        category_profile?: Json;
+        data?: Json;
+        metadata?: Json;
+      }>;
     },
   ): void;
   /** Register an LLM execution intercept for this component. */

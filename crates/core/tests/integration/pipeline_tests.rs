@@ -310,7 +310,9 @@ async fn test_decode_runs_before_intercepts() {
         false,
         Arc::new(move |_name, req, annotated| {
             *cap.lock().unwrap() = Some(annotated.clone());
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -362,7 +364,10 @@ async fn test_encode_runs_after_intercepts() {
         Arc::new(|_name, req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("modified".into());
-            Ok((req, Some(ann)))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req,
+                Some(ann),
+            ))
         }),
     )
     .unwrap();
@@ -424,7 +429,9 @@ async fn test_annotated_intercept_receives_both() {
         false,
         Arc::new(move |_name, req, annotated| {
             *cp.lock().unwrap() = Some((req.clone(), annotated.clone()));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -465,12 +472,12 @@ async fn test_annotated_intercept_receives_both() {
 // ===========================================================================
 
 #[tokio::test]
-async fn test_legacy_intercept_backward_compat() {
+async fn test_canonical_intercept_with_and_without_codec() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
 
-    // Part 1: Legacy intercept with no Codec
+    // Part 1: canonical intercept with no codec.
     let legacy_called_1 = Arc::new(Mutex::new(false));
     let lc1 = legacy_called_1.clone();
     register_llm_request_intercept(
@@ -480,7 +487,9 @@ async fn test_legacy_intercept_backward_compat() {
         Arc::new(move |_name, mut req, annotated| {
             *lc1.lock().unwrap() = true;
             req.headers.insert("x-legacy".into(), json!("was-here"));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -510,7 +519,7 @@ async fn test_legacy_intercept_backward_compat() {
     // Cleanup part 1
     deregister_llm_request_intercept("legacy_1").unwrap();
 
-    // Part 2: Legacy intercept WITH Codec — legacy intercept still runs
+    // Part 2: canonical intercept with a codec.
     reset_global();
 
     let (codec, _, _) = make_tracking_codec("codec_D");
@@ -524,7 +533,9 @@ async fn test_legacy_intercept_backward_compat() {
         Arc::new(move |_name, mut req, annotated| {
             *lc2.lock().unwrap() = true;
             req.headers.insert("x-legacy-2".into(), json!("also-here"));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -580,7 +591,9 @@ async fn test_stream_path_also_decodes() {
         false,
         Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -644,7 +657,9 @@ async fn test_shared_helper_both_paths() {
         false,
         Arc::new(move |_name, req, annotated| {
             *acc.lock().unwrap() += 1;
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -721,7 +736,9 @@ async fn test_explicit_codec_param_overrides() {
             if let Some(ref ann) = annotated {
                 *cm.lock().unwrap() = ann.model.clone();
             }
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -768,7 +785,10 @@ async fn test_encode_merge_not_replace() {
         Arc::new(|_name, req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("new_model".into());
-            Ok((req, Some(ann)))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req,
+                Some(ann),
+            ))
         }),
     )
     .unwrap();
@@ -836,7 +856,9 @@ async fn test_unified_chain_priority_order() {
         false,
         Arc::new(move |_name, req, annotated| {
             cl1.lock().unwrap().push("legacy_p10".into());
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -849,7 +871,9 @@ async fn test_unified_chain_priority_order() {
         false,
         Arc::new(move |_name, req, annotated| {
             cl2.lock().unwrap().push("annotated_p5".into());
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -897,7 +921,9 @@ async fn test_no_codec_annotated_intercept_receives_none() {
         false,
         Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
