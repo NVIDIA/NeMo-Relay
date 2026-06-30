@@ -96,8 +96,10 @@ When a managed LLM event already has an annotation, subscribers and exporters
 consume that annotation. When an event has only raw provider JSON, best-effort
 normalization may detect a built-in provider surface and decode it. This
 fallback is fail-open: unrecognized, ambiguous, missing, sparse, or invalid
-payloads remain observable as raw lifecycle data, but no provider annotation is
-invented.
+payloads remain observable as raw lifecycle data. A recognized provider hint can
+disambiguate an otherwise identical request shape, such as an Anthropic Messages
+request without a top-level `system` field, but no provider annotation is
+invented without either a matching provider surface or a recognized hint.
 
 Provider extraction covers model names, messages, generation parameters, tool
 definitions, tool calls, finish reasons, usage, cost, provider-specific fields,
@@ -112,14 +114,33 @@ usage, cost, provider-specific, and preserved `extra` fields. Cost parsing and
 estimation helpers are codec implementation details behind that interface, not a
 separate provider-response API.
 
+### Provider Request Extraction
+
+Provider request extraction is gateway-owned. It uses the selected gateway route,
+such as OpenAI Responses, OpenAI Chat Completions, OpenAI Models, Anthropic
+Messages, or Anthropic Count Tokens, to extract request facts that are not codec
+schema annotations.
+
+Route-specific request extractors resolve gateway session IDs, request-affinity
+keys, and fallback turn input for provider calls that arrive before the matching
+agent prompt hook. This keeps correlation and ownership hints near gateway
+alignment, while provider codecs stay focused on decoding request and response
+schemas.
+
+Provider request extraction can also pass a narrow provider hint into codec
+normalization. For example, the recognized `anthropic` and `anthropic.messages`
+hints let Anthropic Messages requests without a top-level `system` field decode
+through the Anthropic provider surface instead of being treated as shape-only
+OpenAI Chat payloads.
+
 ### Agent Payload Extraction
 
 Agent payload extraction is separate from provider codecs. Coding agents,
 harnesses, and framework hooks can expose session IDs, event names, subagent
 relationships, tool IDs, tool names, tool arguments, tool results, LLM hints,
-and request-affinity hints through host-specific payload shapes. These facts
-help NeMo Relay attach lifecycle events to the right scope, but they do not
-decode provider schemas.
+and status fields through host-specific payload shapes. These facts help NeMo
+Relay attach lifecycle events to the right scope, but they do not decode
+provider schemas or build request-affinity keys from provider requests.
 
 Agent extraction may be partial. Missing identifiers use compatibility
 fallbacks at the adapter boundary, such as synthetic session IDs, synthetic tool
