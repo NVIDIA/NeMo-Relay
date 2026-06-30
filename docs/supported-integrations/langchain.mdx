@@ -88,6 +88,14 @@ final_message = result["messages"][-1]
 print(f"Final response: {final_message.content}")
 ```
 
+## Verify the Integration
+
+The integration is wired correctly when:
+
+- The agent run completes and prints a final response.
+- The `langchain-request` scope contains the managed model call.
+- Tool activity appears under the same request when the agent decides to use `get_weather`.
+
 ## Observability
 
 Refer to [Observability](/observability-plugin/about) for details on exporting NeMo Relay observability data to third-party systems.

@@ -151,6 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           pr_number="${GITHUB_REF_NAME#pull-request/}"
+          printf 'pr_number=%s\n' "$pr_number" >> "$GITHUB_OUTPUT"
           preview_id="pull-request-${pr_number}"
           if OUTPUT="$("$GITHUB_WORKSPACE/source-checkout/node_modules/.bin/fern" generate --docs --preview --id "$preview_id" 2>&1)"; then
             fern_exit=0
@@ -169,15 +170,11 @@ jobs:
 
       - name: Comment preview URL on PR
         if: ${{ steps.preview.outputs.url != '' }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          pr_number="${GITHUB_REF_NAME#pull-request/}"
-          gh pr comment "https://github.com/${{ github.repository }}/pull/${pr_number}" \
-            --edit-last \
-            --create-if-none \
-            --body "Fern docs preview: ${{ steps.preview.outputs.url }}"
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: nemo-relay-fern-preview
+          number: ${{ steps.preview.outputs.pr_number }}
+          message: 'Fern docs preview: ${{ steps.preview.outputs.url }}'
 
   cleanup-preview-docs:
     name: Clean up docs preview

@@ -100,13 +100,12 @@ jobs:
           cat license-diff.status >&2
           cat license-diff.md
 
-      - name: Upsert PR comment
+      - name: Build PR comment
+        id: comment
         if: ${{ steps.compare.outcome == 'success' }}
         env:
           COMPARE_REF: ${{ steps.compare.outputs.compare_ref }}
           DIFF_STATUS: ${{ steps.compare.outputs.diff_status }}
-          GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -115,10 +114,9 @@ jobs:
             echo "::warning title=License diff comment skipped::Unable to derive a PR number from ref '${GITHUB_REF_NAME}'."
             exit 0
           fi
+          printf 'pr_number=%s\n' "$pr_number" >> "$GITHUB_OUTPUT"
 
-          marker="<!-- nemo-relay-license-diff -->"
           {
-            echo "$marker"
             echo "## License Diff"
             echo
             echo "Compared against \`${COMPARE_REF}\`."
@@ -146,24 +144,10 @@ jobs:
             echo "</details>"
           } > license-diff-comment.md
 
-          comment_id=""
-          if ! comment_id="$(
-            gh api "repos/{owner}/{repo}/issues/${pr_number}/comments" --paginate \
-              --jq '.[] | select(.user.login == "github-actions[bot]" and (.body // "" | contains("<!-- nemo-relay-license-diff -->"))) | .id' \
-              | tail -n 1
-          )"; then
-            echo "::warning title=License diff comment failed::Unable to list comments on PR #${pr_number}."
-            exit 0
-          fi
-
-          if [[ -n "$comment_id" ]]; then
-            if gh api --method PATCH "repos/{owner}/{repo}/issues/comments/${comment_id}" --field body=@license-diff-comment.md --silent; then
-              echo "Updated license diff comment on PR #${pr_number}."
-            else
-              echo "::warning title=License diff comment failed::Unable to update license diff comment on PR #${pr_number}."
-            fi
-          elif gh api --method POST "repos/{owner}/{repo}/issues/${pr_number}/comments" --field body=@license-diff-comment.md --silent; then
-            echo "Created license diff comment on PR #${pr_number}."
-          else
-            echo "::warning title=License diff comment failed::Unable to create license diff comment on PR #${pr_number}."
-          fi
+      - name: Upsert PR comment
+        if: ${{ steps.comment.outputs.pr_number != '' }}
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: nemo-relay-license-diff
+          number: ${{ steps.comment.outputs.pr_number }}
+          path: license-diff-comment.md
