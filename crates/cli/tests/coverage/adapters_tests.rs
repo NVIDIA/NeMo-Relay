@@ -467,6 +467,41 @@ fn hermes_extractor_prefers_child_subagent_and_claude_session_header() {
 }
 
 #[test]
+fn codex_extractor_ignores_claude_session_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-claude-code-session-id",
+        "claude-session".parse().unwrap(),
+    );
+
+    // RelayOnly: unlike Claude Code and Hermes, Codex must not adopt the Claude
+    // installed-mode session header. With no native session id the extractor
+    // returns None, and the adapter boundary applies the synthetic fallback.
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR.session_id(&json!({}), &headers),
+        None
+    );
+
+    // The Claude header must not win over the native payload session id either.
+    let payload = json!({ "session_id": "codex-native" });
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("codex-native")
+    );
+
+    // The NeMo Relay session header is still honored and takes precedence.
+    headers.insert("x-nemo-relay-session-id", "relay-session".parse().unwrap());
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("relay-session")
+    );
+}
+
+#[test]
 fn keeps_codex_response_unwrapped() {
     let headers = HeaderMap::new();
     let outcome = codex::adapt(

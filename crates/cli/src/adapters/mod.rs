@@ -71,23 +71,68 @@ pub(crate) struct ExtractedToolCall {
 
 /// Strategy for extracting normalized facts from agent or harness hook payloads.
 ///
-/// Implementations should return `None` for missing or untrusted fields,
-/// including per-field values inside returned hint and tool-call structs. The
-/// adapter layer owns compatibility fallbacks such as synthetic session IDs,
-/// synthetic tool-call IDs, and `unknown_tool` names so downstream lifecycle
-/// behavior remains stable for sparse payloads.
+/// The trait is organized as a small set of per-harness *deviation hooks*
+/// (`session_header_policy`, `session_id_paths`, `event_name_paths`,
+/// `subagent_id_paths`, `tool_paths`) plus shared *behavior* methods built on
+/// top of them. Every deviation hook has a canonical default, so a harness
+/// implementation overrides only the hooks where its hook payloads genuinely
+/// differ and the shared behavior is written once.
+///
+/// Behavior methods return `None` for missing or untrusted fields. The adapter
+/// layer owns compatibility fallbacks such as synthetic session IDs, synthetic
+/// tool-call IDs, and `unknown_tool` names so downstream lifecycle behavior
+/// remains stable for sparse payloads.
 pub(crate) trait AgentPayloadExtractor {
+    // -- Per-harness deviations (override only what genuinely differs) -------
+
+    /// Whether this harness also trusts the Claude installed-mode session
+    /// header (`x-claude-code-session-id`) as explicit session evidence.
+    fn session_header_policy(&self) -> SessionHeaderPolicy {
+        SessionHeaderPolicy::RelayAndClaude
+    }
+
+    /// Candidate payload paths for the native session identifier.
+    fn session_id_paths(&self) -> &'static [&'static [&'static str]] {
+        SESSION_ID_PATHS
+    }
+
+    /// Candidate payload paths for the native hook event name.
+    fn event_name_paths(&self) -> &'static [&'static [&'static str]] {
+        EVENT_NAME_PATHS
+    }
+
+    /// Candidate payload paths for the native subagent or worker identifier.
+    fn subagent_id_paths(&self) -> &'static [&'static [&'static str]] {
+        SUBAGENT_ID_PATHS
+    }
+
+    /// Tool payload paths (call id, name, arguments, result, status).
+    fn tool_paths(&self) -> &'static ToolPathSet {
+        TOOL_PATHS
+    }
+
+    // -- Shared behavior (derived from the deviation hooks above) ------------
+
     /// Extract the native session identifier for this agent payload.
     ///
     /// Returning `None` means the payload did not supply a trustworthy session
     /// id; the adapter boundary will apply compatibility fallbacks.
-    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String>;
+    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_session_id(
+            headers,
+            payload,
+            self.session_header_policy(),
+            self.session_id_paths(),
+        )
+    }
 
     /// Extract the native hook event name for this agent payload.
     ///
     /// Returning `None` keeps unknown events observable by letting the adapter
     /// boundary synthesize the generic `unknown` event name.
-    fn event_name(&self, payload: &Value) -> Option<String>;
+    fn event_name(&self, payload: &Value) -> Option<String> {
+        first_string_at(payload, self.event_name_paths())
+    }
 
     /// Build stable, low-cardinality metadata shared by normalized events.
     ///
@@ -99,16 +144,22 @@ pub(crate) trait AgentPayloadExtractor {
         headers: &HeaderMap,
         kind: AgentKind,
         event_name: &str,
-    ) -> Value;
+    ) -> Value {
+        agent_metadata(payload, headers, kind, event_name)
+    }
 
     /// Extract the native subagent or worker identifier for this agent payload.
     ///
     /// Returning `None` means the payload did not identify a subagent; callers
     /// decide whether to synthesize a compatibility owner.
-    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String>;
+    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_subagent_id(payload, headers, self.subagent_id_paths())
+    }
 
     /// Extract LLM-correlation hints without applying fallback values.
-    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint;
+    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
+        agent_llm_hint(payload, self.subagent_id(payload, headers))
+    }
 
     /// Extract tool-call facts without applying fallback identifiers or names.
     fn tool_call(
@@ -116,7 +167,14 @@ pub(crate) trait AgentPayloadExtractor {
         payload: &Value,
         headers: &HeaderMap,
         event_name: &str,
-    ) -> ExtractedToolCall;
+    ) -> ExtractedToolCall {
+        agent_tool_call(
+            payload,
+            self.subagent_id(payload, headers),
+            event_name,
+            self.tool_paths(),
+        )
+    }
 }
 
 pub(super) struct ClaudeCodePayloadExtractor;
@@ -128,151 +186,43 @@ pub(super) static CLAUDE_CODE_PAYLOAD_EXTRACTOR: ClaudeCodePayloadExtractor =
 pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadExtractor;
 pub(super) static HERMES_PAYLOAD_EXTRACTOR: HermesPayloadExtractor = HermesPayloadExtractor;
 
+/// Claude Code reports its native tool identifier as `tool_use_id`, so it uses
+/// a tool path set that prefers that key. Every other hook field matches the
+/// canonical defaults (including the installed-mode session-header policy).
 impl AgentPayloadExtractor for ClaudeCodePayloadExtractor {
-    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_session_id(
-            headers,
-            payload,
-            SessionHeaderPolicy::RelayAndClaude,
-            CLAUDE_SESSION_ID_PATHS,
-        )
-    }
-
-    fn event_name(&self, payload: &Value) -> Option<String> {
-        agent_event_name(payload, CLAUDE_EVENT_NAME_PATHS)
-    }
-
-    fn metadata(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        kind: AgentKind,
-        event_name: &str,
-    ) -> Value {
-        agent_metadata(payload, headers, kind, event_name)
-    }
-
-    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_subagent_id(payload, headers, CLAUDE_SUBAGENT_ID_PATHS)
-    }
-
-    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
-        agent_llm_hint(payload, self.subagent_id(payload, headers))
-    }
-
-    fn tool_call(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        event_name: &str,
-    ) -> ExtractedToolCall {
-        agent_tool_call(
-            payload,
-            self.subagent_id(payload, headers),
-            event_name,
-            CLAUDE_TOOL_PATHS,
-        )
+    fn tool_paths(&self) -> &'static ToolPathSet {
+        CLAUDE_TOOL_PATHS
     }
 }
 
+/// Codex transparent runs forward provider tokens directly, so they must not
+/// adopt the Claude installed-mode session header. They also expose a
+/// Codex-native subagent nickname and send tool arguments under `arguments`.
 impl AgentPayloadExtractor for CodexPayloadExtractor {
-    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_session_id(
-            headers,
-            payload,
-            SessionHeaderPolicy::RelayOnly,
-            CODEX_SESSION_ID_PATHS,
-        )
+    fn session_header_policy(&self) -> SessionHeaderPolicy {
+        SessionHeaderPolicy::RelayOnly
     }
 
-    fn event_name(&self, payload: &Value) -> Option<String> {
-        agent_event_name(payload, CODEX_EVENT_NAME_PATHS)
+    fn subagent_id_paths(&self) -> &'static [&'static [&'static str]] {
+        CODEX_SUBAGENT_ID_PATHS
     }
 
-    fn metadata(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        kind: AgentKind,
-        event_name: &str,
-    ) -> Value {
-        agent_metadata(payload, headers, kind, event_name)
-    }
-
-    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_subagent_id(payload, headers, CODEX_SUBAGENT_ID_PATHS)
-    }
-
-    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
-        agent_llm_hint(payload, self.subagent_id(payload, headers))
-    }
-
-    fn tool_call(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        event_name: &str,
-    ) -> ExtractedToolCall {
-        agent_tool_call(
-            payload,
-            self.subagent_id(payload, headers),
-            event_name,
-            CODEX_TOOL_PATHS,
-        )
+    fn tool_paths(&self) -> &'static ToolPathSet {
+        CODEX_TOOL_PATHS
     }
 }
 
+/// Hermes always runs nested under another agent, so the `child_subagent_id`
+/// signal is the most reliable owner and is preferred over the generic
+/// session-scoped subagent id. Session, event, and tool extraction match the
+/// canonical defaults.
 impl AgentPayloadExtractor for HermesPayloadExtractor {
-    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        // Hermes pre-tool correlation already treats the Claude installed-mode
-        // session header as explicit session evidence; extraction must accept
-        // the same header so those tool hooks do not fall back to synthetic IDs.
-        agent_session_id(
-            headers,
-            payload,
-            SessionHeaderPolicy::RelayAndClaude,
-            HERMES_SESSION_ID_PATHS,
-        )
-    }
-
-    fn event_name(&self, payload: &Value) -> Option<String> {
-        agent_event_name(payload, HERMES_EVENT_NAME_PATHS)
-    }
-
-    fn metadata(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        kind: AgentKind,
-        event_name: &str,
-    ) -> Value {
-        agent_metadata(payload, headers, kind, event_name)
-    }
-
-    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        agent_subagent_id(payload, headers, HERMES_SUBAGENT_ID_PATHS)
-    }
-
-    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
-        agent_llm_hint(payload, self.subagent_id(payload, headers))
-    }
-
-    fn tool_call(
-        &self,
-        payload: &Value,
-        headers: &HeaderMap,
-        event_name: &str,
-    ) -> ExtractedToolCall {
-        agent_tool_call(
-            payload,
-            self.subagent_id(payload, headers),
-            event_name,
-            HERMES_TOOL_PATHS,
-        )
+    fn subagent_id_paths(&self) -> &'static [&'static [&'static str]] {
+        HERMES_SUBAGENT_ID_PATHS
     }
 }
 
-struct ToolPathSet {
+pub(crate) struct ToolPathSet {
     call_id: &'static [&'static [&'static str]],
     name: &'static [&'static [&'static str]],
     arguments: &'static [&'static [&'static str]],
@@ -280,35 +230,21 @@ struct ToolPathSet {
     status: &'static [&'static [&'static str]],
 }
 
+/// Whether an extractor accepts the Claude installed-mode session header.
 #[derive(Clone, Copy)]
-enum SessionHeaderPolicy {
+pub(crate) enum SessionHeaderPolicy {
+    /// Trust only the NeMo Relay session header. Used by harnesses (Codex
+    /// transparent runs) that forward provider tokens directly and must not
+    /// inherit a Claude installed-mode session id.
     RelayOnly,
+    /// Trust the NeMo Relay session header and then the Claude installed-mode
+    /// `x-claude-code-session-id` header as explicit session evidence.
     RelayAndClaude,
 }
 
-const CLAUDE_SESSION_ID_PATHS: &[&[&str]] = &[
-    &["session_id"],
-    &["sessionId"],
-    &["session", "id"],
-    &["conversation_id"],
-    &["conversationId"],
-    &["parent_session_id"],
-    &["task_id"],
-    &["extra", "session_id"],
-    &["extra", "task_id"],
-];
-const CODEX_SESSION_ID_PATHS: &[&[&str]] = &[
-    &["session_id"],
-    &["sessionId"],
-    &["session", "id"],
-    &["conversation_id"],
-    &["conversationId"],
-    &["parent_session_id"],
-    &["task_id"],
-    &["extra", "session_id"],
-    &["extra", "task_id"],
-];
-const HERMES_SESSION_ID_PATHS: &[&[&str]] = &[
+/// Canonical session-id precedence. All supported harnesses share this list;
+/// only their [`SessionHeaderPolicy`] differs.
+const SESSION_ID_PATHS: &[&[&str]] = &[
     &["session_id"],
     &["sessionId"],
     &["session", "id"],
@@ -320,35 +256,8 @@ const HERMES_SESSION_ID_PATHS: &[&[&str]] = &[
     &["extra", "task_id"],
 ];
 
-const CLAUDE_EVENT_NAME_PATHS: &[&[&str]] = &[
-    &["hook_event_name"],
-    &["event_name"],
-    &["eventName"],
-    &["event"],
-    &["type"],
-    &["name"],
-    &["extra", "hook_event_name"],
-    &["extra", "event_name"],
-    &["extra", "eventName"],
-    &["extra", "event"],
-    &["extra", "type"],
-    &["extra", "name"],
-];
-const CODEX_EVENT_NAME_PATHS: &[&[&str]] = &[
-    &["hook_event_name"],
-    &["event_name"],
-    &["eventName"],
-    &["event"],
-    &["type"],
-    &["name"],
-    &["extra", "hook_event_name"],
-    &["extra", "event_name"],
-    &["extra", "eventName"],
-    &["extra", "event"],
-    &["extra", "type"],
-    &["extra", "name"],
-];
-const HERMES_EVENT_NAME_PATHS: &[&[&str]] = &[
+/// Canonical hook event-name precedence, shared by all supported harnesses.
+const EVENT_NAME_PATHS: &[&[&str]] = &[
     &["hook_event_name"],
     &["event_name"],
     &["eventName"],
@@ -363,7 +272,9 @@ const HERMES_EVENT_NAME_PATHS: &[&[&str]] = &[
     &["extra", "name"],
 ];
 
-const CLAUDE_SUBAGENT_ID_PATHS: &[&[&str]] = &[
+/// Canonical subagent-id precedence for harnesses without a native nested-agent
+/// signal of their own (Claude Code).
+const SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["subagent_id"],
     &["subagentId"],
     &["child_subagent_id"],
@@ -379,6 +290,9 @@ const CLAUDE_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["extra", "subagent", "id"],
     &["extra", "agent", "id"],
 ];
+
+/// Codex deviation: adds the thread-spawn nickname between the flat id keys and
+/// the nested `subagent.id`/`agent.id` shapes.
 const CODEX_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["subagent_id"],
     &["subagentId"],
@@ -396,6 +310,9 @@ const CODEX_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["extra", "subagent", "id"],
     &["extra", "agent", "id"],
 ];
+
+/// Hermes deviation: prefers the `child_subagent_id` owner signal before the
+/// generic session-scoped subagent id.
 const HERMES_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["child_subagent_id"],
     &["childSubagentId"],
@@ -413,6 +330,8 @@ const HERMES_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["extra", "agent", "id"],
 ];
 
+/// Claude Code deviation: its native tool identifier is `tool_use_id`, checked
+/// before the generic `tool_call_id` shapes.
 const CLAUDE_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["tool_use_id"],
     &["tool_call_id"],
@@ -424,18 +343,10 @@ const CLAUDE_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["tool_input", "id"],
     &["id"],
 ];
-const CODEX_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
-    &["tool_call_id"],
-    &["toolCallId"],
-    &["tool_use_id"],
-    &["call_id"],
-    &["extra", "tool_call_id"],
-    &["extra", "call_id"],
-    &["tool", "id"],
-    &["tool_input", "id"],
-    &["id"],
-];
-const HERMES_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
+
+/// Canonical tool-call-id precedence for harnesses that report the generic
+/// `tool_call_id` first (Codex and Hermes).
+const TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["tool_call_id"],
     &["toolCallId"],
     &["tool_use_id"],
@@ -454,7 +365,12 @@ const TOOL_NAME_PATHS: &[&[&str]] = &[
     &["tool_input", "name"],
     &["name"],
 ];
+
+/// Canonical argument precedence for harnesses that nest tool input under
+/// `tool_input` first (Claude Code and Hermes).
 const TOOL_ARGUMENT_PATHS: &[&[&str]] = &[&["tool_input"], &["input"], &["arguments"], &["args"]];
+
+/// Codex deviation: sends tool arguments under `arguments`/`args` first.
 const CODEX_TOOL_ARGUMENT_PATHS: &[&[&str]] =
     &[&["arguments"], &["args"], &["input"], &["tool_input"]];
 const TOOL_RESULT_PATHS: &[&[&str]] = &[
@@ -467,6 +383,15 @@ const TOOL_RESULT_PATHS: &[&[&str]] = &[
 ];
 const TOOL_STATUS_PATHS: &[&[&str]] = &[&["status"], &["decision"], &["permission"]];
 
+/// Canonical tool path set used by harnesses that report generic tool shapes
+/// (Hermes). Name, result, and status precedence is shared by every harness.
+const TOOL_PATHS: &ToolPathSet = &ToolPathSet {
+    call_id: TOOL_CALL_ID_PATHS,
+    name: TOOL_NAME_PATHS,
+    arguments: TOOL_ARGUMENT_PATHS,
+    result: TOOL_RESULT_PATHS,
+    status: TOOL_STATUS_PATHS,
+};
 const CLAUDE_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
     call_id: CLAUDE_TOOL_CALL_ID_PATHS,
     name: TOOL_NAME_PATHS,
@@ -475,16 +400,9 @@ const CLAUDE_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
     status: TOOL_STATUS_PATHS,
 };
 const CODEX_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
-    call_id: CODEX_TOOL_CALL_ID_PATHS,
+    call_id: TOOL_CALL_ID_PATHS,
     name: TOOL_NAME_PATHS,
     arguments: CODEX_TOOL_ARGUMENT_PATHS,
-    result: TOOL_RESULT_PATHS,
-    status: TOOL_STATUS_PATHS,
-};
-const HERMES_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
-    call_id: HERMES_TOOL_CALL_ID_PATHS,
-    name: TOOL_NAME_PATHS,
-    arguments: TOOL_ARGUMENT_PATHS,
     result: TOOL_RESULT_PATHS,
     status: TOOL_STATUS_PATHS,
 };
@@ -503,10 +421,6 @@ fn agent_session_id(
             }
         })
         .or_else(|| session_id_from_payload(payload, payload_paths))
-}
-
-fn agent_event_name(payload: &Value, paths: &'static [&'static [&'static str]]) -> Option<String> {
-    first_string_at(payload, paths)
 }
 
 fn agent_metadata(
