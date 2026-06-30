@@ -394,27 +394,14 @@ fn prompt_menu(
             term.write_line(line).map_err(menu_error)?;
         }
         term.flush().map_err(menu_error)?;
-        match term.read_key().map_err(menu_error)? {
-            Key::ArrowUp | Key::Char('k') => {
-                selected = if selected == 0 {
-                    items.len() - 1
-                } else {
-                    selected - 1
-                };
-            }
-            Key::ArrowDown | Key::Char('j') => {
-                selected = (selected + 1) % items.len();
-            }
-            Key::PageUp => {
-                selected = selected.saturating_sub(viewport.page_size);
-            }
-            Key::PageDown => {
-                selected = selected
-                    .saturating_add(viewport.page_size)
-                    .min(items.len() - 1);
-            }
-            Key::Home => selected = 0,
-            Key::End => selected = items.len() - 1,
+        let key = term.read_key().map_err(menu_error)?;
+        if let Some(next) =
+            menu_selection_after_key(&key, selected, items.len(), viewport.page_size)
+        {
+            selected = next;
+            continue;
+        }
+        match key {
             Key::Enter | Key::Char(' ') => {
                 clear_menu(&term, rendered_lines)?;
                 return Ok(MenuResponse::Selected(selected));
@@ -445,6 +432,29 @@ fn prompt_menu(
             }
             _ => {}
         }
+    }
+}
+
+fn menu_selection_after_key(
+    key: &Key,
+    selected: usize,
+    item_count: usize,
+    page_size: usize,
+) -> Option<usize> {
+    if item_count == 0 {
+        return None;
+    }
+
+    let last = item_count - 1;
+    let selected = selected.min(last);
+    match key {
+        Key::ArrowUp | Key::Char('k') => Some(if selected == 0 { last } else { selected - 1 }),
+        Key::ArrowDown | Key::Char('j') => Some((selected + 1) % item_count),
+        Key::PageUp => Some(selected.saturating_sub(page_size)),
+        Key::PageDown => Some(selected.saturating_add(page_size).min(last)),
+        Key::Home => Some(0),
+        Key::End => Some(last),
+        _ => None,
     }
 }
 

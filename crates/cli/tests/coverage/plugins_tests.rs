@@ -492,6 +492,21 @@ fn menu_viewport_keeps_selection_visible_and_pages() {
 }
 
 #[test]
+fn menu_selection_navigation_wraps_pages_and_jumps() {
+    assert_eq!(menu_selection_after_key(&Key::ArrowUp, 0, 10, 4), Some(9));
+    assert_eq!(menu_selection_after_key(&Key::Char('k'), 4, 10, 4), Some(3));
+    assert_eq!(menu_selection_after_key(&Key::ArrowDown, 9, 10, 4), Some(0));
+    assert_eq!(menu_selection_after_key(&Key::Char('j'), 4, 10, 4), Some(5));
+    assert_eq!(menu_selection_after_key(&Key::PageUp, 5, 10, 4), Some(1));
+    assert_eq!(menu_selection_after_key(&Key::PageUp, 2, 10, 4), Some(0));
+    assert_eq!(menu_selection_after_key(&Key::PageDown, 5, 10, 4), Some(9));
+    assert_eq!(menu_selection_after_key(&Key::Home, 5, 10, 4), Some(0));
+    assert_eq!(menu_selection_after_key(&Key::End, 5, 10, 4), Some(9));
+    assert_eq!(menu_selection_after_key(&Key::Enter, 5, 10, 4), None);
+    assert_eq!(menu_selection_after_key(&Key::PageDown, 0, 0, 4), None);
+}
+
+#[test]
 fn menu_renderer_respects_terminal_height_and_width() {
     let theme = ColorfulTheme::default();
     let items = (0..20)
