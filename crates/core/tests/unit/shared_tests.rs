@@ -156,7 +156,9 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         Arc::new(|_name, mut request, annotated| {
             assert!(annotated.is_none());
             request.headers.insert("x-no-codec".into(), json!(true));
-            Ok((request, None))
+            let mut annotated = SharedTestCodec.decode(&request)?;
+            annotated.model = Some("interceptor-model".into());
+            Ok((request, Some(annotated)))
         }),
     )
     .unwrap();
@@ -175,7 +177,12 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
         request_without_codec.headers.get("x-no-codec"),
         Some(&json!(true))
     );
-    assert!(annotated_without_codec.is_none());
+    assert_eq!(
+        annotated_without_codec
+            .as_deref()
+            .and_then(|annotated| annotated.model.as_deref()),
+        Some("interceptor-model")
+    );
     assert!(pending_marks_without_codec.is_empty());
     deregister_llm_request_intercept("shared-none").unwrap();
 

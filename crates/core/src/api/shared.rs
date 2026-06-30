@@ -110,7 +110,7 @@ pub(crate) fn run_request_intercepts_with_codec(
             encoded.headers = outcome.request.headers;
             Ok((encoded, Some(Arc::new(annotated)), pending_marks))
         }
-        _ => Ok((outcome.request, None, pending_marks)),
+        (_, annotated) => Ok((outcome.request, annotated.map(Arc::new), pending_marks)),
     }
 }
 

@@ -4416,6 +4416,10 @@ fn typed_llm_request_intercept_with_marks_uses_tagged_annotation_envelope() {
     assert!(!registration.break_chain);
     let name = host_string(&host, "llm");
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
+    let annotated = json_host_string(
+        &host,
+        serde_json::to_value(test_annotated_llm_request()).unwrap(),
+    );
     let mut out_request = ptr::null_mut();
     let mut out_annotated = ptr::null_mut();
     let status = unsafe {
@@ -4423,7 +4427,7 @@ fn typed_llm_request_intercept_with_marks_uses_tagged_annotation_envelope() {
             registration.user_data as *mut c_void,
             name,
             request,
-            ptr::null(),
+            annotated,
             &mut out_request,
             &mut out_annotated,
         )
@@ -4438,7 +4442,7 @@ fn typed_llm_request_intercept_with_marks_uses_tagged_annotation_envelope() {
     );
     let metadata = read_json_and_free(&host, out_annotated);
     assert_eq!(metadata["__nemo_relay_llm_intercept_outcome"], true);
-    assert_eq!(metadata["annotated_request"], Json::Null);
+    assert_eq!(metadata["annotated_request"]["messages"], json!([]));
     assert_eq!(
         metadata["pending_marks"][0]["name"],
         "plugin.request.rewritten"
@@ -4448,6 +4452,7 @@ fn typed_llm_request_intercept_with_marks_uses_tagged_annotation_envelope() {
     unsafe {
         (host.string_free)(name);
         (host.string_free)(request);
+        (host.string_free)(annotated);
         registration.free();
     }
 }

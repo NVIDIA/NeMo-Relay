@@ -107,6 +107,16 @@ fn llm_request_intercept_outcome_round_trips_pending_marks() {
     assert_eq!(encoded["pending_marks"][0]["category"], "custom");
     assert!(encoded.get("annotated_request").is_none());
 
+    let mut encoded_without_pending_marks = encoded.clone();
+    encoded_without_pending_marks
+        .as_object_mut()
+        .unwrap()
+        .remove("pending_marks");
+    let decoded_without_pending_marks: LlmRequestInterceptOutcome =
+        serde_json::from_value(encoded_without_pending_marks)
+            .expect("outcome without pending marks should deserialize");
+    assert!(decoded_without_pending_marks.pending_marks.is_empty());
+
     let decoded: LlmRequestInterceptOutcome =
         serde_json::from_value(encoded).expect("outcome should deserialize");
     assert_eq!(decoded, outcome);

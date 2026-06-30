@@ -1790,7 +1790,20 @@ struct NativeLlmRequestInterceptOutcome {
     #[serde(rename = "__nemo_relay_llm_intercept_outcome")]
     _marked_outcome: bool,
     annotated_request: Option<AnnotatedLlmRequest>,
+    #[serde(default)]
     pending_marks: Vec<PendingMarkSpec>,
+}
+
+#[cfg(test)]
+#[test]
+fn native_llm_request_intercept_outcome_defaults_omitted_pending_marks() {
+    let outcome: NativeLlmRequestInterceptOutcome = serde_json::from_value(serde_json::json!({
+        "__nemo_relay_llm_intercept_outcome": true
+    }))
+    .unwrap();
+
+    assert!(outcome.annotated_request.is_none());
+    assert!(outcome.pending_marks.is_empty());
 }
 
 fn wrap_llm_execution_fn(
