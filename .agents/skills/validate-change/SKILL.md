@@ -28,6 +28,9 @@ surfaces touched by a change.
   Python, Go, Node.js, and WebAssembly.
 - If a language surface changed, always run that language's test target even when
   Rust core did not change.
+- If dynamic plugin behavior changed, use `maintain-dynamic-plugins` and include
+  the native SDK, worker protocol, Python SDK, docs, packaging, and Codecov
+  surfaces in the validation plan.
 - If code changes alter APIs, bindings, commands, paths, packaging behavior,
   observability/adaptive semantics, or documented best practices, update any
   dependent maintainer or consumer skills in the same branch.
@@ -53,6 +56,10 @@ surfaces touched by a change.
 - **Framework integration change**
   Run the relevant language test target and focused integration tests or smoke
   path.
+- **Dynamic plugin loader, SDK, or protocol change**
+  Use `maintain-dynamic-plugins`. Run the targeted plugin crates and
+  `just test-python-plugin` first, then escalate to the core validation matrix
+  when runtime behavior or `crates/core` changed.
 - **Docs-only change**
   Run targeted checks only if commands, package names, or examples changed.
   Use `just docs` for docs-site builds and `just docs-linkcheck` when links
@@ -81,7 +88,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # Python
 just build-python
+just build-python-plugin
 just test-python
+just test-python-plugin
 uv run ruff format python
 uv run pytest -k "<pattern>"
 
@@ -113,6 +122,7 @@ just docs-linkcheck
 - `test-node-binding`
 - `test-wasm-binding`
 - `test-ffi-surface`
+- `maintain-dynamic-plugins`
 
 ## Pre-commit Semantics
 
@@ -158,9 +168,11 @@ If the change is large or public-facing, also verify:
 - README and docs entry points still match current package names and paths
 - Examples still run with the documented commands
 - Any renamed public surfaces are reflected consistently in manifests and docs
+- Dynamic plugin examples use `compat.relay = ">=0.5,<1.0"` unless deliberately
+  narrower.
 
 ## References
 
-- Testing guide: `docs/contribute/testing-and-docs.md`
+- Testing guide: `docs/contribute/testing-and-docs.mdx`
 - Contributor guide: `CONTRIBUTING.md`
 - Build and test dispatchers: `justfile`

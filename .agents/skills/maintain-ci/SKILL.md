@@ -34,6 +34,10 @@ reliability, or reproducibility.
   pipeline has tag-based publish behavior.
 - Keep release-tag policy aligned with `RELEASING.md`: raw SemVer tags only,
   no leading `v`.
+- Keep Codecov component paths aligned with new crates, packages, and generated
+  outputs. Dynamic plugin SDK/protocol paths belong in the plugin component.
+- Keep pure-Python plugin SDK packaging as a single wheel artifact instead of
+  duplicating it across every platform matrix entry.
 
 ## Permission Model
 
@@ -61,6 +65,10 @@ reliability, or reproducibility.
 - [ ] Every external action is pinned to a full SHA
 - [ ] Cache settings are tied to lockfiles, manifests, or explicit tool versions
 - [ ] Secrets are only passed to the jobs that consume them
+- [ ] Codecov upload counts match `codecov.yml` after adding or removing upload
+      jobs
+- [ ] Package artifacts include any first-class SDK packages introduced by the
+      change
 - [ ] Concurrency, branch filters, and publish guards still reflect release intent
 - [ ] Artifact upload, download, and Pages deploy steps have matching permissions
 - [ ] Tag-triggered release workflows fail early when a tag violates repo policy
@@ -71,7 +79,7 @@ Start with the narrowest useful checks:
 
 ```bash
 ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |f| YAML.load_file(f) }; puts "yaml-ok"'
-uv run pre-commit run --files .github/workflows/ci.yaml .github/workflows/ci_pipe.yml
+uv run pre-commit run --files .github/workflows/ci.yaml .github/workflows/ci_python.yml
 ```
 
 Use ripgrep to inspect the workflow graph before editing:
@@ -87,8 +95,9 @@ source instead of assuming local success proves remote success.
 ## Canonical References
 
 - `.github/workflows/ci.yaml`
-- `.github/workflows/ci_pipe.yml`
+- `.github/workflows/ci_python.yml`
 - `RELEASING.md`
 - `.pre-commit-config.yaml`
 - `maintain-packaging`
 - `validate-change`
+- `maintain-dynamic-plugins`
