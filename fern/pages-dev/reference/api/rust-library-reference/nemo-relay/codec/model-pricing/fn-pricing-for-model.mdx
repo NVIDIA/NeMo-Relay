@@ -1,0 +1,17 @@
+---
+title: "Function pricing_for_model"
+sidebar-title: "pricing_for_model"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-pricing-for-model"
+description: "Returns known model pricing for a model ID."
+position: 20
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn pricing_for_model(model: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-modelpricing\">ModelPricing</a>&gt;"}} /></pre>
+
+Returns known model pricing for a model ID.
+
+Unknown models return `None` so response handling and observability export can continue without inventing a cost.

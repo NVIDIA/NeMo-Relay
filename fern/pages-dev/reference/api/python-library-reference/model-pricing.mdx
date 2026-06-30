@@ -1,0 +1,259 @@
+---
+title: "nemo_relay.model_pricing"
+sidebar-title: "model_pricing"
+description: "Model pricing plugin configuration helpers."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/model_pricing.pyi`.
+
+Module `nemo_relay.model_pricing`.
+
+Model pricing plugin configuration helpers.
+
+## Classes
+
+### `ConfigDiagnostic(_ConfigDiagnosticRequired)`
+
+One model pricing validation diagnostic.
+
+### `ConfigReport(TypedDict)`
+
+Validation report for model pricing configuration.
+
+### `TokenPricingRates`
+
+Per-token model rates expressed per one million tokens.
+
+#### Methods
+
+##### `TokenPricingRates`
+
+```python
+def TokenPricingRates(input_per_million: float, output_per_million: float, cache_read_per_million: float | None = None, cache_write_per_million: float | None = None) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize these rates to the canonical JSON object shape.
+
+### `PromptCachePricing`
+
+Prompt-cache accounting settings for a model pricing entry.
+
+#### Methods
+
+##### `PromptCachePricing`
+
+```python
+def PromptCachePricing(read_accounting: Literal['included_in_prompt_tokens', 'separate'] = 'included_in_prompt_tokens') -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this prompt-cache config to the canonical JSON object shape.
+
+### `TokenRateTier`
+
+One threshold tier in a token rate schedule.
+
+#### Methods
+
+##### `TokenRateTier`
+
+```python
+def TokenRateTier(rates: TokenPricingRates | JsonObject, min_prompt_tokens: int | None = None, max_prompt_tokens: int | None = None) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this rate tier to the canonical JSON object shape.
+
+### `PromptTokenThresholdRateSchedule`
+
+Rate schedule selected by full-request prompt token thresholds.
+
+#### Methods
+
+##### `PromptTokenThresholdRateSchedule`
+
+```python
+def PromptTokenThresholdRateSchedule(tiers: list[TokenRateTier | JsonObject] = ..., applies_to: Literal['full_request'] = 'full_request') -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this rate schedule to the canonical JSON object shape.
+
+### `ModelPricing`
+
+One model pricing catalog entry.
+
+#### Methods
+
+##### `ModelPricing`
+
+```python
+def ModelPricing(provider: str, model_id: str, pricing_as_of: str, pricing_source: str, aliases: list[str] = ..., currency: str = 'USD', unit: Literal['per_token', 'per_request', 'per_second', 'gpu_hour'] = 'per_token', rates: TokenPricingRates | JsonObject | None = None, rate_schedule: PromptTokenThresholdRateSchedule | JsonObject | None = None, prompt_cache: PromptCachePricing | JsonObject = ...) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this catalog entry to the canonical JSON object shape.
+
+### `PricingCatalog`
+
+Inline model pricing catalog payload.
+
+#### Methods
+
+##### `PricingCatalog`
+
+```python
+def PricingCatalog(entries: list[ModelPricing | JsonObject] = ..., version: int = 1) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this catalog to the canonical JSON object shape.
+
+### `InlineSource`
+
+Pricing source backed by an inline catalog.
+
+#### Methods
+
+##### `InlineSource`
+
+```python
+def InlineSource(catalog: PricingCatalog | JsonObject) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this source to the canonical JSON object shape.
+
+### `FileSource`
+
+Pricing source backed by a JSON catalog file.
+
+#### Methods
+
+##### `FileSource`
+
+```python
+def FileSource(path: str) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this source to the canonical JSON object shape.
+
+### `PricingConfig`
+
+Canonical config document for the top-level model pricing component.
+
+#### Methods
+
+##### `PricingConfig`
+
+```python
+def PricingConfig(sources: list[InlineSource | FileSource | JsonObject] = ...) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this model pricing config to the canonical JSON object shape.
+
+### `ComponentSpec`
+
+Top-level model pricing component wrapper.
+
+#### Methods
+
+##### `ComponentSpec`
+
+```python
+def ComponentSpec(config: PricingConfig | JsonObject, enabled: bool = True) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this component to the canonical plugin shape.
+
+## Functions
+
+### `validate_config`
+
+```python
+def validate_config(config: PricingConfig | JsonObject) -> ConfigReport
+```
+
+Validate a model pricing config document without activating it.
+
+## Type Aliases And Constants
+
+- `PRICING_PLUGIN_KIND`
+

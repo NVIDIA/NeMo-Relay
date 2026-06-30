@@ -1,0 +1,33 @@
+---
+title: "Trait Pricing Source"
+sidebar-title: "PricingSource"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/trait-pricingsource"
+description: "Pluggable model pricing source interface."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait PricingSource: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required methods\n    fn source_name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>;\n    fn load_catalog(\n        &amp;self,\n    ) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-pricingcatalog\">PricingCatalog</a>&gt;, <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>&gt;;\n&#125;"}} /></pre>
+
+Pluggable model pricing source interface.
+
+Database, service-backed, or enterprise-managed model pricing integrations should implement this trait and return a validated catalog snapshot. The LLM hot path uses [`PricingResolver`](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-pricingresolver), so sources can refresh out-of-band without making each response decode perform network or database I/O.
+
+## Required Methods
+
+#### `source_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn source_name(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+Stable source name for diagnostics.
+
+#### `load_catalog`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn load_catalog(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-pricingcatalog\">PricingCatalog</a>&gt;, <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>&gt;"}} /></pre>
+
+Loads a catalog snapshot from this source.
+
+## Implementors
