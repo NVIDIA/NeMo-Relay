@@ -6,8 +6,9 @@ use serde_json::{Map, Value, json};
 
 use crate::adapters::{
     AdapterOutcome, ClassificationRules, classify, common_session_event, event_name, metadata,
-    normalize_name, session_id, value_at,
+    normalize_name, session_id,
 };
+use crate::json_path::value_at;
 use crate::model::{AgentKind, LlmEvent, NormalizedEvent};
 
 /// Normalizes Hermes shell hook payloads without emitting control directives.

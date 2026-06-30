@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::config::header_string;
+use crate::json_path::{string_at, string_at_any as first_string_at, value_at};
 use crate::model::{
     AgentKind, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
 };
@@ -213,19 +214,20 @@ fn session_id(payload: &Value, headers: &HeaderMap) -> String {
 // Reads the first known session identifier payload path. Keeping the path list in one place makes
 // adapter precedence explicit without nesting a long `or_else` chain in `session_id`.
 fn session_id_from_payload(payload: &Value) -> Option<String> {
-    [
-        &["session_id"][..],
-        &["sessionId"],
-        &["session", "id"],
-        &["conversation_id"],
-        &["conversationId"],
-        &["parent_session_id"],
-        &["task_id"],
-        &["extra", "session_id"],
-        &["extra", "task_id"],
-    ]
-    .into_iter()
-    .find_map(|path| string_at(payload, path))
+    first_string_at(
+        payload,
+        &[
+            &["session_id"][..],
+            &["sessionId"][..],
+            &["session", "id"][..],
+            &["conversation_id"][..],
+            &["conversationId"][..],
+            &["parent_session_id"][..],
+            &["task_id"][..],
+            &["extra", "session_id"][..],
+            &["extra", "task_id"][..],
+        ],
+    )
 }
 
 // Reads the agent's event name from the known hook fields in order and falls back to `unknown`.
@@ -325,12 +327,6 @@ fn common_tool_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> T
         payload: session.payload,
         metadata: session.metadata,
     }
-}
-
-// Looks up the first string across a list of payload paths. Keeping this fallback mechanic in one
-// helper makes event-specific extraction code read as schema precedence rather than control flow.
-fn first_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
-    paths.iter().find_map(|path| string_at(payload, path))
 }
 
 // Resolves a tool call identifier from all known agent payload conventions before synthesizing a
@@ -444,30 +440,6 @@ fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value>
         }
     }
     (!object.is_empty()).then_some(Value::Object(object))
-}
-
-// Reads a nested value as a string, accepting numbers and booleans for agent schemas that encode
-// identifiers or flags without string types. Empty strings are treated as absent to preserve
-// fallback ordering.
-fn string_at(payload: &Value, path: &[&str]) -> Option<String> {
-    value_at(payload, path)
-        .and_then(|value| match value {
-            Value::String(value) => Some(value),
-            Value::Number(value) => Some(value.to_string()),
-            Value::Bool(value) => Some(value.to_string()),
-            _ => None,
-        })
-        .filter(|value| !value.is_empty())
-}
-
-// Returns a cloned nested JSON value using exact object-key traversal. Missing intermediate keys
-// stop the lookup without error so callers can chain schema fallbacks cheaply.
-fn value_at(payload: &Value, path: &[&str]) -> Option<Value> {
-    let mut current = payload;
-    for key in path {
-        current = current.get(*key)?;
-    }
-    Some(current.clone())
 }
 
 // Classifies a raw hook event into one or more normalized events.

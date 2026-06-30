@@ -614,6 +614,14 @@ fn json_helpers_and_metadata_merge_cover_edge_shapes() {
         json_value_at(&payload, &[&["object"][..]]),
         Some(json!({ "nested": true }))
     );
+    assert_eq!(
+        json_string_at(
+            &payload,
+            &[&["object"][..], &["empty"][..], &["string"][..]]
+        )
+        .as_deref(),
+        Some("value")
+    );
 
     let mut inserted = Map::new();
     insert_optional(&mut inserted, "present", Some("value"));

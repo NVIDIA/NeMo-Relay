@@ -14,6 +14,7 @@ use nemo_relay::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
+pub(crate) use crate::json_path::{string_at_any as json_string_at, value_at_any as json_value_at};
 use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
 
 pub(crate) mod claude_code;
@@ -984,31 +985,6 @@ fn normalize_affinity_text(text: &str) -> String {
 
 fn truncate_affinity_text(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
-}
-
-// Reads the first string-like value from any candidate JSON path. Scalar numbers and booleans are
-// accepted for IDs because provider payloads are not always strict about identifier types.
-pub(crate) fn json_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
-    json_value_at(payload, paths)
-        .and_then(|value| match value {
-            Value::String(value) => Some(value),
-            Value::Number(value) => Some(value.to_string()),
-            Value::Bool(value) => Some(value.to_string()),
-            _ => None,
-        })
-        .filter(|value| !value.is_empty())
-}
-
-// Reads the first JSON value from any candidate path. The clone is intentional because extracted
-// correlation data must live independently of the provider payload it was read from.
-pub(crate) fn json_value_at(payload: &Value, paths: &[&[&str]]) -> Option<Value> {
-    paths.iter().find_map(|path| {
-        let mut current = payload;
-        for key in *path {
-            current = current.get(*key)?;
-        }
-        Some(current.clone())
-    })
 }
 
 // Inserts an optional string value into a JSON object while omitting absent fields entirely. This
