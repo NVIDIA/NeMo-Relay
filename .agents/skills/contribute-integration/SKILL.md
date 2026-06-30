@@ -14,8 +14,8 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when contributing an integration with a framework such as
-LangChain, LangGraph, Deep Agents, or OpenClaw through its public APIs.
+Use this skill when contributing an integration with a framework or plugin such
+as LangChain, LangGraph, Deep Agents, or OpenClaw through its public APIs.
 
 ## Default Guidance
 
@@ -26,12 +26,12 @@ LangChain, LangGraph, Deep Agents, or OpenClaw through its public APIs.
 
 ## Checklist
 
-- [ ] Integration pattern follows `docs/integrate-frameworks/adding-scopes.md`
+- [ ] Integration pattern follows `docs/integrate-into-frameworks/adding-scopes.mdx`
 - [ ] Integration uses public framework or plugin APIs
 - [ ] Relevant integration tests or smoke path pass
 - [ ] Docs updated if activation or usage changed
 
 ## References
 
-- `docs/integrate-frameworks/about.md`
+- `docs/integrate-into-frameworks/about.mdx`
 - `validate-change`
