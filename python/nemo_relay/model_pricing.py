@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pricing plugin configuration helpers."""
+"""Model pricing plugin configuration helpers."""
 
 from __future__ import annotations
 
@@ -19,14 +19,14 @@ class _ConfigDiagnosticRequired(TypedDict):
 
 
 class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
-    """One pricing validation diagnostic."""
+    """One model pricing validation diagnostic."""
 
     component: str
     field: str
 
 
 class ConfigReport(TypedDict):
-    """Validation report for pricing configuration."""
+    """Validation report for model pricing configuration."""
 
     diagnostics: list[ConfigDiagnostic]
 
@@ -78,7 +78,7 @@ class TokenPricingRates:
 
 @dataclass(slots=True)
 class PromptCachePricing:
-    """Prompt-cache accounting settings for a pricing entry."""
+    """Prompt-cache accounting settings for a model pricing entry."""
 
     read_accounting: Literal["included_in_prompt_tokens", "separate"] = "included_in_prompt_tokens"
 
@@ -159,7 +159,7 @@ class ModelPricing:
 
 @dataclass(slots=True)
 class PricingCatalog:
-    """Inline pricing catalog payload."""
+    """Inline model pricing catalog payload."""
 
     entries: list[ModelPricing | JsonObject] = field(default_factory=list)
     version: int = 1
@@ -206,12 +206,12 @@ class FileSource:
 
 @dataclass(slots=True)
 class PricingConfig:
-    """Canonical config document for the top-level pricing component."""
+    """Canonical config document for the top-level model pricing component."""
 
     sources: list[InlineSource | FileSource | JsonObject] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
-        """Serialize this pricing config to the canonical JSON object shape."""
+        """Serialize this model pricing config to the canonical JSON object shape."""
         return _normalize_object({"sources": self.sources})
 
 
@@ -220,7 +220,7 @@ PRICING_PLUGIN_KIND = "pricing"
 
 @dataclass(slots=True)
 class ComponentSpec:
-    """Top-level pricing component wrapper."""
+    """Top-level model pricing component wrapper."""
 
     config: PricingConfig | JsonObject
     enabled: bool = True
@@ -235,7 +235,7 @@ class ComponentSpec:
 
 
 def validate_config(config: PricingConfig | JsonObject) -> ConfigReport:
-    """Validate a pricing config document without activating it."""
+    """Validate a model pricing config document without activating it."""
     report = plugin_module.validate(
         plugin_module.PluginConfig(
             components=[ComponentSpec(config)],

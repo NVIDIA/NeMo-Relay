@@ -8,9 +8,9 @@ const plugin = require('./plugin.js');
 const PRICING_PLUGIN_KIND = 'pricing';
 
 /**
- * Create a default pricing component config.
+ * Create a default model pricing component config.
  *
- * @returns {object} The minimal pricing config with no sources.
+ * @returns {object} The minimal model pricing config with no sources.
  */
 function defaultConfig() {
   return {
@@ -19,10 +19,10 @@ function defaultConfig() {
 }
 
 /**
- * Create per-token pricing rates with defaults applied.
+ * Create per-token model pricing rates with defaults applied.
  *
  * @param {object} [config={}] - Partial token-rate fields to override.
- * @returns {object} A normalized token pricing rates object.
+ * @returns {object} A normalized token model pricing rates object.
  */
 function tokenRates(config = {}) {
   return {
@@ -76,27 +76,28 @@ function promptTokenThresholdRateSchedule(tiers = [], config = {}) {
 }
 
 /**
- * Create one pricing catalog entry with defaults applied.
+ * Create one model pricing catalog entry with defaults applied.
  *
  * @param {object} config - Required and optional model pricing fields.
  * @returns {object} A normalized model pricing entry.
  */
 function catalogEntry(config) {
+  const { prompt_cache: promptCacheConfig, ...entryConfig } = config;
   return {
     aliases: [],
     currency: 'USD',
     unit: 'per_token',
-    prompt_cache: promptCache(),
-    ...config,
+    ...entryConfig,
+    prompt_cache: promptCache(promptCacheConfig),
   };
 }
 
 /**
- * Create an inline pricing catalog payload.
+ * Create an inline model pricing catalog payload.
  *
  * @param {object[]} [entries=[]] - Pricing catalog entries.
  * @param {object} [config={}] - Optional catalog fields to override.
- * @returns {object} A normalized pricing catalog object.
+ * @returns {object} A normalized model pricing catalog object.
  */
 function inlineCatalog(entries = [], config = {}) {
   return {
@@ -107,7 +108,7 @@ function inlineCatalog(entries = [], config = {}) {
 }
 
 /**
- * Create an inline pricing source.
+ * Create an inline model pricing source.
  *
  * @param {object} catalog - Pricing catalog payload.
  * @returns {object} A normalized inline source config.
@@ -120,7 +121,7 @@ function inlineSource(catalog) {
 }
 
 /**
- * Create a file-backed pricing source.
+ * Create a file-backed model pricing source.
  *
  * @param {string} path - JSON catalog file path.
  * @returns {object} A normalized file source config.
@@ -133,10 +134,10 @@ function fileSource(path) {
 }
 
 /**
- * Create a pricing config from ordered sources.
+ * Create a model pricing config from ordered sources.
  *
  * @param {object[]} [sources=[]] - Pricing sources in precedence order.
- * @returns {object} A normalized pricing config object.
+ * @returns {object} A normalized model pricing config object.
  */
 function pricingConfig(sources = []) {
   return {
@@ -145,11 +146,11 @@ function pricingConfig(sources = []) {
 }
 
 /**
- * Wrap pricing config as a top-level plugin component.
+ * Wrap model pricing config as a top-level plugin component.
  *
- * @param {object} config - Pricing component configuration document.
+ * @param {object} config - Model pricing component configuration document.
  * @param {{ enabled?: boolean }} [options={}] - Optional component-level flags.
- * @returns {object} A plugin component spec for the pricing plugin.
+ * @returns {object} A plugin component spec for the model pricing plugin.
  */
 function ComponentSpec(config, { enabled = true } = {}) {
   return plugin.ComponentSpec(PRICING_PLUGIN_KIND, config, {
@@ -158,9 +159,9 @@ function ComponentSpec(config, { enabled = true } = {}) {
 }
 
 /**
- * Validate a pricing config document without activating it.
+ * Validate a model pricing config document without activating it.
  *
- * @param {object} config - Pricing component configuration document.
+ * @param {object} config - Model pricing component configuration document.
  * @returns {object} A structured validation report with diagnostics.
  */
 function validateConfig(config) {

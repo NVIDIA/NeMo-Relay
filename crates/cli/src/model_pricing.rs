@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Pricing catalog CLI helpers.
+//! Model pricing catalog CLI helpers.
 
 use std::path::Path;
 
-use nemo_relay::codec::pricing::{
+use nemo_relay::codec::model_pricing::{
     ModelPricing, PricingCatalog, PricingConfig, PricingSourceConfig,
 };
 use nemo_relay::codec::response::Usage;
@@ -27,7 +27,7 @@ pub(crate) fn validate(command: PricingValidateCommand) -> Result<(), CliError> 
     let catalog = read_pricing_catalog(&command.path)?;
     let entries = catalog.entries.len();
     println!(
-        "Valid pricing catalog: {} ({entries} {})",
+        "Valid model pricing catalog: {} ({entries} {})",
         command.path.display(),
         plural(entries, "entry", "entries")
     );
@@ -44,14 +44,14 @@ pub(crate) fn init(command: PricingInitCommand) -> Result<(), CliError> {
     plugin_config.components[index].enabled = true;
     validate_config(&plugin_config)?;
     write_plugin_config(&path, &plugin_config)?;
-    println!("Initialized pricing config: {}", path.display());
+    println!("Initialized model pricing config: {}", path.display());
     Ok(())
 }
 
 pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliError> {
     let source_path = std::fs::canonicalize(&command.path).map_err(|source| {
         CliError::Config(format!(
-            "could not canonicalize pricing catalog '{}': {source}",
+            "could not canonicalize model pricing catalog '{}': {source}",
             command.path.display()
         ))
     })?;
@@ -76,7 +76,7 @@ pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliErro
     validate_config(&plugin_config)?;
     write_plugin_config(&path, &plugin_config)?;
     println!(
-        "Added pricing source: {} -> {}",
+        "Added model pricing source: {} -> {}",
         command.path.display(),
         path.display()
     );
@@ -87,20 +87,20 @@ pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {
     let sources = pricing_catalog_sources_from_current_config()?;
     if sources.is_empty() {
         return Err(CliError::Config(
-            "no pricing sources configured; run `nemo-relay pricing add-source <catalog.json>` or enable the pricing component".into(),
+            "no model pricing sources configured; run `nemo-relay model-pricing add-source <catalog.json>` or enable the `pricing` component".into(),
         ));
     }
     let resolved = resolve_pricing(&sources, command.provider.as_deref(), &command.model)
         .ok_or_else(|| {
             CliError::Config(format!(
-                "no pricing entry matched provider={} model={}",
+                "no model pricing entry matched provider={} model={}",
                 command.provider.as_deref().unwrap_or("<none>"),
                 command.model
             ))
         })?;
     let pricing = resolved.pricing;
 
-    println!("Resolved pricing");
+    println!("Resolved model pricing");
     println!("source = {}", resolved.source);
     println!("provider = {}", pricing.provider);
     println!("model = {}", pricing.model_id);
@@ -133,13 +133,13 @@ pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {
 fn read_pricing_catalog(path: &Path) -> Result<PricingCatalog, CliError> {
     let raw = std::fs::read_to_string(path).map_err(|source| {
         CliError::Config(format!(
-            "could not read pricing catalog '{}': {source}",
+            "could not read model pricing catalog '{}': {source}",
             path.display()
         ))
     })?;
     PricingCatalog::from_json_str(&raw).map_err(|error| {
         CliError::Config(format!(
-            "invalid pricing catalog '{}': {error}",
+            "invalid model pricing catalog '{}': {error}",
             path.display()
         ))
     })
@@ -247,7 +247,7 @@ fn pricing_config_from_component(
     component: &PluginComponentSpec,
 ) -> Result<PricingConfig, CliError> {
     serde_json::from_value(Value::Object(component.config.clone()))
-        .map_err(|error| CliError::Config(format!("invalid pricing config: {error}")))
+        .map_err(|error| CliError::Config(format!("invalid model pricing config: {error}")))
 }
 
 fn store_pricing_config(
@@ -255,11 +255,11 @@ fn store_pricing_config(
     config: &PricingConfig,
 ) -> Result<(), CliError> {
     let value = serde_json::to_value(config).map_err(|error| {
-        CliError::Config(format!("could not serialize pricing config: {error}"))
+        CliError::Config(format!("could not serialize model pricing config: {error}"))
     })?;
     let Value::Object(object) = value else {
         return Err(CliError::Config(
-            "could not serialize pricing config as an object".into(),
+            "could not serialize model pricing config as an object".into(),
         ));
     };
     component.config = object;
@@ -278,5 +278,5 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/pricing_tests.rs"]
+#[path = "../tests/coverage/model_pricing_tests.rs"]
 mod tests;

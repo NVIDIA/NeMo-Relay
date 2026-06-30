@@ -112,5 +112,5 @@ fn pricing_component_rejects_malformed_component_config() {
     let error = pricing_config_from_component(&component)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("invalid pricing config"));
+    assert!(error.contains("invalid model pricing config"));
 }

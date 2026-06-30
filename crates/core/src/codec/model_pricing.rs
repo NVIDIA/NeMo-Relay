@@ -3,7 +3,7 @@
 
 //! Data-driven LLM model pricing used to layer cost estimates onto usage.
 //!
-//! Pricing is deliberately separate from response normalization so adding
+//! Model pricing is deliberately separate from response normalization so adding
 //! providers, aliases, or cache-accounting rules does not require editing
 //! [`AnnotatedLlmResponse`](super::response::AnnotatedLlmResponse).
 
@@ -29,26 +29,26 @@ pub(crate) fn pricing_test_mutex() -> &'static Mutex<()> {
     &PRICING_TEST_MUTEX
 }
 
-/// Errors produced while parsing or validating a pricing catalog.
+/// Errors produced while parsing or validating a model pricing catalog.
 #[derive(Debug, Error)]
 pub enum PricingCatalogError {
     /// The catalog was not valid JSON for the catalog schema.
-    #[error("invalid pricing catalog JSON: {0}")]
+    #[error("invalid model pricing catalog JSON: {0}")]
     Json(#[from] serde_json::Error),
     /// Two entries or aliases normalize to the same model key.
-    #[error("duplicate pricing model alias '{model}'")]
+    #[error("duplicate model pricing alias '{model}'")]
     DuplicateModelAlias {
         /// Normalized model key that appeared more than once.
         model: String,
     },
     /// The catalog schema version is not supported by this Relay build.
-    #[error("unsupported pricing catalog version {version}")]
+    #[error("unsupported model pricing catalog version {version}")]
     UnsupportedVersion {
         /// Version number from the catalog payload.
         version: u32,
     },
     /// A required text field was empty.
-    #[error("pricing entry {entry_index} has empty {field}")]
+    #[error("model pricing entry {entry_index} has empty {field}")]
     EmptyField {
         /// Zero-based index of the invalid catalog entry.
         entry_index: usize,
@@ -56,7 +56,7 @@ pub enum PricingCatalogError {
         field: String,
     },
     /// A price was negative or non-finite.
-    #[error("pricing entry {entry_index} has invalid {field}: {value}")]
+    #[error("model pricing entry {entry_index} has invalid {field}: {value}")]
     InvalidRate {
         /// Zero-based index of the invalid catalog entry.
         entry_index: usize,
@@ -65,16 +65,16 @@ pub enum PricingCatalogError {
         /// Invalid field value.
         value: f64,
     },
-    /// A pricing catalog file could not be read.
-    #[error("could not read pricing catalog file '{}': {source}", path.display())]
+    /// A model pricing catalog file could not be read.
+    #[error("could not read model pricing catalog file '{}': {source}", path.display())]
     FileRead {
         /// Catalog path.
         path: PathBuf,
         /// Underlying I/O error.
         source: std::io::Error,
     },
-    /// The active pricing resolver lock was poisoned.
-    #[error("pricing resolver lock poisoned: {0}")]
+    /// The active model pricing resolver lock was poisoned.
+    #[error("model pricing resolver lock poisoned: {0}")]
     LockPoisoned(String),
 }
 
@@ -88,20 +88,20 @@ pub struct PricingCatalog {
 }
 
 impl PricingCatalog {
-    /// Parses and validates a pricing catalog from JSON.
+    /// Parses and validates a model pricing catalog from JSON.
     pub fn from_json_str(catalog_json: &str) -> Result<Self, PricingCatalogError> {
         let catalog: Self = serde_json::from_str(catalog_json)?;
         catalog.validate()?;
         Ok(catalog)
     }
 
-    /// Finds pricing for a canonical model ID or alias.
+    /// Finds model pricing for a canonical model ID or alias.
     #[must_use]
     pub fn pricing_for_model(&self, model: &str) -> Option<ModelPricing> {
         self.pricing_for(None, model)
     }
 
-    /// Finds pricing for a provider/model pair, with model-only fallback.
+    /// Finds model pricing for a provider/model pair, with model-only fallback.
     #[must_use]
     pub fn pricing_for(&self, provider: Option<&str>, model: &str) -> Option<ModelPricing> {
         let model_keys = normalized_model_lookup_keys(provider, model);
@@ -140,7 +140,7 @@ impl PricingCatalog {
     }
 }
 
-/// Runtime pricing resolver configuration.
+/// Runtime model pricing resolver configuration.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PricingConfig {
@@ -149,7 +149,7 @@ pub struct PricingConfig {
     pub sources: Vec<PricingSourceConfig>,
 }
 
-/// Declarative pricing source supported by Relay configuration.
+/// Declarative model pricing source supported by Relay configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PricingSourceConfig {
@@ -160,14 +160,14 @@ pub enum PricingSourceConfig {
     },
     /// Catalog loaded from a JSON file.
     File {
-        /// JSON pricing catalog path.
+        /// JSON model pricing catalog path.
         path: PathBuf,
     },
 }
 
-/// Pluggable pricing source interface.
+/// Pluggable model pricing source interface.
 ///
-/// Database, service-backed, or enterprise-managed pricing integrations should
+/// Database, service-backed, or enterprise-managed model pricing integrations should
 /// implement this trait and return a validated catalog snapshot. The LLM hot
 /// path uses [`PricingResolver`], so sources can refresh out-of-band without
 /// making each response decode perform network or database I/O.
@@ -179,7 +179,7 @@ pub trait PricingSource: Send + Sync {
     fn load_catalog(&self) -> Result<Option<PricingCatalog>, PricingCatalogError>;
 }
 
-/// Ordered pricing lookup chain.
+/// Ordered model pricing lookup chain.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PricingResolver {
     catalogs: Vec<PricingCatalog>,
@@ -227,13 +227,13 @@ impl PricingResolver {
         Ok(Self { catalogs })
     }
 
-    /// Finds pricing for a canonical model ID or alias.
+    /// Finds model pricing for a canonical model ID or alias.
     #[must_use]
     pub fn pricing_for_model(&self, model: &str) -> Option<ModelPricing> {
         self.pricing_for(None, model)
     }
 
-    /// Finds pricing for a provider/model pair, with model-only fallback.
+    /// Finds model pricing for a provider/model pair, with model-only fallback.
     #[must_use]
     pub fn pricing_for(&self, provider: Option<&str>, model: &str) -> Option<ModelPricing> {
         self.catalogs
@@ -241,13 +241,13 @@ impl PricingResolver {
             .find_map(|catalog| catalog.pricing_for(provider, model))
     }
 
-    /// Estimates cost for a model/usage pair when pricing is known.
+    /// Estimates cost for a model/usage pair when model pricing is known.
     #[must_use]
     pub fn estimate_cost(&self, model: &str, usage: &Usage) -> Option<CostEstimate> {
         self.estimate_cost_for_provider(None, model, usage)
     }
 
-    /// Estimates cost for a provider/model pair when pricing is known.
+    /// Estimates cost for a provider/model pair when model pricing is known.
     #[must_use]
     pub fn estimate_cost_for_provider(
         &self,
@@ -260,33 +260,33 @@ impl PricingResolver {
     }
 }
 
-/// Per-token pricing for a model, expressed in USD per one million tokens.
+/// Per-token model pricing expressed in USD per one million tokens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelPricing {
-    /// Provider that owns this pricing entry.
+    /// Provider that owns this model pricing entry.
     pub provider: String,
-    /// Canonical model ID for this pricing entry.
+    /// Canonical model ID for this model pricing entry.
     pub model_id: String,
-    /// Additional model IDs that should use this pricing.
+    /// Additional model IDs that should use this model pricing.
     #[serde(default)]
     pub aliases: Vec<String>,
-    /// ISO 4217 currency for this pricing entry.
+    /// ISO 4217 currency for this model pricing entry.
     #[serde(default = "default_pricing_currency")]
     pub currency: String,
-    /// Billing unit represented by this pricing entry.
+    /// Billing unit represented by this model pricing entry.
     #[serde(default)]
     pub unit: PricingUnit,
     /// Token rates expressed as USD per one million tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rates: Option<TokenPricingRates>,
-    /// Data-driven token rate schedule for threshold-based provider pricing.
+    /// Data-driven token rate schedule for threshold-based model pricing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_schedule: Option<TokenRateSchedule>,
     /// Prompt-cache accounting model for this provider/model.
     pub prompt_cache: PromptCachePricing,
-    /// Date this pricing entry was last verified.
+    /// Date this model pricing entry was last verified.
     pub pricing_as_of: String,
-    /// Source URL for this pricing entry.
+    /// Source URL for this model pricing entry.
     pub pricing_source: String,
 }
 
@@ -404,18 +404,18 @@ impl ModelPricing {
     }
 }
 
-/// Billing unit represented by a pricing entry.
+/// Billing unit represented by a model pricing entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PricingUnit {
-    /// Token-based pricing.
+    /// Token-based model pricing.
     #[default]
     PerToken,
-    /// Request-based pricing, reserved for future estimation.
+    /// Request-based model pricing, reserved for future estimation.
     PerRequest,
-    /// Time-based pricing, reserved for future estimation.
+    /// Time-based model pricing, reserved for future estimation.
     PerSecond,
-    /// GPU-hour amortized pricing for self-hosted models, reserved for future estimation.
+    /// GPU-hour amortized model pricing for self-hosted models, reserved for future estimation.
     GpuHour,
 }
 
@@ -464,7 +464,7 @@ impl TokenPricingRates {
     }
 }
 
-/// Data-driven token rate schedule for provider pricing with request thresholds.
+/// Data-driven token rate schedule for model pricing with request thresholds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TokenRateSchedule {
@@ -521,7 +521,7 @@ pub enum RateScheduleApplication {
     FullRequest,
 }
 
-/// A token pricing tier selected by prompt/input token count.
+/// A model pricing tier selected by prompt/input token count.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TokenRateTier {
     /// Inclusive lower bound for prompt tokens.
@@ -577,7 +577,7 @@ pub enum CacheReadAccounting {
     Separate,
 }
 
-/// Returns known pricing for a model ID.
+/// Returns known model pricing for a model ID.
 ///
 /// Unknown models return `None` so response handling and observability export
 /// can continue without inventing a cost.
@@ -586,19 +586,19 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     active_pricing_resolver().pricing_for_model(model)
 }
 
-/// Returns known pricing for a provider/model pair.
+/// Returns known model pricing for a provider/model pair.
 #[must_use]
 pub fn pricing_for_provider(provider: Option<&str>, model: &str) -> Option<ModelPricing> {
     active_pricing_resolver().pricing_for(provider, model)
 }
 
-/// Estimates USD cost for a model/usage pair when pricing is known.
+/// Estimates USD cost for a model/usage pair when model pricing is known.
 #[must_use]
 pub fn estimate_cost(model: &str, usage: &Usage) -> Option<CostEstimate> {
     active_pricing_resolver().estimate_cost(model, usage)
 }
 
-/// Estimates USD cost for a provider/model pair when pricing is known.
+/// Estimates USD cost for a provider/model pair when model pricing is known.
 #[must_use]
 pub fn estimate_cost_for_provider(
     provider: Option<&str>,
@@ -633,7 +633,7 @@ pub fn estimate_cost_with_provider(
         .and_then(|pricing| pricing.estimate_cost(usage))
 }
 
-/// Returns the active process-wide pricing resolver.
+/// Returns the active process-wide model pricing resolver.
 #[must_use]
 pub fn active_pricing_resolver() -> Arc<PricingResolver> {
     ACTIVE_PRICING_RESOLVER
@@ -642,7 +642,7 @@ pub fn active_pricing_resolver() -> Arc<PricingResolver> {
         .unwrap_or_else(|_| Arc::new(PricingResolver::default()))
 }
 
-/// Replaces the active process-wide pricing resolver.
+/// Replaces the active process-wide model pricing resolver.
 pub fn set_active_pricing_resolver(resolver: PricingResolver) -> Result<(), PricingCatalogError> {
     let mut guard = ACTIVE_PRICING_RESOLVER
         .write()
@@ -651,19 +651,19 @@ pub fn set_active_pricing_resolver(resolver: PricingResolver) -> Result<(), Pric
     Ok(())
 }
 
-/// Restores the active process-wide pricing resolver to an empty resolver.
+/// Restores the active process-wide model pricing resolver to an empty resolver.
 pub fn reset_active_pricing_resolver() -> Result<(), PricingCatalogError> {
     set_active_pricing_resolver(PricingResolver::default())
 }
 
-/// Adds a model-pricing estimate to a normalized response when cost is missing.
+/// Adds a model pricing estimate to a normalized response when cost is missing.
 ///
 /// Existing provider-reported or caller-supplied costs are preserved.
 pub fn attach_estimated_cost(response: &mut AnnotatedLlmResponse) {
     attach_estimated_cost_for_provider(response, None);
 }
 
-/// Adds a provider-aware model-pricing estimate to a normalized response when cost is missing.
+/// Adds a provider-aware model pricing estimate to a normalized response when cost is missing.
 ///
 /// Existing provider-reported or caller-supplied costs are preserved.
 pub fn attach_estimated_cost_for_provider(

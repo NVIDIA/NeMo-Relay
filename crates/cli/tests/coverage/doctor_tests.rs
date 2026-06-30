@@ -1148,7 +1148,7 @@ async fn collect_observability_covers_absent_invalid_and_componentless_configs()
     assert!(
         no_observability
             .iter()
-            .any(|check| check.name == "Pricing" && check.details.contains("not configured"))
+            .any(|check| check.name == "Model pricing" && check.details.contains("not configured"))
     );
 }
 
@@ -1450,8 +1450,8 @@ async fn collect_observability_validates_pricing_file_source() {
 
     let pricing = checks
         .iter()
-        .find(|check| check.name == "Pricing source")
-        .expect("pricing source check");
+        .find(|check| check.name == "Model pricing source")
+        .expect("model pricing source check");
     assert_eq!(pricing.status, Status::Pass);
     assert!(pricing.details.contains("valid (1 entries)"));
 }
@@ -1482,8 +1482,8 @@ async fn collect_observability_fails_for_missing_pricing_file_source() {
 
     let pricing = checks
         .iter()
-        .find(|check| check.name == "Pricing source")
-        .expect("pricing source check");
+        .find(|check| check.name == "Model pricing source")
+        .expect("model pricing source check");
     assert_eq!(pricing.status, Status::Fail);
     assert!(pricing.details.contains("unreadable"));
 }

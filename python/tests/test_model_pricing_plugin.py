@@ -1,14 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the built-in pricing plugin config helpers."""
+"""Tests for the built-in model pricing plugin config helpers."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from nemo_relay import plugin
-from nemo_relay.pricing import (
+from nemo_relay.model_pricing import (
     PRICING_PLUGIN_KIND,
     ComponentSpec,
     FileSource,

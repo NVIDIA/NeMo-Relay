@@ -26,19 +26,19 @@ func TestPricingConfigHelpers(t *testing.T) {
 
 	component := NewPricingComponentSpec(config).PluginComponent()
 	if component.Kind != PricingPluginKind || !component.Enabled {
-		t.Fatalf("unexpected pricing component wrapper: %#v", component)
+		t.Fatalf("unexpected model pricing component wrapper: %#v", component)
 	}
 	if len(component.Config["sources"].([]any)) != 2 {
-		t.Fatalf("expected two pricing sources, got %#v", component.Config)
+		t.Fatalf("expected two model pricing sources, got %#v", component.Config)
 	}
 
 	payload, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("marshal pricing config: %v", err)
+		t.Fatalf("marshal model pricing config: %v", err)
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(payload, &parsed); err != nil {
-		t.Fatalf("unmarshal pricing config: %v", err)
+		t.Fatalf("unmarshal model pricing config: %v", err)
 	}
 	sources := parsed["sources"].([]any)
 	inlineSource := sources[0].(map[string]any)
