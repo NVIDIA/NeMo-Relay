@@ -20,7 +20,9 @@ use crate::model::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AdapterOutcome {
+    /// Normalized events emitted from one incoming agent hook payload.
     pub(crate) events: Vec<NormalizedEvent>,
+    /// Hook response body returned to the invoking agent process.
     pub(crate) response: Value,
 }
 
@@ -36,22 +38,35 @@ pub(super) struct ClassificationRules<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct ExtractedLlmHint {
+    /// Agent-local worker or subagent identifier, when the payload supplies one.
     pub(crate) subagent_id: Option<String>,
+    /// Stable agent identifier from the hook payload, not synthesized.
     pub(crate) agent_id: Option<String>,
+    /// Agent type or role reported by the harness, not synthesized.
     pub(crate) agent_type: Option<String>,
+    /// Provider or harness conversation identifier used for later LLM correlation.
     pub(crate) conversation_id: Option<String>,
+    /// Generation identifier used to pair hook hints with provider responses.
     pub(crate) generation_id: Option<String>,
+    /// Request identifier used to pair hook hints with provider requests.
     pub(crate) request_id: Option<String>,
+    /// Model name reported by the hook payload.
     pub(crate) model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ExtractedToolCall {
+    /// Tool-call identifier reported by the hook payload, not synthesized.
     pub(crate) tool_call_id: Option<String>,
+    /// Tool name reported by the hook payload, not synthesized.
     pub(crate) tool_name: Option<String>,
+    /// Agent-local worker or subagent that owns the tool call.
     pub(crate) subagent_id: Option<String>,
+    /// Tool arguments exactly as supplied by the hook payload.
     pub(crate) arguments: Option<Value>,
+    /// Tool result exactly as supplied by the hook payload.
     pub(crate) result: Option<Value>,
+    /// Tool status reported or conservatively derived from the hook event name.
     pub(crate) status: Option<String>,
 }
 
@@ -63,8 +78,22 @@ pub(crate) struct ExtractedToolCall {
 /// synthetic tool-call IDs, and `unknown_tool` names so downstream lifecycle
 /// behavior remains stable for sparse payloads.
 pub(crate) trait AgentPayloadExtractor {
+    /// Extract the native session identifier for this agent payload.
+    ///
+    /// Returning `None` means the payload did not supply a trustworthy session
+    /// id; the adapter boundary will apply compatibility fallbacks.
     fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String>;
+
+    /// Extract the native hook event name for this agent payload.
+    ///
+    /// Returning `None` keeps unknown events observable by letting the adapter
+    /// boundary synthesize the generic `unknown` event name.
     fn event_name(&self, payload: &Value) -> Option<String>;
+
+    /// Build stable, low-cardinality metadata shared by normalized events.
+    ///
+    /// Implementations must not promote high-cardinality paths or PII into this
+    /// map; consumers that need full details can read the raw event payload.
     fn metadata(
         &self,
         payload: &Value,
@@ -72,8 +101,17 @@ pub(crate) trait AgentPayloadExtractor {
         kind: AgentKind,
         event_name: &str,
     ) -> Value;
+
+    /// Extract the native subagent or worker identifier for this agent payload.
+    ///
+    /// Returning `None` means the payload did not identify a subagent; callers
+    /// decide whether to synthesize a compatibility owner.
     fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String>;
+
+    /// Extract LLM-correlation hints without applying fallback values.
     fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint;
+
+    /// Extract tool-call facts without applying fallback identifiers or names.
     fn tool_call(
         &self,
         payload: &Value,
@@ -675,9 +713,10 @@ fn agent_tool_call(
     }
 }
 
-// Derives a stable session identifier from gateway headers first, then common agent payload
-// fields, and finally a v7 UUID. Header precedence lets gateway and hook-forward callers
-// correlate events even when agent payload schemas omit or rename their native session field.
+/// Derive a stable session identifier from extracted facts and compatibility fallbacks.
+///
+/// Header and payload precedence lives in the selected extractor. This boundary
+/// applies the final synthetic ID fallback so sparse payloads stay observable.
 fn session_id(
     payload: &Value,
     headers: &HeaderMap,
@@ -688,8 +727,10 @@ fn session_id(
         .unwrap_or_else(|| format!("hook-{}", Uuid::now_v7()))
 }
 
-// Reads the first known session identifier payload path. Keeping the path list in one place makes
-// adapter precedence explicit without nesting a long `or_else` chain in `session_id`.
+/// Read the first known session identifier payload path for one agent strategy.
+///
+/// Keeping the path list in one place makes adapter precedence explicit without
+/// nesting a long `or_else` chain in `session_id`.
 fn session_id_from_payload(
     payload: &Value,
     paths: &'static [&'static [&'static str]],
@@ -697,18 +738,21 @@ fn session_id_from_payload(
     first_string_at(payload, paths)
 }
 
-// Reads the agent's event name from the known hook fields in order and falls back to `unknown`.
-// This deliberately keeps unknown payloads observable instead of rejecting them at the adapter
-// boundary, allowing the session layer to emit a generic mark event.
+/// Read the agent's event name and fall back to `unknown`.
+///
+/// Unknown payloads stay observable instead of being rejected at the adapter
+/// boundary, allowing the session layer to emit a generic mark event.
 fn event_name(payload: &Value, extractor: &dyn AgentPayloadExtractor) -> String {
     extractor
         .event_name(payload)
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-// Builds shared metadata for every normalized hook event. Only stable, low-cardinality fields and
-// gateway configuration hints are lifted out; the full payload remains on the event for consumers
-// that need agent-specific detail.
+/// Build shared metadata for a normalized hook event.
+///
+/// Only stable, low-cardinality fields and gateway configuration hints are
+/// lifted out; the full payload remains on the event for consumers that need
+/// agent-specific detail.
 fn metadata(
     payload: &Value,
     headers: &HeaderMap,
@@ -719,8 +763,10 @@ fn metadata(
     extractor.metadata(payload, headers, kind, event_name)
 }
 
-// Creates a root session event using the common session-id and metadata extraction rules so
-// lifecycle, marks, notifications, and compaction events all carry identical correlation fields.
+/// Create a root session event using the common extraction rules.
+///
+/// Lifecycle, marks, notifications, and compaction events all carry identical
+/// session-id and metadata correlation fields.
 pub(crate) fn common_session_event(
     payload: &Value,
     headers: &HeaderMap,
@@ -737,9 +783,11 @@ pub(crate) fn common_session_event(
     }
 }
 
-// Creates a subagent event and tolerates sparse agent payloads by using the gateway subagent
-// header and then a synthetic `subagent` id. The fallback keeps unmatched start/end events visible
-// rather than dropping them when an integration lacks explicit nested-agent IDs.
+/// Create a subagent event from an agent hook payload.
+///
+/// Sparse payloads fall back through the selected extractor and then to a
+/// synthetic `subagent` id, keeping unmatched start/end events visible when an
+/// integration lacks explicit nested-agent IDs.
 fn common_subagent_event(
     payload: &Value,
     headers: &HeaderMap,
@@ -760,9 +808,11 @@ fn common_subagent_event(
     }
 }
 
-// Captures hook payloads that can help correlate nearby gateway LLM calls to the right agent or
-// subagent. Multiple naming conventions are accepted because integrations expose conversation,
-// generation, request, and model identifiers under different shapes.
+/// Capture hook payload hints used to correlate nearby gateway LLM calls.
+///
+/// Multiple naming conventions are accepted because integrations expose
+/// conversation, generation, request, and model identifiers under different
+/// shapes.
 fn common_llm_hint_event(
     payload: &Value,
     headers: &HeaderMap,
@@ -787,9 +837,11 @@ fn common_llm_hint_event(
     }
 }
 
-// Converts agent tool hooks into the runtime tool event shape while preserving missing fields.
-// Tool IDs and names are synthesized when absent, arguments/results are searched across known
-// payload shapes, and failure or permission-denied event names are reflected in status metadata.
+/// Convert agent tool hooks into the runtime tool event shape.
+///
+/// Tool IDs and names are synthesized when absent, arguments/results are
+/// searched across known payload shapes, and failure or permission-denied event
+/// names are reflected in status metadata.
 fn common_tool_event(
     payload: &Value,
     headers: &HeaderMap,
@@ -817,8 +869,10 @@ fn common_tool_event(
     }
 }
 
-// Derives error/denied status from event names after an extractor has checked its explicit status
-// fields. The derivation is intentionally conservative and only covers known failure spellings.
+/// Derive error or denied status from normalized event names.
+///
+/// This runs after an extractor has checked explicit status fields and remains
+/// conservative by covering only known failure spellings.
 fn derived_tool_status(normalized_event: &str) -> Option<String> {
     {
         (normalized_event.contains("failure") || normalized_event.contains("failed"))
@@ -831,9 +885,11 @@ fn derived_tool_status(normalized_event: &str) -> Option<String> {
     })
 }
 
-// Extracts detail fields as a synthetic tool result only for failure-like hooks. Successful tool
-// events without explicit output remain `null` so observers can distinguish "no output supplied"
-// from "the gateway assembled diagnostic details".
+/// Extract diagnostic detail fields as a synthetic result for failure-like hooks.
+///
+/// Successful tool events without explicit output remain `null` so observers can
+/// distinguish "no output supplied" from "the gateway assembled diagnostic
+/// details".
 fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value> {
     let include_details = normalized_event.contains("failure")
         || normalized_event.contains("failed")
@@ -851,18 +907,15 @@ fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value>
     (!object.is_empty()).then_some(Value::Object(object))
 }
 
-// Classifies a raw hook event into one or more normalized events.
-//
-// Most hook events produce a single normalized event from `classify_primary`. The exception is
-// `Stop` (Claude/Codex): it emits both the existing `LlmHint` (preserving correlation for
-// subsequent LLM calls) AND a `TurnEnded` so the session manager can snapshot ATIF without
-// closing the agent scope. Codex 0.129 has no `SessionEnd`-equivalent hook — without this dual
-// emission, codex transparent runs would never trigger an ATIF write.
-//
-// If the primary event is already terminal (e.g., Cursor classifies `stop` as `AgentEnded`),
-// the snapshot is skipped to avoid double-writing — `flush_observers` already writes ATIF on
-// agent-end, and a follow-up `TurnEnded` on a removed session would recreate an empty session
-// and overwrite the freshly-written ATIF with an empty trajectory.
+/// Classify a raw hook event into one or more normalized events.
+///
+/// Most hook events produce a single normalized event from `classify_primary`.
+/// The exception is `Stop` for Claude Code and Codex: it emits both the
+/// existing `LlmHint` and a `TurnEnded` so the session manager can snapshot ATIF
+/// without closing the agent scope.
+///
+/// If the primary event is already terminal, the snapshot is skipped to avoid
+/// double-writing and accidentally recreating an empty session.
 fn classify(
     payload: &Value,
     headers: &HeaderMap,
@@ -895,9 +948,11 @@ fn classify(
     vec![primary]
 }
 
-// Classifies a raw hook event using adapter-specific lifecycle names first and generic gateway
-// names second. Unknown events are intentionally converted to hook marks, not errors, so new agent
-// hook types remain observable until first-class normalization rules are added.
+/// Classify a raw hook event using adapter-specific names before generic names.
+///
+/// Unknown events are intentionally converted to hook marks, not errors, so new
+/// agent hook types remain observable until first-class normalization rules are
+/// added.
 fn classify_primary(
     payload: &Value,
     headers: &HeaderMap,
@@ -969,8 +1024,10 @@ fn classify_primary(
     }
 }
 
-// Removes separators and case differences before comparing hook names. The gateway uses this for
-// agent-specific aliases so `PostToolUse`, `post_tool_use`, and `postToolUse` converge.
+/// Remove separators and case differences before comparing hook names.
+///
+/// The gateway uses this for agent-specific aliases so `PostToolUse`,
+/// `post_tool_use`, and `postToolUse` converge.
 fn normalize_name(name: &str) -> String {
     name.chars()
         .filter(|character| character.is_ascii_alphanumeric())
