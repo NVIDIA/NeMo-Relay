@@ -768,8 +768,8 @@ fn environment_last_error(
         message: environment_ref.map_or_else(
             || {
                 format!(
-                    "dynamic plugin '{}' has no lifecycle-managed Python environment; run `nemo-relay plugins add <path>`",
-                    plugin_id
+                    "dynamic plugin '{}' has no lifecycle-managed Python environment; run `nemo-relay plugins remove {}` to remove the manual registration, then run `nemo-relay plugins add <path>`",
+                    plugin_id, plugin_id
                 )
             },
             |environment_ref| {

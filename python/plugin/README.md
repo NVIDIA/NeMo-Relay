@@ -11,7 +11,8 @@ Declare this package as a dependency of a Python worker project and expose a
 `module:function` entrypoint that calls `serve_plugin`. Register the manifest
 with `nemo-relay plugins add`; Relay creates a per-plugin virtual environment,
 installs `source.manifest_root`, and records that environment for activation.
-Python workers without a lifecycle-managed environment are rejected.
+Enable it with `nemo-relay plugins enable <plugin_id>` after registration. Python
+workers without a lifecycle-managed environment are rejected.
 
 A minimal worker plugin looks like this:
 

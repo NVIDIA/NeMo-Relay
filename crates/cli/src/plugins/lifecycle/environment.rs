@@ -79,14 +79,7 @@ pub(super) fn provision_python_environment(
     }
 
     let environment = managed_environment_path(state_path, &manifest.plugin.id)?;
-    if environment.exists() {
-        std::fs::remove_dir_all(&environment).map_err(|error| {
-            format!(
-                "could not reset managed Python environment {}: {error}",
-                environment.display()
-            )
-        })?;
-    }
+    remove_directory_if_present(&environment, "reset")?;
     let environment_parent = environment.parent().ok_or_else(|| {
         format!(
             "managed Python environment {} has no parent directory",
@@ -107,7 +100,7 @@ pub(super) fn provision_python_environment(
         environment.as_os_str().to_owned(),
     ];
     if let Err(error) = runner.run(&base_python, &create_args) {
-        let _ = std::fs::remove_dir_all(&environment);
+        let _ = remove_directory_if_present(&environment, "clean up");
         return Err(format!(
             "failed to create managed Python environment {}: {error}",
             environment.display()
@@ -116,7 +109,7 @@ pub(super) fn provision_python_environment(
 
     let environment_python = environment_python_path(&environment);
     if !environment_python.is_file() {
-        let _ = std::fs::remove_dir_all(&environment);
+        let _ = remove_directory_if_present(&environment, "clean up");
         return Err(format!(
             "managed Python environment {} did not create interpreter {}",
             environment.display(),
@@ -131,7 +124,7 @@ pub(super) fn provision_python_environment(
         manifest_root.as_os_str().to_owned(),
     ];
     if let Err(error) = runner.run(environment_python.as_os_str(), &install_args) {
-        let _ = std::fs::remove_dir_all(&environment);
+        let _ = remove_directory_if_present(&environment, "clean up");
         return Err(format!(
             "failed to install Python plugin from {} into {}: {error}",
             manifest_root.display(),
@@ -156,15 +149,7 @@ pub(super) fn remove_managed_environment(
             expected.display()
         ));
     }
-    if configured.exists() {
-        std::fs::remove_dir_all(&configured).map_err(|error| {
-            format!(
-                "could not delete managed Python environment {}: {error}",
-                configured.display()
-            )
-        })?;
-    }
-    Ok(())
+    remove_directory_if_present(&configured, "delete")
 }
 
 pub(super) fn environment_state(
@@ -245,4 +230,29 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
             .map(|current| current.join(path))
             .map_err(|error| format!("could not resolve {}: {error}", path.display()))
     }
+}
+
+fn remove_directory_if_present(path: &Path, operation: &str) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "could not inspect managed Python environment {} before {operation}: {error}",
+                path.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "refusing to {operation} managed Python environment {} because it is not a directory",
+            path.display()
+        ));
+    }
+    std::fs::remove_dir_all(path).map_err(|error| {
+        format!(
+            "could not {operation} managed Python environment {}: {error}",
+            path.display()
+        )
+    })
 }

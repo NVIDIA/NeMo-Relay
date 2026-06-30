@@ -14,9 +14,19 @@ and returns a mutated JSON tool request.
 Run the following commands from this directory:
 
 ```bash
-nemo-relay plugins add ./relay-plugin.toml
-nemo-relay plugins enable examples.python_grpc_worker
-nemo-relay --bind 127.0.0.1:4040
+relay_tmp="$(mktemp -d)"
+relay_config="$relay_tmp/gateway.toml"
+nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
+nemo-relay --config "$relay_config" plugins enable examples.python_grpc_worker
+nemo-relay --config "$relay_config" --bind 127.0.0.1:4040
+```
+
+After stopping Relay, remove the plugin and its managed environment, then delete
+the temporary state:
+
+```bash
+nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
+rm -rf "$relay_tmp"
 ```
 
 `plugins add` creates an isolated Relay-managed virtual environment and installs

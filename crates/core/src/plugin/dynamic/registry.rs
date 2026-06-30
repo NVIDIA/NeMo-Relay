@@ -180,6 +180,7 @@ impl DynamicPluginRegistry {
         let record = self.lookup_mut(plugin_id)?;
         record.source.environment_ref = environment_ref;
         record.status.validation.environment = environment;
+        record.status.validation.checked_at = Some(super::current_timestamp());
         Ok(())
     }
 

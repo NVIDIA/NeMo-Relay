@@ -465,6 +465,35 @@ fn registry_status_updates_do_not_change_desired_state_generation() {
     );
 }
 
+#[test]
+fn registry_environment_updates_stamp_validation_time() {
+    let mut registry = DynamicPluginRegistry::new();
+    let mut record = sample_record();
+    record.status.validation.checked_at = None;
+    registry.add(record).expect("register plugin");
+
+    registry
+        .update_environment(
+            "acme.guardrails.pii",
+            Some("/managed/environment".into()),
+            DynamicPluginCheckState::Valid,
+        )
+        .expect("update environment");
+
+    let record = registry
+        .get("acme.guardrails.pii")
+        .expect("updated plugin record");
+    assert_eq!(
+        record.source.environment_ref.as_deref(),
+        Some("/managed/environment")
+    );
+    assert_eq!(
+        record.status.validation.environment,
+        DynamicPluginCheckState::Valid
+    );
+    assert!(record.status.validation.checked_at.is_some());
+}
+
 fn valid_worker_manifest_toml() -> &'static str {
     r#"
 manifest_version = 1

@@ -1183,7 +1183,21 @@ test-python-plugin-e2e:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
+    python_executable="$(uv_python_executable)"
+    sync_args=(--inexact --all-packages --no-install-project --no-install-package nemo-relay)
+    if python_plugin_grpc_dependencies_supported "$python_executable"; then
+        sync_args+=(--reinstall-package nemo-relay-plugin)
+    fi
+    while IFS= read -r -d '' arg; do
+        sync_args+=("$arg")
+    done < <(python_plugin_sync_args "$python_executable")
+    uv sync "${sync_args[@]}"
+    activate_project_venv
     python_executable="$(project_python_executable)"
+    configure_python_plugin_test_environment "$python_executable"
+    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
+        exit 0
+    fi
     tmp="$(mktemp -d)"
     gateway_pid=""
     cleanup() {
@@ -1210,8 +1224,7 @@ test-python-plugin-e2e:
 
     port="$("$python_executable" -c \
         'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
-    NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1 \
-        "$cli" --config "$config" --bind "127.0.0.1:$port" >"$tmp/gateway.log" 2>&1 &
+    "$cli" --config "$config" --bind "127.0.0.1:$port" >"$tmp/gateway.log" 2>&1 &
     gateway_pid=$!
     ready=false
     for _ in $(seq 1 100); do
@@ -1230,14 +1243,14 @@ test-python-plugin-e2e:
         cat "$tmp/gateway.log"
         exit 1
     fi
-    wait "$gateway_pid"
-    gateway_pid=""
-
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
         cargo test -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
         python_worker_host_runtime_mark_and_mutated_request_round_trip \
         -- --nocapture
+    kill "$gateway_pid" 2>/dev/null || true
+    wait "$gateway_pid" 2>/dev/null || true
+    gateway_pid=""
     "$cli" --config "$config" plugins remove examples.python_grpc_worker
     test ! -e "$environment_ref"
 

@@ -159,6 +159,21 @@ entrypoint = "plugin.py"
 fn write_python_dynamic_manifest(dir: &Path, plugin_id: &str) -> PathBuf {
     let artifact_body = "def main():\n    return None\n";
     std::fs::write(dir.join("plugin.py"), artifact_body).unwrap();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        r#"[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-lifecycle-test-plugin"
+version = "0.1.0"
+
+[tool.setuptools]
+py-modules = ["plugin"]
+"#,
+    )
+    .unwrap();
     let digest = format!(
         "sha256:{}",
         Sha256::digest(artifact_body.as_bytes())
@@ -196,7 +211,7 @@ sha256 = "{digest}"
 
 [load]
 runtime = "python"
-entrypoint = "example.worker:main"
+entrypoint = "plugin:main"
 "#,
         ),
     )
@@ -935,6 +950,38 @@ fn managed_environment_cleanup_refuses_paths_outside_lifecycle_directory() {
     .expect_err("unmanaged environment must not be removed");
 
     assert!(error.contains("refusing to delete Python environment"));
+    assert!(outside.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_environment_cleanup_refuses_symlinked_environment() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let state_path = temp.path().join(".dynamic-plugins.json");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let environment = temp
+        .path()
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    std::fs::create_dir_all(environment.parent().unwrap()).unwrap();
+    symlink(&outside, &environment).unwrap();
+
+    let error = environment::remove_managed_environment(
+        &state_path,
+        "acme.python",
+        environment.to_string_lossy().as_ref(),
+    )
+    .expect_err("symlinked environment must not be removed");
+
+    assert!(error.contains("is not a directory"));
+    assert!(environment.is_symlink());
     assert!(outside.exists());
 }
 
@@ -1721,6 +1768,7 @@ fn manually_configured_python_worker_cannot_enable_without_lifecycle_add() {
         .expect("direct Python activation error should be structured");
     assert_eq!(kind, PluginLifecycleFailureKind::Refused);
     assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("plugins remove acme.python-direct"));
     assert!(message.contains("plugins add"));
 }
 
@@ -2490,6 +2538,10 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         serde_json::json!("plugin_id")
     );
     assert_eq!(validate_value["data"]["valid"], serde_json::json!(true));
+    assert_eq!(
+        validate_value["data"]["environment_state"],
+        serde_json::json!("unknown")
+    );
     assert_eq!(
         validate_value["data"]["policy_state"],
         serde_json::json!("valid")

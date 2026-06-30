@@ -1690,6 +1690,35 @@ async def test_unlink_unix_socket_refuses_an_active_socket():
             socket_path.unlink(missing_ok=True)
 
 
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Unix sockets are unavailable")
+async def test_unlink_unix_socket_still_refuses_active_socket_when_close_wait_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory(prefix="nr-plugin-", dir="/tmp") as directory:
+        socket_path = Path(directory) / "active.sock"
+        server = await asyncio.start_unix_server(lambda _reader, writer: writer.close(), path=socket_path)
+
+        class TimeoutWriter:
+            def close(self) -> None:
+                pass
+
+            async def wait_closed(self) -> None:
+                raise TimeoutError
+
+        async def open_unix_connection(_path: Path):
+            return object(), TimeoutWriter()
+
+        monkeypatch.setattr(plugin_api.asyncio, "open_unix_connection", open_unix_connection)
+        try:
+            with pytest.raises(WorkerSdkError, match="already active"):
+                await _unlink_unix_socket(f"unix://{socket_path}")
+            assert socket_path.exists()
+        finally:
+            server.close()
+            await server.wait_closed()
+            socket_path.unlink(missing_ok=True)
+
+
 async def test_serve_plugin_announces_endpoint_only_after_server_start(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
