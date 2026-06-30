@@ -9,6 +9,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -230,7 +231,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .expect("cancel returns ack")
         .into_inner();
     assert!(!cancel.accepted);
-    assert!(cancel.message.contains("not implemented"));
+    assert!(cancel.message.contains("not active"));
 
     let shutdown = client
         .shutdown(Request::new(ShutdownRequest {
@@ -243,6 +244,101 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .into_inner();
     assert!(!shutdown.accepted);
     assert!(shutdown.message.contains("not implemented"));
+
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
+    let plugin = Arc::new(CancellationPlugin::default());
+    let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
+    register_plugin(&mut client).await;
+
+    let mut unary_client = client.clone();
+    let unary_task = tokio::spawn(async move {
+        unary_client
+            .invoke(Request::new(InvokeRequest {
+                invocation_id: "cancel-unary".into(),
+                ..tool_invoke(
+                    "cancel-unary",
+                    RegistrationSurface::ToolExecutionIntercept,
+                    json!({}),
+                )
+            }))
+            .await
+            .expect("cancelled unary invocation should return a response")
+            .into_inner()
+    });
+    plugin.unary_started.notified().await;
+    let unary_ack = client
+        .cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-unary".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "test timeout".into(),
+        }))
+        .await
+        .expect("active unary cancellation should return an ack")
+        .into_inner();
+    let unary_response = unary_task.await.expect("unary client task should join");
+    let unary_error = match unary_response.result {
+        Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(error)) => error,
+        other => panic!("expected cancellation error, got {other:?}"),
+    };
+    assert!(unary_ack.accepted);
+    assert_eq!(unary_error.code, "worker.cancelled");
+    assert!(plugin.unary_cancelled.load(Ordering::SeqCst));
+
+    let repeated = client
+        .cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-unary".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "repeat".into(),
+        }))
+        .await
+        .expect("repeated cancellation should return an ack")
+        .into_inner();
+    assert!(!repeated.accepted);
+    assert!(repeated.message.contains("not active"));
+
+    let mut stream = client
+        .invoke_stream(Request::new(InvokeRequest {
+            invocation_id: "cancel-stream".into(),
+            ..llm_invoke(
+                "cancel-stream",
+                RegistrationSurface::LlmStreamExecutionIntercept,
+                llm_request(),
+                None,
+                None,
+            )
+        }))
+        .await
+        .expect("stream invocation should start")
+        .into_inner();
+    plugin.stream_started.notified().await;
+    let stream_ack = client
+        .cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-stream".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "stream abandoned".into(),
+        }))
+        .await
+        .expect("active stream cancellation should return an ack")
+        .into_inner();
+    let chunk = stream
+        .next()
+        .await
+        .expect("cancelled stream should yield a terminal error")
+        .expect("cancelled stream chunk should be protocol data");
+    let stream_error = match chunk.item {
+        Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error)) => error,
+        other => panic!("expected stream cancellation error, got {other:?}"),
+    };
+    assert!(stream_ack.accepted);
+    assert_eq!(stream_error.code, "worker.cancelled");
+    assert!(plugin.stream_cancelled.load(Ordering::SeqCst));
 
     handle.abort();
 }
@@ -1178,6 +1274,72 @@ impl WorkerPlugin for MinimalPlugin {
 
     fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct CancellationPlugin {
+    unary_started: Arc<tokio::sync::Notify>,
+    unary_cancelled: Arc<AtomicBool>,
+    stream_started: Arc<tokio::sync::Notify>,
+    stream_cancelled: Arc<AtomicBool>,
+}
+
+impl WorkerPlugin for CancellationPlugin {
+    fn plugin_id(&self) -> &str {
+        "cancellation"
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        let unary_started = self.unary_started.clone();
+        let unary_cancelled = self.unary_cancelled.clone();
+        ctx.register_tool_execution_intercept("cancel-unary", 0, move |_, _, _| {
+            let unary_started = unary_started.clone();
+            let unary_cancelled = unary_cancelled.clone();
+            async move {
+                struct CancelledOnDrop(Arc<AtomicBool>);
+                impl Drop for CancelledOnDrop {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+
+                let _cancelled = CancelledOnDrop(unary_cancelled);
+                unary_started.notify_one();
+                std::future::pending::<Result<Json>>().await
+            }
+        });
+
+        let stream_started = self.stream_started.clone();
+        let stream_cancelled = self.stream_cancelled.clone();
+        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _| {
+            let stream_started = stream_started.clone();
+            let stream_cancelled = stream_cancelled.clone();
+            async move {
+                stream_started.notify_one();
+                Ok(Box::pin(CancelPendingStream(stream_cancelled)) as JsonStream)
+            }
+        });
+        Ok(())
+    }
+}
+
+struct CancelPendingStream(Arc<AtomicBool>);
+
+impl Stream for CancelPendingStream {
+    type Item = Result<Json>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Pending
+    }
+}
+
+impl Drop for CancelPendingStream {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
     }
 }
 

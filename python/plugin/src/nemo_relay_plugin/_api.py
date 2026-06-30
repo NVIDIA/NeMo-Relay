@@ -1159,6 +1159,12 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
         await host_channel.close()
 
 
+@dataclass(slots=True)
+class _ActiveInvocation:
+    task: asyncio.Task[Any]
+    cancel_reason: str | None = None
+
+
 class _WorkerService(pb_grpc.PluginWorkerServicer):
     def __init__(
         self,
@@ -1172,6 +1178,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
         self._handlers = _Handlers.empty()
         self._registered_config: Json | object = _UNREGISTERED
         self._registration_lock = asyncio.Lock()
+        self._active_invocations: dict[str, _ActiveInvocation] = {}
 
     async def Handshake(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
@@ -1238,29 +1245,81 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
     async def Invoke(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
         try:
-            return await self._invoke_result(request)
+            active = self._start_invocation(request.invocation_id, self._invoke_result(request))
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
             return pb.InvokeResponse(error=_sdk_error_to_worker(exc))
+        try:
+            return await active.task
+        except asyncio.CancelledError:
+            if active.cancel_reason is None:
+                raise
+            return pb.InvokeResponse(error=_cancelled_worker_error(active.cancel_reason))
+        except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
+            return pb.InvokeResponse(error=_sdk_error_to_worker(exc))
+        finally:
+            self._forget_invocation(request.invocation_id, active)
 
     async def InvokeStream(self, request: Any, context: Any) -> AsyncIterator[Any]:
         await self._authorize(request, context)
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=16)
+        active_ref: list[_ActiveInvocation] = []
+
+        async def produce() -> None:
+            active = active_ref[0]
+            try:
+                if request.surface != pb.LLM_STREAM_EXECUTION_INTERCEPT:
+                    raise WorkerSdkError("InvokeStream only supports LLM stream execution intercepts")
+                handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
+                payload = _require_payload(request, "llm")
+                llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+                next_call = LlmStreamNext(self._runtime, request.continuation_id)
+                with _bind_invocation_scope(request):
+                    stream = await _maybe_await(handler(payload.model_name, llm_request, next_call))
+                    async for value in _as_async_iter(stream):
+                        await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+            except asyncio.CancelledError:
+                if active.cancel_reason is not None:
+                    while not queue.empty():
+                        queue.get_nowait()
+                    queue.put_nowait(pb.StreamChunk(error=_cancelled_worker_error(active.cancel_reason)))
+                raise
+            except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
+                await queue.put(pb.StreamChunk(error=_sdk_error_to_worker(exc)))
+
         try:
-            if request.surface != pb.LLM_STREAM_EXECUTION_INTERCEPT:
-                raise WorkerSdkError("InvokeStream only supports LLM stream execution intercepts")
-            handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
-            payload = _require_payload(request, "llm")
-            llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
-            next_call = LlmStreamNext(self._runtime, request.continuation_id)
-            with _bind_invocation_scope(request):
-                stream = await _maybe_await(handler(payload.model_name, llm_request, next_call))
-                async for value in _as_async_iter(stream):
-                    yield pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value))
+            active = self._start_invocation(request.invocation_id, produce())
+            active_ref.append(active)
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
             yield pb.StreamChunk(error=_sdk_error_to_worker(exc))
+            return
+        try:
+            while True:
+                if active.task.done() and queue.empty():
+                    return
+                next_item = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait((next_item, active.task), return_when=asyncio.FIRST_COMPLETED)
+                if next_item in done:
+                    yield next_item.result()
+                    continue
+                next_item.cancel()
+                await asyncio.gather(next_item, return_exceptions=True)
+                while not queue.empty():
+                    yield queue.get_nowait()
+                return
+        finally:
+            if not active.task.done():
+                active.task.cancel()
+            await asyncio.gather(active.task, return_exceptions=True)
+            self._forget_invocation(request.invocation_id, active)
 
     async def CancelInvocation(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
-        return pb.WorkerAck(accepted=False, message="cancel is not implemented by the Python worker SDK")
+        active = self._active_invocations.pop(request.invocation_id, None)
+        if active is None or active.task.done():
+            return pb.WorkerAck(accepted=False, message="invocation is not active")
+        active.cancel_reason = request.reason or "host requested cancellation"
+        active.task.cancel()
+        return pb.WorkerAck(accepted=True, message=f"cancellation accepted: {active.cancel_reason}")
 
     async def Shutdown(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)
@@ -1380,6 +1439,28 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 )
                 return _json_response(result)
             raise WorkerSdkError(f"unsupported registration surface {request.surface}")
+
+    def _start_invocation(
+        self,
+        invocation_id: str,
+        coroutine: Any,
+    ) -> _ActiveInvocation:
+        if not invocation_id:
+            coroutine.close()
+            raise WorkerSdkError("invocation_id must not be empty")
+        current = self._active_invocations.get(invocation_id)
+        if current is not None and not current.task.done():
+            coroutine.close()
+            raise WorkerSdkError(f"invocation '{invocation_id}' is already active")
+        task = asyncio.create_task(coroutine)
+        active = _ActiveInvocation(task=task)
+        self._active_invocations[invocation_id] = active
+        task.add_done_callback(lambda _: self._forget_invocation(invocation_id, active))
+        return active
+
+    def _forget_invocation(self, invocation_id: str, active: _ActiveInvocation) -> None:
+        if self._active_invocations.get(invocation_id) is active:
+            self._active_invocations.pop(invocation_id, None)
 
     async def _authorize(self, request: Any, context: Any) -> None:
         if not hmac.compare_digest(request.activation_id, self._runtime._activation_id):
@@ -1527,6 +1608,14 @@ def _sdk_error_to_worker(error: BaseException) -> Any:
     if isinstance(error, WorkerSdkError):
         code = "worker.sdk_error"
     return pb.WorkerError(code=code, message=str(error), retryable=False)
+
+
+def _cancelled_worker_error(reason: str) -> Any:
+    return pb.WorkerError(
+        code="worker.cancelled",
+        message=f"worker invocation was cancelled: {reason}",
+        retryable=False,
+    )
 
 
 def _ack_to_result(response: Any) -> None:

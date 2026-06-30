@@ -56,6 +56,31 @@ appropriate executor.
 The SDK does not configure `maximum_concurrent_rpcs`, so gRPC does not enforce
 an application-level RPC admission limit.
 
+## Invocation Cancellation
+
+Relay assigns every unary and streaming callback an invocation ID. The host
+sends `CancelInvocation` when its managed caller is cancelled, its worker RPC
+times out, or it stops consuming a worker-backed stream. The SDK cancels the
+matching `asyncio.Task` and reports a structured `worker.cancelled` result.
+
+Cancellation is idempotent. The first request that matches an active callback
+returns `accepted = true`; requests for unknown, completed, or already
+cancelled IDs return `accepted = false`. Treat acceptance as confirmation that
+the SDK found and cancelled the task, not as proof that arbitrary user code has
+stopped.
+
+Python task cancellation is cooperative. Async callbacks should allow
+`asyncio.CancelledError` to propagate and use `try`/`finally` for cleanup.
+Synchronous callbacks run on the event-loop thread and cannot be preempted by
+task cancellation. A blocking synchronous callback can delay both the
+cancellation RPC and all other worker RPCs, so offload blocking work and make
+its own cancellation behavior explicit.
+
+`grpc-v1` workers are expected to implement this best-effort cancellation
+contract. Relay remains compatible with older workers that return
+`accepted = false`; in that case it still drops the transport request, but it
+cannot guarantee worker-side interruption.
+
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and
 tests for this SDK on Windows ARM64 rather than creating a package without its

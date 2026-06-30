@@ -231,6 +231,61 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
 }
 
 #[tokio::test]
+async fn host_cancellation_reaches_rust_worker_invocation() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let dropped_tx = Arc::new(Mutex::new(Some(dropped_tx)));
+
+    let execution = tokio::spawn(tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("worker-fixture-cancelled-tool")
+            .args(json!({ "input": "cancel" }))
+            .func(Arc::new(move |_| {
+                let started = started_tx
+                    .lock()
+                    .expect("started lock")
+                    .take()
+                    .expect("callback should run once");
+                let dropped = dropped_tx
+                    .lock()
+                    .expect("dropped lock")
+                    .take()
+                    .expect("callback should run once");
+                Box::pin(async move {
+                    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+                    impl Drop for DropSignal {
+                        fn drop(&mut self) {
+                            if let Some(sender) = self.0.take() {
+                                let _ = sender.send(());
+                            }
+                        }
+                    }
+
+                    let _drop_signal = DropSignal(Some(dropped));
+                    let _ = started.send(());
+                    std::future::pending::<FlowResult<Json>>().await
+                })
+            }))
+            .build(),
+    ));
+    started_rx
+        .await
+        .expect("worker should call the host continuation");
+
+    execution.abort();
+    let _ = execution.await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), dropped_rx)
+        .await
+        .expect("worker cancellation should drop the host continuation")
+        .expect("host continuation drop signal should be delivered");
+
+    loaded.clear();
+}
+
+#[tokio::test]
 async fn worker_request_intercept_callback_error_surfaces_to_host() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let loaded =

@@ -512,7 +512,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
     )
     .await;
 
-    let stream = callback
+    let mut stream = callback
         .invoke_llm_stream_execution(
             "stream_receiver_drop",
             "model",
@@ -523,14 +523,180 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
         )
         .await
         .expect("host stream should be returned");
-    drop(stream);
     yield_tx
         .send(())
         .expect("worker stream yield signal should be delivered");
+    stream
+        .next()
+        .await
+        .expect("worker stream should yield before it is abandoned")
+        .expect("worker stream chunk should be valid");
+    drop(stream);
     tokio::time::timeout(std::time::Duration::from_secs(1), stream_dropped_rx)
         .await
         .expect("worker stream should be dropped after host receiver is dropped")
         .expect("worker stream drop signal should be delivered");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_timeout_sends_explicit_worker_cancellation() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = started_tx.clone();
+            move |_| {
+                let started_tx = started_tx.clone();
+                Box::pin(async move {
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback.base_request(
+        "timeout",
+        RegistrationSurface::ToolRequestIntercept,
+        None,
+        Some(invoke_request_payload_tool("tool", json!({}))),
+    );
+    let invocation_id = request.invocation_id.clone();
+
+    let result = callback
+        .invoke_async_with_timeout(request, std::time::Duration::from_millis(10))
+        .await;
+    started_rx.await.expect("worker invocation should start");
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should send cancellation after timeout")
+        .expect("cancellation channel should remain open");
+
+    assert!(
+        result
+            .expect_err("worker invocation should time out")
+            .to_string()
+            .contains("worker invocation timed out")
+    );
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("timed out"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = started_tx.clone();
+            move |_| {
+                let started_tx = started_tx.clone();
+                Box::pin(async move {
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let continuation_id = callback
+        .host_state
+        .insert_continuation(Continuation::Tool(Arc::new(|value| {
+            Box::pin(async move { Ok(value) })
+        })))
+        .expect("continuation should insert");
+    let request = callback.base_request(
+        "cancel",
+        RegistrationSurface::ToolExecutionIntercept,
+        Some(continuation_id),
+        Some(invoke_request_payload_tool("tool", json!({}))),
+    );
+    let invocation_id = request.invocation_id.clone();
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move { callback_task.invoke_async(request).await });
+    started_rx.await.expect("worker invocation should start");
+
+    task.abort();
+    let _ = task.await;
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should send cancellation when caller drops")
+        .expect("cancellation channel should remain open");
+
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("caller cancelled"));
+    assert!(
+        callback
+            .host_state
+            .continuations
+            .lock()
+            .expect("continuation lock")
+            .is_empty()
+    );
+    assert!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope lock")
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_host_stream_sends_explicit_worker_cancellation() {
+    let (yield_tx, yield_rx) = oneshot::channel();
+    let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        |_| {
+            Box::pin(async {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        {
+            let yield_rx = yield_rx.clone();
+            move |_| {
+                let yield_rx = yield_rx
+                    .lock()
+                    .expect("yield lock")
+                    .take()
+                    .expect("stream should be created once");
+                Box::pin(SignalChunkThenPendingStream {
+                    yield_rx,
+                    dropped: None,
+                    yielded: false,
+                })
+            }
+        },
+    )
+    .await;
+    let stream = callback
+        .invoke_llm_stream_execution(
+            "cancel_stream",
+            "model",
+            valid_llm_request(),
+            Arc::new(|_request| {
+                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
+            }),
+        )
+        .await
+        .expect("host stream should be returned");
+    drop(stream);
+    yield_tx.send(()).expect("stream should advance after drop");
+
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should cancel abandoned stream")
+        .expect("cancellation channel should remain open");
+    assert!(cancellation.reason.contains("stopped consuming"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -987,6 +1153,20 @@ async fn fake_callback_service_with_stream(
     callback_for_client(client, shutdown_tx)
 }
 
+async fn fake_callback_service_with_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (
+    WorkerPluginCallback,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+) {
+    let (client, shutdown_tx, cancel_rx) =
+        fake_worker_client_with_handlers(invoke, invoke_stream).await;
+    let (callback, shutdown_tx) = callback_for_client(client, shutdown_tx);
+    (callback, shutdown_tx, cancel_rx)
+}
+
 fn callback_for_client(
     client: PluginWorkerClient<Channel>,
     shutdown_tx: oneshot::Sender<()>,
@@ -1056,6 +1236,26 @@ async fn fake_worker_client_with_stream(
     invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
     invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
+    let invoke = Arc::new(invoke);
+    let (client, shutdown_tx, _cancel_rx) = fake_worker_client_with_handlers(
+        move |request| {
+            let invoke = invoke.clone();
+            Box::pin(async move { invoke(request) })
+        },
+        invoke_stream,
+    )
+    .await;
+    (client, shutdown_tx)
+}
+
+async fn fake_worker_client_with_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+) {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("fake worker listener should bind");
@@ -1063,11 +1263,13 @@ async fn fake_worker_client_with_stream(
         .local_addr()
         .expect("fake worker listener address should be available");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
     tokio::spawn(
         Server::builder()
             .add_service(PluginWorkerServer::new(FakePluginWorker {
                 invoke: Arc::new(invoke),
                 invoke_stream: Arc::new(invoke_stream),
+                cancel_tx,
             }))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                 let _ = shutdown_rx.await;
@@ -1076,7 +1278,7 @@ async fn fake_worker_client_with_stream(
     let client = PluginWorkerClient::connect(format!("http://{addr}"))
         .await
         .expect("fake worker client should connect");
-    (client, shutdown_tx)
+    (client, shutdown_tx, cancel_rx)
 }
 
 fn registration(surface: RegistrationSurface, local_name: &str) -> Registration {
@@ -1093,10 +1295,12 @@ fn poison_mutex(f: impl FnOnce() + std::panic::UnwindSafe) {
 }
 
 struct FakePluginWorker {
-    invoke: Arc<dyn Fn(InvokeRequest) -> InvokeResponse + Send + Sync>,
+    invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
     invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync>,
+    cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
 }
 
+type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
 type FakeInvokeStream =
     Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
 
@@ -1198,7 +1402,9 @@ impl PluginWorker for FakePluginWorker {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<tonic::Response<InvokeResponse>, tonic::Status> {
-        Ok(tonic::Response::new((self.invoke)(request.into_inner())))
+        Ok(tonic::Response::new(
+            (self.invoke)(request.into_inner()).await,
+        ))
     }
 
     type InvokeStreamStream =
@@ -1215,11 +1421,12 @@ impl PluginWorker for FakePluginWorker {
 
     async fn cancel_invocation(
         &self,
-        _request: Request<CancelInvocationRequest>,
+        request: Request<CancelInvocationRequest>,
     ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
+        let _ = self.cancel_tx.send(request.into_inner());
         Ok(tonic::Response::new(WorkerAck {
-            accepted: false,
-            message: "not implemented".into(),
+            accepted: true,
+            message: "cancelled".into(),
         }))
     }
 

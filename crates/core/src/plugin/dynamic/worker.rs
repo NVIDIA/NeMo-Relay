@@ -16,12 +16,12 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
     RelayHostRuntime, RelayHostRuntimeServer,
 };
 use nemo_relay_worker_proto::v1::{
-    CreateScopeStackRequest, CreateScopeStackResponse, DropScopeStackRequest, EmitMarkRequest,
-    GuardrailResult, HandshakeRequest, HealthRequest, HostAck, InvokeRequest, InvokeResponse,
-    JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest, LlmStreamNextRequest, PopScopeRequest,
-    PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse, Registration,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
-    ToolNextRequest, ValidateRequest, WorkerError,
+    CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
+    DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HealthRequest,
+    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation,
+    LlmNextRequest, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
+    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
+    ShutdownRequest, StreamChunk, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
@@ -982,6 +982,83 @@ struct WorkerPluginCallback {
     host_state: Arc<WorkerHostRuntimeState>,
 }
 
+struct WorkerInvocationGuard {
+    runtime: tokio::runtime::Handle,
+    client: PluginWorkerClient<Channel>,
+    host_state: Arc<WorkerHostRuntimeState>,
+    activation_id: String,
+    auth_token: String,
+    invocation_id: String,
+    continuation_id: String,
+    scope_stack_id: String,
+    cancel_on_drop: bool,
+    cleaned: bool,
+}
+
+impl WorkerInvocationGuard {
+    fn new(callback: &WorkerPluginCallback, request: &InvokeRequest) -> Self {
+        Self {
+            runtime: callback.runtime.clone(),
+            client: callback.client.clone(),
+            host_state: callback.host_state.clone(),
+            activation_id: request.activation_id.clone(),
+            auth_token: request.auth_token.clone(),
+            invocation_id: request.invocation_id.clone(),
+            continuation_id: request.continuation_id.clone(),
+            scope_stack_id: request
+                .scope
+                .as_ref()
+                .map(|scope| scope.scope_stack_id.clone())
+                .unwrap_or_default(),
+            cancel_on_drop: true,
+            cleaned: false,
+        }
+    }
+
+    fn cancel(&mut self, reason: impl Into<String>) {
+        if !self.cancel_on_drop {
+            return;
+        }
+        self.cancel_on_drop = false;
+        let mut client = self.client.clone();
+        let request = CancelInvocationRequest {
+            activation_id: self.activation_id.clone(),
+            invocation_id: self.invocation_id.clone(),
+            auth_token: self.auth_token.clone(),
+            reason: reason.into(),
+        };
+        self.runtime.spawn(async move {
+            let _ = worker_rpc(client.cancel_invocation(worker_rpc_request(request))).await;
+        });
+    }
+
+    fn finish(&mut self) {
+        self.cancel_on_drop = false;
+        self.cleanup();
+    }
+
+    fn cleanup(&mut self) {
+        if self.cleaned {
+            return;
+        }
+        self.cleaned = true;
+        if !self.continuation_id.is_empty() {
+            self.host_state.remove_continuation(&self.continuation_id);
+        }
+        if !self.scope_stack_id.is_empty() {
+            self.host_state
+                .remove_invocation_scope_stack(&self.scope_stack_id);
+        }
+    }
+}
+
+impl Drop for WorkerInvocationGuard {
+    fn drop(&mut self) {
+        self.cancel("host caller cancelled the worker invocation");
+        self.cleanup();
+    }
+}
+
 impl WorkerPluginCallback {
     fn invoke_subscriber(&self, registration_name: &str, event: &Event) -> FlowResult<()> {
         let request = self.base_request(
@@ -1042,20 +1119,13 @@ impl WorkerPluginCallback {
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::Tool(next))?;
-        let callback = self.clone();
-        let registration_name = registration_name.to_string();
-        let tool_name = tool_name.to_string();
-        tokio::task::spawn_blocking(move || {
-            callback.invoke_tool_json(
-                &registration_name,
-                RegistrationSurface::ToolExecutionIntercept,
-                &tool_name,
-                value,
-                Some(continuation_id.clone()),
-            )
-        })
-        .await
-        .map_err(|err| FlowError::Internal(format!("worker task join failed: {err}")))?
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::ToolExecutionIntercept,
+            Some(continuation_id),
+            Some(invoke_request_payload_tool(tool_name, value)),
+        );
+        json_from_invoke_response(self.invoke_async(request).await?)
     }
 
     fn invoke_llm_request_json(
@@ -1178,25 +1248,18 @@ impl WorkerPluginCallback {
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::Llm(next))?;
-        let callback = self.clone();
-        let registration_name = registration_name.to_string();
-        let model_name = model_name.to_string();
-        tokio::task::spawn_blocking(move || {
-            let invoke = callback.base_request(
-                &registration_name,
-                RegistrationSurface::LlmExecutionIntercept,
-                Some(continuation_id),
-                Some(invoke_request_payload_llm(
-                    &model_name,
-                    Some(request),
-                    None,
-                    None,
-                )),
-            );
-            json_from_invoke_response(callback.invoke_blocking(invoke)?)
-        })
-        .await
-        .map_err(|err| FlowError::Internal(format!("worker task join failed: {err}")))?
+        let invoke = self.base_request(
+            registration_name,
+            RegistrationSurface::LlmExecutionIntercept,
+            Some(continuation_id),
+            Some(invoke_request_payload_llm(
+                model_name,
+                Some(request),
+                None,
+                None,
+            )),
+        );
+        json_from_invoke_response(self.invoke_async(invoke).await?)
     }
 
     async fn invoke_llm_stream_execution(
@@ -1220,20 +1283,32 @@ impl WorkerPluginCallback {
                 None,
             )),
         );
-        let scope_stack_id = invoke
-            .scope
-            .as_ref()
-            .map(|scope| scope.scope_stack_id.clone())
-            .unwrap_or_default();
         let mut client = self.client.clone();
-        let host_state = self.host_state.clone();
+        let mut guard = WorkerInvocationGuard::new(self, &invoke);
         let (tx, rx) = mpsc::channel(16);
         self.runtime.spawn(async move {
-            let result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))).await;
+            let result = tokio::select! {
+                result = worker_rpc(client.invoke_stream(worker_rpc_request(invoke))) => result,
+                _ = tx.closed() => {
+                    guard.cancel("host stopped consuming the worker stream");
+                    guard.finish();
+                    return;
+                }
+            };
             match result {
                 Ok(response) => {
                     let mut stream = response.into_inner();
-                    while let Some(item) = stream.next().await {
+                    loop {
+                        let item = tokio::select! {
+                            item = stream.next() => item,
+                            _ = tx.closed() => {
+                                guard.cancel("host stopped consuming the worker stream");
+                                break;
+                            }
+                        };
+                        let Some(item) = item else {
+                            break;
+                        };
                         let result = match item {
                             Ok(chunk) => json_from_stream_chunk(chunk),
                             Err(err) => Err(FlowError::Internal(format!(
@@ -1241,22 +1316,27 @@ impl WorkerPluginCallback {
                             ))),
                         };
                         if tx.send(result).await.is_err() {
+                            guard.cancel("host stopped consuming the worker stream");
                             break;
                         }
                     }
                 }
                 Err(err) => {
+                    let reason = if err.code() == tonic::Code::DeadlineExceeded {
+                        "worker stream invocation timed out"
+                    } else {
+                        "worker stream transport failed"
+                    };
+                    guard.cancel(reason);
                     let _ = tx
-                        .send(Err(FlowError::Internal(format!(
-                            "worker stream invoke failed: {err}"
-                        ))))
+                        .send(Err(worker_status_to_flow(
+                            "worker stream invoke failed",
+                            err,
+                        )))
                         .await;
                 }
             }
-            host_state.remove_continuation(&continuation_id);
-            if !scope_stack_id.is_empty() {
-                host_state.remove_invocation_scope_stack(&scope_stack_id);
-            }
+            guard.finish();
         });
         Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
     }
@@ -1287,26 +1367,33 @@ impl WorkerPluginCallback {
     }
 
     fn invoke_blocking(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
-        let scope_stack_id = request
-            .scope
-            .as_ref()
-            .map(|scope| scope.scope_stack_id.clone())
-            .unwrap_or_default();
-        let continuation_id = request.continuation_id.clone();
+        block_on_handle(&self.runtime, self.invoke_async(request))
+    }
+
+    async fn invoke_async(&self, request: InvokeRequest) -> FlowResult<InvokeResponse> {
+        self.invoke_async_with_timeout(request, WORKER_RPC_TIMEOUT)
+            .await
+    }
+
+    async fn invoke_async_with_timeout(
+        &self,
+        request: InvokeRequest,
+        timeout: Duration,
+    ) -> FlowResult<InvokeResponse> {
+        let mut guard = WorkerInvocationGuard::new(self, &request);
         let mut client = self.client.clone();
-        let result = block_on_handle(&self.runtime, async move {
-            worker_rpc(client.invoke(worker_rpc_request(request))).await
-        })
-        .map(|response| response.into_inner())
-        .map_err(|err| FlowError::Internal(format!("worker invoke failed: {err}")));
-        if !continuation_id.is_empty() {
-            self.host_state.remove_continuation(&continuation_id);
+        let result =
+            worker_rpc_with_timeout(timeout, client.invoke(worker_rpc_request(request))).await;
+        if result
+            .as_ref()
+            .is_err_and(|err| err.code() == tonic::Code::DeadlineExceeded)
+        {
+            guard.cancel("worker invocation timed out");
         }
-        if !scope_stack_id.is_empty() {
-            self.host_state
-                .remove_invocation_scope_stack(&scope_stack_id);
-        }
+        guard.finish();
         result
+            .map(|response| response.into_inner())
+            .map_err(|err| worker_status_to_flow("worker invoke failed", err))
     }
 }
 
@@ -1405,11 +1492,18 @@ async fn worker_rpc<T, F>(future: F) -> Result<Response<T>, Status>
 where
     F: Future<Output = Result<Response<T>, Status>>,
 {
-    match tokio::time::timeout(WORKER_RPC_TIMEOUT, future).await {
+    worker_rpc_with_timeout(WORKER_RPC_TIMEOUT, future).await
+}
+
+async fn worker_rpc_with_timeout<T, F>(timeout: Duration, future: F) -> Result<Response<T>, Status>
+where
+    F: Future<Output = Result<Response<T>, Status>>,
+{
+    match tokio::time::timeout(timeout, future).await {
         Ok(result) => result,
         Err(_) => Err(Status::deadline_exceeded(format!(
-            "worker RPC timed out after {}s",
-            WORKER_RPC_TIMEOUT.as_secs()
+            "worker RPC timed out after {}ms",
+            timeout.as_millis()
         ))),
     }
 }
@@ -1923,7 +2017,23 @@ fn flow_error_to_worker(err: FlowError) -> WorkerError {
 }
 
 fn worker_error_to_flow(error: WorkerError) -> FlowError {
-    FlowError::Internal(format!("{}: {}", error.code, error.message))
+    if error.code == "worker.cancelled" {
+        FlowError::Internal(format!("worker invocation cancelled: {}", error.message))
+    } else {
+        FlowError::Internal(format!("{}: {}", error.code, error.message))
+    }
+}
+
+fn worker_status_to_flow(context: &str, error: Status) -> FlowError {
+    match error.code() {
+        tonic::Code::DeadlineExceeded => {
+            FlowError::Internal(format!("worker invocation timed out: {error}"))
+        }
+        tonic::Code::Cancelled => {
+            FlowError::Internal(format!("worker invocation cancelled: {error}"))
+        }
+        _ => FlowError::Internal(format!("{context}: {error}")),
+    }
 }
 
 fn worker_error_to_plugin(error: WorkerError, fallback: &str) -> PluginError {
