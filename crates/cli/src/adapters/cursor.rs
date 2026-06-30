@@ -4,7 +4,7 @@
 use axum::http::HeaderMap;
 use serde_json::{Value, json};
 
-use crate::adapters::{AdapterOutcome, ClassificationRules, classify};
+use crate::adapters::{AdapterOutcome, CURSOR_PAYLOAD_EXTRACTOR, ClassificationRules, classify};
 use crate::model::{AgentKind, NormalizedEvent};
 
 /// Normalizes Cursor hook payloads and returns Cursor-compatible continuation decisions.
@@ -16,6 +16,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,
         headers,
+        &CURSOR_PAYLOAD_EXTRACTOR,
         &ClassificationRules {
             kind: AgentKind::Cursor,
             agent_start: &["sessionStart", "session_start"],

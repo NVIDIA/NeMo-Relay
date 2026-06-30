@@ -11,7 +11,9 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::config::header_string;
-use crate::json_path::{string_at, string_at_any as first_string_at, value_at};
+use crate::json_path::{
+    string_at, string_at_any as first_string_at, value_at, value_at_any as first_value_at,
+};
 use crate::model::{
     AgentKind, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
 };
@@ -80,30 +82,29 @@ pub(crate) trait AgentPayloadExtractor {
     ) -> ExtractedToolCall;
 }
 
-struct BuiltinAgentPayloadExtractor;
+pub(super) struct ClaudeCodePayloadExtractor;
+pub(super) struct CodexPayloadExtractor;
+pub(super) struct CursorPayloadExtractor;
+pub(super) struct HermesPayloadExtractor;
 
-static BUILTIN_AGENT_PAYLOAD_EXTRACTOR: BuiltinAgentPayloadExtractor = BuiltinAgentPayloadExtractor;
+pub(super) static CLAUDE_CODE_PAYLOAD_EXTRACTOR: ClaudeCodePayloadExtractor =
+    ClaudeCodePayloadExtractor;
+pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadExtractor;
+pub(super) static CURSOR_PAYLOAD_EXTRACTOR: CursorPayloadExtractor = CursorPayloadExtractor;
+pub(super) static HERMES_PAYLOAD_EXTRACTOR: HermesPayloadExtractor = HermesPayloadExtractor;
 
-impl AgentPayloadExtractor for BuiltinAgentPayloadExtractor {
+impl AgentPayloadExtractor for ClaudeCodePayloadExtractor {
     fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        header_string(headers, "x-nemo-relay-session-id")
-            .or_else(|| header_string(headers, "x-claude-code-session-id"))
-            .or_else(|| session_id_from_payload(payload))
+        agent_session_id(
+            headers,
+            payload,
+            SessionHeaderPolicy::RelayAndClaude,
+            CLAUDE_SESSION_ID_PATHS,
+        )
     }
 
     fn event_name(&self, payload: &Value) -> Option<String> {
-        string_at(payload, &["hook_event_name"])
-            .or_else(|| string_at(payload, &["event_name"]))
-            .or_else(|| string_at(payload, &["eventName"]))
-            .or_else(|| string_at(payload, &["event"]))
-            .or_else(|| string_at(payload, &["type"]))
-            .or_else(|| string_at(payload, &["name"]))
-            .or_else(|| string_at(payload, &["extra", "hook_event_name"]))
-            .or_else(|| string_at(payload, &["extra", "event_name"]))
-            .or_else(|| string_at(payload, &["extra", "eventName"]))
-            .or_else(|| string_at(payload, &["extra", "event"]))
-            .or_else(|| string_at(payload, &["extra", "type"]))
-            .or_else(|| string_at(payload, &["extra", "name"]))
+        agent_event_name(payload, CLAUDE_EVENT_NAME_PATHS)
     }
 
     fn metadata(
@@ -113,70 +114,15 @@ impl AgentPayloadExtractor for BuiltinAgentPayloadExtractor {
         kind: AgentKind,
         event_name: &str,
     ) -> Value {
-        let mut object = Map::new();
-        object.insert("agent_kind".into(), json!(kind.as_str()));
-        object.insert("hook_event_name".into(), json!(event_name));
-        if let Some(profile) = header_string(headers, "x-nemo-relay-config-profile") {
-            object.insert("gateway_config_profile".into(), json!(profile));
-        }
-        for (key, value) in [
-            ("model", string_at(payload, &["model"])),
-            ("agent_id", string_at(payload, &["agent_id"])),
-            ("agent_type", string_at(payload, &["agent_type"])),
-        ] {
-            if let Some(value) = value {
-                object.insert(key.into(), json!(value));
-            }
-        }
-        Value::Object(object)
+        agent_metadata(payload, headers, kind, event_name)
     }
 
     fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
-        subagent_id(payload).or_else(|| header_string(headers, "x-nemo-relay-subagent-id"))
+        agent_subagent_id(payload, headers, CLAUDE_SUBAGENT_ID_PATHS)
     }
 
     fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
-        ExtractedLlmHint {
-            subagent_id: self.subagent_id(payload, headers),
-            agent_id: first_string_at(payload, &[&["agent_id"][..], &["agent", "id"][..]]),
-            agent_type: first_string_at(
-                payload,
-                &[
-                    &["agent_type"][..],
-                    &["agent", "type"][..],
-                    &["agent", "name"][..],
-                ],
-            ),
-            conversation_id: first_string_at(
-                payload,
-                &[
-                    &["conversation_id"][..],
-                    &["conversationId"][..],
-                    &["conversation", "id"][..],
-                ],
-            ),
-            generation_id: first_string_at(
-                payload,
-                &[
-                    &["generation_id"][..],
-                    &["generationId"][..],
-                    &["generation", "id"][..],
-                ],
-            ),
-            request_id: first_string_at(
-                payload,
-                &[
-                    &["request_id"][..],
-                    &["requestId"][..],
-                    &["request", "id"][..],
-                    &["extra", "request_id"][..],
-                ],
-            ),
-            model: first_string_at(
-                payload,
-                &[&["model"][..], &["model_name"][..], &["modelName"][..]],
-            ),
-        }
+        agent_llm_hint(payload, self.subagent_id(payload, headers))
     }
 
     fn tool_call(
@@ -185,56 +131,577 @@ impl AgentPayloadExtractor for BuiltinAgentPayloadExtractor {
         headers: &HeaderMap,
         event_name: &str,
     ) -> ExtractedToolCall {
-        let normalized_event = normalize_name(event_name);
-        ExtractedToolCall {
-            tool_call_id: tool_call_id(payload),
-            tool_name: tool_name(payload),
-            subagent_id: self.subagent_id(payload, headers),
-            arguments: tool_arguments(payload),
-            result: tool_result(payload, &normalized_event),
-            status: tool_status(payload, &normalized_event),
-        }
+        agent_tool_call(
+            payload,
+            self.subagent_id(payload, headers),
+            event_name,
+            CLAUDE_TOOL_PATHS,
+        )
     }
 }
 
-// TODO(extraction): These free-function shims preserve existing adapter call
-// sites while host-specific extractors land. Move callers onto
-// `AgentPayloadExtractor` implementations and remove the shims after that
-// migration completes.
+impl AgentPayloadExtractor for CodexPayloadExtractor {
+    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_session_id(
+            headers,
+            payload,
+            SessionHeaderPolicy::RelayOnly,
+            CODEX_SESSION_ID_PATHS,
+        )
+    }
+
+    fn event_name(&self, payload: &Value) -> Option<String> {
+        agent_event_name(payload, CODEX_EVENT_NAME_PATHS)
+    }
+
+    fn metadata(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        kind: AgentKind,
+        event_name: &str,
+    ) -> Value {
+        agent_metadata(payload, headers, kind, event_name)
+    }
+
+    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_subagent_id(payload, headers, CODEX_SUBAGENT_ID_PATHS)
+    }
+
+    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
+        agent_llm_hint(payload, self.subagent_id(payload, headers))
+    }
+
+    fn tool_call(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        event_name: &str,
+    ) -> ExtractedToolCall {
+        agent_tool_call(
+            payload,
+            self.subagent_id(payload, headers),
+            event_name,
+            CODEX_TOOL_PATHS,
+        )
+    }
+}
+
+impl AgentPayloadExtractor for CursorPayloadExtractor {
+    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_session_id(
+            headers,
+            payload,
+            SessionHeaderPolicy::RelayOnly,
+            CURSOR_SESSION_ID_PATHS,
+        )
+    }
+
+    fn event_name(&self, payload: &Value) -> Option<String> {
+        agent_event_name(payload, CURSOR_EVENT_NAME_PATHS)
+    }
+
+    fn metadata(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        kind: AgentKind,
+        event_name: &str,
+    ) -> Value {
+        agent_metadata(payload, headers, kind, event_name)
+    }
+
+    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_subagent_id(payload, headers, CURSOR_SUBAGENT_ID_PATHS)
+    }
+
+    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
+        agent_llm_hint(payload, self.subagent_id(payload, headers))
+    }
+
+    fn tool_call(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        event_name: &str,
+    ) -> ExtractedToolCall {
+        agent_tool_call(
+            payload,
+            self.subagent_id(payload, headers),
+            event_name,
+            CURSOR_TOOL_PATHS,
+        )
+    }
+}
+
+impl AgentPayloadExtractor for HermesPayloadExtractor {
+    fn session_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        // Hermes pre-tool correlation already treats the Claude installed-mode
+        // session header as explicit session evidence; extraction must accept
+        // the same header so those tool hooks do not fall back to synthetic IDs.
+        agent_session_id(
+            headers,
+            payload,
+            SessionHeaderPolicy::RelayAndClaude,
+            HERMES_SESSION_ID_PATHS,
+        )
+    }
+
+    fn event_name(&self, payload: &Value) -> Option<String> {
+        agent_event_name(payload, HERMES_EVENT_NAME_PATHS)
+    }
+
+    fn metadata(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        kind: AgentKind,
+        event_name: &str,
+    ) -> Value {
+        agent_metadata(payload, headers, kind, event_name)
+    }
+
+    fn subagent_id(&self, payload: &Value, headers: &HeaderMap) -> Option<String> {
+        agent_subagent_id(payload, headers, HERMES_SUBAGENT_ID_PATHS)
+    }
+
+    fn llm_hint(&self, payload: &Value, headers: &HeaderMap) -> ExtractedLlmHint {
+        agent_llm_hint(payload, self.subagent_id(payload, headers))
+    }
+
+    fn tool_call(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        event_name: &str,
+    ) -> ExtractedToolCall {
+        agent_tool_call(
+            payload,
+            self.subagent_id(payload, headers),
+            event_name,
+            HERMES_TOOL_PATHS,
+        )
+    }
+}
+
+struct ToolPathSet {
+    call_id: &'static [&'static [&'static str]],
+    name: &'static [&'static [&'static str]],
+    arguments: &'static [&'static [&'static str]],
+    result: &'static [&'static [&'static str]],
+    status: &'static [&'static [&'static str]],
+}
+
+#[derive(Clone, Copy)]
+enum SessionHeaderPolicy {
+    RelayOnly,
+    RelayAndClaude,
+}
+
+const CLAUDE_SESSION_ID_PATHS: &[&[&str]] = &[
+    &["session_id"],
+    &["sessionId"],
+    &["session", "id"],
+    &["conversation_id"],
+    &["conversationId"],
+    &["parent_session_id"],
+    &["task_id"],
+    &["extra", "session_id"],
+    &["extra", "task_id"],
+];
+const CODEX_SESSION_ID_PATHS: &[&[&str]] = &[
+    &["session_id"],
+    &["sessionId"],
+    &["session", "id"],
+    &["conversation_id"],
+    &["conversationId"],
+    &["parent_session_id"],
+    &["task_id"],
+    &["extra", "session_id"],
+    &["extra", "task_id"],
+];
+const CURSOR_SESSION_ID_PATHS: &[&[&str]] = &[
+    &["session_id"],
+    &["sessionId"],
+    &["session", "id"],
+    &["conversation_id"],
+    &["conversationId"],
+    &["parent_session_id"],
+    &["task_id"],
+    &["extra", "session_id"],
+    &["extra", "task_id"],
+];
+const HERMES_SESSION_ID_PATHS: &[&[&str]] = &[
+    &["session_id"],
+    &["sessionId"],
+    &["session", "id"],
+    &["conversation_id"],
+    &["conversationId"],
+    &["parent_session_id"],
+    &["task_id"],
+    &["extra", "session_id"],
+    &["extra", "task_id"],
+];
+
+const CLAUDE_EVENT_NAME_PATHS: &[&[&str]] = &[
+    &["hook_event_name"],
+    &["event_name"],
+    &["eventName"],
+    &["event"],
+    &["type"],
+    &["name"],
+    &["extra", "hook_event_name"],
+    &["extra", "event_name"],
+    &["extra", "eventName"],
+    &["extra", "event"],
+    &["extra", "type"],
+    &["extra", "name"],
+];
+const CODEX_EVENT_NAME_PATHS: &[&[&str]] = &[
+    &["hook_event_name"],
+    &["event_name"],
+    &["eventName"],
+    &["event"],
+    &["type"],
+    &["name"],
+    &["extra", "hook_event_name"],
+    &["extra", "event_name"],
+    &["extra", "eventName"],
+    &["extra", "event"],
+    &["extra", "type"],
+    &["extra", "name"],
+];
+const CURSOR_EVENT_NAME_PATHS: &[&[&str]] = &[
+    &["hook_event_name"],
+    &["event_name"],
+    &["eventName"],
+    &["event"],
+    &["type"],
+    &["name"],
+    &["extra", "hook_event_name"],
+    &["extra", "event_name"],
+    &["extra", "eventName"],
+    &["extra", "event"],
+    &["extra", "type"],
+    &["extra", "name"],
+];
+const HERMES_EVENT_NAME_PATHS: &[&[&str]] = &[
+    &["hook_event_name"],
+    &["event_name"],
+    &["eventName"],
+    &["event"],
+    &["type"],
+    &["name"],
+    &["extra", "hook_event_name"],
+    &["extra", "event_name"],
+    &["extra", "eventName"],
+    &["extra", "event"],
+    &["extra", "type"],
+    &["extra", "name"],
+];
+
+const CLAUDE_SUBAGENT_ID_PATHS: &[&[&str]] = &[
+    &["subagent_id"],
+    &["subagentId"],
+    &["child_subagent_id"],
+    &["childSubagentId"],
+    &["agent_id"],
+    &["subagent", "id"],
+    &["agent", "id"],
+    &["extra", "subagent_id"],
+    &["extra", "subagentId"],
+    &["extra", "child_subagent_id"],
+    &["extra", "childSubagentId"],
+    &["extra", "agent_id"],
+    &["extra", "subagent", "id"],
+    &["extra", "agent", "id"],
+];
+const CODEX_SUBAGENT_ID_PATHS: &[&[&str]] = &[
+    &["subagent_id"],
+    &["subagentId"],
+    &["child_subagent_id"],
+    &["childSubagentId"],
+    &["agent_id"],
+    &["source", "subagent", "thread_spawn", "agent_nickname"],
+    &["subagent", "id"],
+    &["agent", "id"],
+    &["extra", "subagent_id"],
+    &["extra", "subagentId"],
+    &["extra", "child_subagent_id"],
+    &["extra", "childSubagentId"],
+    &["extra", "agent_id"],
+    &["extra", "subagent", "id"],
+    &["extra", "agent", "id"],
+];
+const CURSOR_SUBAGENT_ID_PATHS: &[&[&str]] = &[
+    &["subagent_id"],
+    &["subagentId"],
+    &["child_subagent_id"],
+    &["childSubagentId"],
+    &["agent_id"],
+    &["subagent", "id"],
+    &["agent", "id"],
+    &["extra", "subagent_id"],
+    &["extra", "subagentId"],
+    &["extra", "child_subagent_id"],
+    &["extra", "childSubagentId"],
+    &["extra", "agent_id"],
+    &["extra", "subagent", "id"],
+    &["extra", "agent", "id"],
+];
+const HERMES_SUBAGENT_ID_PATHS: &[&[&str]] = &[
+    &["child_subagent_id"],
+    &["childSubagentId"],
+    &["subagent_id"],
+    &["subagentId"],
+    &["agent_id"],
+    &["subagent", "id"],
+    &["agent", "id"],
+    &["extra", "child_subagent_id"],
+    &["extra", "childSubagentId"],
+    &["extra", "subagent_id"],
+    &["extra", "subagentId"],
+    &["extra", "agent_id"],
+    &["extra", "subagent", "id"],
+    &["extra", "agent", "id"],
+];
+
+const CLAUDE_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
+    &["tool_use_id"],
+    &["tool_call_id"],
+    &["toolCallId"],
+    &["call_id"],
+    &["extra", "tool_call_id"],
+    &["extra", "call_id"],
+    &["tool", "id"],
+    &["tool_input", "id"],
+    &["id"],
+];
+const CODEX_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
+    &["tool_call_id"],
+    &["toolCallId"],
+    &["tool_use_id"],
+    &["call_id"],
+    &["extra", "tool_call_id"],
+    &["extra", "call_id"],
+    &["tool", "id"],
+    &["tool_input", "id"],
+    &["id"],
+];
+const CURSOR_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
+    &["tool_call_id"],
+    &["toolCallId"],
+    &["tool_use_id"],
+    &["call_id"],
+    &["extra", "tool_call_id"],
+    &["extra", "call_id"],
+    &["tool", "id"],
+    &["tool_input", "id"],
+    &["id"],
+];
+const HERMES_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
+    &["tool_call_id"],
+    &["toolCallId"],
+    &["tool_use_id"],
+    &["call_id"],
+    &["extra", "tool_call_id"],
+    &["extra", "call_id"],
+    &["tool", "id"],
+    &["tool_input", "id"],
+    &["id"],
+];
+
+const TOOL_NAME_PATHS: &[&[&str]] = &[
+    &["tool_name"],
+    &["toolName"],
+    &["tool", "name"],
+    &["tool_input", "name"],
+    &["name"],
+];
+const TOOL_ARGUMENT_PATHS: &[&[&str]] = &[&["tool_input"], &["input"], &["arguments"], &["args"]];
+const CODEX_TOOL_ARGUMENT_PATHS: &[&[&str]] =
+    &[&["arguments"], &["args"], &["input"], &["tool_input"]];
+const TOOL_RESULT_PATHS: &[&[&str]] = &[
+    &["tool_output"],
+    &["tool_response"],
+    &["output"],
+    &["result"],
+    &["extra", "tool_output"],
+    &["extra", "result"],
+];
+const TOOL_STATUS_PATHS: &[&[&str]] = &[&["status"], &["decision"], &["permission"]];
+
+const CLAUDE_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
+    call_id: CLAUDE_TOOL_CALL_ID_PATHS,
+    name: TOOL_NAME_PATHS,
+    arguments: TOOL_ARGUMENT_PATHS,
+    result: TOOL_RESULT_PATHS,
+    status: TOOL_STATUS_PATHS,
+};
+const CODEX_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
+    call_id: CODEX_TOOL_CALL_ID_PATHS,
+    name: TOOL_NAME_PATHS,
+    arguments: CODEX_TOOL_ARGUMENT_PATHS,
+    result: TOOL_RESULT_PATHS,
+    status: TOOL_STATUS_PATHS,
+};
+const CURSOR_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
+    call_id: CURSOR_TOOL_CALL_ID_PATHS,
+    name: TOOL_NAME_PATHS,
+    arguments: TOOL_ARGUMENT_PATHS,
+    result: TOOL_RESULT_PATHS,
+    status: TOOL_STATUS_PATHS,
+};
+const HERMES_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
+    call_id: HERMES_TOOL_CALL_ID_PATHS,
+    name: TOOL_NAME_PATHS,
+    arguments: TOOL_ARGUMENT_PATHS,
+    result: TOOL_RESULT_PATHS,
+    status: TOOL_STATUS_PATHS,
+};
+
+fn agent_session_id(
+    headers: &HeaderMap,
+    payload: &Value,
+    header_policy: SessionHeaderPolicy,
+    payload_paths: &'static [&'static [&'static str]],
+) -> Option<String> {
+    header_string(headers, "x-nemo-relay-session-id")
+        .or_else(|| match header_policy {
+            SessionHeaderPolicy::RelayOnly => None,
+            SessionHeaderPolicy::RelayAndClaude => {
+                header_string(headers, "x-claude-code-session-id")
+            }
+        })
+        .or_else(|| session_id_from_payload(payload, payload_paths))
+}
+
+fn agent_event_name(payload: &Value, paths: &'static [&'static [&'static str]]) -> Option<String> {
+    first_string_at(payload, paths)
+}
+
+fn agent_metadata(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    event_name: &str,
+) -> Value {
+    let mut object = Map::new();
+    object.insert("agent_kind".into(), json!(kind.as_str()));
+    object.insert("hook_event_name".into(), json!(event_name));
+    if let Some(profile) = header_string(headers, "x-nemo-relay-config-profile") {
+        object.insert("gateway_config_profile".into(), json!(profile));
+    }
+    for (key, value) in [
+        ("model", string_at(payload, &["model"])),
+        ("agent_id", string_at(payload, &["agent_id"])),
+        ("agent_type", string_at(payload, &["agent_type"])),
+    ] {
+        if let Some(value) = value {
+            object.insert(key.into(), json!(value));
+        }
+    }
+    Value::Object(object)
+}
+
+fn agent_subagent_id(
+    payload: &Value,
+    headers: &HeaderMap,
+    paths: &'static [&'static [&'static str]],
+) -> Option<String> {
+    first_string_at(payload, paths).or_else(|| header_string(headers, "x-nemo-relay-subagent-id"))
+}
+
+fn agent_llm_hint(payload: &Value, subagent_id: Option<String>) -> ExtractedLlmHint {
+    ExtractedLlmHint {
+        subagent_id,
+        agent_id: first_string_at(payload, &[&["agent_id"][..], &["agent", "id"][..]]),
+        agent_type: first_string_at(
+            payload,
+            &[
+                &["agent_type"][..],
+                &["agent", "type"][..],
+                &["agent", "name"][..],
+            ],
+        ),
+        conversation_id: first_string_at(
+            payload,
+            &[
+                &["conversation_id"][..],
+                &["conversationId"][..],
+                &["conversation", "id"][..],
+            ],
+        ),
+        generation_id: first_string_at(
+            payload,
+            &[
+                &["generation_id"][..],
+                &["generationId"][..],
+                &["generation", "id"][..],
+            ],
+        ),
+        request_id: first_string_at(
+            payload,
+            &[
+                &["request_id"][..],
+                &["requestId"][..],
+                &["request", "id"][..],
+                &["extra", "request_id"][..],
+            ],
+        ),
+        model: first_string_at(
+            payload,
+            &[&["model"][..], &["model_name"][..], &["modelName"][..]],
+        ),
+    }
+}
+
+fn agent_tool_call(
+    payload: &Value,
+    subagent_id: Option<String>,
+    event_name: &str,
+    paths: &ToolPathSet,
+) -> ExtractedToolCall {
+    let normalized_event = normalize_name(event_name);
+    ExtractedToolCall {
+        tool_call_id: first_string_at(payload, paths.call_id),
+        tool_name: first_string_at(payload, paths.name),
+        subagent_id,
+        arguments: first_value_at(payload, paths.arguments),
+        result: first_value_at(payload, paths.result)
+            .or_else(|| event_detail_result(payload, &normalized_event)),
+        status: first_string_at(payload, paths.status)
+            .or_else(|| derived_tool_status(&normalized_event)),
+    }
+}
 
 // Derives a stable session identifier from gateway headers first, then common agent payload
 // fields, and finally a v7 UUID. Header precedence lets gateway and hook-forward callers
 // correlate events even when agent payload schemas omit or rename their native session field.
-fn session_id(payload: &Value, headers: &HeaderMap) -> String {
-    BUILTIN_AGENT_PAYLOAD_EXTRACTOR
+fn session_id(
+    payload: &Value,
+    headers: &HeaderMap,
+    extractor: &dyn AgentPayloadExtractor,
+) -> String {
+    extractor
         .session_id(payload, headers)
         .unwrap_or_else(|| format!("hook-{}", Uuid::now_v7()))
 }
 
 // Reads the first known session identifier payload path. Keeping the path list in one place makes
 // adapter precedence explicit without nesting a long `or_else` chain in `session_id`.
-fn session_id_from_payload(payload: &Value) -> Option<String> {
-    first_string_at(
-        payload,
-        &[
-            &["session_id"][..],
-            &["sessionId"][..],
-            &["session", "id"][..],
-            &["conversation_id"][..],
-            &["conversationId"][..],
-            &["parent_session_id"][..],
-            &["task_id"][..],
-            &["extra", "session_id"][..],
-            &["extra", "task_id"][..],
-        ],
-    )
+fn session_id_from_payload(
+    payload: &Value,
+    paths: &'static [&'static [&'static str]],
+) -> Option<String> {
+    first_string_at(payload, paths)
 }
 
 // Reads the agent's event name from the known hook fields in order and falls back to `unknown`.
 // This deliberately keeps unknown payloads observable instead of rejecting them at the adapter
 // boundary, allowing the session layer to emit a generic mark event.
-fn event_name(payload: &Value) -> String {
-    BUILTIN_AGENT_PAYLOAD_EXTRACTOR
+fn event_name(payload: &Value, extractor: &dyn AgentPayloadExtractor) -> String {
+    extractor
         .event_name(payload)
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -242,8 +709,14 @@ fn event_name(payload: &Value) -> String {
 // Builds shared metadata for every normalized hook event. Only stable, low-cardinality fields and
 // gateway configuration hints are lifted out; the full payload remains on the event for consumers
 // that need agent-specific detail.
-fn metadata(payload: &Value, headers: &HeaderMap, kind: AgentKind, event_name: &str) -> Value {
-    BUILTIN_AGENT_PAYLOAD_EXTRACTOR.metadata(payload, headers, kind, event_name)
+fn metadata(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    event_name: &str,
+    extractor: &dyn AgentPayloadExtractor,
+) -> Value {
+    extractor.metadata(payload, headers, kind, event_name)
 }
 
 // Creates a root session event using the common session-id and metadata extraction rules so
@@ -252,23 +725,29 @@ pub(crate) fn common_session_event(
     payload: &Value,
     headers: &HeaderMap,
     kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
 ) -> SessionEvent {
-    let event_name = event_name(payload);
+    let event_name = event_name(payload, extractor);
     SessionEvent {
-        session_id: session_id(payload, headers),
+        session_id: session_id(payload, headers, extractor),
         agent_kind: kind,
         event_name: event_name.clone(),
         payload: payload.clone(),
-        metadata: metadata(payload, headers, kind, &event_name),
+        metadata: metadata(payload, headers, kind, &event_name, extractor),
     }
 }
 
 // Creates a subagent event and tolerates sparse agent payloads by using the gateway subagent
 // header and then a synthetic `subagent` id. The fallback keeps unmatched start/end events visible
 // rather than dropping them when an integration lacks explicit nested-agent IDs.
-fn common_subagent_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> SubagentEvent {
-    let session = common_session_event(payload, headers, kind);
-    let subagent_id = BUILTIN_AGENT_PAYLOAD_EXTRACTOR
+fn common_subagent_event(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
+) -> SubagentEvent {
+    let session = common_session_event(payload, headers, kind, extractor);
+    let subagent_id = extractor
         .subagent_id(payload, headers)
         .unwrap_or_else(|| "subagent".to_string());
     SubagentEvent {
@@ -284,9 +763,14 @@ fn common_subagent_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) 
 // Captures hook payloads that can help correlate nearby gateway LLM calls to the right agent or
 // subagent. Multiple naming conventions are accepted because integrations expose conversation,
 // generation, request, and model identifiers under different shapes.
-fn common_llm_hint_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> LlmHintEvent {
-    let session = common_session_event(payload, headers, kind);
-    let hint = BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(payload, headers);
+fn common_llm_hint_event(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
+) -> LlmHintEvent {
+    let session = common_session_event(payload, headers, kind, extractor);
+    let hint = extractor.llm_hint(payload, headers);
     LlmHintEvent {
         session_id: session.session_id,
         agent_kind: kind,
@@ -306,10 +790,14 @@ fn common_llm_hint_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) 
 // Converts agent tool hooks into the runtime tool event shape while preserving missing fields.
 // Tool IDs and names are synthesized when absent, arguments/results are searched across known
 // payload shapes, and failure or permission-denied event names are reflected in status metadata.
-fn common_tool_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> ToolEvent {
-    let session = common_session_event(payload, headers, kind);
-    let tool_call =
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(payload, headers, &session.event_name);
+fn common_tool_event(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
+) -> ToolEvent {
+    let session = common_session_event(payload, headers, kind, extractor);
+    let tool_call = extractor.tool_call(payload, headers, &session.event_name);
     ToolEvent {
         session_id: session.session_id,
         agent_kind: kind,
@@ -329,97 +817,18 @@ fn common_tool_event(payload: &Value, headers: &HeaderMap, kind: AgentKind) -> T
     }
 }
 
-// Resolves a tool call identifier from all known agent payload conventions before synthesizing a
-// UUID-backed id. The synthetic id keeps lifecycle events recordable even when hooks omit IDs.
-fn tool_call_id(payload: &Value) -> Option<String> {
-    first_string_at(
-        payload,
-        &[
-            &["tool_call_id"][..],
-            &["toolCallId"][..],
-            &["tool_use_id"][..],
-            &["call_id"][..],
-            &["extra", "tool_call_id"][..],
-            &["extra", "call_id"][..],
-            &["tool", "id"][..],
-            &["tool_input", "id"][..],
-            &["id"][..],
-        ],
-    )
-}
-
-// Resolves a human-readable tool name from the common top-level, nested tool, and tool-input
-// shapes. Missing names are kept explicit as `unknown_tool` rather than inheriting event names.
-fn tool_name(payload: &Value) -> Option<String> {
-    first_string_at(
-        payload,
-        &[
-            &["tool_name"][..],
-            &["toolName"][..],
-            &["tool", "name"][..],
-            &["tool_input", "name"][..],
-            &["name"][..],
-        ],
-    )
-}
-
-// Extracts tool input from the agent-specific fields that represent call arguments. A missing
-// argument payload remains JSON null so downstream consumers can distinguish it from `{}`.
-fn tool_arguments(payload: &Value) -> Option<Value> {
-    value_at(payload, &["tool_input"])
-        .or_else(|| value_at(payload, &["input"]))
-        .or_else(|| value_at(payload, &["arguments"]))
-        .or_else(|| value_at(payload, &["args"]))
-}
-
-// Extracts tool output from success payloads first and then failure diagnostics. Failure detail
-// synthesis is last so an explicit result always wins over gateway-built diagnostic metadata.
-fn tool_result(payload: &Value, normalized_event: &str) -> Option<Value> {
-    value_at(payload, &["tool_output"])
-        .or_else(|| value_at(payload, &["tool_response"]))
-        .or_else(|| value_at(payload, &["output"]))
-        .or_else(|| value_at(payload, &["result"]))
-        .or_else(|| value_at(payload, &["extra", "tool_output"]))
-        .or_else(|| value_at(payload, &["extra", "result"]))
-        .or_else(|| event_detail_result(payload, normalized_event))
-}
-
-// Resolves explicit status fields before deriving error/denied status from event names. Derived
-// status is intentionally conservative and only covers known failure or permission-denial spellings.
-fn tool_status(payload: &Value, normalized_event: &str) -> Option<String> {
-    first_string_at(
-        payload,
-        &[&["status"][..], &["decision"][..], &["permission"][..]],
-    )
-    .or_else(|| {
+// Derives error/denied status from event names after an extractor has checked its explicit status
+// fields. The derivation is intentionally conservative and only covers known failure spellings.
+fn derived_tool_status(normalized_event: &str) -> Option<String> {
+    {
         (normalized_event.contains("failure") || normalized_event.contains("failed"))
             .then_some("error".to_string())
-    })
+    }
     .or_else(|| {
         normalized_event
             .contains("permissiondenied")
             .then_some("denied".to_string())
     })
-}
-
-// Finds the most specific nested-agent identifier the gateway knows how to interpret. Agent IDs
-// are accepted as subagent IDs because several hook systems use `agent` terminology for spawned
-// workers rather than for the top-level coding agent.
-fn subagent_id(payload: &Value) -> Option<String> {
-    string_at(payload, &["subagent_id"])
-        .or_else(|| string_at(payload, &["subagentId"]))
-        .or_else(|| string_at(payload, &["child_subagent_id"]))
-        .or_else(|| string_at(payload, &["childSubagentId"]))
-        .or_else(|| string_at(payload, &["agent_id"]))
-        .or_else(|| string_at(payload, &["subagent", "id"]))
-        .or_else(|| string_at(payload, &["agent", "id"]))
-        .or_else(|| string_at(payload, &["extra", "subagent_id"]))
-        .or_else(|| string_at(payload, &["extra", "subagentId"]))
-        .or_else(|| string_at(payload, &["extra", "child_subagent_id"]))
-        .or_else(|| string_at(payload, &["extra", "childSubagentId"]))
-        .or_else(|| string_at(payload, &["extra", "agent_id"]))
-        .or_else(|| string_at(payload, &["extra", "subagent", "id"]))
-        .or_else(|| string_at(payload, &["extra", "agent", "id"]))
 }
 
 // Extracts detail fields as a synthetic tool result only for failure-like hooks. Successful tool
@@ -457,23 +866,30 @@ fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value>
 fn classify(
     payload: &Value,
     headers: &HeaderMap,
+    extractor: &dyn AgentPayloadExtractor,
     rules: &ClassificationRules<'_>,
 ) -> Vec<NormalizedEvent> {
-    let normalized = normalize_name(&event_name(payload));
+    let normalized = normalize_name(&event_name(payload, extractor));
     if matches!(
         normalized.as_str(),
         "beforesubmitprompt" | "promptsubmitted" | "userpromptsubmit"
     ) {
         return vec![
-            NormalizedEvent::PromptSubmitted(common_session_event(payload, headers, rules.kind)),
-            NormalizedEvent::LlmHint(common_llm_hint_event(payload, headers, rules.kind)),
+            NormalizedEvent::PromptSubmitted(common_session_event(
+                payload, headers, rules.kind, extractor,
+            )),
+            NormalizedEvent::LlmHint(common_llm_hint_event(
+                payload, headers, rules.kind, extractor,
+            )),
         ];
     }
-    let primary = classify_primary(payload, headers, rules);
+    let primary = classify_primary(payload, headers, extractor, rules);
     if normalized == "stop" && !primary.is_terminal() {
         return vec![
             primary,
-            NormalizedEvent::TurnEnded(common_session_event(payload, headers, rules.kind)),
+            NormalizedEvent::TurnEnded(common_session_event(
+                payload, headers, rules.kind, extractor,
+            )),
         ];
     }
     vec![primary]
@@ -485,59 +901,70 @@ fn classify(
 fn classify_primary(
     payload: &Value,
     headers: &HeaderMap,
+    extractor: &dyn AgentPayloadExtractor,
     rules: &ClassificationRules<'_>,
 ) -> NormalizedEvent {
-    let event = event_name(payload);
+    let event = event_name(payload, extractor);
     let normalized = normalize_name(&event);
     if rules
         .agent_start
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::AgentStarted(common_session_event(payload, headers, rules.kind))
+        NormalizedEvent::AgentStarted(common_session_event(
+            payload, headers, rules.kind, extractor,
+        ))
     } else if rules
         .agent_end
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::AgentEnded(common_session_event(payload, headers, rules.kind))
+        NormalizedEvent::AgentEnded(common_session_event(
+            payload, headers, rules.kind, extractor,
+        ))
     } else if rules
         .subagent_start
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::SubagentStarted(common_subagent_event(payload, headers, rules.kind))
+        NormalizedEvent::SubagentStarted(common_subagent_event(
+            payload, headers, rules.kind, extractor,
+        ))
     } else if rules
         .subagent_end
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::SubagentEnded(common_subagent_event(payload, headers, rules.kind))
+        NormalizedEvent::SubagentEnded(common_subagent_event(
+            payload, headers, rules.kind, extractor,
+        ))
     } else if rules
         .tool_start
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::ToolStarted(common_tool_event(payload, headers, rules.kind))
+        NormalizedEvent::ToolStarted(common_tool_event(payload, headers, rules.kind, extractor))
     } else if rules
         .tool_end
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::ToolEnded(common_tool_event(payload, headers, rules.kind))
+        NormalizedEvent::ToolEnded(common_tool_event(payload, headers, rules.kind, extractor))
     } else {
         match normalized.as_str() {
             "afteragentresponse" | "agentresponse" | "assistantresponse" | "afteragentthought"
-            | "prellmcall" | "postllmcall" | "stop" => {
-                NormalizedEvent::LlmHint(common_llm_hint_event(payload, headers, rules.kind))
-            }
-            "precompact" | "compaction" => {
-                NormalizedEvent::Compaction(common_session_event(payload, headers, rules.kind))
-            }
-            "notification" => {
-                NormalizedEvent::Notification(common_session_event(payload, headers, rules.kind))
-            }
-            _ => NormalizedEvent::HookMark(common_session_event(payload, headers, rules.kind)),
+            | "prellmcall" | "postllmcall" | "stop" => NormalizedEvent::LlmHint(
+                common_llm_hint_event(payload, headers, rules.kind, extractor),
+            ),
+            "precompact" | "compaction" => NormalizedEvent::Compaction(common_session_event(
+                payload, headers, rules.kind, extractor,
+            )),
+            "notification" => NormalizedEvent::Notification(common_session_event(
+                payload, headers, rules.kind, extractor,
+            )),
+            _ => NormalizedEvent::HookMark(common_session_event(
+                payload, headers, rules.kind, extractor,
+            )),
         }
     }
 }

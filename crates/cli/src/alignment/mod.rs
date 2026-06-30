@@ -51,6 +51,19 @@ pub(crate) enum GatewayRouteKind {
     AnthropicCountTokens,
 }
 
+impl GatewayRouteKind {
+    fn from_provider_name(provider: &str) -> Option<Self> {
+        match provider {
+            "openai.responses" => Some(Self::OpenAiResponses),
+            "openai.chat_completions" => Some(Self::OpenAiChatCompletions),
+            "openai.models" => Some(Self::OpenAiModels),
+            "anthropic.messages" => Some(Self::AnthropicMessages),
+            "anthropic.count_tokens" => Some(Self::AnthropicCountTokens),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GatewayManagementPolicy {
     Managed,
@@ -79,41 +92,100 @@ impl GatewayManagementPolicy {
 /// stateless read of request JSON, while ownership resolution is stateful and
 /// depends on active scopes, hints, aliases, and recent tool activity.
 pub(crate) trait ProviderRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String>;
     fn request_affinity_key(&self, request: &LlmRequest) -> Option<String>;
-    fn gateway_turn_input(
-        &self,
-        agent_kind: AgentKind,
-        provider: &str,
-        request: &LlmRequest,
-    ) -> Option<Value>;
+    fn gateway_turn_input(&self, agent_kind: AgentKind, request: &LlmRequest) -> Option<Value>;
 }
 
-struct BuiltinProviderRequestExtractor;
+struct OpenAiResponsesRequestExtractor;
+struct OpenAiChatCompletionsRequestExtractor;
+struct OpenAiModelsRequestExtractor;
+struct AnthropicMessagesRequestExtractor;
+struct AnthropicCountTokensRequestExtractor;
 
-static BUILTIN_PROVIDER_REQUEST_EXTRACTOR: BuiltinProviderRequestExtractor =
-    BuiltinProviderRequestExtractor;
+static OPENAI_RESPONSES_REQUEST_EXTRACTOR: OpenAiResponsesRequestExtractor =
+    OpenAiResponsesRequestExtractor;
+static OPENAI_CHAT_COMPLETIONS_REQUEST_EXTRACTOR: OpenAiChatCompletionsRequestExtractor =
+    OpenAiChatCompletionsRequestExtractor;
+static OPENAI_MODELS_REQUEST_EXTRACTOR: OpenAiModelsRequestExtractor = OpenAiModelsRequestExtractor;
+static ANTHROPIC_MESSAGES_REQUEST_EXTRACTOR: AnthropicMessagesRequestExtractor =
+    AnthropicMessagesRequestExtractor;
+static ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR: AnthropicCountTokensRequestExtractor =
+    AnthropicCountTokensRequestExtractor;
 
-impl ProviderRequestExtractor for BuiltinProviderRequestExtractor {
-    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
-        let task_text = request_user_task_text(&request.content)?;
-        let normalized = normalize_affinity_text(&task_text);
-        (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
-            .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
+impl ProviderRequestExtractor for OpenAiResponsesRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+            .or_else(|| codex::prompt_cache_session_id(body, GatewayRouteKind::OpenAiResponses))
+            .or_else(|| openai_body_session_id(body, GatewayRouteKind::OpenAiResponses))
     }
 
-    fn gateway_turn_input(
-        &self,
-        agent_kind: AgentKind,
-        provider: &str,
-        request: &LlmRequest,
-    ) -> Option<Value> {
-        // Keep this narrower than the codec hint matcher: only the real Messages
-        // route carries a user turn body, while Anthropic count-token traffic is
-        // a management/probe path that should not create a synthetic turn.
-        if agent_kind != AgentKind::ClaudeCode || provider != "anthropic.messages" {
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        affinity_key_from_task_text(responses_user_task_text(&request.content)?)
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
+    }
+}
+
+impl ProviderRequestExtractor for OpenAiChatCompletionsRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+            .or_else(|| openai_body_session_id(body, GatewayRouteKind::OpenAiChatCompletions))
+    }
+
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        affinity_key_from_task_text(messages_user_task_text(&request.content)?)
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
+    }
+}
+
+impl ProviderRequestExtractor for OpenAiModelsRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, _body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+    }
+
+    fn request_affinity_key(&self, _request: &LlmRequest) -> Option<String> {
+        None
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
+    }
+}
+
+impl ProviderRequestExtractor for AnthropicMessagesRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, _body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+    }
+
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        affinity_key_from_task_text(messages_user_task_text(&request.content)?)
+    }
+
+    fn gateway_turn_input(&self, agent_kind: AgentKind, request: &LlmRequest) -> Option<Value> {
+        if agent_kind != AgentKind::ClaudeCode {
             return None;
         }
-        request_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+        messages_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+    }
+}
+
+impl ProviderRequestExtractor for AnthropicCountTokensRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, _body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+    }
+
+    fn request_affinity_key(&self, _request: &LlmRequest) -> Option<String> {
+        None
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
     }
 }
 
@@ -393,10 +465,28 @@ pub(crate) fn gateway_session_id(
     body: &Value,
     route: GatewayRouteKind,
 ) -> Option<String> {
+    provider_request_extractor(route).gateway_session_id(headers, body)
+}
+
+fn provider_request_extractor(route: GatewayRouteKind) -> &'static dyn ProviderRequestExtractor {
+    match route {
+        GatewayRouteKind::OpenAiResponses => &OPENAI_RESPONSES_REQUEST_EXTRACTOR,
+        GatewayRouteKind::OpenAiChatCompletions => &OPENAI_CHAT_COMPLETIONS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::OpenAiModels => &OPENAI_MODELS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::AnthropicMessages => &ANTHROPIC_MESSAGES_REQUEST_EXTRACTOR,
+        GatewayRouteKind::AnthropicCountTokens => &ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR,
+    }
+}
+
+fn provider_request_extractor_for_name(
+    provider: &str,
+) -> Option<&'static dyn ProviderRequestExtractor> {
+    GatewayRouteKind::from_provider_name(provider).map(provider_request_extractor)
+}
+
+fn gateway_header_session_id(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-nemo-relay-session-id")
         .or_else(|| claude_code::session_id_from_headers(headers))
-        .or_else(|| codex::prompt_cache_session_id(body, route))
-        .or_else(|| openai_body_session_id(body, route))
 }
 
 fn openai_body_session_id(body: &Value, route: GatewayRouteKind) -> Option<String> {
@@ -602,17 +692,12 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
     )
 }
 
-// Builds a provider-neutral affinity key from the user task text inside common LLM request
-// formats. Coding agents often replay the same task prompt on later provider calls without a
-// worker id; this key lets session correlation pair those calls with the subagent that first owned
-// the task. The extractor understands Anthropic Messages, OpenAI Chat Completions, and OpenAI
-// Responses shapes, and deliberately ignores raw count-token/file payloads.
-// TODO(extraction): These free-function shims preserve existing alignment call
-// sites while host-specific extractors land. Move callers onto
-// `ProviderRequestExtractor` implementations and remove the shims after that
-// migration completes.
-pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
-    BUILTIN_PROVIDER_REQUEST_EXTRACTOR.request_affinity_key(request)
+// Builds a route-specific affinity key from the user task text inside provider request payloads.
+// Coding agents often replay the same task prompt on later provider calls without a worker id; this
+// key lets session correlation pair those calls with the subagent that first owned the same task.
+// Count-token, model-list, raw file, and sidecar JSON payloads deliberately return `None`.
+pub(crate) fn request_affinity_key(provider: &str, request: &LlmRequest) -> Option<String> {
+    provider_request_extractor_for_name(provider)?.request_affinity_key(request)
 }
 
 // Builds a non-null turn input when a direct gateway request arrives before the prompt hook. This
@@ -623,7 +708,7 @@ pub(crate) fn gateway_turn_input(
     provider: &str,
     request: &LlmRequest,
 ) -> Option<Value> {
-    BUILTIN_PROVIDER_REQUEST_EXTRACTOR.gateway_turn_input(agent_kind, provider, request)
+    provider_request_extractor_for_name(provider)?.gateway_turn_input(agent_kind, request)
 }
 
 // Detects tool results that imply a subagent completed. Claude Code reports this through the
@@ -912,13 +997,24 @@ const TASK_SESSION_SCOPE_PATHS: &[&[&str]] = &[
     &["extra", "parentSessionId"],
 ];
 
-fn request_user_task_text(payload: &Value) -> Option<String> {
+fn messages_user_task_text(payload: &Value) -> Option<String> {
     payload
         .get("messages")
         .and_then(Value::as_array)
         .and_then(|messages| messages.iter().rev().find_map(user_message_task_text))
-        .or_else(|| responses_input_task_text(payload.get("input")?))
-        .or_else(|| prompt_task_text(payload.get("prompt")?))
+}
+
+fn responses_user_task_text(payload: &Value) -> Option<String> {
+    payload
+        .get("input")
+        .and_then(responses_input_task_text)
+        .or_else(|| payload.get("prompt").and_then(prompt_task_text))
+}
+
+fn affinity_key_from_task_text(task_text: String) -> Option<String> {
+    let normalized = normalize_affinity_text(&task_text);
+    (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
+        .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
 }
 
 fn user_message_task_text(message: &Value) -> Option<String> {

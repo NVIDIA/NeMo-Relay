@@ -235,47 +235,73 @@ fn adapter_string_lookup_accepts_scalar_values_only() {
 }
 
 #[test]
-fn builtin_extractor_keeps_fallbacks_at_adapter_boundary() {
+fn agent_extractors_keep_fallbacks_at_adapter_boundary() {
     let headers = HeaderMap::new();
     let payload = json!({});
 
-    assert_eq!(
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.session_id(&payload, &headers),
-        None
-    );
-    assert_eq!(BUILTIN_AGENT_PAYLOAD_EXTRACTOR.event_name(&payload), None);
-    assert_eq!(
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.subagent_id(&payload, &headers),
-        None
-    );
-    assert_eq!(
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
-        ExtractedLlmHint::default()
-    );
-    assert_eq!(
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PreToolUse"),
-        ExtractedToolCall {
-            tool_call_id: None,
-            tool_name: None,
-            subagent_id: None,
-            arguments: None,
-            result: None,
-            status: None,
-        }
-    );
+    fn assert_fallbacks(
+        extractor: &dyn AgentPayloadExtractor,
+        kind: AgentKind,
+        payload: &serde_json::Value,
+        headers: &HeaderMap,
+    ) {
+        assert_eq!(extractor.session_id(payload, headers), None);
+        assert_eq!(extractor.event_name(payload), None);
+        assert_eq!(extractor.subagent_id(payload, headers), None);
+        assert_eq!(
+            extractor.llm_hint(payload, headers),
+            ExtractedLlmHint::default()
+        );
+        assert_eq!(
+            extractor.tool_call(payload, headers, "PreToolUse"),
+            ExtractedToolCall {
+                tool_call_id: None,
+                tool_name: None,
+                subagent_id: None,
+                arguments: None,
+                result: None,
+                status: None,
+            }
+        );
 
-    assert!(session_id(&payload, &headers).starts_with("hook-"));
-    assert_eq!(event_name(&payload), "unknown");
+        assert!(session_id(payload, headers, extractor).starts_with("hook-"));
+        assert_eq!(event_name(payload, extractor), "unknown");
 
-    let event = common_tool_event(&payload, &headers, AgentKind::ClaudeCode);
-    assert!(event.tool_call_id.starts_with("tool-"));
-    assert_eq!(event.tool_name, "unknown_tool");
-    assert_eq!(event.arguments, json!(null));
-    assert_eq!(event.result, json!(null));
+        let event = common_tool_event(payload, headers, kind, extractor);
+        assert!(event.tool_call_id.starts_with("tool-"));
+        assert_eq!(event.tool_name, "unknown_tool");
+        assert_eq!(event.arguments, json!(null));
+        assert_eq!(event.result, json!(null));
+    }
+
+    assert_fallbacks(
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR,
+        AgentKind::ClaudeCode,
+        &payload,
+        &headers,
+    );
+    assert_fallbacks(
+        &CODEX_PAYLOAD_EXTRACTOR,
+        AgentKind::Codex,
+        &payload,
+        &headers,
+    );
+    assert_fallbacks(
+        &CURSOR_PAYLOAD_EXTRACTOR,
+        AgentKind::Cursor,
+        &payload,
+        &headers,
+    );
+    assert_fallbacks(
+        &HERMES_PAYLOAD_EXTRACTOR,
+        AgentKind::Hermes,
+        &payload,
+        &headers,
+    );
 }
 
 #[test]
-fn builtin_extractor_reads_agent_hint_and_tool_call_fields() {
+fn codex_extractor_reads_agent_hint_and_tool_call_fields() {
     let headers = HeaderMap::new();
     let payload = json!({
         "subagent_id": "worker-1",
@@ -295,7 +321,7 @@ fn builtin_extractor_reads_agent_hint_and_tool_call_fields() {
     });
 
     assert_eq!(
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        CODEX_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
         ExtractedLlmHint {
             subagent_id: Some("worker-1".into()),
             agent_id: Some("agent-1".into()),
@@ -307,7 +333,7 @@ fn builtin_extractor_reads_agent_hint_and_tool_call_fields() {
         }
     );
     assert_eq!(
-        BUILTIN_AGENT_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
+        CODEX_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
         ExtractedToolCall {
             tool_call_id: Some("tool-call-1".into()),
             tool_name: Some("search".into()),
@@ -316,6 +342,168 @@ fn builtin_extractor_reads_agent_hint_and_tool_call_fields() {
             result: Some(json!({ "matches": 2 })),
             status: Some("success".into()),
         }
+    );
+}
+
+#[test]
+fn agent_extractors_prefer_extra_call_ids_over_structural_ids() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "hook_event_name": "PostToolUse",
+        "tool": { "id": "tool-structural" },
+        "tool_input": { "id": "argument-id" },
+        "id": "event-id",
+        "extra": {
+            "call_id": "extra-call"
+        }
+    });
+
+    for extractor in [
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
+        &CODEX_PAYLOAD_EXTRACTOR,
+        &CURSOR_PAYLOAD_EXTRACTOR,
+        &HERMES_PAYLOAD_EXTRACTOR,
+    ] {
+        assert_eq!(
+            extractor
+                .tool_call(&payload, &headers, "PostToolUse")
+                .tool_call_id
+                .as_deref(),
+            Some("extra-call")
+        );
+    }
+}
+
+#[test]
+fn agent_extractors_keep_hook_event_name_precedence() {
+    let payload = json!({
+        "hook_event_name": "hook-winner",
+        "event_name": "event-name-loser",
+        "eventName": "event-name-camel-loser",
+        "event": "event-loser"
+    });
+
+    for extractor in [
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
+        &CODEX_PAYLOAD_EXTRACTOR,
+        &CURSOR_PAYLOAD_EXTRACTOR,
+        &HERMES_PAYLOAD_EXTRACTOR,
+    ] {
+        assert_eq!(
+            extractor.event_name(&payload).as_deref(),
+            Some("hook-winner")
+        );
+    }
+}
+
+#[test]
+fn claude_extractor_prefers_native_tool_use_id() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "claude-toolu",
+        "tool_call_id": "generic-tool",
+        "extra": {
+            "call_id": "extra-call"
+        }
+    });
+
+    assert_eq!(
+        CLAUDE_CODE_PAYLOAD_EXTRACTOR
+            .tool_call(&payload, &headers, "PreToolUse")
+            .tool_call_id
+            .as_deref(),
+        Some("claude-toolu")
+    );
+}
+
+#[test]
+fn codex_extractor_prefers_codex_specific_fields() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "source": {
+            "subagent": {
+                "thread_spawn": {
+                    "agent_nickname": "codex-reviewer"
+                }
+            }
+        },
+        "subagent": { "id": "nested-subagent" },
+        "arguments": { "cmd": "cargo test" },
+        "tool_input": { "cmd": "ignored", "id": "argument-id" },
+        "extra": { "call_id": "extra-call" }
+    });
+    let tool_call = CODEX_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "toolEnded");
+
+    assert_eq!(tool_call.subagent_id.as_deref(), Some("codex-reviewer"));
+    assert_eq!(tool_call.tool_call_id.as_deref(), Some("extra-call"));
+    assert_eq!(tool_call.arguments, Some(json!({ "cmd": "cargo test" })));
+}
+
+#[test]
+fn cursor_extractor_keeps_cursor_session_and_nested_subagent_paths() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-claude-code-session-id",
+        "claude-session".parse().unwrap(),
+    );
+    let payload = json!({
+        "parent_session_id": "cursor-parent",
+        "extra": {
+            "subagent": { "id": "cursor-worker" }
+        }
+    });
+
+    assert_eq!(
+        CURSOR_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("cursor-parent")
+    );
+    assert_eq!(
+        CURSOR_PAYLOAD_EXTRACTOR
+            .subagent_id(&payload, &headers)
+            .as_deref(),
+        Some("cursor-worker")
+    );
+}
+
+#[test]
+fn hermes_extractor_prefers_child_subagent_and_claude_session_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-claude-code-session-id",
+        "claude-session".parse().unwrap(),
+    );
+    let payload = json!({
+        "subagent_id": "generic-subagent",
+        "child_subagent_id": "hermes-child"
+    });
+
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("claude-session")
+    );
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .subagent_id(&payload, &headers)
+            .as_deref(),
+        Some("hermes-child")
+    );
+
+    let nested_payload = json!({
+        "subagent": { "id": "nested-subagent" },
+        "extra": {
+            "subagent_id": "extra-subagent"
+        }
+    });
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .subagent_id(&nested_payload, &headers)
+            .as_deref(),
+        Some("nested-subagent")
     );
 }
 

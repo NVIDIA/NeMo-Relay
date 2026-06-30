@@ -5,8 +5,8 @@ use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
 
 use crate::adapters::{
-    AdapterOutcome, ClassificationRules, classify, common_session_event, event_name, metadata,
-    normalize_name, session_id,
+    AdapterOutcome, ClassificationRules, HERMES_PAYLOAD_EXTRACTOR, classify, common_session_event,
+    event_name, metadata, normalize_name, session_id,
 };
 use crate::json_path::value_at;
 use crate::model::{AgentKind, LlmEvent, NormalizedEvent};
@@ -17,7 +17,7 @@ use crate::model::{AgentKind, LlmEvent, NormalizedEvent};
 /// responses minimal and relies on the forwarder fail-open/fail-closed setting to decide whether
 /// hook delivery problems affect the invoking agent.
 pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
-    let event_name = event_name(&payload);
+    let event_name = event_name(&payload, &HERMES_PAYLOAD_EXTRACTOR);
     let normalized = normalize_name(&event_name);
     if normalized == "preapirequest" {
         return AdapterOutcome {
@@ -65,6 +65,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
                 &payload,
                 headers,
                 AgentKind::Hermes,
+                &HERMES_PAYLOAD_EXTRACTOR,
             ))],
             response: json!({}),
         };
@@ -73,6 +74,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,
         headers,
+        &HERMES_PAYLOAD_EXTRACTOR,
         &ClassificationRules {
             kind: AgentKind::Hermes,
             agent_start: &["on_session_start", "sessionStart"],
@@ -90,7 +92,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
 }
 
 fn hermes_llm_event(payload: &Value, headers: &HeaderMap, event_name: &str) -> LlmEvent {
-    let session_id = session_id(payload, headers);
+    let session_id = session_id(payload, headers, &HERMES_PAYLOAD_EXTRACTOR);
     let api_call_id = hermes_api_call_id(payload, &session_id);
     let provider = hermes_string_at(payload, "provider")
         .or_else(|| hermes_string_at(payload, "api_mode"))
@@ -98,7 +100,13 @@ fn hermes_llm_event(payload: &Value, headers: &HeaderMap, event_name: &str) -> L
     let model_name =
         hermes_string_at(payload, "response_model").or_else(|| hermes_string_at(payload, "model"));
     let payload_exact = hermes_payload_exact(payload, event_name);
-    let mut event_metadata = metadata(payload, headers, AgentKind::Hermes, event_name);
+    let mut event_metadata = metadata(
+        payload,
+        headers,
+        AgentKind::Hermes,
+        event_name,
+        &HERMES_PAYLOAD_EXTRACTOR,
+    );
     if let Value::Object(ref mut object) = event_metadata {
         object.insert("api_call_id".into(), json!(api_call_id.clone()));
         object.insert("provider_payload_exact".into(), json!(payload_exact));

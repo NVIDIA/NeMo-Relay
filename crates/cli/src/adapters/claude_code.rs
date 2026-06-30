@@ -4,7 +4,9 @@
 use axum::http::HeaderMap;
 use serde_json::{Value, json};
 
-use crate::adapters::{AdapterOutcome, ClassificationRules, classify};
+use crate::adapters::{
+    AdapterOutcome, CLAUDE_CODE_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
+};
 use crate::model::{AgentKind, NormalizedEvent};
 
 /// Normalizes Claude Code hook payloads and returns the hook response Claude expects.
@@ -18,6 +20,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,
         headers,
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR,
         &ClassificationRules {
             kind: AgentKind::ClaudeCode,
             agent_start: &["SessionStart", "sessionStart", "session_start"],
