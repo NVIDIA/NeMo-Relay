@@ -722,9 +722,23 @@ fn session_id(
     headers: &HeaderMap,
     extractor: &dyn AgentPayloadExtractor,
 ) -> String {
+    let fallback_session_id = fallback_session_id();
+    session_id_with_fallback(payload, headers, extractor, &fallback_session_id)
+}
+
+fn fallback_session_id() -> String {
+    format!("hook-{}", Uuid::now_v7())
+}
+
+fn session_id_with_fallback(
+    payload: &Value,
+    headers: &HeaderMap,
+    extractor: &dyn AgentPayloadExtractor,
+    fallback_session_id: &str,
+) -> String {
     extractor
         .session_id(payload, headers)
-        .unwrap_or_else(|| format!("hook-{}", Uuid::now_v7()))
+        .unwrap_or_else(|| fallback_session_id.to_string())
 }
 
 /// Read the first known session identifier payload path for one agent strategy.
@@ -773,9 +787,20 @@ pub(crate) fn common_session_event(
     kind: AgentKind,
     extractor: &dyn AgentPayloadExtractor,
 ) -> SessionEvent {
+    let fallback_session_id = fallback_session_id();
+    common_session_event_with_fallback(payload, headers, kind, extractor, &fallback_session_id)
+}
+
+fn common_session_event_with_fallback(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
+    fallback_session_id: &str,
+) -> SessionEvent {
     let event_name = event_name(payload, extractor);
     SessionEvent {
-        session_id: session_id(payload, headers, extractor),
+        session_id: session_id_with_fallback(payload, headers, extractor, fallback_session_id),
         agent_kind: kind,
         event_name: event_name.clone(),
         payload: payload.clone(),
@@ -788,13 +813,15 @@ pub(crate) fn common_session_event(
 /// Sparse payloads fall back through the selected extractor and then to a
 /// synthetic `subagent` id, keeping unmatched start/end events visible when an
 /// integration lacks explicit nested-agent IDs.
-fn common_subagent_event(
+fn common_subagent_event_with_fallback(
     payload: &Value,
     headers: &HeaderMap,
     kind: AgentKind,
     extractor: &dyn AgentPayloadExtractor,
+    fallback_session_id: &str,
 ) -> SubagentEvent {
-    let session = common_session_event(payload, headers, kind, extractor);
+    let session =
+        common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
     let subagent_id = extractor
         .subagent_id(payload, headers)
         .unwrap_or_else(|| "subagent".to_string());
@@ -813,13 +840,15 @@ fn common_subagent_event(
 /// Multiple naming conventions are accepted because integrations expose
 /// conversation, generation, request, and model identifiers under different
 /// shapes.
-fn common_llm_hint_event(
+fn common_llm_hint_event_with_fallback(
     payload: &Value,
     headers: &HeaderMap,
     kind: AgentKind,
     extractor: &dyn AgentPayloadExtractor,
+    fallback_session_id: &str,
 ) -> LlmHintEvent {
-    let session = common_session_event(payload, headers, kind, extractor);
+    let session =
+        common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
     let hint = extractor.llm_hint(payload, headers);
     LlmHintEvent {
         session_id: session.session_id,
@@ -842,13 +871,15 @@ fn common_llm_hint_event(
 /// Tool IDs and names are synthesized when absent, arguments/results are
 /// searched across known payload shapes, and failure or permission-denied event
 /// names are reflected in status metadata.
-fn common_tool_event(
+fn common_tool_event_with_fallback(
     payload: &Value,
     headers: &HeaderMap,
     kind: AgentKind,
     extractor: &dyn AgentPayloadExtractor,
+    fallback_session_id: &str,
 ) -> ToolEvent {
-    let session = common_session_event(payload, headers, kind, extractor);
+    let session =
+        common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
     let tool_call = extractor.tool_call(payload, headers, &session.event_name);
     ToolEvent {
         session_id: session.session_id,
@@ -922,26 +953,39 @@ fn classify(
     extractor: &dyn AgentPayloadExtractor,
     rules: &ClassificationRules<'_>,
 ) -> Vec<NormalizedEvent> {
+    let fallback_session_id = fallback_session_id();
     let normalized = normalize_name(&event_name(payload, extractor));
     if matches!(
         normalized.as_str(),
         "beforesubmitprompt" | "promptsubmitted" | "userpromptsubmit"
     ) {
         return vec![
-            NormalizedEvent::PromptSubmitted(common_session_event(
-                payload, headers, rules.kind, extractor,
+            NormalizedEvent::PromptSubmitted(common_session_event_with_fallback(
+                payload,
+                headers,
+                rules.kind,
+                extractor,
+                &fallback_session_id,
             )),
-            NormalizedEvent::LlmHint(common_llm_hint_event(
-                payload, headers, rules.kind, extractor,
+            NormalizedEvent::LlmHint(common_llm_hint_event_with_fallback(
+                payload,
+                headers,
+                rules.kind,
+                extractor,
+                &fallback_session_id,
             )),
         ];
     }
-    let primary = classify_primary(payload, headers, extractor, rules);
+    let primary = classify_primary(payload, headers, extractor, rules, &fallback_session_id);
     if normalized == "stop" && !primary.is_terminal() {
         return vec![
             primary,
-            NormalizedEvent::TurnEnded(common_session_event(
-                payload, headers, rules.kind, extractor,
+            NormalizedEvent::TurnEnded(common_session_event_with_fallback(
+                payload,
+                headers,
+                rules.kind,
+                extractor,
+                &fallback_session_id,
             )),
         ];
     }
@@ -958,6 +1002,7 @@ fn classify_primary(
     headers: &HeaderMap,
     extractor: &dyn AgentPayloadExtractor,
     rules: &ClassificationRules<'_>,
+    fallback_session_id: &str,
 ) -> NormalizedEvent {
     let event = event_name(payload, extractor);
     let normalized = normalize_name(&event);
@@ -966,59 +1011,107 @@ fn classify_primary(
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::AgentStarted(common_session_event(
-            payload, headers, rules.kind, extractor,
+        NormalizedEvent::AgentStarted(common_session_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
         ))
     } else if rules
         .agent_end
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::AgentEnded(common_session_event(
-            payload, headers, rules.kind, extractor,
+        NormalizedEvent::AgentEnded(common_session_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
         ))
     } else if rules
         .subagent_start
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::SubagentStarted(common_subagent_event(
-            payload, headers, rules.kind, extractor,
+        NormalizedEvent::SubagentStarted(common_subagent_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
         ))
     } else if rules
         .subagent_end
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::SubagentEnded(common_subagent_event(
-            payload, headers, rules.kind, extractor,
+        NormalizedEvent::SubagentEnded(common_subagent_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
         ))
     } else if rules
         .tool_start
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::ToolStarted(common_tool_event(payload, headers, rules.kind, extractor))
+        NormalizedEvent::ToolStarted(common_tool_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
+        ))
     } else if rules
         .tool_end
         .iter()
         .any(|name| normalize_name(name) == normalized)
     {
-        NormalizedEvent::ToolEnded(common_tool_event(payload, headers, rules.kind, extractor))
+        NormalizedEvent::ToolEnded(common_tool_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
+        ))
     } else {
         match normalized.as_str() {
             "afteragentresponse" | "agentresponse" | "assistantresponse" | "afteragentthought"
-            | "prellmcall" | "postllmcall" | "stop" => NormalizedEvent::LlmHint(
-                common_llm_hint_event(payload, headers, rules.kind, extractor),
-            ),
-            "precompact" | "compaction" => NormalizedEvent::Compaction(common_session_event(
-                payload, headers, rules.kind, extractor,
+            | "prellmcall" | "postllmcall" | "stop" => {
+                NormalizedEvent::LlmHint(common_llm_hint_event_with_fallback(
+                    payload,
+                    headers,
+                    rules.kind,
+                    extractor,
+                    fallback_session_id,
+                ))
+            }
+            "precompact" | "compaction" => {
+                NormalizedEvent::Compaction(common_session_event_with_fallback(
+                    payload,
+                    headers,
+                    rules.kind,
+                    extractor,
+                    fallback_session_id,
+                ))
+            }
+            "notification" => NormalizedEvent::Notification(common_session_event_with_fallback(
+                payload,
+                headers,
+                rules.kind,
+                extractor,
+                fallback_session_id,
             )),
-            "notification" => NormalizedEvent::Notification(common_session_event(
-                payload, headers, rules.kind, extractor,
-            )),
-            _ => NormalizedEvent::HookMark(common_session_event(
-                payload, headers, rules.kind, extractor,
+            _ => NormalizedEvent::HookMark(common_session_event_with_fallback(
+                payload,
+                headers,
+                rules.kind,
+                extractor,
+                fallback_session_id,
             )),
         }
     }

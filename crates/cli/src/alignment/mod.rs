@@ -52,15 +52,26 @@ pub(crate) enum GatewayRouteKind {
 }
 
 impl GatewayRouteKind {
-    fn from_provider_name(provider: &str) -> Option<Self> {
-        match provider {
-            "openai.responses" => Some(Self::OpenAiResponses),
-            "openai.chat_completions" => Some(Self::OpenAiChatCompletions),
-            "openai.models" => Some(Self::OpenAiModels),
-            "anthropic.messages" => Some(Self::AnthropicMessages),
-            "anthropic.count_tokens" => Some(Self::AnthropicCountTokens),
-            _ => None,
+    pub(crate) const ALL: [Self; 5] = [
+        Self::OpenAiResponses,
+        Self::OpenAiChatCompletions,
+        Self::OpenAiModels,
+        Self::AnthropicMessages,
+        Self::AnthropicCountTokens,
+    ];
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "openai.responses",
+            Self::OpenAiChatCompletions => "openai.chat_completions",
+            Self::OpenAiModels => "openai.models",
+            Self::AnthropicMessages => "anthropic.messages",
+            Self::AnthropicCountTokens => "anthropic.count_tokens",
         }
+    }
+
+    pub(crate) fn from_provider_name(provider: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|route| route.name() == provider)
     }
 }
 

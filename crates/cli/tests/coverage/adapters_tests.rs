@@ -184,6 +184,24 @@ fn stop_hook_emits_turn_ended_for_codex() {
 }
 
 #[test]
+fn multi_event_hooks_reuse_synthetic_session_id() {
+    let outcome = codex::adapt(
+        json!({ "hook_event_name": "UserPromptSubmit" }),
+        &HeaderMap::new(),
+    );
+    assert_eq!(outcome.events.len(), 2);
+    let prompt_session_id = outcome.events[0].session_id();
+    assert!(prompt_session_id.starts_with("hook-"));
+    assert_eq!(outcome.events[1].session_id(), prompt_session_id);
+
+    let outcome = codex::adapt(json!({ "hook_event_name": "Stop" }), &HeaderMap::new());
+    assert_eq!(outcome.events.len(), 2);
+    let hint_session_id = outcome.events[0].session_id();
+    assert!(hint_session_id.starts_with("hook-"));
+    assert_eq!(outcome.events[1].session_id(), hint_session_id);
+}
+
+#[test]
 fn stop_hook_emits_turn_ended_for_claude() {
     let outcome = claude_code::adapt(
         json!({ "session_id": "claude-session", "hook_event_name": "Stop" }),
@@ -267,7 +285,7 @@ fn agent_extractors_keep_fallbacks_at_adapter_boundary() {
         assert!(session_id(payload, headers, extractor).starts_with("hook-"));
         assert_eq!(event_name(payload, extractor), "unknown");
 
-        let event = common_tool_event(payload, headers, kind, extractor);
+        let event = common_tool_event_with_fallback(payload, headers, kind, extractor, "hook-test");
         assert!(event.tool_call_id.starts_with("tool-"));
         assert_eq!(event.tool_name, "unknown_tool");
         assert_eq!(event.arguments, json!(null));
