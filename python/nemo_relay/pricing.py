@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pricing plugin configuration helpers."""
+"""Model pricing plugin configuration helpers."""
 
 from __future__ import annotations
 

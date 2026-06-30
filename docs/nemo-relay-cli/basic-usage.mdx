@@ -177,18 +177,18 @@ enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
-## Add Pricing For Cost Estimates
+## Add Model Pricing for Cost Estimates
 
-Pricing is configured with the same `plugins.toml` discovery path as
+Model pricing is configured with the same `plugins.toml` discovery path as
 Observability. The configured sources apply to transparent agent runs,
 standalone gateway runs, and evals or custom agents that initialize the same
 gateway plugin config. Framework patches, harnesses, and custom integrations do
-not need their own pricing logic when they emit managed LLM calls with response
-codecs: Relay attaches cost to the annotated response when the provider reports
-cost or when a configured pricing source matches the response model and token
-usage.
+not need their own model pricing logic when they emit managed LLM calls with
+response codecs: Relay attaches cost to the annotated response when the
+provider reports cost or when a configured model pricing source matches the
+response model and token usage.
 
-Create a Relay pricing catalog JSON file:
+Create a Relay model pricing catalog JSON file:
 
 ```json
 {
@@ -218,43 +218,44 @@ Create a Relay pricing catalog JSON file:
 Validate and add the file-backed source:
 
 ```bash
-nemo-relay pricing validate /path/to/pricing.json
-nemo-relay pricing init --project
-nemo-relay pricing add-source /path/to/pricing.json --project
+nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing init --project
+nemo-relay model-pricing add-source /path/to/pricing.json --project
 ```
 
 Use `--user` instead of `--project` for a device-wide user config, or
-`--global` for `/etc/nemo-relay/plugins.toml`. `pricing add-source` prepends the
-source by default, so the new file becomes the highest-priority source for that
-scope. Use `--append` to add it as a lower-priority fallback.
+`--global` for `/etc/nemo-relay/plugins.toml`. `model-pricing add-source`
+prepends the source by default, so the new file becomes the highest-priority
+source for that scope. Use `--append` to add it as a lower-priority fallback.
 
 Resolve a model before running an agent:
 
 ```bash
-nemo-relay pricing resolve gpt-4o-mini \
+nemo-relay model-pricing resolve gpt-4o-mini \
   --provider openai \
   --prompt-tokens 1000 \
   --completion-tokens 500
 ```
 
-`pricing resolve` prints the source that won, the matched provider/model, and an
-estimated total when token counts are supplied. Use it to debug overlapping
-fleet, project, and user pricing files.
+`model-pricing resolve` prints the source that won, the matched provider/model,
+and an estimated total when token counts are supplied. Use it to debug
+overlapping fleet, project, and user model pricing files.
 
-Run doctor to validate the active pricing sources alongside exporter checks:
+Run doctor to validate the active model pricing sources alongside exporter
+checks:
 
 ```bash
 nemo-relay doctor codex
 ```
 
-Doctor fails when an enabled pricing source is unreadable or contains an invalid
-catalog, and it reports passing sources as `Pricing source`.
+Doctor fails when an enabled model pricing source is unreadable or contains an
+invalid catalog, and it reports passing sources as `Model pricing source`.
 
 Relay does not ship a canonical price catalog. Unknown models and missing token
 fields leave cost absent instead of defaulting to zero. For the catalog schema,
-provider-aware lookup behavior, threshold pricing, and custom `PricingSource`
-integrations, see
-[Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+provider-aware lookup behavior, threshold-based model pricing, and custom
+`PricingSource` integrations, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
 
 Transparent runs always bind the managed gateway to `127.0.0.1:0`. The selected
 port is discovered by the wrapper and exposed to hooks through

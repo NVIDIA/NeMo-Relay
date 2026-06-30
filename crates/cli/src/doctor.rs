@@ -784,7 +784,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
         .find(|component| component.kind == PRICING_PLUGIN_KIND)
     else {
         checks.push(Check {
-            name: "Pricing",
+            name: "Model pricing",
             status: Status::Info,
             details: "component not configured".into(),
         });
@@ -793,7 +793,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
 
     if !component.enabled {
         checks.push(Check {
-            name: "Pricing",
+            name: "Model pricing",
             status: Status::Info,
             details: "component disabled".into(),
         });
@@ -805,7 +805,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
             Ok(config) => config,
             Err(error) => {
                 checks.push(Check {
-                    name: "Pricing",
+                    name: "Model pricing",
                     status: Status::Fail,
                     details: format!("invalid config: {error}"),
                 });
@@ -815,7 +815,7 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
 
     if config.sources.is_empty() {
         checks.push(Check {
-            name: "Pricing",
+            name: "Model pricing",
             status: Status::Info,
             details: "component configured with no sources".into(),
         });
@@ -830,14 +830,14 @@ fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &Plu
 fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
     match source {
         PricingSourceConfig::Inline { catalog } => Check {
-            name: "Pricing source",
+            name: "Model pricing source",
             status: Status::Pass,
             details: format!("inline:{index} valid ({} entries)", catalog.entries.len()),
         },
         PricingSourceConfig::File { path } => match std::fs::read_to_string(path) {
             Ok(raw) => match PricingCatalog::from_json_str(&raw) {
                 Ok(catalog) => Check {
-                    name: "Pricing source",
+                    name: "Model pricing source",
                     status: Status::Pass,
                     details: format!(
                         "file:{} valid ({} entries)",
@@ -846,13 +846,13 @@ fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
                     ),
                 },
                 Err(error) => Check {
-                    name: "Pricing source",
+                    name: "Model pricing source",
                     status: Status::Fail,
                     details: format!("file:{} invalid catalog: {error}", path.display()),
                 },
             },
             Err(error) => Check {
-                name: "Pricing source",
+                name: "Model pricing source",
                 status: Status::Fail,
                 details: format!("file:{} unreadable: {error}", path.display()),
             },

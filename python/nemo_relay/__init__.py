@@ -17,7 +17,7 @@ The main entry points are:
 - ``nemo_relay.adaptive`` for adaptive component configuration helpers
 - ``nemo_relay.observability`` for observability component configuration helpers
 - ``nemo_relay.pii_redaction`` for PII redaction component configuration helpers
-- ``nemo_relay.pricing`` for pricing component configuration helpers
+- ``nemo_relay.pricing`` for model pricing component configuration helpers
 
 Top-level exports also include:
 

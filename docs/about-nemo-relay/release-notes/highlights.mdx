@@ -11,16 +11,16 @@ documentation set.
 
 ## NVIDIA NeMo Relay 0.4
 
-NVIDIA NeMo Relay 0.4 adds host plugin installation, first-party PII redaction, local
-Guardrails execution, pricing-aware observability, streaming raw-event export,
-and stronger coding-agent trace fidelity.
+NVIDIA NeMo Relay 0.4 adds host plugin installation, first-party PII redaction,
+local Guardrails execution, observability with model pricing, streaming
+raw-event export, and stronger coding-agent trace fidelity.
 
 ### Compatibility Notes
 
 - The Python-only NeMo Guardrails example plugin was removed. Applications
   should use the built-in `nemo_guardrails` component instead.
-- Pricing estimates require an inline, file-backed, or embedding-provided
-  pricing source. NeMo Relay does not ship provider price data by default.
+- Model pricing estimates require an inline, file-backed, or embedding-provided
+  model pricing source. NeMo Relay does not ship provider price data by default.
 - Local NeMo Guardrails mode requires Python 3.11 or newer and
   `nemoguardrails==0.22.0` in the runtime environment.
 
@@ -32,7 +32,7 @@ and stronger coding-agent trace fidelity.
   NeMo Relay through native host plugin mechanisms.
 - Layered code-driven plugin configuration over materialized global, project,
   and user plugin files while preserving documented file precedence.
-- Added pricing source management commands for validating catalogs, adding
+- Added model pricing source management commands for validating catalogs, adding
   file-backed sources, and resolving model pricing.
 
 ### Guardrails And Redaction
@@ -49,7 +49,7 @@ and stronger coding-agent trace fidelity.
 - Added ATOF streaming endpoints for HTTP POST, WebSocket, and long-lived
   NDJSON uploads.
 - Added ATIF HTTP storage export alongside S3-compatible storage destinations.
-- Added model-pricing lookup and cost layering for managed LLM responses.
+- Added model pricing lookup and cost layering for managed LLM responses.
 - Propagated normalized LLM cost into ATIF step metrics, OpenInference
   attributes, and OpenTelemetry attributes.
 - Set OpenTelemetry span status from NeMo Relay execution results.

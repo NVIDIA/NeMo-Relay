@@ -13,7 +13,7 @@ tag-specific notes.
 ## Current Release
 
 NeMo Relay 0.4 focuses on host plugin installation, first-party PII redaction,
-local NeMo Guardrails execution, pricing-aware LLM response annotations,
+local NeMo Guardrails execution, LLM response annotations with model pricing,
 streaming raw ATOF export, remote ATIF storage, and stronger coding-agent trace
 fidelity.
 
@@ -21,8 +21,8 @@ The most important compatibility notes are:
 
 - The Python-only NeMo Guardrails example plugin has been removed. Use the
   built-in `nemo_guardrails` component for supported Guardrails integration.
-- Pricing estimates require configured pricing sources. NeMo Relay does not
-  ship provider price data by default.
+- Model pricing estimates require configured model pricing sources. NeMo Relay
+  does not ship provider price data by default.
 - Local NeMo Guardrails mode depends on Python 3.11 or newer and an available
   `nemoguardrails` runtime.
 - Node.js 24 or newer remains the minimum supported Node.js version.
@@ -46,7 +46,7 @@ This release includes:
   and user plugin files.
 - First-party PII redaction plugin helpers across Rust, Python, Node.js, and
   WebAssembly surfaces.
-- Model-pricing catalogs and LLM cost annotations that propagate into ATIF,
+- Model pricing catalogs and LLM cost annotations that propagate into ATIF,
   OpenInference, and OpenTelemetry output.
 - ATOF streaming endpoints for HTTP POST, WebSocket, and NDJSON collectors.
 - ATIF remote storage support for HTTP endpoints in addition to S3-compatible
@@ -62,7 +62,7 @@ For the major 0.4 additions, start with:
 - [Observability Plugin](/observability-plugin/about)
 - [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof)
 - [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif)
-- [Provider Response Codecs And Pricing](/integrate-into-frameworks/provider-response-codecs)
+- [Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs)
 - [NeMo Guardrails Plugin](/nemo-guardrails-plugin/about)
 - [PII Redaction API Reference](/reference/api/python-library-reference/pii-redaction)
 - [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin)

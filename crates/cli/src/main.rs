@@ -14,10 +14,10 @@ mod gateway;
 mod installer;
 mod launcher;
 mod model;
+mod model_pricing;
 mod plugin_install;
 mod plugin_shim;
 mod plugins;
-mod pricing;
 mod server;
 mod session;
 mod setup;
@@ -85,7 +85,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         }
         Command::Config(command) => run_config(command).await,
         Command::Plugins(command) => run_plugins(command, server),
-        Command::Pricing(command) => run_pricing(command),
+        Command::ModelPricing(command) => run_pricing(command),
         Command::Doctor(command) => run_doctor(command).await,
         Command::Agents(command) => doctor::run_agents(command.json).await,
         Command::Completions(command) => run_completions(command),
@@ -140,10 +140,10 @@ fn run_plugins(command: PluginsCommand, server: &ServerArgs) -> Result<ExitCode,
 
 fn run_pricing(command: PricingCommand) -> Result<ExitCode, error::CliError> {
     match command.command {
-        PricingSubcommand::Validate(command) => pricing::validate(command)?,
-        PricingSubcommand::Init(command) => pricing::init(command)?,
-        PricingSubcommand::AddSource(command) => pricing::add_source(command)?,
-        PricingSubcommand::Resolve(command) => pricing::resolve(command)?,
+        PricingSubcommand::Validate(command) => model_pricing::validate(command)?,
+        PricingSubcommand::Init(command) => model_pricing::init(command)?,
+        PricingSubcommand::AddSource(command) => model_pricing::add_source(command)?,
+        PricingSubcommand::Resolve(command) => model_pricing::resolve(command)?,
     }
     Ok(ExitCode::SUCCESS)
 }

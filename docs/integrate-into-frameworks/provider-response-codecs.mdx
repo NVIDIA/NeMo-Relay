@@ -1,5 +1,5 @@
 ---
-title: "Provider Response Codecs"
+title: "Provider Response Codecs and Model Pricing"
 description: ""
 position: 8
 ---
@@ -56,24 +56,26 @@ available:
 
 - The decoded response includes `model`.
 - The managed LLM call name identifies the provider or route, such as `openai`,
-  `anthropic`, or `azure/openai`, when provider-specific pricing is needed.
+  `anthropic`, or `azure/openai`, when provider-specific model pricing is needed.
 - The decoded response includes prompt and/or completion token usage.
-- Relay has an explicit pricing entry for that model or alias.
+- Relay has an explicit model pricing entry for that model or alias.
 
-Pricing estimates carry `pricing_provider`, `pricing_model`, `pricing_as_of`,
-`pricing_source`, and `currency` metadata so stale pricing can be audited
-without failing response decoding. Normalized cost uses currency-neutral amount
-fields such as `total`, `input`, `output`, `cache_read`, and `cache_write`.
+Model pricing estimates carry `pricing_provider`, `pricing_model`,
+`pricing_as_of`, `pricing_source`, and `currency` metadata so stale model
+pricing can be audited without failing response decoding. Normalized cost uses
+currency-neutral amount fields such as `total`, `input`, `output`,
+`cache_read`, and `cache_write`.
 Unknown model pricing and missing token data are non-fatal: Relay omits the cost
 field and still exports token metrics and response annotations.
 
-Relay resolves pricing through an active `PricingResolver` source chain. Provider
-or framework-reported cost remains authoritative; the resolver is used only when
-`Usage.cost` is missing. Relay does not ship provider price data by default:
-estimates require a configured inline, file, or embedding-provided pricing
-source. With no configured source, every model is treated as unknown for pricing.
+Relay resolves model pricing through an active `PricingResolver` source chain.
+Provider- or framework-reported cost remains authoritative; the resolver is
+used only when `Usage.cost` is missing. Relay does not ship provider price data
+by default: estimates require a configured inline, file, or embedding-provided
+model pricing source. With no configured source, every model is treated as
+unknown for model pricing.
 
-Pricing is runtime state, not a CLI-only feature. Any host that initializes
+Model pricing is runtime state, not a CLI-only feature. Any host that initializes
 Relay plugins can activate the built-in `pricing` component before it runs
 managed LLM calls. This includes application code, eval harnesses, custom
 agents, framework integrations, and third-party patches. The CLI commands below
@@ -83,7 +85,7 @@ the same component config directly through the plugin APIs.
 Source precedence is deployment controlled:
 
 1. Project or application overrides.
-2. User/global device pricing.
+2. User/global device model pricing.
 3. Enterprise-managed sources, such as a remotely synced file or a service
    backed by a database.
 
@@ -92,7 +94,7 @@ files in precedence order. In discovered `plugins.toml` config, system config
 loads first, project config loads next, and user config loads last. For the
 `pricing` component, higher-priority `sources` are prepended instead of
 replacing lower-priority sources, so a user override can win for one model while
-enterprise or fleet pricing remains available for everything else:
+enterprise or fleet model pricing remains available for everything else:
 
 ```toml
 [[components]]
@@ -117,7 +119,7 @@ Each catalog entry declares:
 - `currency`, defaulting to `USD`.
 - `unit`, defaulting to `per_token`. Relay estimates only `per_token` entries in this version; `per_request`, `per_second`, and `gpu_hour` are representable for future source integrations but are not estimated.
 - `rates` per one million input, output, cache-read, and cache-write tokens for flat `per_token` entries.
-- `rate_schedule` for data-driven threshold pricing, such as models whose full-request input/output rates change after a prompt-token threshold.
+- `rate_schedule` for data-driven threshold-based model pricing, such as models whose full-request input/output rates change after a prompt-token threshold.
 - `prompt_cache.read_accounting`, which tells Relay whether cache-read tokens are already included in prompt tokens.
 - `pricing_as_of` and `pricing_source` for auditability.
 
@@ -127,35 +129,35 @@ appear under distinct providers, such as `openai/gpt-4o-mini` and
 `azure/openai/gpt-4o-mini`. Adding a model should be a catalog/source update
 plus tests; it should not require adding another Rust `match` arm.
 
-Use the CLI to validate catalog files and manage file-backed pricing sources:
+Use the CLI to validate catalog files and manage file-backed model pricing sources:
 
 ```bash
-nemo-relay pricing validate /path/to/pricing.json
-nemo-relay pricing init --project
-nemo-relay pricing add-source /path/to/pricing.json --project
-nemo-relay pricing resolve gpt-4o-mini --provider openai --prompt-tokens 1000 --completion-tokens 500
+nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing init --project
+nemo-relay model-pricing add-source /path/to/pricing.json --project
+nemo-relay model-pricing resolve gpt-4o-mini --provider openai --prompt-tokens 1000 --completion-tokens 500
 ```
 
-`pricing init` creates or enables the `pricing` plugin component in the selected
-`plugins.toml`. The initialized component has an empty `sources` list; use
-`pricing add-source` or an inline config edit to provide pricing data.
+`model-pricing init` creates or enables the `pricing` plugin component in the
+selected `plugins.toml`. The initialized component has an empty `sources` list;
+use `model-pricing add-source` or an inline config edit to provide model pricing data.
 
-`pricing add-source` validates the referenced JSON catalog before updating
-`plugins.toml`. It creates the pricing component if needed and prepends the new
+`model-pricing add-source` validates the referenced JSON catalog before updating
+`plugins.toml`. It creates the `pricing` component if needed and prepends the new
 file source by default, making it the highest-priority source in that scope. Use
 `--append` when the file should be a lower-priority fallback. Both commands
 default to user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`; pass
 `--project` for `.nemo-relay/plugins.toml` or `--global` for
 `/etc/nemo-relay/plugins.toml`.
 
-`pricing resolve` uses the same discovered config path as the gateway. It
+`model-pricing resolve` uses the same discovered config path as the gateway. It
 reports the winning catalog source, matched provider/model, and, when token
 counts are supplied, the estimated total cost. The source line is one of
 `file:<path>` or `inline:<index>`, which makes overlapping project/user/fleet
 entries debuggable. This is a dry diagnostic command; it does not mutate
 configuration.
 
-`nemo-relay doctor` also validates enabled pricing sources and reports missing,
+`nemo-relay doctor` also validates enabled model pricing sources and reports missing,
 unreadable, or invalid catalogs before the gateway starts.
 
 Model lookup is provider-aware and route-aware. Relay uses the managed LLM call
@@ -165,10 +167,10 @@ example, a call named `azure/openai` with response `model = "gpt-4o-mini"` tries
 `azure/openai/gpt-4o-mini` before generic `gpt-4o-mini`. If the model string is
 itself routed, such as `azure/openai/gpt-4o-mini`, Relay can infer
 `azure/openai` for the terminal model before trying slash-delimited model-only
-suffixes. This keeps route-specific enterprise pricing authoritative when
+suffixes. This keeps route-specific enterprise model pricing authoritative when
 configured while still allowing generic model pricing to apply to routed names.
 
-For threshold pricing, use `rate_schedule.type = "prompt_token_threshold"`.
+For threshold-based model pricing, use `rate_schedule.type = "prompt_token_threshold"`.
 Relay selects exactly one tier from `prompt_tokens` and applies that tier to the
 full request; it does not price only the overflow tokens at the higher rate.
 This matches providers that publish "short context" and "long context" prices
@@ -210,19 +212,19 @@ entry, Relay omits the estimate instead of guessing.
 }
 ```
 
-Database-backed or remote pricing should be implemented as a source that returns
-a validated `PricingCatalog` snapshot to Relay. Keep database queries, service
-auth, refresh cadence, and caching outside the LLM response hot path. A fleet
-deployment can refresh `/etc/nemo-relay/pricing.json` from an IT-managed service,
-or embed a custom Rust `PricingSource` that reads from a database and installs a
-`PricingResolver` snapshot during process startup.
+Database-backed or remote model pricing should be implemented as a source that
+returns a validated `PricingCatalog` snapshot to Relay. Keep database queries,
+service auth, refresh cadence, and caching outside the LLM response hot path. A
+fleet deployment can refresh `/etc/nemo-relay/pricing.json` from an IT-managed
+service, or embed a custom Rust `PricingSource` that reads from a database and
+installs a `PricingResolver` snapshot during process startup.
 
-External pricing catalogs should be converted into Relay catalog JSON
+External model pricing catalogs should be converted into Relay catalog JSON
 out-of-band and then loaded through a `file` source, unless the embedding
 application installs a custom Rust `PricingSource` directly.
 
-Embedded applications and eval harnesses can initialize the built-in pricing
-component directly:
+Embedded applications and eval harnesses can initialize the built-in `pricing`
+component for model pricing directly:
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -297,16 +299,16 @@ initialize_plugins(config).await?;
 </Tab>
 </Tabs>
 
-Initialize pricing once during process or harness startup, before the managed
-LLM calls whose responses should be cost-annotated. In tests or reusable
-harnesses, clear plugin configuration during teardown if later cases need a
-different resolver.
+Initialize model pricing once during process or harness startup, before the
+managed LLM calls whose responses should be cost-annotated. In tests or
+reusable harnesses, clear plugin configuration during teardown if later cases
+need a different resolver.
 
 Built-in response codecs attach estimated cost directly to
-`AnnotatedLlmResponse.usage.cost` when pricing is known. Managed LLM wrappers
-also enrich decoded custom response-codec output when the custom codec returns
-`model` and `usage` but omits `usage.cost`. Existing cost values are preserved,
-so provider-reported cost remains authoritative in the annotation.
+`AnnotatedLlmResponse.usage.cost` when model pricing is known. Managed LLM
+wrappers also enrich decoded custom response-codec output when the custom codec
+returns `model` and `usage` but omits `usage.cost`. Existing cost values are
+preserved, so provider-reported cost remains authoritative in the annotation.
 
 Observability exporters prefer an explicit cost in the raw payload, then
 normalized `Usage.cost`, then a derived estimate from model pricing. When cost is

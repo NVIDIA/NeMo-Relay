@@ -3,7 +3,7 @@
 
 //! Data-driven LLM model pricing used to layer cost estimates onto usage.
 //!
-//! Pricing is deliberately separate from response normalization so adding
+//! Model pricing is deliberately separate from response normalization so adding
 //! providers, aliases, or cache-accounting rules does not require editing
 //! [`AnnotatedLlmResponse`](super::response::AnnotatedLlmResponse).
 
