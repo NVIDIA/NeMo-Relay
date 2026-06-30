@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import * as plugin from '../pkg/plugin.js';
-import * as pricing from '../pkg/pricing.js';
+import * as pricing from '../pkg/model_pricing.js';
 
 function pricedEntry(overrides = {}) {
   return pricing.catalogEntry({
@@ -18,7 +18,7 @@ function pricedEntry(overrides = {}) {
   });
 }
 
-test('WebAssembly pricing wrappers expose helper defaults', () => {
+test('WebAssembly model pricing wrappers expose helper defaults', () => {
   assert.deepEqual(pricing.defaultConfig(), { sources: [] });
   assert.deepEqual(pricing.tokenRates(), {
     input_per_million: 0,
@@ -33,7 +33,7 @@ test('WebAssembly pricing wrappers expose helper defaults', () => {
   });
 });
 
-test('WebAssembly pricing wrappers build component specs and validate config', () => {
+test('WebAssembly model pricing wrappers build component specs and validate config', () => {
   assert.equal(plugin.listKinds().includes(pricing.PRICING_PLUGIN_KIND), true);
 
   const component = pricing.ComponentSpec(

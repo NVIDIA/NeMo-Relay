@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Built-in model pricing plugin component.
+//! Built-in model pricing plugin component module.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -54,7 +54,7 @@ impl Plugin for PricingPlugin {
                         code: "pricing.invalid_config".into(),
                         component: Some(PRICING_PLUGIN_KIND.into()),
                         field: None,
-                        message: format!("invalid pricing config: {error}"),
+                        message: format!("invalid model pricing config: {error}"),
                     }];
                 }
             };
@@ -65,7 +65,7 @@ impl Plugin for PricingPlugin {
                 code: "pricing.invalid_config".into(),
                 component: Some(PRICING_PLUGIN_KIND.into()),
                 field: None,
-                message: format!("invalid pricing config: {error}"),
+                message: format!("invalid model pricing config: {error}"),
             }],
         }
     }

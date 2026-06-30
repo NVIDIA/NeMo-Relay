@@ -4,7 +4,7 @@
 import type { Json, JsonObject } from './index';
 import type { ComponentSpec as PluginComponentSpec, ConfigReport } from './plugin';
 
-/** Plugin kind used by the pricing component. */
+/** Plugin kind used by the model pricing component. */
 export declare const PRICING_PLUGIN_KIND = 'pricing';
 
 /** Token rates expressed per one million tokens. */
@@ -48,19 +48,19 @@ export interface ModelPricing {
   pricing_source: string;
 }
 
-/** Inline pricing catalog payload. */
+/** Inline model pricing catalog payload. */
 export interface PricingCatalog {
   version?: number;
   entries: Array<ModelPricing | JsonObject>;
 }
 
-/** Inline pricing source config. */
+/** Inline model pricing source config. */
 export interface InlineSource {
   type: 'inline';
   catalog: PricingCatalog | JsonObject;
 }
 
-/** File-backed pricing source config. */
+/** File-backed model pricing source config. */
 export interface FileSource {
   type: 'file';
   path: string;
@@ -69,45 +69,48 @@ export interface FileSource {
 /** Pricing source config. */
 export type PricingSource = InlineSource | FileSource | JsonObject;
 
-/** Canonical pricing plugin config. */
+/** Canonical model pricing plugin config. */
 export interface PricingConfig {
   sources?: PricingSource[];
 }
 
-/** Create a default pricing component config. */
+/** Create a default model pricing component config. */
 export declare function defaultConfig(): PricingConfig;
-/** Create per-token pricing rates with defaults applied. */
+/** Create per-token model pricing rates with defaults applied. */
 export declare function tokenRates(config?: Partial<TokenPricingRates>): TokenPricingRates;
 /** Create prompt-cache accounting settings with defaults applied. */
 export declare function promptCache(config?: Partial<PromptCachePricing>): PromptCachePricing;
 /** Create one prompt-token threshold rate tier. */
-export declare function tokenRateTier(rates: TokenPricingRates, config?: Omit<Partial<TokenRateTier>, 'rates'>): TokenRateTier;
+export declare function tokenRateTier(
+  rates: TokenPricingRates,
+  config?: Omit<Partial<TokenRateTier>, 'rates'>,
+): TokenRateTier;
 /** Create a prompt-token threshold rate schedule. */
 export declare function promptTokenThresholdRateSchedule(
   tiers?: TokenRateTier[],
   config?: Omit<Partial<PromptTokenThresholdRateSchedule>, 'type' | 'tiers'>,
 ): PromptTokenThresholdRateSchedule;
-/** Create one pricing catalog entry with defaults applied. */
+/** Create one model pricing catalog entry with defaults applied. */
 export declare function catalogEntry(config: Omit<ModelPricing, 'prompt_cache'> & Partial<ModelPricing>): ModelPricing;
-/** Create an inline pricing catalog payload. */
+/** Create an inline model pricing catalog payload. */
 export declare function inlineCatalog(
   entries?: Array<ModelPricing | JsonObject>,
   config?: Omit<Partial<PricingCatalog>, 'entries'>,
 ): PricingCatalog;
-/** Create an inline pricing source. */
+/** Create an inline model pricing source. */
 export declare function inlineSource(catalog: PricingCatalog | JsonObject): InlineSource;
-/** Create a file-backed pricing source. */
+/** Create a file-backed model pricing source. */
 export declare function fileSource(path: string): FileSource;
-/** Create a pricing config from ordered sources. */
+/** Create a model pricing config from ordered sources. */
 export declare function pricingConfig(sources?: PricingSource[]): PricingConfig;
-/** Wrap pricing config as a top-level plugin component. */
+/** Wrap model pricing config as a top-level plugin component. */
 export declare function ComponentSpec(
   config: PricingConfig | JsonObject,
   options?: {
     enabled?: boolean;
   },
 ): PluginComponentSpec;
-/** Validate a pricing config document without activating it. */
+/** Validate a model pricing config document without activating it. */
 export declare function validateConfig(config: PricingConfig | JsonObject): ConfigReport;
 
 export type { Json };

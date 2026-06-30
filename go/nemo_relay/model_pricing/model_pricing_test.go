@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package pricing
+package model_pricing
 
 import (
 	"encoding/json"
@@ -21,7 +21,7 @@ func TestPricingPackageHelpers(t *testing.T) {
 	}
 	component := NewComponentSpec(config).PluginComponent()
 	if component.Kind != PluginKind {
-		t.Fatalf("unexpected pricing component kind: %#v", component)
+		t.Fatalf("unexpected model pricing component kind: %#v", component)
 	}
 
 	report, err := ValidateConfig(config)
@@ -91,6 +91,6 @@ func TestPricingPackageSourceAndRateHelpers(t *testing.T) {
 	config := NewConfig()
 	component := Component(config)
 	if component.Kind != PluginKind || !component.Enabled {
-		t.Fatalf("unexpected pricing component: %#v", component)
+		t.Fatalf("unexpected model pricing component: %#v", component)
 	}
 }

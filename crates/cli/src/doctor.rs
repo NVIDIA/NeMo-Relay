@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use futures_util::SinkExt;
 use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
-use nemo_relay::codec::pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
+use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;

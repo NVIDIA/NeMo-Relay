@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use nemo_relay::codec::pricing::{
+use nemo_relay::codec::model_pricing::{
     ModelPricing, PricingCatalog, PricingConfig, PricingSourceConfig,
 };
 use nemo_relay::codec::response::Usage;
@@ -278,5 +278,5 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/pricing_tests.rs"]
+#[path = "../tests/coverage/model_pricing_tests.rs"]
 mod tests;

@@ -291,7 +291,7 @@ let config: PluginConfig = serde_json::from_value(json!({
 
 let report = validate_plugin_config(&config);
 if report.has_errors() {
-    return Err("invalid pricing plugin config".into());
+    return Err("invalid model pricing plugin config".into());
 }
 
 initialize_plugins(config).await?;

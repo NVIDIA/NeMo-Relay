@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const plugin = require('../plugin.js');
-const pricing = require('../pricing.js');
+const pricing = require('../model_pricing.js');
 
 function pricedEntry(overrides = {}) {
   return pricing.catalogEntry({
@@ -20,7 +20,7 @@ function pricedEntry(overrides = {}) {
   });
 }
 
-describe('pricing plugin helpers', () => {
+describe('model pricing plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
     assert.deepEqual(pricing.defaultConfig(), { sources: [] });
     assert.deepEqual(pricing.tokenRates(), {
