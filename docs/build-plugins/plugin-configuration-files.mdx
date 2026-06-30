@@ -260,7 +260,11 @@ editor:
 - `required` identifies fields that must be configured.
 - `writeOnly: true` masks a string value in menus and previews and uses hidden
   terminal input for replacements. An existing value remains unchanged unless
-  you explicitly replace or clear it.
+  you explicitly replace or clear it. `writeOnly` fields under
+  `dependentSchemas`, Draft 7 `dependencies`, `unevaluatedProperties`, or
+  `unevaluatedItems` are not supported because their applicability depends on
+  runtime evaluation state; the editor rejects schemas that use those
+  combinations instead of risking an unmasked secret.
 - `x-nemo-relay-order` optionally lists properties in editor order. Properties
   that are not listed follow in alphabetical order.
 

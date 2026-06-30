@@ -839,6 +839,7 @@ enum SecretSegment {
     Property(String),
     Any,
     Pattern(SecretPropertyPattern),
+    UnmatchedProperties(SecretUnmatchedProperties),
     Index(usize),
     Tail(usize),
 }
@@ -870,6 +871,24 @@ impl Ord for SecretPropertyPattern {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SecretUnmatchedProperties {
+    properties: Vec<String>,
+    patterns: Vec<SecretPropertyPattern>,
+}
+
+impl SecretUnmatchedProperties {
+    fn matches(&self, property: &str) -> bool {
+        self.properties
+            .binary_search_by(|candidate| candidate.as_str().cmp(property))
+            .is_err()
+            && !self
+                .patterns
+                .iter()
+                .any(|pattern| pattern_matches(pattern, property))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct SecretPattern(Vec<SecretSegment>);
 
 impl SecretPattern {
@@ -884,6 +903,7 @@ impl SecretPattern {
                 SecretSegment::Pattern(pattern) => {
                     pointer.push_str(&format!("~pattern({})", pattern.source))
                 }
+                SecretSegment::UnmatchedProperties(_) => pointer.push_str("~additional"),
                 SecretSegment::Index(index) => pointer.push_str(&index.to_string()),
                 SecretSegment::Tail(start) => pointer.push_str(&format!("~tail({start})")),
             }
@@ -921,6 +941,15 @@ impl SecretPattern {
                 if let Value::Object(object) = value {
                     for (key, child) in object {
                         if pattern_matches(pattern, key) {
+                            self.redact(child, offset + 1);
+                        }
+                    }
+                }
+            }
+            SecretSegment::UnmatchedProperties(selector) => {
+                if let Value::Object(object) = value {
+                    for (key, child) in object {
+                        if selector.matches(key) {
                             self.redact(child, offset + 1);
                         }
                     }
@@ -998,6 +1027,15 @@ impl SecretPattern {
                     }
                 }
             }
+            SecretSegment::UnmatchedProperties(selector) => {
+                if let Value::Object(object) = value {
+                    for (key, child) in object {
+                        if selector.matches(key) {
+                            self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                        }
+                    }
+                }
+            }
             SecretSegment::Index(index) => {
                 if let Some(child) = value.get_mut(*index) {
                     self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
@@ -1023,6 +1061,7 @@ impl SecretPattern {
                     SecretSegment::Property(expected) => expected == property,
                     SecretSegment::Any => true,
                     SecretSegment::Pattern(pattern) => pattern_matches(pattern, property),
+                    SecretSegment::UnmatchedProperties(selector) => selector.matches(property),
                     SecretSegment::Index(index) => property.parse::<usize>() == Ok(*index),
                     SecretSegment::Tail(start) => {
                         property.parse::<usize>().is_ok_and(|index| index >= *start)
@@ -1045,6 +1084,10 @@ impl SecretPattern {
                     (SecretSegment::Pattern(pattern), SecretInstanceSegment::Property(actual)) => {
                         pattern_matches(pattern, actual)
                     }
+                    (
+                        SecretSegment::UnmatchedProperties(selector),
+                        SecretInstanceSegment::Property(actual),
+                    ) => selector.matches(actual),
                     (SecretSegment::Index(expected), SecretInstanceSegment::Index(actual)) => {
                         expected == actual
                     }
@@ -1162,37 +1205,66 @@ fn discover_secret_patterns(
         return Ok(());
     };
 
-    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+    let properties = object.get("properties").and_then(Value::as_object);
+    if let Some(properties) = properties {
         for (property, child_schema) in properties {
             let mut child_path = instance_path.to_vec();
             child_path.push(SecretSegment::Property(property.clone()));
             discover_secret_patterns(root, child_schema, &child_path, &references, output)?;
         }
     }
-    if let Some(additional) = object.get("additionalProperties")
-        && additional.is_object()
-    {
-        let mut child_path = instance_path.to_vec();
-        child_path.push(SecretSegment::Any);
-        discover_secret_patterns(root, additional, &child_path, &references, output)?;
-    }
+
+    let mut pattern_schemas = Vec::new();
     if let Some(patterns) = object.get("patternProperties").and_then(Value::as_object) {
         for (pattern, child_schema) in patterns {
-            let mut child_path = instance_path.to_vec();
             let matcher = regex::Regex::new(pattern).map_err(|error| {
                 format!("unsupported patternProperties expression {pattern:?}: {error}")
             })?;
-            child_path.push(SecretSegment::Pattern(SecretPropertyPattern {
-                source: pattern.clone(),
-                matcher,
-            }));
-            discover_secret_patterns(root, child_schema, &child_path, &references, output)?;
+            pattern_schemas.push((
+                SecretPropertyPattern {
+                    source: pattern.clone(),
+                    matcher,
+                },
+                child_schema,
+            ));
         }
+    }
+    pattern_schemas.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    if let Some(additional) = object.get("additionalProperties")
+        && additional.is_object()
+    {
+        let mut excluded_properties = properties
+            .into_iter()
+            .flat_map(|properties| properties.keys().cloned())
+            .collect::<Vec<_>>();
+        excluded_properties.sort();
+        let mut child_path = instance_path.to_vec();
+        child_path.push(SecretSegment::UnmatchedProperties(
+            SecretUnmatchedProperties {
+                properties: excluded_properties,
+                patterns: pattern_schemas
+                    .iter()
+                    .map(|(pattern, _)| pattern.clone())
+                    .collect(),
+            },
+        ));
+        discover_secret_patterns(root, additional, &child_path, &references, output)?;
+    }
+    for (pattern, child_schema) in pattern_schemas {
+        let mut child_path = instance_path.to_vec();
+        child_path.push(SecretSegment::Pattern(pattern));
+        discover_secret_patterns(root, child_schema, &child_path, &references, output)?;
     }
     if let Some(items) = object.get("items") {
         if items.is_object() {
             let mut child_path = instance_path.to_vec();
-            child_path.push(SecretSegment::Any);
+            match object.get("prefixItems").and_then(Value::as_array) {
+                Some(prefix_items) => {
+                    child_path.push(SecretSegment::Tail(prefix_items.len()));
+                }
+                None => child_path.push(SecretSegment::Any),
+            }
             discover_secret_patterns(root, items, &child_path, &references, output)?;
         } else if let Some(tuple_items) = items.as_array() {
             for (index, child_schema) in tuple_items.iter().enumerate() {
@@ -1237,7 +1309,51 @@ fn discover_secret_patterns(
         child_path.push(SecretSegment::Any);
         discover_secret_patterns(root, contains, &child_path, &references, output)?;
     }
+    for keyword in ["unevaluatedProperties", "unevaluatedItems"] {
+        if let Some(branch) = object.get(keyword)
+            && branch.is_object()
+        {
+            reject_write_only_under_applicator(root, keyword, branch, instance_path, &references)?;
+        }
+    }
+    for keyword in ["dependentSchemas", "dependencies"] {
+        if let Some(branches) = object.get(keyword).and_then(Value::as_object) {
+            for branch in branches.values().filter(|branch| branch.is_object()) {
+                reject_write_only_under_applicator(
+                    root,
+                    keyword,
+                    branch,
+                    instance_path,
+                    &references,
+                )?;
+            }
+        }
+    }
     Ok(())
+}
+
+fn reject_write_only_under_applicator(
+    root: &Value,
+    keyword: &str,
+    schema: &Value,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+) -> Result<(), String> {
+    let mut nested_patterns = Vec::new();
+    discover_secret_patterns(
+        root,
+        schema,
+        instance_path,
+        references,
+        &mut nested_patterns,
+    )?;
+    if nested_patterns.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "writeOnly fields under '{keyword}' are not supported for secret redaction"
+        ))
+    }
 }
 
 fn push_pointer(pointer: &str, segment: &str) -> String {
@@ -1651,6 +1767,138 @@ mod tests {
         assert!(loaded.has_secrets_at(&["patterned".to_owned()]));
         assert!(loaded.has_secrets_at(&["tuple".to_owned()]));
         assert!(loaded.has_secrets_at(&["contained".to_owned()]));
+    }
+
+    #[test]
+    fn secret_discovery_limits_additional_properties_and_items_to_unmatched_values() {
+        let loaded = load(&json!({
+            "$schema": DRAFT2020,
+            "type": "object",
+            "properties": {
+                "metadata": {
+                    "type": "object",
+                    "properties": {
+                        "known": {"type": "string"}
+                    },
+                    "patternProperties": {
+                        "^public_": {"type": "string"}
+                    },
+                    "additionalProperties": {"type": "string", "writeOnly": true}
+                },
+                "tuple": {
+                    "type": "array",
+                    "prefixItems": [
+                        {"type": "string"},
+                        {"type": "string", "writeOnly": true}
+                    ],
+                    "items": {"type": "string", "writeOnly": true}
+                }
+            }
+        }));
+        assert_eq!(
+            loaded.secret_paths(),
+            &["/metadata/~additional", "/tuple/1", "/tuple/~tail(2)"]
+        );
+
+        let config = json!({
+            "metadata": {
+                "known": "visible-known",
+                "public_name": "visible-pattern",
+                "token": "hidden-additional"
+            },
+            "tuple": ["visible-prefix", "hidden-prefix", "hidden-tail"]
+        });
+        assert_eq!(
+            loaded.redact(&config),
+            json!({
+                "metadata": {
+                    "known": "visible-known",
+                    "public_name": "visible-pattern",
+                    "token": REDACTED
+                },
+                "tuple": ["visible-prefix", REDACTED, REDACTED]
+            })
+        );
+
+        let (redacted, secrets) = loaded.redact_for_edit(&config);
+        assert_eq!(
+            loaded
+                .restore_edit_secrets(&redacted, &secrets)
+                .expect("restore precisely selected secrets"),
+            config
+        );
+    }
+
+    #[test]
+    fn rejects_write_only_under_evaluation_dependent_applicators() {
+        let cases = [
+            (
+                DRAFT2020,
+                "dependentSchemas",
+                json!({
+                    "dependentSchemas": {
+                        "mode": {
+                            "properties": {
+                                "token": {"type": "string", "writeOnly": true}
+                            }
+                        }
+                    }
+                }),
+            ),
+            (
+                DRAFT7,
+                "dependencies",
+                json!({
+                    "dependencies": {
+                        "mode": {
+                            "properties": {
+                                "token": {"type": "string", "writeOnly": true}
+                            }
+                        }
+                    }
+                }),
+            ),
+            (
+                DRAFT2020,
+                "unevaluatedProperties",
+                json!({
+                    "unevaluatedProperties": {"$ref": "#/$defs/secret"},
+                    "$defs": {
+                        "secret": {"type": "string", "writeOnly": true}
+                    }
+                }),
+            ),
+            (
+                DRAFT2020,
+                "unevaluatedItems",
+                json!({
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "prefixItems": [{"type": "string"}],
+                            "unevaluatedItems": {"type": "string", "writeOnly": true}
+                        }
+                    }
+                }),
+            ),
+        ];
+
+        for (draft, keyword, body) in cases {
+            let mut schema = json!({
+                "$schema": draft,
+                "type": "object"
+            });
+            schema
+                .as_object_mut()
+                .unwrap()
+                .extend(body.as_object().unwrap().clone());
+            let (_directory, path) = write_schema(&schema);
+            let error = PluginConfigSchema::load("acme.unsupported-secret", path)
+                .expect_err("reject applicator-dependent writeOnly field");
+            let message = error.to_string();
+            assert!(message.contains(keyword), "{message}");
+            assert!(message.contains("writeOnly"), "{message}");
+        }
     }
 
     #[test]

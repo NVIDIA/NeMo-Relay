@@ -526,6 +526,10 @@ fn component_field_clear_only_removes_optional_fields() {
     )
     .unwrap();
     assert!(pii_redaction.field_configured(input));
+    let EditableComponent::PiiRedaction(state) = &*pii_redaction else {
+        unreachable!();
+    };
+    assert!(!state.config.input);
     reset_component_menu_item(
         pii_redaction,
         Some(ComponentMenuAction::EditField(input_index)),
