@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-python-grpc-worker-example"
+version = "0.1.0"
+description = "Example Python gRPC worker plugin for NeMo Relay"
+requires-python = ">=3.11"
+dependencies = [
+  "nemo-relay-plugin>=0.5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nemo_relay_python_grpc_worker_example"]

@@ -55,6 +55,9 @@ dev = [
 ]
 
 test = [
+    # De Morgan form: exclude only when the platform is both Windows and ARM64.
+    "grpcio>=1.81.1,<2; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
+    "nemo-relay-plugin; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
     "opentelemetry-proto>=1.39,<2",
     "pydantic>=2",
     "pytest>=8",
@@ -98,24 +101,35 @@ auditwheel = true
 default-groups = ["dev", "test"]
 package = true
 
+[tool.uv.sources]
+nemo-relay-plugin = { workspace = true }
+
+[tool.uv.workspace]
+members = ["python/plugin"]
+
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
 asyncio_mode = "auto"
+pythonpath = ["python"]
 
 [tool.coverage.run]
 # Exclude integration tests from coverage, since we don't run these by default
-omit = ["python/nemo_relay/integrations/*"]
+omit = [
+    "python/nemo_relay/integrations/*",
+    "python/plugin/src/nemo_relay_plugin/_proto/*",
+]
 
 [tool.ty.analysis]
 # nemo_relay._native is a compiled Rust extension (built by maturin) that only
 # exists after `uv sync` / `pip install -e .`. Suppress unresolved-import for it.
 # LangChain, LangGraph, and Deep Agents are optional integration dependencies
 # which aren't installed by default.
-allowed-unresolved-imports = ["deepagents.**", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
+allowed-unresolved-imports = ["deepagents.**", "grpc", "langchain.**", "langchain_*.**", "langgraph.**", "nemo_relay._native", "pytest"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+extend-exclude = ["python/plugin/src/nemo_relay_plugin/_proto"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -124,4 +138,4 @@ quote-style = "double"
 select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["nemo_relay"]
+known-first-party = ["nemo_relay", "nemo_relay_plugin"]
