@@ -234,7 +234,10 @@ type LLMRequestInterceptOutcome struct {
 	PendingMarks     []PendingMarkSpec `json:"pending_marks"`
 }
 
-// LLMRequestInterceptFunc is a callback for LLM request intercepts.
+// LLMRequestInterceptFunc is a callback for LLM request intercepts. When
+// annotatedJSON is non-nil, request.Content is read-only, request.Headers may
+// be changed, and the returned annotation is authoritative for provider body
+// content. Without an annotation, the full request is writable.
 type LLMRequestInterceptFunc func(
 	name string,
 	request LLMRequestDTO,

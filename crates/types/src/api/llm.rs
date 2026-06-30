@@ -33,9 +33,16 @@ pub struct LlmRequest {
 /// Result of an LLM request intercept that can schedule lifecycle marks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LlmRequestInterceptOutcome {
-    /// Rewritten provider request.
+    /// Rewritten provider request when no request codec is active.
+    ///
+    /// With a request codec, callbacks may rewrite `headers`, but `content`
+    /// is read-only and provider-body changes must be made through
+    /// [`Self::annotated_request`].
     pub request: LlmRequest,
     /// Optional normalized request annotation to carry forward.
+    ///
+    /// This is required and authoritative for provider content when a request
+    /// codec is active. It remains optional when no request codec is active.
     #[serde(default)]
     pub annotated_request: Option<AnnotatedLlmRequest>,
     /// Ordered marks to emit after Relay creates and starts the LLM scope.

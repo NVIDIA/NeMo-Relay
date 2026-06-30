@@ -172,7 +172,9 @@ pub type NemoRelayCodecEncodeFn = Option<
 /// signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
 /// optionally the annotated request as a JSON C string (null if no Codec
 /// resolved). Writes one owned canonical outcome JSON string to
-/// `out_outcome_json`. Returns `NemoRelayStatus`.
+/// `out_outcome_json`. With a Codec, the outcome must preserve request content
+/// and return the annotation; only request headers and annotation fields are
+/// writable. Returns `NemoRelayStatus`.
 pub type NemoRelayLlmRequestInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,

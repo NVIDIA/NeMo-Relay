@@ -914,7 +914,9 @@ pub fn llm_request_intercepts(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_request_intercept_entries(&scope_locals)
     };
-    NemoRelayContextState::llm_request_intercepts_snapshot_chain(name, request, None, &entries)
+    NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+        name, request, None, &entries, false,
+    )
 }
 
 /// Run only the LLM conditional-execution guardrail chain.

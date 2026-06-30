@@ -21,12 +21,49 @@ includes all three fields. A pending mark contains only `name`, optional
 `category` and `category_profile`, and optional `data` and `metadata`. Relay
 owns event UUIDs, parent UUIDs, and timestamps.
 
+## Request Authority
+
+The provider-body source of truth depends only on whether a request codec is
+active:
+
+| Request codec | Provider body source | Header source |
+| --- | --- | --- |
+| No codec | `outcome.request.content` | `outcome.request.headers` |
+| Active codec | `outcome.annotated_request` | `outcome.request.headers` |
+
+With an active codec, `request.content` is read-only context. Every intercept
+must return an annotation and make provider-body changes through that
+annotation, including its flattened `extra` fields for provider-specific data.
+Relay rejects a changed raw body or missing annotation at the offending
+intercept before invoking later middleware or creating an LLM lifecycle.
+
+```mermaid
+flowchart TD
+    INPUT["Original LlmRequest"] --> CODEC{"Request codec active?"}
+
+    CODEC -->|No| RAWCHAIN["Run intercept chain"]
+    RAWCHAIN --> RAWPROVIDER["Provider receives outcome.request"]
+
+    CODEC -->|Yes| DECODE["Decode content into annotated_request"]
+    DECODE --> INTERCEPT["Invoke next intercept"]
+    INTERCEPT --> CHECKANN{"Annotation returned?"}
+    CHECKANN -->|No| FAIL["Fail before lifecycle"]
+    CHECKANN -->|Yes| CHECKRAW{"request.content unchanged?"}
+    CHECKRAW -->|No| FAIL
+    CHECKRAW -->|Yes| MORE{"More intercepts?"}
+    MORE -->|Yes| INTERCEPT
+    MORE -->|No| ENCODE["Encode final annotated_request"]
+    ENCODE --> HEADERS["Apply final request.headers"]
+    HEADERS --> PROVIDER["Provider receives one resolved LlmRequest"]
+```
+
 Python callbacks return `LLMRequestInterceptOutcome`; Rust callbacks return
 `LlmRequestInterceptOutcome`; Go callbacks return
 `LLMRequestInterceptOutcome`; and Node.js and WebAssembly callbacks return
 `{ request, annotated?, pendingMarks? }`. Public C callbacks write one owned
 canonical outcome JSON string. Native ABI v1 uses one host-owned outcome JSON
-string, and `grpc-v1` uses a `JsonEnvelope` whose schema is
+string. Rust and Python `grpc-v1` worker SDKs return their canonical outcome
+type in a `JsonEnvelope` whose schema is
 `nemo.relay.LlmRequestInterceptOutcome@1`.
 
 The standalone request-intercept helper returns the complete outcome but does
@@ -35,8 +72,9 @@ not emit its pending marks because it does not own an LLM lifecycle.
 ## Managed Lifecycle
 
 Managed execution runs all effective global and scope-local intercepts before
-creating the LLM handle. Each rewritten request and annotation feeds the next
-intercept, while pending marks append in middleware order. A breaking
+creating the LLM handle. Each accepted request/annotation pair feeds the next
+intercept under the authority rules above, while pending marks append in
+middleware order. A breaking
 intercept's marks are retained. If any intercept fails or its boundary result
 is malformed, Relay discards all accumulated marks and creates no LLM
 lifecycle.

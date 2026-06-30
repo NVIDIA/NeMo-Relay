@@ -14,11 +14,11 @@ use futures::StreamExt;
 use serde_json::json;
 use tokio_stream::Stream;
 
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::event::{Event, PendingMarkSpec, ScopeCategory};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry::{
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, register_llm_request_intercept,
@@ -361,9 +361,10 @@ async fn test_encode_runs_after_intercepts() {
         "modify_model",
         1,
         false,
-        Arc::new(|_name, req, annotated| {
+        Arc::new(|_name, mut req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("modified".into());
+            req.headers.insert("x-codec-route".into(), json!("blue"));
             Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req,
                 Some(ann),
@@ -402,9 +403,183 @@ async fn test_encode_runs_after_intercepts() {
     let captured_req = exec_request.lock().unwrap();
     let req = captured_req.as_ref().unwrap();
     assert_eq!(req.content["model"], json!("modified"));
+    assert_eq!(req.headers["x-codec-route"], json!("blue"));
 
     // Cleanup
     deregister_llm_request_intercept("modify_model").unwrap();
+}
+
+#[tokio::test]
+async fn test_codec_rejects_raw_content_mutation_before_lifecycle() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = events.clone();
+    register_subscriber(
+        "codec_raw_mutation_subscriber",
+        Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let later_intercept_called = Arc::new(Mutex::new(false));
+    register_llm_request_intercept(
+        "codec_raw_mutation",
+        1,
+        false,
+        Arc::new(|_name, mut request, annotated| {
+            request.content["model"] = json!("raw-model-edit");
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()))
+        }),
+    )
+    .unwrap();
+    let later_called = later_intercept_called.clone();
+    register_llm_request_intercept(
+        "codec_after_raw_mutation",
+        2,
+        false,
+        Arc::new(move |_name, request, annotated| {
+            *later_called.lock().unwrap() = true;
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(Mutex::new(false));
+    let called = provider_called.clone();
+    let provider: LlmExecutionNextFn = Arc::new(move |_request| {
+        *called.lock().unwrap() = true;
+        Box::pin(async { Ok(json!({"response": "unexpected"})) })
+    });
+    let (codec, _, encode_log) = make_tracking_codec("codec_raw_read_only");
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("test_llm")
+            .request(make_llm_request(json!({
+                "model": "original",
+                "messages": [{"role": "user", "content": "hello"}]
+            })))
+            .func(provider)
+            .codec(codec)
+            .build(),
+    )
+    .await
+    .expect_err("raw content mutation must fail on the codec path");
+
+    assert!(error.to_string().contains("request.content"));
+    assert!(!*later_intercept_called.lock().unwrap());
+    assert!(!*provider_called.lock().unwrap());
+    assert!(encode_log.lock().unwrap().is_empty());
+    assert!(captured_events_snapshot(&events).is_empty());
+
+    deregister_llm_request_intercept("codec_raw_mutation").unwrap();
+    deregister_llm_request_intercept("codec_after_raw_mutation").unwrap();
+    deregister_subscriber("codec_raw_mutation_subscriber").unwrap();
+}
+
+#[tokio::test]
+async fn test_codec_rejects_missing_annotation_before_lifecycle() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_llm_request_intercept(
+        "codec_missing_annotation",
+        1,
+        false,
+        Arc::new(|_name, request, _annotated| Ok(LlmRequestInterceptOutcome::new(request, None))),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(Mutex::new(false));
+    let called = provider_called.clone();
+    let provider: LlmExecutionNextFn = Arc::new(move |_request| {
+        *called.lock().unwrap() = true;
+        Box::pin(async { Ok(json!({"response": "unexpected"})) })
+    });
+    let (codec, _, encode_log) = make_tracking_codec("codec_annotation_required");
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("test_llm")
+            .request(make_llm_request(json!({
+                "messages": [{"role": "user", "content": "hello"}]
+            })))
+            .func(provider)
+            .codec(codec)
+            .build(),
+    )
+    .await
+    .expect_err("missing annotation must fail on the codec path");
+
+    assert!(error.to_string().contains("omitted annotated_request"));
+    assert!(!*provider_called.lock().unwrap());
+    assert!(encode_log.lock().unwrap().is_empty());
+
+    deregister_llm_request_intercept("codec_missing_annotation").unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_codec_rejects_raw_content_mutation_before_lifecycle() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = events.clone();
+    register_subscriber(
+        "stream_codec_raw_mutation_subscriber",
+        Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        "stream_codec_raw_mutation",
+        1,
+        false,
+        Arc::new(|_name, mut request, annotated| {
+            request.content["model"] = json!("raw-stream-edit");
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(Mutex::new(false));
+    let called = provider_called.clone();
+    let provider: LlmStreamExecutionNextFn = Arc::new(move |_request| {
+        *called.lock().unwrap() = true;
+        Box::pin(async {
+            let stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> =
+                Box::pin(futures::stream::empty());
+            Ok(stream)
+        })
+    });
+    let (codec, _, _) = make_tracking_codec("stream_codec_raw_read_only");
+    let result = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("test_stream")
+            .request(make_llm_request(json!({
+                "model": "original",
+                "messages": [{"role": "user", "content": "hello"}]
+            })))
+            .func(provider)
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"done": true})))
+            .codec(codec)
+            .build(),
+    )
+    .await;
+    let error = match result {
+        Ok(_) => panic!("raw content mutation must fail on the streaming codec path"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("request.content"));
+    assert!(!*provider_called.lock().unwrap());
+    assert!(captured_events_snapshot(&events).is_empty());
+
+    deregister_llm_request_intercept("stream_codec_raw_mutation").unwrap();
+    deregister_subscriber("stream_codec_raw_mutation_subscriber").unwrap();
 }
 
 // ===========================================================================

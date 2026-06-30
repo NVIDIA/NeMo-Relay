@@ -264,6 +264,8 @@ pub fn wrap_js_tool_exec_fn(
 ///
 /// Supports both `(name, request, annotated) => { request, annotated }` and
 /// `({ name, request, annotated }) => { request, annotated }`.
+/// When `annotated` is non-null, request content is read-only and provider-body
+/// edits must be made through the returned annotation; headers remain writable.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn wrap_js_llm_request_intercept_fn(_func: Function) -> LlmRequestInterceptFn {
     Arc::new(

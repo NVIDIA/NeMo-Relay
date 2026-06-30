@@ -164,6 +164,10 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 ///
 /// # Returns
 /// A [`Result`] containing the canonical request-intercept outcome.
+/// Without a request codec, the returned request is authoritative. With a
+/// request codec, its headers remain writable while its content must remain
+/// unchanged; provider-body edits must be returned through the required
+/// annotation.
 ///
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort

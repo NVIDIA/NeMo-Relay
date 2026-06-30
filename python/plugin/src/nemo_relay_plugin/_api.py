@@ -16,6 +16,8 @@ Public data types:
     LlmRequest: A Relay LLM request represented as a JSON object.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
+    PendingMarkSpec: A mark Relay emits under the future managed LLM scope.
+    LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
     ScopeType: Semantic category for a Relay execution scope.
@@ -63,7 +65,7 @@ import stat
 import tempfile
 import tomllib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
@@ -88,8 +90,16 @@ JSON_SCHEMA = "nemo.relay.Json@1"
 EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@1"
+LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@1"
 PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
-_OBJECT_SCHEMAS = frozenset({EVENT_SCHEMA, LLM_REQUEST_SCHEMA, ANNOTATED_LLM_REQUEST_SCHEMA})
+_OBJECT_SCHEMAS = frozenset(
+    {
+        EVENT_SCHEMA,
+        LLM_REQUEST_SCHEMA,
+        ANNOTATED_LLM_REQUEST_SCHEMA,
+        LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+    }
+)
 _UNREGISTERED = object()
 _SCOPE_CONTEXT: contextvars.ContextVar[_BoundScopeContext | None] = contextvars.ContextVar(
     "nemo_relay_plugin_scope_context",
@@ -169,6 +179,49 @@ class ConfigDiagnostic:
                 invalid.
         """
         return _normalize_diagnostic(asdict(self))
+
+
+@dataclass(slots=True)
+class PendingMarkSpec:
+    """Describe a mark Relay emits after starting a managed LLM call."""
+
+    name: str
+    category: str | None = None
+    category_profile: Json | None = None
+    data: Json | None = None
+    metadata: Json | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this pending mark to its canonical JSON object."""
+        if not isinstance(self.name, str):
+            raise WorkerSdkError("pending mark name must be a string")
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class LlmRequestInterceptOutcome:
+    """Canonical result returned by a Python worker LLM request intercept."""
+
+    request: LlmRequest
+    annotated_request: AnnotatedLlmRequest | None = None
+    pending_marks: list[PendingMarkSpec] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this outcome to the canonical worker-envelope payload."""
+        if not isinstance(self.request, dict):
+            raise WorkerSdkError("LLM request intercept outcome request must be a JSON object")
+        if self.annotated_request is not None and not isinstance(self.annotated_request, dict):
+            raise WorkerSdkError("LLM request intercept outcome annotated_request must be a JSON object or None")
+        marks = []
+        for mark in self.pending_marks:
+            if not isinstance(mark, PendingMarkSpec):
+                raise WorkerSdkError("LLM request intercept outcome pending_marks must contain PendingMarkSpec values")
+            marks.append(mark.to_json())
+        return {
+            "request": self.request,
+            "annotated_request": self.annotated_request,
+            "pending_marks": marks,
+        }
 
 
 def _normalize_diagnostic(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -325,9 +378,7 @@ LlmSanitizeResponseCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]
 LlmConditionalCallback: TypeAlias = Callable[[LlmRequest], str | None | Awaitable[str | None]]
 LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
-    LlmRequest
-    | tuple[LlmRequest, AnnotatedLlmRequest | None]
-    | Awaitable[LlmRequest | tuple[LlmRequest, AnnotatedLlmRequest | None]],
+    LlmRequestInterceptOutcome | Awaitable[LlmRequestInterceptOutcome],
 ]
 LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, "LlmNext"], Json | Awaitable[Json]]
 LlmStreamExecutionCallback: TypeAlias = Callable[
@@ -593,10 +644,11 @@ class PluginContext:
         Args:
             name: Component-local registration name.
             callback: Function receiving ``(model_name, request,
-                annotated_request)``. Return a replacement :data:`LlmRequest`
-                or ``(request, annotated_request)`` tuple, directly or through
-                an awaitable. ``annotated_request`` is ``None`` when the host
-                did not provide one.
+                annotated_request)``. Return
+                :class:`LlmRequestInterceptOutcome`, directly or through an
+                awaitable. ``annotated_request`` is ``None`` when the host did
+                not provide one. When present, it is authoritative for provider
+                body content and the raw request content must remain unchanged.
             priority: Execution order. Lower values run first.
             break_chain: Whether Relay skips later, lower-priority request
                 intercepts after this callback runs.
@@ -1358,15 +1410,14 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         annotated,
                     )
                 )
-                if isinstance(result, tuple):
-                    llm_request, annotated = result
-                else:
-                    llm_request = result
+                if not isinstance(result, LlmRequestInterceptOutcome):
+                    raise WorkerSdkError("LLM request intercept must return LlmRequestInterceptOutcome")
                 return pb.InvokeResponse(
                     llm_request=pb.LlmRequestInterceptResult(
-                        request=_json_envelope(LLM_REQUEST_SCHEMA, llm_request),
-                        annotated_request=_optional_json_envelope(annotated, ANNOTATED_LLM_REQUEST_SCHEMA),
-                        has_annotated_request=annotated is not None,
+                        outcome=_json_envelope(
+                            LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+                            result.to_json(),
+                        ),
                     )
                 )
             if request.surface == pb.LLM_EXECUTION_INTERCEPT:

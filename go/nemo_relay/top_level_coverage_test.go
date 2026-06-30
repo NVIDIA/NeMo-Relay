@@ -417,13 +417,35 @@ func assertLlmCodecInterceptCoverage(t *testing.T) {
 		t.Fatalf("expected codec-backed intercept success, got %v", err)
 	}
 
+	if err := RegisterLlmRequestIntercept("coverage_llm_codec_raw_content", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
+		request.Content = json.RawMessage(`{"model":"raw-model-edit"}`)
+		return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotatedJSON}, nil
+	}); err != nil {
+		t.Fatalf("RegisterLlmRequestIntercept raw content case failed: %v", err)
+	}
+	providerCalled := false
+	_, err := LlmCallExecute("coverage_llm_codec_raw_content", map[string]any{
+		"headers": map[string]any{},
+		"content": map[string]any{"model": coverageModelName},
+	}, func(json.RawMessage) (json.RawMessage, error) {
+		providerCalled = true
+		return json.RawMessage(`{"content":"unexpected"}`), nil
+	}, WithLLMCodec(requestCodec))
+	assertErrorContains(t, err, "request.content", "codec-backed raw content mutation")
+	if providerCalled {
+		t.Fatal("provider should not run after a codec-backed raw content mutation")
+	}
+	if err := DeregisterLlmRequestIntercept("coverage_llm_codec_raw_content"); err != nil {
+		t.Fatalf("failed to deregister raw content intercept: %v", err)
+	}
+
 	if err := RegisterLlmRequestIntercept("coverage_llm_codec_error", 1, false, func(name string, request LLMRequestDTO, annotatedJSON json.RawMessage) (LLMRequestInterceptOutcome, error) {
 		return LLMRequestInterceptOutcome{}, errors.New("forced codec-backed intercept failure")
 	}); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept error case failed: %v", err)
 	}
 	defer DeregisterLlmRequestIntercept("coverage_llm_codec_error")
-	_, err := LlmCallExecute("coverage_llm_codec_error", map[string]any{
+	_, err = LlmCallExecute("coverage_llm_codec_error", map[string]any{
 		"headers": map[string]any{},
 		"content": map[string]any{"model": coverageModelName},
 	}, func(json.RawMessage) (json.RawMessage, error) {

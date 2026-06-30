@@ -12,6 +12,8 @@ Covers:
 
 from typing import cast
 
+import pytest
+
 from nemo_relay import (
     AnnotatedLLMRequest,
     JsonObject,
@@ -286,6 +288,27 @@ class TestCodecPipeline:
             assert result["messages"][0]["content"] == "injected by intercept"
         finally:
             intercepts.deregister_llm_request("test-annot-intercept-pipeline")
+
+    async def test_codec_rejects_raw_content_edits_before_provider(self):
+        """Codec-aware intercepts must edit the annotation, not the raw body."""
+        provider_called = False
+
+        def raw_content_intercept(name, request, annotated):
+            content = {**request.content, "model": "raw-model-edit"}
+            return LLMRequestInterceptOutcome(LLMRequest(request.headers, content), annotated)
+
+        def provider(request):
+            nonlocal provider_called
+            provider_called = True
+            return {"unexpected": True}
+
+        intercepts.register_llm_request("test-codec-raw-content", 1, False, raw_content_intercept)
+        try:
+            with pytest.raises(RuntimeError, match=r"request\.content"):
+                await llm.execute("pipeline-llm", make_request(), provider, codec=SimpleCodec())
+            assert not provider_called
+        finally:
+            intercepts.deregister_llm_request("test-codec-raw-content")
 
     async def test_codec_parameter(self):
         """codec parameter passes the specified codec instance directly."""

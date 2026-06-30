@@ -182,14 +182,20 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                         "fixture LLM request error requested".into(),
                     ));
                 }
-                let annotated = annotated.map(|mut annotated| {
-                    annotated
-                        .extra
-                        .insert("worker_plugin_annotated_request".into(), json!(true));
-                    annotated
-                });
+                let (request, annotated) = match annotated {
+                    Some(mut annotated) => {
+                        annotated
+                            .extra
+                            .insert("worker_plugin_annotated_request".into(), json!(true));
+                        (request, Some(annotated))
+                    }
+                    None => (
+                        mark_llm_request(request, "worker_plugin_llm_request_intercept"),
+                        None,
+                    ),
+                };
                 Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
-                    mark_llm_request(request, "worker_plugin_llm_request_intercept"),
+                    request,
                     annotated,
                 ))
             },

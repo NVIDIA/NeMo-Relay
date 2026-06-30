@@ -646,6 +646,8 @@ pub fn wrap_py_llm_conditional_fn(py_fn: Py<PyAny>) -> LlmConditionalFn {
 ///
 /// The Python function receives ``(name: str, request: LlmRequest, annotated: AnnotatedLLMRequest | None)``
 /// and must return ``LLMRequestInterceptOutcome``.
+/// When ``annotated`` is present, request content is read-only and provider-body
+/// edits must be made through the returned annotation; headers remain writable.
 pub fn wrap_py_llm_request_intercept_fn(py_fn: Py<PyAny>) -> LlmRequestInterceptFn {
     Arc::new(
         move |name: &str,
