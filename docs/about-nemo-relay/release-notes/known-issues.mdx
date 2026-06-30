@@ -39,9 +39,9 @@ and limitations apply to NeMo Relay 0.4:
   authoritative pin.
 - The PII redaction plugin currently provides deterministic local backend
   support. Local-model backend configuration is reserved for future expansion.
-- Model pricing estimates depend on configured model pricing sources and the
-  freshness of the source catalog. Unknown model pricing and missing token data
-  leave cost absent instead of defaulting to zero.
+- Pricing estimates depend on configured pricing sources and the freshness of
+  the source catalog. Unknown model pricing and missing token data leave cost
+  absent instead of defaulting to zero.
 - ATOF streaming endpoints depend on collector availability. Failed endpoints
   are skipped or retried without blocking file output or other configured
   endpoints.
