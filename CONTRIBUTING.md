@@ -223,7 +223,7 @@ Complete these checks before opening or updating a pull request.
 
 1. Ensure all pre-commit hooks pass.
 2. Run the relevant test suites and confirm they pass.
-3. Verify your changes compile cleanly with the relevant `just build-*` recipe.
+3. Verify your changes compile cleanly with the relevant target-specific build recipe, such as `just build-rust` or `just build-python`.
 4. Update the relevant documentation entry points and references.
 5. Rebase your branch on the latest `main` to avoid merge conflicts.
 
