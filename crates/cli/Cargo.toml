@@ -25,7 +25,7 @@ default = ["atof-streaming"]
 atof-streaming = ["nemo-relay/atof-streaming"]
 
 [dependencies]
-nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "openinference", "worker-grpc"] }
+nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "otel", "openinference", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
 async-stream = "0.3"

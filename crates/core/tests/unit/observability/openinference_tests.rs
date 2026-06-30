@@ -13,7 +13,7 @@ use crate::api::runtime::global_context;
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
-use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{
     AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
     ToolDefinition,

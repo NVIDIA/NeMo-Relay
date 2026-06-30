@@ -6,7 +6,7 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This quick start shows the smallest Rust workflow that emits scope and mark events.
+This quick start shows the smallest Rust workflow that emits scope, tool, and LLM events.
 
 ## Choose an Install Path
 
@@ -19,8 +19,8 @@ Use the published crates when you are consuming a release:
 
 ```bash
 cargo add nemo-relay@0.5.0
-cargo add nemo-relay-adaptive@0.5.0
 cargo add serde_json
+cargo add tokio --features macros,rt-multi-thread
 ```
 
 Install the published NeMo Relay CLI separately when you need coding-agent hook
@@ -37,28 +37,38 @@ Use a path dependency when your application is consuming a local checkout:
 ```toml
 [dependencies]
 nemo-relay = { path = "../NeMo-Relay/crates/core" }
-nemo-relay-adaptive = { path = "../NeMo-Relay/crates/adaptive" }
 serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 - `nemo-relay` is the core Rust runtime surface.
-- `nemo-relay-adaptive` is the companion crate for adaptive runtime primitives and Redis-backed learning components.
-- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.5.0` when
-  you need the NeMo Relay CLI.
+- `tokio` provides the async runtime used by the managed tool and LLM helpers in
+  this quick start.
+- `nemo-relay-adaptive` is a companion crate for adaptive runtime primitives and
+  Redis-backed learning components when you need adaptive behavior later, but it
+  is not required for this minimal direct-runtime example.
+- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.5.0`
+  when you need the NeMo Relay CLI.
 
-## Push a Scope and Emit a Mark
+## Run One Scope, One Tool Call, and One LLM Call
 
-The example below creates a scope and records a mark event from Rust.
+The example below creates a scope, records an initialization mark, runs one
+managed tool call, and runs one managed LLM call through the public Rust APIs.
+Place it in `src/main.rs` in the same Cargo project where you added the
+dependencies above, then run `cargo run`.
 
 ```rust
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
 use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams};
 use serde_json::json;
 use std::sync::Arc;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     register_subscriber(
         "quickstart-printer",
         Arc::new(|event| {
@@ -82,6 +92,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .data(json!({"ok": true}))
             .build(),
     )?;
+
+    let tool_result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("search")
+            .args(json!({"query": "hello"}))
+            .func(Arc::new(|args| Box::pin(async move {
+                Ok(json!({"echo": args["query"]}))
+            })))
+            .parent(handle.clone())
+            .build(),
+    )
+    .await?;
+
+    let llm_result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("demo-provider")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({"messages": [{"role": "user", "content": "hi"}]}),
+            })
+            .func(Arc::new(|request| Box::pin(async move {
+                Ok(json!({
+                    "messages": request.content["messages"],
+                    "ok": true
+                }))
+            })))
+            .parent(handle.clone())
+            .model_name("demo-model")
+            .build(),
+    )
+    .await?;
+
+    println!("{tool_result}");
+    println!("{llm_result}");
+
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
     flush_subscribers()?;
     let _ = deregister_subscriber("quickstart-printer")?;
@@ -91,15 +136,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## What Success Looks Like
 
-The script should exit cleanly and print lifecycle lines from the subscriber.
-Native subscriber delivery is asynchronous, so examples flush before checking
-subscriber output.
-You should see one line for the scope start event, one for the `initialized`
-mark, and one for the scope end event.
+You should see:
+
+- Event lines for the root scope, managed tool and LLM lifecycles, plus the
+  `initialized` mark event
+- `{"echo":"hello"}` from the tool call
+- A final object containing `ok: true` and the echoed message payload from the
+  LLM callback
+
+Native subscriber delivery is asynchronous, so flush before checking subscriber
+output. If you only see the returned JSON values and no event lines, the tool
+and LLM callbacks ran but you did not verify instrumentation.
 
 That tells you two things:
 
-- The scope API ran successfully.
+- The direct Rust runtime APIs ran successfully.
 - Emitted events were observable through the subscriber system.
 
 ## What to Learn Next

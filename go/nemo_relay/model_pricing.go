@@ -5,10 +5,10 @@ package nemo_relay
 
 import "encoding/json"
 
-// PricingPluginKind is the top-level plugin kind used by the pricing component.
+// PricingPluginKind is the top-level plugin kind used by the model pricing component.
 const PricingPluginKind = "pricing"
 
-// Pricing unit constants accepted by pricing catalog entries.
+// Pricing unit constants accepted by model pricing catalog entries.
 const (
 	PricingUnitPerToken   = "per_token"
 	PricingUnitPerRequest = "per_request"
@@ -16,23 +16,23 @@ const (
 	PricingUnitGPUHour    = "gpu_hour"
 )
 
-// Prompt-cache accounting constants accepted by pricing catalog entries.
+// Prompt-cache accounting constants accepted by model pricing catalog entries.
 const (
 	CacheReadAccountingIncludedInPromptTokens = "included_in_prompt_tokens"
 	CacheReadAccountingSeparate               = "separate"
 )
 
-// PricingConfig is the canonical Go shape for the pricing plugin config document.
+// PricingConfig is the canonical Go shape for the model pricing plugin config document.
 type PricingConfig struct {
 	Sources []PricingSourceConfigurer `json:"sources,omitempty"`
 }
 
-// PricingSourceConfigurer is implemented by pricing source config structs.
+// PricingSourceConfigurer is implemented by model pricing source config structs.
 type PricingSourceConfigurer interface {
 	pricingSourceConfig()
 }
 
-// PricingInlineSourceConfig embeds a pricing catalog directly in plugin config.
+// PricingInlineSourceConfig embeds a model pricing catalog directly in plugin config.
 type PricingInlineSourceConfig struct {
 	Catalog PricingCatalog `json:"catalog"`
 }
@@ -53,7 +53,7 @@ func (source PricingInlineSourceConfig) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// PricingFileSourceConfig loads a pricing catalog from a JSON file path.
+// PricingFileSourceConfig loads a model pricing catalog from a JSON file path.
 type PricingFileSourceConfig struct {
 	Path string `json:"path"`
 }
@@ -74,7 +74,7 @@ func (source PricingFileSourceConfig) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// PricingCatalog is an inline pricing catalog payload.
+// PricingCatalog is an inline model pricing catalog payload.
 type PricingCatalog struct {
 	Version uint32         `json:"version,omitempty"`
 	Entries []ModelPricing `json:"entries,omitempty"`
@@ -102,7 +102,7 @@ type TokenPricingRates struct {
 	CacheWritePerMillion *float64 `json:"cache_write_per_million,omitempty"`
 }
 
-// PromptCachePricing configures cache-read token accounting for a pricing entry.
+// PromptCachePricing configures cache-read token accounting for a model pricing entry.
 type PromptCachePricing struct {
 	ReadAccounting string `json:"read_accounting"`
 }
@@ -132,28 +132,28 @@ func (schedule PromptTokenThresholdRateSchedule) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// PricingComponentSpec wraps one pricing config as a top-level plugin component.
+// PricingComponentSpec wraps one model pricing config as a top-level plugin component.
 type PricingComponentSpec struct {
 	Enabled bool          `json:"enabled,omitempty"`
 	Config  PricingConfig `json:"config"`
 }
 
-// NewPricingConfig returns an empty pricing config.
+// NewPricingConfig returns an empty model pricing config.
 func NewPricingConfig() PricingConfig {
 	return PricingConfig{Sources: []PricingSourceConfigurer{}}
 }
 
-// NewPricingInlineSource returns an inline pricing catalog source.
+// NewPricingInlineSource returns an inline model pricing catalog source.
 func NewPricingInlineSource(catalog PricingCatalog) PricingInlineSourceConfig {
 	return PricingInlineSourceConfig{Catalog: catalog}
 }
 
-// NewPricingFileSource returns a file-backed pricing catalog source.
+// NewPricingFileSource returns a file-backed model pricing catalog source.
 func NewPricingFileSource(path string) PricingFileSourceConfig {
 	return PricingFileSourceConfig{Path: path}
 }
 
-// NewPricingCatalog returns an inline pricing catalog with version 1.
+// NewPricingCatalog returns an inline model pricing catalog with version 1.
 func NewPricingCatalog(entries ...ModelPricing) PricingCatalog {
 	return PricingCatalog{
 		Version: 1,
@@ -206,7 +206,7 @@ func NewPromptTokenThresholdRateSchedule(tiers ...TokenRateTier) PromptTokenThre
 	}
 }
 
-// NewPricingComponentSpec wraps pricing config as an enabled top-level component.
+// NewPricingComponentSpec wraps model pricing config as an enabled top-level component.
 func NewPricingComponentSpec(config PricingConfig) PricingComponentSpec {
 	return PricingComponentSpec{
 		Enabled: true,
@@ -214,7 +214,7 @@ func NewPricingComponentSpec(config PricingConfig) PricingComponentSpec {
 	}
 }
 
-// PluginComponent converts the pricing component wrapper into the shared plugin shape.
+// PluginComponent converts the model pricing component wrapper into the shared plugin shape.
 func (spec PricingComponentSpec) PluginComponent() PluginComponentSpec {
 	return PluginComponentSpec{
 		Kind:    PricingPluginKind,
@@ -223,12 +223,12 @@ func (spec PricingComponentSpec) PluginComponent() PluginComponentSpec {
 	}
 }
 
-// PricingComponent converts pricing config directly into a shared plugin component.
+// PricingComponent converts model pricing config directly into a shared plugin component.
 func PricingComponent(config PricingConfig) PluginComponentSpec {
 	return NewPricingComponentSpec(config).PluginComponent()
 }
 
-// ValidatePricingConfig validates a pricing config document without activating it.
+// ValidatePricingConfig validates a model pricing config document without activating it.
 func ValidatePricingConfig(config PricingConfig) (ConfigReport, error) {
 	return ValidatePluginConfig(PluginConfig{
 		Version:    1,

@@ -15,9 +15,9 @@
 //! provider codec from a raw payload when no codec annotation is present.
 
 pub mod anthropic;
+pub mod model_pricing;
 pub mod openai_chat;
 pub mod openai_responses;
-pub mod pricing;
 pub mod request;
 pub mod resolve;
 pub mod response;

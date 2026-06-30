@@ -84,10 +84,10 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install cargo-deny
+      - name: Install cargo-deny and just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
-          tool: cargo-deny@${{ steps.ci-config.outputs.cargo_deny_version }}
+          tool: cargo-deny@${{ steps.ci-config.outputs.cargo_deny_version }},just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Install cargo-about
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6

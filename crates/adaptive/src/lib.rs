@@ -9,6 +9,11 @@
 //! This crate provides the adaptive runtime, persistence abstractions, learner
 //! implementations, and Adaptive Cache Governor (ACG) analysis types used to
 //! derive and apply runtime hints from observed NeMo Relay executions.
+
+#[cfg(test)]
+pub(crate) static TEST_GLOBAL_CONTEXT_MUTEX: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 pub mod acg;
 pub mod acg_component;
 pub mod acg_learner;

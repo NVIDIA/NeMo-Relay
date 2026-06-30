@@ -299,7 +299,7 @@ fn pricing_validate_dispatch_covers_success_read_and_parse_errors() {
     })
     .unwrap_err()
     .to_string();
-    assert!(missing.contains("could not read pricing catalog"));
+    assert!(missing.contains("could not read model pricing catalog"));
 
     let invalid = dir.path().join("invalid.json");
     std::fs::write(&invalid, "{\"version\":2,\"entries\":[]}").unwrap();
@@ -308,5 +308,5 @@ fn pricing_validate_dispatch_covers_success_read_and_parse_errors() {
     })
     .unwrap_err()
     .to_string();
-    assert!(invalid_error.contains("invalid pricing catalog"));
+    assert!(invalid_error.contains("invalid model pricing catalog"));
 }

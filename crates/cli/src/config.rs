@@ -90,7 +90,7 @@ pub(crate) enum Command {
     /// Uninstall coding-agent plugins installed by `nemo-relay install`.
     Uninstall(UninstallCommand),
     /// Validate and configure model pricing catalogs.
-    Pricing(PricingCommand),
+    ModelPricing(PricingCommand),
     /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
@@ -247,27 +247,27 @@ impl PluginsSubcommand {
     }
 }
 
-/// Args for `nemo-relay pricing`.
+/// Args for `nemo-relay model-pricing`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingCommand {
     #[command(subcommand)]
     pub(crate) command: PricingSubcommand,
 }
 
-/// Pricing catalog and resolver subcommands.
+/// Model pricing catalog and resolver subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PricingSubcommand {
-    /// Validate a pricing catalog JSON file.
+    /// Validate a model pricing catalog JSON file.
     Validate(PricingValidateCommand),
-    /// Initialize the pricing plugin component in `plugins.toml`.
+    /// Initialize model pricing in `plugins.toml`.
     Init(PricingInitCommand),
-    /// Add a pricing catalog file source to `plugins.toml`.
+    /// Add a model pricing catalog file source to `plugins.toml`.
     AddSource(PricingAddSourceCommand),
-    /// Resolve which pricing entry matches a model and optional usage.
+    /// Resolve which model pricing entry matches a model and optional usage.
     Resolve(PricingResolveCommand),
 }
 
-/// Common target-scope flags for pricing config mutations.
+/// Common target-scope flags for model pricing config mutations.
 #[derive(Debug, Clone, Default, Args)]
 #[command(group(
     ArgGroup::new("pricing_scope")
@@ -286,33 +286,33 @@ pub(crate) struct PricingScopeArgs {
     pub(crate) global: bool,
 }
 
-/// Args for `nemo-relay pricing validate`.
+/// Args for `nemo-relay model-pricing validate`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingValidateCommand {
-    /// Path to a Relay pricing catalog JSON file.
+    /// Path to a Relay model pricing catalog JSON file.
     pub(crate) path: PathBuf,
 }
 
-/// Args for `nemo-relay pricing init`.
+/// Args for `nemo-relay model-pricing init`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingInitCommand {
     #[command(flatten)]
     pub(crate) scope: PricingScopeArgs,
 }
 
-/// Args for `nemo-relay pricing add-source`.
+/// Args for `nemo-relay model-pricing add-source`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingAddSourceCommand {
     #[command(flatten)]
     pub(crate) scope: PricingScopeArgs,
-    /// Path to a Relay pricing catalog JSON file.
+    /// Path to a Relay model pricing catalog JSON file.
     pub(crate) path: PathBuf,
     /// Append as a lower-priority source instead of prepending as the highest-priority override.
     #[arg(long)]
     pub(crate) append: bool,
 }
 
-/// Args for `nemo-relay pricing resolve`.
+/// Args for `nemo-relay model-pricing resolve`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingResolveCommand {
     /// Model ID or routed model name to look up.

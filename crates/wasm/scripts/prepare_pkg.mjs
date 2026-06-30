@@ -12,14 +12,21 @@ const nodeJsWrapperDir = path.join(crateDir, 'wrappers', 'nodejs');
 const pkgDir = process.argv[2] ? path.resolve(process.argv[2]) : path.join(crateDir, 'pkg');
 
 const rootJsFiles = ['index.js'];
-const jsWrapperFiles = ['typed.js', 'plugin.js', 'adaptive.js', 'observability.js', 'pii_redaction.js', 'pricing.js'];
+const jsWrapperFiles = [
+  'typed.js',
+  'plugin.js',
+  'adaptive.js',
+  'observability.js',
+  'pii_redaction.js',
+  'model_pricing.js',
+];
 const typeWrapperFiles = [
   'typed.d.ts',
   'plugin.d.ts',
   'adaptive.d.ts',
   'observability.d.ts',
   'pii_redaction.d.ts',
-  'pricing.d.ts',
+  'model_pricing.d.ts',
 ];
 const wrapperFiles = [...rootJsFiles, ...jsWrapperFiles, ...typeWrapperFiles];
 const packageMetadata = {
@@ -114,9 +121,9 @@ function updatePackageManifest(manifest) {
       types: './pii_redaction.d.ts',
       default: './pii_redaction.js',
     },
-    './pricing': {
-      types: './pricing.d.ts',
-      default: './pricing.js',
+    './model_pricing': {
+      types: './model_pricing.d.ts',
+      default: './model_pricing.js',
     },
     './typed.js': {
       types: './typed.d.ts',
@@ -138,9 +145,9 @@ function updatePackageManifest(manifest) {
       types: './pii_redaction.d.ts',
       default: './pii_redaction.js',
     },
-    './pricing.js': {
-      types: './pricing.d.ts',
-      default: './pricing.js',
+    './model_pricing.js': {
+      types: './model_pricing.d.ts',
+      default: './model_pricing.js',
     },
   };
 

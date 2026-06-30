@@ -85,7 +85,7 @@ pub struct Usage {
     /// Tokens written to prompt cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_tokens: Option<u64>,
-    /// Optional cost reported by provider data or estimated from Relay pricing.
+    /// Optional cost reported by provider data or estimated from Relay model pricing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<CostEstimate>,
 }
