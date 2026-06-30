@@ -99,3 +99,6 @@ crates/wasm/coverage/
 
 # VSCode
 /.vscode
+
+# Relay
+/.nemo-relay
