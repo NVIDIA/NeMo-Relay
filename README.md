@@ -26,7 +26,7 @@ shared runtime for scopes, policy, plugins, and lifecycle events.
 
 | Goal | Start With... |
 |---|---|
-| Observe Codex, Claude Code, Cursor, or Hermes locally via CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
+| Observe Codex, Claude Code, or Hermes locally via CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
@@ -282,7 +282,6 @@ coverage.
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
 | Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
 | Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
-| Cursor | Partial | Limited | No | Missing hooks under `cursor-agent` and manual gateway routing limit full feature coverage. |
 
 ### Public API Integrations
 

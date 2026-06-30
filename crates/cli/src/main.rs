@@ -77,9 +77,6 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Codex(command) => {
             launcher::easy_path(CodingAgent::Codex, command, Some(server)).await
         }
-        Command::Cursor(command) => {
-            launcher::easy_path(CodingAgent::Cursor, command, Some(server)).await
-        }
         Command::Hermes(command) => {
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }

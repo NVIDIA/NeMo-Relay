@@ -3,7 +3,6 @@
 
 pub(crate) mod claude_code;
 pub(crate) mod codex;
-pub(crate) mod cursor;
 pub(crate) mod hermes;
 
 use axum::http::HeaderMap;
@@ -375,10 +374,9 @@ fn value_at(payload: &Value, path: &[&str]) -> Option<Value> {
 // closing the agent scope. Codex 0.129 has no `SessionEnd`-equivalent hook — without this dual
 // emission, codex transparent runs would never trigger an ATIF write.
 //
-// If the primary event is already terminal (e.g., Cursor classifies `stop` as `AgentEnded`),
-// the snapshot is skipped to avoid double-writing — `flush_observers` already writes ATIF on
-// agent-end, and a follow-up `TurnEnded` on a removed session would recreate an empty session
-// and overwrite the freshly-written ATIF with an empty trajectory.
+// If the primary event is already terminal, the snapshot is skipped to avoid double-writing —
+// `flush_observers` already writes ATIF on agent-end, and a follow-up `TurnEnded` on a removed
+// session would recreate an empty session and overwrite the freshly-written ATIF.
 fn classify(
     payload: &Value,
     headers: &HeaderMap,

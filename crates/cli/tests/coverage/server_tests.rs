@@ -1832,38 +1832,6 @@ async fn claude_code_hook_returns_continue_shape() {
 }
 
 #[tokio::test]
-async fn cursor_hook_returns_cursor_permission_fields() {
-    let app = router(test_config());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/cursor")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "cursor-1",
-                        "hook_event_name": "beforeShellExecution",
-                        "tool_call_id": "shell-1",
-                        "tool_name": "shell",
-                        "input": { "command": "pwd" }
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body["continue"], json!(true));
-    assert_eq!(body["permission"], json!("allow"));
-    assert!(body.get("user_message").is_none());
-    assert!(body.get("agent_message").is_none());
-}
-
-#[tokio::test]
 async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = deregister_tool_conditional_execution_guardrail("cli-pre-tool-blocker");

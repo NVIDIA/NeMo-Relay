@@ -1172,12 +1172,13 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    for agent in ["claude", "codex", "cursor", "hermes"] {
+    for agent in ["claude", "codex", "hermes"] {
         assert!(
             stdout.contains(&format!("  {agent}")),
             "expected `--help` to list `{agent}` subcommand, got:\n{stdout}"
         );
     }
+    assert!(!stdout.contains("  cursor"));
 }
 
 #[test]
@@ -1626,7 +1627,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
-            "cursor",
+            "hermes",
             "--gateway-url",
             &server_url,
             "--fail-closed",
@@ -1641,7 +1642,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let request = received.recv().unwrap();
 
     assert!(!output.status.success());
-    assert!(request.contains("POST /hooks/cursor HTTP/1.1"));
+    assert!(request.contains("POST /hooks/hermes HTTP/1.1"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP 503"));
 }
 
