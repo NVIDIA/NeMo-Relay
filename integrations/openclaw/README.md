@@ -15,8 +15,8 @@ Adaptive components for hook-backed telemetry learning.
 This public OpenClaw plugin package uses OpenClaw public hooks. It can run
 pre-tool conditional guardrails when OpenClaw invokes the before-tool hook, but
 it does not rewrite provider routing or model requests. For middleware-backed
-behavior that changes execution, use the patch-based OpenClaw integration from
-the NeMo Relay repository.
+behavior that changes execution, OpenClaw must expose the relevant invocation
+through a public plugin hook.
 
 ## Why Use It?
 

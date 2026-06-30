@@ -104,7 +104,7 @@ uses the raw C FFI, and WebAssembly uses a `wasm-bindgen` binding.
 
 The documentation and examples also cover integration with Agent Trajectory
 Interchange Format (ATIF) trajectory export, OpenTelemetry traces,
-OpenInference-compatible data, and third-party agent framework patch sets.
+OpenInference-compatible data, and public framework or plugin APIs.
 
 ### Why Is NeMo Relay's Core Written In Rust?
 
@@ -392,7 +392,7 @@ Refer to [Adaptive](/adaptive-plugin/about),
 ## Framework Integration And APIs
 
 Use these questions when integrating framework-owned call paths, provider
-payloads, generated references, or third-party patch sets.
+payloads, generated references, or public framework APIs.
 
 ### How Should Framework Integrations Be Designed?
 
@@ -430,13 +430,13 @@ Refer to [Using Codecs](/integrate-into-frameworks/using-codecs),
 
 ### How Are Third-Party Integrations Maintained?
 
-Some framework integrations are maintained as patch sets against pinned
-upstream source checkouts under `third_party/`. Use the repository wrapper
-scripts when checking or applying those patches, and regenerate the patch after
-changing files inside a submodule.
+Maintained integrations use stable public framework or plugin APIs and live in
+the NeMo Relay source tree. Python integrations live under
+`python/nemo_relay/integrations/`; the OpenClaw plugin lives under
+`integrations/openclaw/`.
 
-Refer to [Framework Integration Code Examples](/integrate-into-frameworks/code-examples#quickstart-apply-maintained-patches)
-and the repository root `third_party/README.md`.
+Refer to [Supported Integrations](/supported-integrations/about) for the current
+support matrix and setup guides.
 
 ### Where Are The API Docs?
 

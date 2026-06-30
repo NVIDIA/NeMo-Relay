@@ -76,7 +76,7 @@ source. With no configured source, every model is treated as unknown for pricing
 Pricing is runtime state, not a CLI-only feature. Any host that initializes
 Relay plugins can activate the built-in `pricing` component before it runs
 managed LLM calls. This includes application code, eval harnesses, custom
-agents, framework integrations, and third-party patches. The CLI commands below
+agents, and framework integrations. The CLI commands below
 are a file-management convenience for the local gateway; embedded hosts can pass
 the same component config directly through the plugin APIs.
 

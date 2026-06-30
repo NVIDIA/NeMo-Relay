@@ -99,7 +99,7 @@ default-groups = ["dev", "test"]
 package = true
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "third_party/langgraph_tests"]
+testpaths = ["python/tests"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]

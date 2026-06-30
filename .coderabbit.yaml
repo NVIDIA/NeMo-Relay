@@ -31,7 +31,7 @@ reviews:
     type(optional-scope)[!]: concise imperative summary
 
     Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.
-    Prefer scopes from this repository when clear: core, adaptive, python, ffi, node, wasm, go, docs, ci, deps, patches
+    Prefer scopes from this repository when clear: core, adaptive, python, ffi, node, wasm, go, docs, ci, deps
     Use lowercase type and scope. If the change is a breaking change, add a ! suffix before the colon.
     Keep it under 72 characters and do not use a trailing period.
   auto_review:
@@ -53,7 +53,6 @@ reviews:
     - "!**/.scannerwork/**"
     - "!crates/wasm/pkg/**"
     - "!crates/wasm/pkg-test/**"
-    - "!third_party/**"
     - "!**/junit.xml"
     - "!**/*.profraw"
     - "!**/*.profdata"
@@ -82,10 +81,6 @@ reviews:
       instructions: |
         Tests should cover the behavior promised by the changed API surface, including error paths and cross-request isolation where relevant.
         Prefer assertions on lifecycle events, scope stacks, middleware ordering, and binding parity over shallow smoke tests.
-    - path: "patches/**/*.patch"
-      instructions: |
-        Patch changes should remain reviewable as regenerated diffs against the matching third_party submodule.
-        Check that integration behavior, package metadata, and tests remain consistent with the main NeMo Relay API.
     - path: "{docs/**,README.md,CONTRIBUTING.md,RELEASING.md,SECURITY.md}"
       instructions: |
         Review documentation for technical accuracy against the current API, command correctness, and consistency across language bindings.

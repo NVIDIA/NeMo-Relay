@@ -294,7 +294,7 @@ or plugin hooks that preserve enough lifecycle fidelity.
 | LangChain | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | LangGraph | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
-| OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
+| OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
 
 The Python `nemo-relay` package ships extras for LangChain, LangGraph, and Deep
 Agents:
@@ -305,19 +305,6 @@ uv add "nemo-relay[langchain,langgraph,deepagents]"
 
 Refer to [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) for setup
 guides and current caveats.
-
-### Patch-Based Integrations
-
-Patch-based integrations are experimental samples maintained against pinned
-upstream checkouts. Use [third_party/README.md](third_party/README.md) for the
-clone, checkout, and patch-application workflow.
-
-| Integration | Observability | Security | Optimization | Notes |
-|:---|:---:|:---:|:---:|:---|
-| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | Yes | Yes | Yes | Directly patches behavior into code. |
-| [opencode](third_party/README-opencode.md) | Yes | Yes | Yes | Directly patches behavior into code. |
-| [OpenClaw](third_party/README-openclaw.md) | Yes | Yes | Yes | Adds middleware support to OpenClaw and a built-in plugin. |
-| [Hermes Agent](third_party/README-hermes-agent.md) | Yes | Yes | Yes | Directly patches behavior into code. |
 
 ## Documentation
 

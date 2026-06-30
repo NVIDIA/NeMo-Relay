@@ -7,8 +7,8 @@
 - NIM Codec inheritance from OpenAI with NIM-specific field handling
 - LangGraph delegation model via explicit codec= parameter (direct instance passing)
 
-The OpenAICodec and NIMCodec classes are defined inline here (same logic
-as in the LangChain and LangChain-NVIDIA patch files).
+The OpenAICodec and NIMCodec classes are defined inline so the tests exercise
+integration-provided codecs independently of any one framework adapter.
 """
 
 from typing import cast
@@ -19,7 +19,7 @@ from nemo_relay.codecs import (
 )
 
 # ---------------------------------------------------------------------------
-# Codec implementations (inline -- same code that goes into patches)
+# Representative integration codec implementations
 # ---------------------------------------------------------------------------
 
 

@@ -168,16 +168,6 @@ Use [Adaptive Configuration](/adaptive-plugin/configuration),
 [Adaptive Hints](/adaptive-plugin/adaptive-hints) to verify component
 names and configuration scope.
 
-## Third-Party Patch Does Not Apply
-
-Run the wrapper command from the repository root:
-
-```bash
-./scripts/apply-patches.sh --check
-```
-
-If the patch still does not apply, confirm that the local checkout is clean and matches the pinned commit in `third_party/sources.lock`.
-
 ## Third-Party Integration Behaves Differently From Core APIs
 
 First reproduce the behavior through the closest core or binding-level API. If the core API behaves correctly, inspect the integration wrapper, codec, or provider adapter that translates provider calls into NeMo Relay calls.
