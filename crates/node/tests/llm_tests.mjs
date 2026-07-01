@@ -729,7 +729,7 @@ describe('LLM intercepts', () => {
       null,
     );
 
-    for (; ;) {
+    for (;;) {
       const chunk = await stream.next();
       if (chunk === null) {
         break;
@@ -769,7 +769,7 @@ describe('LLM intercepts', () => {
       null,
     );
 
-    for (; ;) {
+    for (;;) {
       const chunk = await stream.next();
       if (chunk === null) {
         break;
@@ -827,7 +827,11 @@ describe('LLM intercepts', () => {
         request,
         annotated,
         pendingMarks: [
-          { name: 'request.first', data: { order: 1 } },
+          {
+            name: 'request.first',
+            categoryProfile: { subtype: 'optimizer.saved_tokens' },
+            data: { order: 1 },
+          },
           { name: 'request.second', metadata: { source: 'node' } },
         ],
       };
@@ -840,14 +844,14 @@ describe('LLM intercepts', () => {
       {
         name: 'request.first',
         category: null,
-        category_profile: null,
+        categoryProfile: { subtype: 'optimizer.saved_tokens' },
         data: { order: 1 },
         metadata: null,
       },
       {
         name: 'request.second',
         category: null,
-        category_profile: null,
+        categoryProfile: null,
         data: null,
         metadata: { source: 'node' },
       },

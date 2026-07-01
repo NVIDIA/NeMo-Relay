@@ -60,10 +60,12 @@ flowchart TD
 Python callbacks return `LLMRequestInterceptOutcome`; Rust callbacks return
 `LlmRequestInterceptOutcome`; Go callbacks return
 `LLMRequestInterceptOutcome`; and Node.js and WebAssembly callbacks return
-`{ request, annotated?, pendingMarks? }`. Public C callbacks write one owned
-canonical outcome JSON string. Native ABI v1 uses one host-owned outcome JSON
-string. Rust and Python `grpc-v1` worker SDKs return their canonical outcome
-type in a `JsonEnvelope` whose schema is
+`{ request, annotated?, pendingMarks? }`, with `categoryProfile` on each
+JavaScript pending-mark DTO. The canonical JSON forms retain `pending_marks`
+and `category_profile`. Public C callbacks write one owned canonical outcome
+JSON string. Native ABI v1 uses one host-owned outcome JSON string. Rust and
+Python `grpc-v1` worker SDKs return their canonical outcome type in a
+`JsonEnvelope` whose schema is
 `nemo.relay.LlmRequestInterceptOutcome@1`.
 
 The standalone request-intercept helper returns the complete outcome but does

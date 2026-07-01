@@ -15,6 +15,40 @@ fn dummy_function() -> Function {
 }
 
 #[test]
+fn pending_mark_dto_uses_camel_case_without_changing_canonical_fields() {
+    let dto: JsPendingMarkSpec = serde_json::from_value(json!({
+        "name": "request.optimized",
+        "categoryProfile": {"subtype": "optimizer.saved_tokens"},
+        "data": {"savedTokens": 12}
+    }))
+    .unwrap();
+    let canonical: PendingMarkSpec = dto.into();
+    assert_eq!(
+        canonical
+            .category_profile
+            .as_ref()
+            .unwrap()
+            .subtype
+            .as_deref(),
+        Some("optimizer.saved_tokens")
+    );
+
+    let dto_json = serde_json::to_value(JsPendingMarkSpec::from(canonical)).unwrap();
+    assert_eq!(
+        dto_json["categoryProfile"]["subtype"],
+        "optimizer.saved_tokens"
+    );
+    assert!(dto_json.get("category_profile").is_none());
+    assert!(
+        serde_json::from_value::<JsPendingMarkSpec>(json!({
+            "name": "wire-name-is-invalid-in-js",
+            "category_profile": {"subtype": "invalid"}
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn native_tool_and_llm_wrapper_fallbacks_are_stable() {
     let tool = wrap_js_tool_fn(dummy_function());
     assert_eq!(tool("name", json!({"input": true})), Json::Null);

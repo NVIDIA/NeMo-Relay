@@ -2039,7 +2039,7 @@ pub fn llm_request_intercepts_wasm(
     let result_json = serde_json::json!({
         "request": result.request,
         "annotated": result.annotated_request,
-        "pendingMarks": result.pending_marks,
+        "pendingMarks": callable::js_pending_marks(result.pending_marks),
     });
     Ok(json_to_js(&result_json))
 }

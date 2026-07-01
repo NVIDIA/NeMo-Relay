@@ -88,7 +88,7 @@ export interface PluginContext {
       pendingMarks?: Array<{
         name: string;
         category?: string | null;
-        category_profile?: Json;
+        categoryProfile?: Json;
         data?: Json;
         metadata?: Json;
       }>;

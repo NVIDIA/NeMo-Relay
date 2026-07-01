@@ -213,11 +213,27 @@ test('WebAssembly llm and stream flows work from the generated Node package', as
       },
     },
     annotated,
+    pendingMarks: [
+      {
+        name: 'request.optimized',
+        categoryProfile: { subtype: 'optimizer.saved_tokens' },
+        data: { savedTokens: 12 },
+      },
+    ],
   }));
 
   try {
-    const interceptedRequest = wasm.llmRequestIntercepts('pkg_llm', request);
-    assert.equal(interceptedRequest.content.intercepted, true);
+    const outcome = wasm.llmRequestIntercepts('pkg_llm', request);
+    assert.equal(outcome.request.content.intercepted, true);
+    assert.deepEqual(outcome.pendingMarks, [
+      {
+        name: 'request.optimized',
+        category: null,
+        categoryProfile: { subtype: 'optimizer.saved_tokens' },
+        data: { savedTokens: 12 },
+        metadata: null,
+      },
+    ]);
     wasm.llmConditionalExecution(request);
   } finally {
     wasm.deregisterLlmRequestIntercept(llmInterceptName);

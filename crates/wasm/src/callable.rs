@@ -16,8 +16,7 @@ use std::sync::Arc;
 use js_sys::Function;
 #[cfg(target_arch = "wasm32")]
 use send_wrapper::SendWrapper;
-#[cfg(target_arch = "wasm32")]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 #[cfg(target_arch = "wasm32")]
 use tokio_stream::StreamExt;
@@ -28,9 +27,7 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-use nemo_relay::api::event::Event;
-#[cfg(target_arch = "wasm32")]
-use nemo_relay::api::event::PendingMarkSpec;
+use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
@@ -49,6 +46,52 @@ use crate::convert::record_callback_error;
 use crate::convert::{js_callback_to_json, js_to_json, json_to_js};
 #[cfg(target_arch = "wasm32")]
 use crate::types::WasmEvent;
+
+/// JavaScript-facing pending mark DTO.
+///
+/// The public WebAssembly API uses camelCase while canonical Relay JSON keeps
+/// snake_case field names.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct JsPendingMarkSpec {
+    name: String,
+    #[serde(default)]
+    category: Option<EventCategory>,
+    #[serde(default)]
+    category_profile: Option<CategoryProfile>,
+    #[serde(default)]
+    data: Option<Json>,
+    #[serde(default)]
+    metadata: Option<Json>,
+}
+
+impl From<JsPendingMarkSpec> for PendingMarkSpec {
+    fn from(mark: JsPendingMarkSpec) -> Self {
+        Self {
+            name: mark.name,
+            category: mark.category,
+            category_profile: mark.category_profile,
+            data: mark.data,
+            metadata: mark.metadata,
+        }
+    }
+}
+
+impl From<PendingMarkSpec> for JsPendingMarkSpec {
+    fn from(mark: PendingMarkSpec) -> Self {
+        Self {
+            name: mark.name,
+            category: mark.category,
+            category_profile: mark.category_profile,
+            data: mark.data,
+            metadata: mark.metadata,
+        }
+    }
+}
+
+pub(crate) fn js_pending_marks(marks: Vec<PendingMarkSpec>) -> Vec<JsPendingMarkSpec> {
+    marks.into_iter().map(Into::into).collect()
+}
 
 /// Extract a human-readable error message from a `JsValue`.
 ///
@@ -352,9 +395,13 @@ pub fn wrap_js_llm_request_intercept_fn(func: Function) -> LlmRequestInterceptFn
             } else {
                 let marks_json = js_to_json(&js_pending_marks)
                     .map_err(|e| FlowError::Internal(js_error_message(&e)))?;
-                serde_json::from_value::<Vec<PendingMarkSpec>>(marks_json).map_err(|e| {
-                    FlowError::Internal(format!("failed to deserialize pendingMarks: {e}"))
-                })?
+                serde_json::from_value::<Vec<JsPendingMarkSpec>>(marks_json)
+                    .map_err(|e| {
+                        FlowError::Internal(format!("failed to deserialize pendingMarks: {e}"))
+                    })?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect()
             };
 
             Ok(LlmRequestInterceptOutcome {
