@@ -196,7 +196,7 @@ fn managed_environment_path(state_path: &Path, plugin_id: &str) -> Result<PathBu
             state_path.display()
         )
     })?;
-    let digest = Sha256::digest(plugin_id.as_bytes())
+    let digest = Sha256::digest(plugin_id.trim().as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();

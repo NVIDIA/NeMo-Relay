@@ -592,7 +592,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("python");
     std::fs::create_dir_all(&plugin_dir).unwrap();
-    write_python_dynamic_manifest(&plugin_dir, "acme.python");
+    write_python_dynamic_manifest(&plugin_dir, "  acme.python  ");
     let runner = FakePythonEnvironmentRunner::default();
     let server = ServerArgs::default();
 
@@ -621,6 +621,14 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         .expect("managed environment should be persisted");
     let environment_path = PathBuf::from(environment_ref);
     assert!(environment_path.is_absolute());
+    let expected_environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        environment_path.file_name(),
+        Some(OsStr::new(&expected_environment_name))
+    );
     assert!(
         environment_path
             .parent()
