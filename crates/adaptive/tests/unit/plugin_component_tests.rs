@@ -5,8 +5,6 @@
 
 use super::*;
 
-use std::sync::{Mutex, OnceLock};
-
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::llm::llm_request_intercepts;
 use nemo_relay::api::runtime::NemoRelayContextState;
@@ -14,14 +12,6 @@ use nemo_relay::api::runtime::global_context;
 use nemo_relay::plugin::{DiagnosticLevel, UnsupportedBehavior, clear_plugin_configuration};
 use nemo_relay::plugin::{Plugin, PluginRegistrationContext, rollback_registrations};
 use serde_json::json;
-
-use crate::test_support::GLOBAL_RUNTIME_TEST_MUTEX;
-
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
 
 fn reset_global() {
     let _ = clear_plugin_configuration();
@@ -89,10 +79,9 @@ fn validate_adaptive_plugin_config_reports_unknown_fields_and_backend_errors() {
     );
 }
 
-#[test]
-fn register_adaptive_component_is_idempotent_and_deregisters_cleanly() {
-    let _guard = test_mutex().lock().unwrap();
-    let _runtime_guard = GLOBAL_RUNTIME_TEST_MUTEX.blocking_lock();
+#[tokio::test(flavor = "current_thread")]
+async fn register_adaptive_component_is_idempotent_and_deregisters_cleanly() {
+    let _guard = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     let _ = clear_plugin_configuration();
     let _ = deregister_adaptive_component();
 
@@ -383,7 +372,7 @@ fn validate_adaptive_plugin_config_accepts_topology_sections() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
-    let _guard = GLOBAL_RUNTIME_TEST_MUTEX.lock().await;
+    let _guard = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     reset_global();
 
     let plugin = AdaptivePlugin;

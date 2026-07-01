@@ -28,7 +28,7 @@ Use these signals to decide whether this documentation path matches your current
 - Need to instrument calls without rewriting framework internals
 - Need to handle provider-specific request or response payloads
 - Need to keep non-serializable framework objects outside NeMo Relay payloads
-- Are building or reviewing third-party integration patches
+- Are building or reviewing a public-API framework integration
 
 If you own the application call sites directly, use [Instrument Applications](/instrument-applications/about) first.
 If your application uses a maintained public integration such as LangChain,
@@ -46,11 +46,11 @@ Use these guide links to move from the overview into task-specific instructions.
 - [Using Codecs](/integrate-into-frameworks/using-codecs) explains typed value codecs for framework-facing wrappers.
 - [Provider Codecs](/integrate-into-frameworks/provider-codecs) explains request codecs for request intercepts and request-side middleware, plus response codecs for event annotations.
 - [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) focuses on response-only annotations for subscribers and exporters.
-- [Code Examples](/integrate-into-frameworks/code-examples) collects fallback APIs, mark events, and repository patch workflow examples.
+- [Code Examples](/integrate-into-frameworks/code-examples) collects fallback APIs, mark events, and framework integration examples.
 
 For coding-agent hook and LLM gateway observability, use
 [NeMo Relay CLI](/nemo-relay-cli/about). That section covers Claude Code,
-Codex, Cursor, and Hermes Agent support.
+Codex, and Hermes Agent support.
 
 Start by identifying the framework's stable tool and LLM boundaries. Prefer
 managed execution wrappers wherever the framework exposes a callback that NeMo

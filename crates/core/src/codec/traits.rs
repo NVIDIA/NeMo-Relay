@@ -17,10 +17,10 @@ use super::response::AnnotatedLlmResponse;
 /// A bidirectional translator between opaque [`LlmRequest`] content and
 /// structured [`AnnotatedLlmRequest`].
 ///
-/// Codecs are implemented by integration patches (LangChain, LangChain-NVIDIA,
-/// LangGraph, etc.) since each SDK has its own request format. A codec is
-/// supplied per call by the caller; the built-in provider codecs can also be
-/// selected from a raw payload via [`crate::codec::resolve`].
+/// Codecs are implemented by framework integrations and provider adapters
+/// because each SDK has its own request format. A codec is supplied per call by
+/// the caller; the built-in provider codecs can also be selected from a raw
+/// payload via [`crate::codec::resolve`].
 ///
 /// # Design
 ///
@@ -29,8 +29,8 @@ use super::response::AnnotatedLlmResponse;
 ///   and request intercepts.
 /// - **`Send + Sync`**: Required because [`NemoRelayContextState`](crate::api::runtime::NemoRelayContextState)
 ///   is behind `Arc<RwLock<>>` and accessed from async contexts.
-/// - **Trait object**: Codecs are registered at runtime (e.g., by Python
-///   patches), so the Rust core cannot know concrete types at compile time.
+/// - **Trait object**: Codecs are registered at runtime by callers or bindings,
+///   so the Rust core cannot know concrete types at compile time.
 ///   Store as `Arc<dyn LlmCodec>`.
 pub trait LlmCodec: Send + Sync {
     /// Parse opaque request content into structured form.

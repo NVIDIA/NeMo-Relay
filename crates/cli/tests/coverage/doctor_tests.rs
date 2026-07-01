@@ -451,12 +451,6 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
         hook_status(CodingAgent::Codex, &agents, true),
         (Status::Pass, "hooks: injected during run".into())
     );
-    agents.cursor.patch_restore_hooks = true;
-    assert_eq!(
-        hook_status(CodingAgent::Cursor, &agents, true),
-        (Status::Pass, "hooks: patched during run".into())
-    );
-
     let temp = tempfile::tempdir().unwrap();
     let hook = temp.path().join("hooks.yaml");
     std::fs::write(&hook, "cmd: nemo-relay hook-forward hermes\n").unwrap();
@@ -471,14 +465,13 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     let (status, _) = hook_file_status(Ok(hook), CodingAgent::Hermes, false, "hooks");
     assert_eq!(status, Status::Info);
 
-    let mut agents = AgentConfigs::default();
+    let agents = AgentConfigs::default();
     let (status, details) = hook_status(CodingAgent::Hermes, &agents, true);
     assert_eq!(status, Status::Fail);
     assert!(details.contains("not installed"));
     let (status, details) = hook_status(CodingAgent::Hermes, &agents, false);
     assert_eq!(status, Status::Info);
     assert!(details.contains("not configured"));
-    agents.cursor.patch_restore_hooks = false;
 }
 
 #[test]
@@ -685,7 +678,7 @@ fn check_directory_reports_pass_warn_and_fail() {
 }
 
 #[test]
-fn hook_file_status_covers_resolution_missing_and_invalid_cursor_json() {
+fn hook_file_status_covers_resolution_and_missing_paths() {
     let resolution_error = hook_file_status(
         Err(CliError::Config("bad path".into())),
         CodingAgent::Hermes,
@@ -704,24 +697,6 @@ fn hook_file_status_covers_resolution_missing_and_invalid_cursor_json() {
     let (status, details) = hook_file_status(Ok(missing), CodingAgent::Hermes, false, "hooks");
     assert_eq!(status, Status::Info);
     assert!(details.contains("missing"));
-
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{"version":1,"hooks":"hook-forward cursor"}"#,
-    )
-    .unwrap();
-    let (status, details) = hook_file_status(
-        Ok(hooks_path),
-        CodingAgent::Cursor,
-        true,
-        "hooks: user-managed",
-    );
-    assert_eq!(status, Status::Fail);
-    assert!(
-        details.contains("invalid Cursor hooks JSON") || details.contains("has no hooks object")
-    );
 }
 
 #[test]
@@ -746,182 +721,6 @@ fn hook_file_status_covers_plain_files_and_read_errors() {
         hook_file_status(Ok(unreadable_path), CodingAgent::Hermes, false, "hooks");
     assert_eq!(status, Status::Fail);
     assert!(details.contains("could not read"));
-}
-
-#[test]
-fn cursor_hook_status_rejects_grouped_entries() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{
-          "version": 1,
-          "hooks": {
-            "beforeShellExecution": [
-              {
-                "matcher": "*",
-                "hooks": [
-                  {
-                    "type": "command",
-                    "command": "nemo-relay hook-forward cursor",
-                    "timeout": 30
-                  }
-                ]
-              }
-            ]
-          }
-        }"#,
-    )
-    .unwrap();
-
-    let (status, details) = hook_file_status(
-        Ok(hooks_path),
-        CodingAgent::Cursor,
-        true,
-        "hooks: user-managed",
-    );
-
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("nested hook groups"));
-    assert!(details.contains("direct command entries"));
-}
-
-#[test]
-fn cursor_hook_status_rejects_any_grouped_entries_when_nemo_hook_is_direct() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{
-          "version": 1,
-          "hooks": {
-            "sessionStart": [
-              {
-                "command": "nemo-relay hook-forward cursor",
-                "timeout": 30
-              }
-            ],
-            "beforeShellExecution": [
-              {
-                "matcher": "*",
-                "hooks": [
-                  {
-                    "type": "command",
-                    "command": "existing-audit-hook",
-                    "timeout": 30
-                  }
-                ]
-              }
-            ]
-          }
-        }"#,
-    )
-    .unwrap();
-
-    let (status, details) = hook_file_status(
-        Ok(hooks_path),
-        CodingAgent::Cursor,
-        true,
-        "hooks: user-managed",
-    );
-
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("nested hook groups"));
-    assert!(details.contains("direct command entries"));
-}
-
-#[test]
-fn cursor_hook_status_requires_version_one() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{
-          "hooks": {
-            "beforeShellExecution": [
-              {
-                "command": "nemo-relay hook-forward cursor",
-                "timeout": 30
-              }
-            ]
-          }
-        }"#,
-    )
-    .unwrap();
-
-    let (status, details) = hook_file_status(
-        Ok(hooks_path),
-        CodingAgent::Cursor,
-        true,
-        "hooks: user-managed",
-    );
-
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("version"));
-    assert!(details.contains("1"));
-}
-
-#[test]
-fn cursor_hook_status_rejects_non_one_version() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{
-          "version": 2,
-          "hooks": {
-            "beforeShellExecution": [
-              {
-                "command": "nemo-relay hook-forward cursor",
-                "timeout": 30
-              }
-            ]
-          }
-        }"#,
-    )
-    .unwrap();
-
-    let (status, details) = hook_file_status(
-        Ok(hooks_path),
-        CodingAgent::Cursor,
-        true,
-        "hooks: user-managed",
-    );
-
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("version"));
-    assert!(details.contains("1"));
-}
-
-#[test]
-fn cursor_hook_status_accepts_direct_versioned_entries() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::write(
-        &hooks_path,
-        r#"{
-          "version": 1,
-          "hooks": {
-            "beforeShellExecution": [
-              {
-                "command": "nemo-relay hook-forward cursor",
-                "timeout": 30
-              }
-            ]
-          }
-        }"#,
-    )
-    .unwrap();
-
-    let (status, details) = hook_file_status(
-        Ok(hooks_path),
-        CodingAgent::Cursor,
-        true,
-        "hooks: user-managed",
-    );
-
-    assert_eq!(status, Status::Pass);
-    assert!(details.contains("installed"));
 }
 
 #[tokio::test]
@@ -1148,7 +947,7 @@ async fn collect_observability_covers_absent_invalid_and_componentless_configs()
     assert!(
         no_observability
             .iter()
-            .any(|check| check.name == "Pricing" && check.details.contains("not configured"))
+            .any(|check| check.name == "Model pricing" && check.details.contains("not configured"))
     );
 }
 
@@ -1450,8 +1249,8 @@ async fn collect_observability_validates_pricing_file_source() {
 
     let pricing = checks
         .iter()
-        .find(|check| check.name == "Pricing source")
-        .expect("pricing source check");
+        .find(|check| check.name == "Model pricing source")
+        .expect("model pricing source check");
     assert_eq!(pricing.status, Status::Pass);
     assert!(pricing.details.contains("valid (1 entries)"));
 }
@@ -1482,8 +1281,8 @@ async fn collect_observability_fails_for_missing_pricing_file_source() {
 
     let pricing = checks
         .iter()
-        .find(|check| check.name == "Pricing source")
-        .expect("pricing source check");
+        .find(|check| check.name == "Model pricing source")
+        .expect("model pricing source check");
     assert_eq!(pricing.status, Status::Fail);
     assert!(pricing.details.contains("unreadable"));
 }

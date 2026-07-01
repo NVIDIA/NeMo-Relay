@@ -744,7 +744,7 @@ pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let register_builtins = || {
         crate::observability::plugin_component::register_observability_component()?;
         crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
-        crate::plugins::pricing::register_pricing_component()
+        crate::plugins::model_pricing::register_pricing_component()
     };
     match BUILTIN_PLUGIN_REGISTRATION.get_or_init(register_builtins) {
         Ok(()) => Ok(()),

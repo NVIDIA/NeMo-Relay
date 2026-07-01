@@ -49,9 +49,9 @@
       "types": "./pii_redaction.d.ts",
       "default": "./pii_redaction.js"
     },
-    "./pricing": {
-      "types": "./pricing.d.ts",
-      "default": "./pricing.js"
+    "./model_pricing": {
+      "types": "./model_pricing.d.ts",
+      "default": "./model_pricing.js"
     }
   },
   "engines": {

@@ -19,7 +19,6 @@ use crate::error::AdaptiveError;
 use crate::runtime::backend::build_backend;
 use crate::runtime::features::AdaptiveRuntime;
 use crate::runtime::validation::validate_config;
-use crate::test_support::GLOBAL_RUNTIME_TEST_MUTEX;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay::plugin::{ConfigPolicy, UnsupportedBehavior};
 
@@ -637,7 +636,7 @@ async fn adaptive_runtime_build_cache_request_facts_keeps_missing_stability_sema
 
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_bind_scope_requires_registration_and_passes_through_without_state() {
-    let _guard = GLOBAL_RUNTIME_TEST_MUTEX.lock().await;
+    let _guard = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     reset_runtime_context();
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
         agent_id: Some("agent-1".to_string()),

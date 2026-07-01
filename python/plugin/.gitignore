@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+.venv/
+.ruff_cache/
+__pycache__/
+*.egg-info/
+build/
+dist/
+proto/
+src/nemo_relay_plugin/_proto/plugin_worker_pb2.py
+src/nemo_relay_plugin/_proto/plugin_worker_pb2_grpc.py

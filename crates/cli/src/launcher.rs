@@ -19,9 +19,7 @@ use crate::config::{
     ServerArgs, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
-use crate::installer::{
-    generated_hooks, hook_forward_command, merge_hermes_config, merge_hooks, read_json_file,
-};
+use crate::installer::{generated_hooks, hook_forward_command, merge_hermes_config};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 
@@ -231,7 +229,6 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
     match agent {
         CodingAgent::ClaudeCode => "claude",
         CodingAgent::Codex => "codex",
-        CodingAgent::Cursor => "cursor-agent",
         CodingAgent::Hermes => "hermes",
     }
 }
@@ -244,7 +241,7 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
     }
     CodingAgent::infer(&argv[0]).ok_or_else(|| {
         CliError::Launch(format!(
-            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, --agent cursor, or --agent hermes",
+            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, or --agent hermes",
             argv[0]
         ))
     })
@@ -257,7 +254,6 @@ fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<S
     let command = match agent {
         CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
-        CodingAgent::Cursor => agents.cursor.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
     }?;
     let argv: Vec<_> = command.split_whitespace().map(ToOwned::to_owned).collect();
@@ -268,15 +264,8 @@ struct PreparedRun {
     argv: Vec<String>,
     env: Vec<(String, String)>,
     temp_dirs: Vec<PathBuf>,
-    cursor_restore: Option<CursorRestore>,
     hermes_restore: Option<HermesRestore>,
     notes: Vec<String>,
-}
-
-struct CursorRestore {
-    path: PathBuf,
-    backup_path: Option<PathBuf>,
-    had_original: bool,
 }
 
 struct HermesRestore {
@@ -336,7 +325,6 @@ impl PreparedRun {
             argv,
             env: vec![("NEMO_RELAY_GATEWAY_URL".into(), gateway_url.into())],
             temp_dirs: Vec::new(),
-            cursor_restore: None,
             hermes_restore: None,
             notes: Vec::new(),
         };
@@ -352,15 +340,6 @@ impl PreparedRun {
                 }
             }
             CodingAgent::Codex => run.prepare_codex(gateway_url),
-            CodingAgent::Cursor => {
-                if resolved.agents.cursor.patch_restore_hooks {
-                    if dry_run {
-                        run.prepare_cursor_dry()?;
-                    } else {
-                        run.prepare_cursor()?;
-                    }
-                }
-            }
             CodingAgent::Hermes => {
                 if dry_run {
                     run.prepare_hermes_dry(resolved.agents.hermes.hooks_path.as_deref())?;
@@ -474,32 +453,6 @@ impl PreparedRun {
         insert_after_agent(&mut self.argv, CodingAgent::Codex, args);
     }
 
-    // Temporarily merges Cursor hooks into the nearest project `.cursor/hooks.json`, backing up the
-    // original if it exists. Cursor discovers hooks from files, so run mode patches and later
-    // restores project state rather than passing hook config on the command line.
-    fn prepare_cursor(&mut self) -> Result<(), CliError> {
-        let path = cursor_hooks_path()?;
-        let (had_original, backup_path) = backup_existing_cursor_hooks(&path)?;
-        write_merged_cursor_hooks(&path)?;
-        self.cursor_restore = Some(CursorRestore {
-            path,
-            backup_path,
-            had_original,
-        });
-        Ok(())
-    }
-
-    // Records the Cursor hook file that would be patched during a real run without touching the
-    // filesystem, preserving dry-run as an inspection-only operation.
-    fn prepare_cursor_dry(&mut self) -> Result<(), CliError> {
-        let path = cursor_hooks_path()?;
-        self.notes.push(format!(
-            "would temporarily merge NeMo Relay hooks into {}",
-            path.display()
-        ));
-        Ok(())
-    }
-
     // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. For
     // transparent runs, temporarily merge gateway hook-forward entries into the configured Hermes
     // hook file, then restore it after the child exits.
@@ -551,14 +504,6 @@ impl PreparedRun {
             let _ = std::fs::remove_dir_all(dir);
         }
 
-        if let Some(cursor) = &self.cursor_restore {
-            restore_hook_file(
-                &cursor.path,
-                cursor.backup_path.as_deref(),
-                cursor.had_original,
-                "Cursor",
-            )?;
-        }
         if let Some(hermes) = &self.hermes_restore {
             restore_hook_file(
                 &hermes.path,
@@ -661,9 +606,6 @@ impl PreparedRun {
         println!("argv = {}", self.argv.join(" "));
         for (name, value) in &self.env {
             println!("env.{name} = {value}");
-        }
-        if let Some(cursor) = &self.cursor_restore {
-            println!("cursor_hooks = {}", cursor.path.display());
         }
         for note in &self.notes {
             println!("note = {note}");
@@ -887,18 +829,6 @@ fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
     Ok(())
 }
 
-// Backs up an existing Cursor hook file before run-mode patching. The return value records both the
-// original-file state and backup path so restore can either copy back or remove the generated file.
-fn backup_existing_cursor_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), CliError> {
-    let had_original = path.exists();
-    if !had_original {
-        return Ok((false, None));
-    }
-    let backup = path.with_extension(format!("json.nemo-relay-run.bak.{}", timestamp()?));
-    std::fs::copy(path, &backup)?;
-    Ok((true, Some(backup)))
-}
-
 // Backs up an existing Hermes hook config before run-mode patching.
 fn backup_existing_hermes_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), CliError> {
     let had_original = path.exists();
@@ -908,28 +838,6 @@ fn backup_existing_hermes_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), 
     let backup = path.with_extension(format!("yaml.nemo-relay-run.bak.{}", timestamp()?));
     std::fs::copy(path, &backup)?;
     Ok((true, Some(backup)))
-}
-
-// Creates the Cursor hooks parent directory when needed, merges generated gateway hooks with any
-// existing hook file, and writes the patched JSON used for this transparent run.
-fn write_merged_cursor_hooks(path: &Path) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut merged = merge_hooks(
-        read_json_file(path)?,
-        generated_hooks(
-            CodingAgent::Cursor,
-            &hook_forward_command(&transparent_hook_executable(), CodingAgent::Cursor),
-        ),
-    )?;
-    if let Some(root) = merged.as_object_mut() {
-        root.insert("version".to_string(), json!(1));
-    }
-    let contents = serde_json::to_string_pretty(&merged)
-        .map_err(|error| CliError::Launch(error.to_string()))?;
-    std::fs::write(path, contents)?;
-    Ok(())
 }
 
 // Creates the Hermes config parent directory when needed, merges generated gateway hooks with any
@@ -1031,17 +939,6 @@ fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
     let path = std::env::temp_dir().join(format!("{prefix}-{}", timestamp()?));
     std::fs::create_dir_all(&path)?;
     Ok(path)
-}
-
-// Locates Cursor's project hook file by walking up to the nearest ancestor that already contains a
-// `.cursor` directory, falling back to the current directory for first-time project setup.
-fn cursor_hooks_path() -> Result<PathBuf, CliError> {
-    let cwd = std::env::current_dir()?;
-    let project = cwd
-        .ancestors()
-        .find(|ancestor| ancestor.join(".cursor").is_dir())
-        .unwrap_or(cwd.as_path());
-    Ok(project.join(".cursor/hooks.json"))
 }
 
 // Returns a monotonic-enough wall-clock nanosecond stamp for temp and backup names. System time

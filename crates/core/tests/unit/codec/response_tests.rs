@@ -10,14 +10,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::super::request::{ContentPart, MessageContent};
 use super::super::traits::LlmResponseCodec;
-use crate::codec::pricing::pricing_test_mutex;
+use crate::codec::model_pricing::pricing_test_mutex;
 use crate::error::FlowError;
 use crate::json::Json;
 use crate::plugin::{
     DiagnosticLevel, PluginComponentSpec, PluginConfig, clear_plugin_configuration,
     initialize_plugins, validate_plugin_config,
 };
-use crate::plugins::pricing::register_pricing_component;
+use crate::plugins::model_pricing::register_pricing_component;
 
 struct ResetPricingResolverGuard;
 
@@ -705,7 +705,7 @@ fn test_pricing_resolver_validates_inline_catalogs() {
 
     assert!(
         err.to_string()
-            .contains("unsupported pricing catalog version 2")
+            .contains("unsupported model pricing catalog version 2")
     );
 }
 
@@ -765,7 +765,7 @@ fn test_pricing_resolver_validates_custom_source_catalogs() {
 
     assert!(
         err.to_string()
-            .contains("unsupported pricing catalog version 2")
+            .contains("unsupported model pricing catalog version 2")
     );
 }
 
@@ -873,7 +873,7 @@ fn test_pricing_plugin_validation_reports_invalid_json_and_catalog_errors() {
     assert!(
         report.diagnostics[0]
             .message
-            .contains("unsupported pricing catalog version 2")
+            .contains("unsupported model pricing catalog version 2")
     );
 
     let duplicate = validate_plugin_config(&PluginConfig {
@@ -914,7 +914,7 @@ fn test_pricing_catalog_rejects_duplicate_model_aliases() {
 
     assert!(
         err.to_string()
-            .contains("duplicate pricing model alias 'a/same-model'")
+            .contains("duplicate model pricing alias 'a/same-model'")
     );
 }
 
@@ -930,7 +930,7 @@ fn test_pricing_catalog_rejects_unsupported_schema_version() {
 
     assert!(
         err.to_string()
-            .contains("unsupported pricing catalog version 2")
+            .contains("unsupported model pricing catalog version 2")
     );
 }
 
@@ -1068,7 +1068,7 @@ fn test_pricing_resolver_file_and_source_error_branches() {
     .unwrap_err();
     assert!(
         err.to_string()
-            .contains("could not read pricing catalog file")
+            .contains("could not read model pricing catalog file")
     );
     assert!(
         err.to_string()
@@ -1107,7 +1107,7 @@ fn test_pricing_resolver_file_and_source_error_branches() {
     let err = PricingResolver::from_sources(vec![Box::new(ErrorPricingSource)]).unwrap_err();
     assert!(
         err.to_string()
-            .contains("unsupported pricing catalog version 99")
+            .contains("unsupported model pricing catalog version 99")
     );
 }
 

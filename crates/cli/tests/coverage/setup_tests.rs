@@ -91,9 +91,9 @@ impl Drop for EnvScope {
 fn detect_installed_agents_finds_binaries_on_path() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
-    // Drop stub binaries for two of the four supported agents — confirming detection picks up
+    // Drop stub binaries for two of the three supported agents — confirming detection picks up
     // only the ones present and ignores the others.
-    for exec in ["claude", "cursor-agent"] {
+    for exec in ["claude", "hermes"] {
         let path = temp.path().join(exec);
         std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -104,9 +104,8 @@ fn detect_installed_agents_finds_binaries_on_path() {
     // race with every other test that reads the environment.
     let detected = detect_installed_agents_in(Some(temp.path().as_os_str()));
     assert!(detected.contains(&CodingAgent::ClaudeCode));
-    assert!(detected.contains(&CodingAgent::Cursor));
+    assert!(detected.contains(&CodingAgent::Hermes));
     assert!(!detected.contains(&CodingAgent::Codex));
-    assert!(!detected.contains(&CodingAgent::Hermes));
 }
 
 #[test]

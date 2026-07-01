@@ -36,9 +36,9 @@ If you want Relay to add cost estimates, initialize the built-in `pricing`
 plugin before the LLM call and attach a response codec that decodes `model` and
 token `usage` from the provider response. Provider- or framework-reported cost
 is preserved when present. Otherwise Relay estimates cost only when a configured
-pricing source matches the response model and usage fields. For catalog setup
-and embedded plugin examples, see
-[Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+model pricing source matches the response model and usage fields. For catalog
+setup and embedded plugin examples, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
 
 ## Integration Pattern
 
@@ -223,7 +223,7 @@ Check both behavior and instrumentation:
 - The provider result matches what the application returned before the wrapper was added.
 - The subscriber prints an agent or request scope event.
 - The subscriber prints LLM start and LLM end events for `demo-provider`.
-- If pricing is configured, LLM end events include
+- If model pricing is configured, LLM end events include
   `annotated_response.usage.cost` only when a response codec decoded model and
   usage fields and a source matched the model.
 

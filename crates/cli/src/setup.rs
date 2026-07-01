@@ -60,7 +60,7 @@ pub(crate) fn prompt_user(
     }
     // Only print the detected-agents listing for the unscoped wizard (`nemo-relay config`),
     // where the user is about to pick from the multi-select. When the agent was already chosen
-    // via the easy-path shortcut (`nemo-relay codex`), listing the other three agents is noise.
+    // via the easy-path shortcut (`nemo-relay codex`), listing the other two agents is noise.
     if agent_hint.is_none() {
         println!();
         print_detected_agents(detected_agents);
@@ -182,8 +182,8 @@ fn ask_scope(
 ) -> Result<ConfigScope, CliError> {
     let options = [ConfigScope::Project, ConfigScope::Global, ConfigScope::Both];
     let labels: Vec<&str> = options.iter().map(|s| s.label()).collect();
-    // Cursor starts on the user's existing scope if there is one (so re-running the wizard
-    // doesn't accidentally relocate their config), else `Project` per the design default.
+    // Start on the user's existing scope if there is one (so re-running the wizard doesn't
+    // accidentally relocate their config), else `Project` per the design default.
     let default_idx = existing
         .and_then(|s| options.iter().position(|opt| *opt == s))
         .unwrap_or(0);
@@ -204,7 +204,6 @@ fn ask_agents(
     let all_supported = [
         CodingAgent::ClaudeCode,
         CodingAgent::Codex,
-        CodingAgent::Cursor,
         CodingAgent::Hermes,
     ];
     let labels: Vec<String> = all_supported

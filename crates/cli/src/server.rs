@@ -23,7 +23,7 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::adapters::{claude_code, codex, cursor, hermes};
+use crate::adapters::{claude_code, codex, hermes};
 use crate::config::GatewayConfig;
 use crate::error::CliError;
 use crate::gateway;
@@ -169,7 +169,6 @@ fn router_with_state(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
-        .route("/hooks/cursor", post(cursor_hook))
         .route("/hooks/hermes", post(hermes_hook))
         .route("/responses", post(gateway::passthrough))
         .route("/chat/completions", post(gateway::passthrough))
@@ -365,23 +364,6 @@ async fn claude_code_hook(
     state.touch();
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = claude_code::adapt(payload, &headers);
-    state
-        .sessions
-        .apply_events(&headers, outcome.events)
-        .await?;
-    Ok(Json(outcome.response))
-}
-
-// Handles Cursor hook payloads and preserves Cursor's fail-open response shape. Shell and MCP hook
-// names are already normalized by the adapter before session state is updated.
-async fn cursor_hook(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    payload: Result<Json<Value>, JsonRejection>,
-) -> Result<Json<Value>, CliError> {
-    state.touch();
-    let Json(payload) = payload.map_err(hook_payload_rejection)?;
-    let outcome = cursor::adapt(payload, &headers);
     state
         .sessions
         .apply_events(&headers, outcome.events)
