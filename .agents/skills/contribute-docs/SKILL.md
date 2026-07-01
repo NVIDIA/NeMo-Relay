@@ -20,6 +20,7 @@ Use this skill for docs-only or example-heavy changes.
 
 - Prefer the documented public API, not internal shortcuts
 - Keep package names, repo references, and build commands current
+- When documenting contribution workflow, require an issue before external contribution PRs and note that NVIDIA contributors may use a GitHub or Linear issue.
 - Update entry-point docs when examples or reading paths change
 - Keep release-process and release-notes guidance in repo-maintainer docs such as
   `RELEASING.md`, not as user-facing docs pages or `CHANGELOG.md`
