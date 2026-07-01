@@ -54,8 +54,6 @@
 //! All middleware is priority-ordered (ascending) and registered by name for
 //! easy addition and removal at runtime.
 pub mod api;
-#[doc(hidden)]
-pub mod bindings;
 pub mod codec;
 pub mod config_editor;
 mod context;

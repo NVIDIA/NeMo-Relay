@@ -16,8 +16,7 @@ use std::sync::Arc;
 use js_sys::Function;
 #[cfg(target_arch = "wasm32")]
 use send_wrapper::SendWrapper;
-#[cfg(target_arch = "wasm32")]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 #[cfg(target_arch = "wasm32")]
 use tokio_stream::StreamExt;
@@ -28,16 +27,13 @@ use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
-#[cfg(any(target_arch = "wasm32", test))]
-pub(crate) use nemo_relay::bindings::js::JsPendingMarkSpec;
-pub(crate) use nemo_relay::bindings::js::js_pending_marks;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 #[cfg(target_arch = "wasm32")]
 use nemo_relay::codec::response::AnnotatedLlmResponse;
@@ -50,6 +46,51 @@ use crate::convert::record_callback_error;
 use crate::convert::{js_callback_to_json, js_to_json, json_to_js};
 #[cfg(target_arch = "wasm32")]
 use crate::types::WasmEvent;
+
+/// JavaScript-facing pending mark DTO.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct JsPendingMarkSpec {
+    name: String,
+    #[serde(default)]
+    category: Option<EventCategory>,
+    #[serde(default)]
+    category_profile: Option<CategoryProfile>,
+    #[serde(default)]
+    data: Option<Json>,
+    #[serde(default)]
+    metadata: Option<Json>,
+}
+
+impl From<JsPendingMarkSpec> for PendingMarkSpec {
+    fn from(mark: JsPendingMarkSpec) -> Self {
+        Self {
+            name: mark.name,
+            category: mark.category,
+            category_profile: mark.category_profile,
+            data: mark.data,
+            metadata: mark.metadata,
+        }
+    }
+}
+
+impl From<PendingMarkSpec> for JsPendingMarkSpec {
+    fn from(mark: PendingMarkSpec) -> Self {
+        Self {
+            name: mark.name,
+            category: mark.category,
+            category_profile: mark.category_profile,
+            data: mark.data,
+            metadata: mark.metadata,
+        }
+    }
+}
+
+/// Convert canonical pending marks to JavaScript-facing DTOs.
+#[must_use]
+pub(crate) fn js_pending_marks(marks: Vec<PendingMarkSpec>) -> Vec<JsPendingMarkSpec> {
+    marks.into_iter().map(Into::into).collect()
+}
 
 /// Extract a human-readable error message from a `JsValue`.
 ///

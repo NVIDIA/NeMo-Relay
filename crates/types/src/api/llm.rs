@@ -67,3 +67,21 @@ impl LlmRequestInterceptOutcome {
         self
     }
 }
+
+impl From<LlmRequest> for LlmRequestInterceptOutcome {
+    fn from(request: LlmRequest) -> Self {
+        Self::new(request, None)
+    }
+}
+
+impl From<(LlmRequest, AnnotatedLlmRequest)> for LlmRequestInterceptOutcome {
+    fn from((request, annotated_request): (LlmRequest, AnnotatedLlmRequest)) -> Self {
+        Self::new(request, Some(annotated_request))
+    }
+}
+
+impl From<(LlmRequest, Option<AnnotatedLlmRequest>)> for LlmRequestInterceptOutcome {
+    fn from((request, annotated_request): (LlmRequest, Option<AnnotatedLlmRequest>)) -> Self {
+        Self::new(request, annotated_request)
+    }
+}

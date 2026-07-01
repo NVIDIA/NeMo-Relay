@@ -15,10 +15,9 @@ use std::sync::{
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmJsonStream, LlmNext,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
-    NativePlugin, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSubscriberCb,
+    NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb,
+    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
     NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
@@ -297,17 +296,17 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 280);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 272);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
-                152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272,
+                152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativePluginV1>(), 64);
-        assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48, 56]);
+        assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
+        assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
         assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 40);
         assert_eq!(stream_offsets(), [0, 8, 16, 24, 32]);
@@ -316,24 +315,24 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 140);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 136);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80,
-                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136,
+                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativePluginV1>(), 32);
-        assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24, 28]);
+        assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
+        assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
         assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
         assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
     }
 }
 
-fn host_api_offsets() -> [usize; 35] {
+fn host_api_offsets() -> [usize; 34] {
     [
         offset_of!(NemoRelayNativeHostApiV1, abi_version),
         offset_of!(NemoRelayNativeHostApiV1, struct_size),
@@ -402,14 +401,10 @@ fn host_api_offsets() -> [usize; 35] {
         offset_of!(NemoRelayNativeHostApiV1, scope_stack_binding_free),
         offset_of!(NemoRelayNativeHostApiV1, scope_stack_active),
         offset_of!(NemoRelayNativeHostApiV1, scope_stack_with_current),
-        offset_of!(
-            NemoRelayNativeHostApiV1,
-            llm_request_intercept_outcome_contract_version
-        ),
     ]
 }
 
-fn plugin_offsets() -> [usize; 8] {
+fn plugin_offsets() -> [usize; 7] {
     [
         offset_of!(NemoRelayNativePluginV1, struct_size),
         offset_of!(NemoRelayNativePluginV1, plugin_kind),
@@ -418,10 +413,6 @@ fn plugin_offsets() -> [usize; 8] {
         offset_of!(NemoRelayNativePluginV1, validate),
         offset_of!(NemoRelayNativePluginV1, register),
         offset_of!(NemoRelayNativePluginV1, drop),
-        offset_of!(
-            NemoRelayNativePluginV1,
-            llm_request_intercept_outcome_contract_version
-        ),
     ]
 }
 
@@ -1100,8 +1091,6 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
         scope_stack_binding_free: capture_scope_stack_binding_free,
         scope_stack_active: true_scope_stack_active,
         scope_stack_with_current: capture_scope_stack_with_current,
-        llm_request_intercept_outcome_contract_version:
-            NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
     }
 }
 
@@ -4736,8 +4725,6 @@ fn direct_export_plugin_validates_host_table_and_kind_allocation() {
         validate: None,
         register: None,
         drop: None,
-        llm_request_intercept_outcome_contract_version:
-            NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
     };
     assert_eq!(
         unsafe { nemo_relay_plugin::export_plugin(&bad_host, &mut plugin, CountingPlugin) },
@@ -4753,18 +4740,6 @@ fn direct_export_plugin_validates_host_table_and_kind_allocation() {
         unsafe { nemo_relay_plugin::export_plugin(&short_host, &mut plugin, CountingPlugin) },
         NemoRelayStatus::InvalidArg
     );
-
-    let mut incompatible_host = host;
-    incompatible_host.llm_request_intercept_outcome_contract_version =
-        NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION + 1;
-    assert_eq!(
-        unsafe {
-            nemo_relay_plugin::export_plugin(&incompatible_host, &mut plugin, CountingPlugin)
-        },
-        NemoRelayStatus::InvalidArg
-    );
-    assert!(plugin.plugin_kind.is_null());
-    assert!(plugin.user_data.is_null());
 
     *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
     assert_eq!(
@@ -4960,8 +4935,6 @@ fn exported_entry_symbol_validates_args_before_constructor() {
         validate: None,
         register: None,
         drop: None,
-        llm_request_intercept_outcome_contract_version:
-            NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
     };
     assert_eq!(
         unsafe { constructor_counting_entry(&bad_host, &mut plugin) },
@@ -4985,15 +4958,6 @@ fn exported_entry_symbol_validates_args_before_constructor() {
     short_host.struct_size = size_of::<NemoRelayNativeHostApiV1>() - 1;
     assert_eq!(
         unsafe { constructor_counting_entry(&short_host, &mut plugin) },
-        NemoRelayStatus::InvalidArg
-    );
-    assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 0);
-
-    let mut incompatible_host = host;
-    incompatible_host.llm_request_intercept_outcome_contract_version =
-        NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION + 1;
-    assert_eq!(
-        unsafe { constructor_counting_entry(&incompatible_host, &mut plugin) },
         NemoRelayStatus::InvalidArg
     );
     assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 0);

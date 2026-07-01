@@ -30,8 +30,6 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 1;
-/// Final canonical LLM request-intercept outcome contract version.
-pub const NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION: u32 = 1;
 
 /// Status codes returned by stable native ABI functions.
 #[repr(i32)]
@@ -497,8 +495,6 @@ pub struct NemoRelayNativeHostApiV1 {
         cb: NemoRelayNativeWithScopeStackCb,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
-    /// Required canonical LLM request-intercept outcome contract version.
-    pub llm_request_intercept_outcome_contract_version: u32,
 }
 
 // The host API table is immutable after construction. Function pointers and
@@ -523,8 +519,6 @@ pub struct NemoRelayNativePluginV1 {
     pub register: Option<NemoRelayNativePluginRegisterFn>,
     /// Optional plugin-owned state destructor.
     pub drop: NemoRelayNativePluginDropFn,
-    /// Required canonical LLM request-intercept outcome contract version.
-    pub llm_request_intercept_outcome_contract_version: u32,
 }
 
 impl Default for NemoRelayNativePluginV1 {
@@ -537,8 +531,6 @@ impl Default for NemoRelayNativePluginV1 {
             validate: None,
             register: None,
             drop: None,
-            llm_request_intercept_outcome_contract_version:
-                NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
         }
     }
 }
@@ -2667,11 +2659,6 @@ where
     if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {
         return NemoRelayStatus::InvalidArg;
     }
-    if host_ref.llm_request_intercept_outcome_contract_version
-        != NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION
-    {
-        return NemoRelayStatus::InvalidArg;
-    }
 
     let plugin = constructor();
     let kind = plugin.plugin_kind().to_owned();
@@ -2692,8 +2679,6 @@ where
             validate: Some(validate_trampoline::<P>),
             register: Some(register_trampoline::<P>),
             drop: Some(drop_plugin_state::<P>),
-            llm_request_intercept_outcome_contract_version:
-                NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
         };
     }
     std::mem::forget(kind_handle);

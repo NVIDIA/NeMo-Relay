@@ -138,3 +138,36 @@ fn llm_request_intercept_outcome_round_trips_pending_marks() {
         serde_json::from_value(encoded).expect("outcome should deserialize");
     assert_eq!(decoded, outcome);
 }
+
+#[test]
+fn llm_request_intercept_outcome_converts_from_request_inputs() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({ "prompt": "hello" }),
+    };
+    let annotated_request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "messages": [],
+        "model": "model"
+    }))
+    .expect("annotated request should deserialize");
+
+    let request_only: LlmRequestInterceptOutcome = request.clone().into();
+    assert_eq!(
+        request_only,
+        LlmRequestInterceptOutcome::new(request.clone(), None)
+    );
+
+    let required_annotation: LlmRequestInterceptOutcome =
+        (request.clone(), annotated_request.clone()).into();
+    assert_eq!(
+        required_annotation,
+        LlmRequestInterceptOutcome::new(request.clone(), Some(annotated_request.clone()))
+    );
+
+    let optional_annotation: LlmRequestInterceptOutcome =
+        (request.clone(), Some(annotated_request.clone())).into();
+    assert_eq!(
+        optional_annotation,
+        LlmRequestInterceptOutcome::new(request, Some(annotated_request))
+    );
+}

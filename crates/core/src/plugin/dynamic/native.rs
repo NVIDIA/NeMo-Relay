@@ -15,15 +15,15 @@ use std::task::{Context, Poll};
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
-    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
-    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
-    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
+    NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -401,13 +401,6 @@ fn validate_plugin_descriptor(
             plugin.struct_size
         )));
     }
-    if plugin.llm_request_intercept_outcome_contract_version
-        != NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION
-    {
-        return Err(PluginError::InvalidConfig(format!(
-            "native plugin '{plugin_id}' returned an incompatible LLM request-intercept outcome contract"
-        )));
-    }
     if plugin.plugin_kind.is_null() {
         return Err(PluginError::InvalidConfig(format!(
             "native plugin '{plugin_id}' returned a null plugin_kind"
@@ -603,8 +596,6 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
         scope_stack_binding_free: native_scope_stack_binding_free,
         scope_stack_active: native_scope_stack_active,
         scope_stack_with_current: native_scope_stack_with_current,
-        llm_request_intercept_outcome_contract_version:
-            NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION,
     }) as *const _
 }
 
