@@ -11,9 +11,8 @@ codecov:
     # | Python      | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
     # | Go          | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
     # | Node.js     | linux-amd64, linux-arm64, macos-arm64                                | 3       |
-    # | WebAssembly | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
-    # | Total       |                                                                      | 22      |
-    after_n_builds: 22
+    # | Total       |                                                                      | 17      |
+    after_n_builds: 17
     wait_for_ci: true
 
 coverage:
@@ -106,16 +105,6 @@ component_management:
           threshold: 0.5%
           base: auto
           if_ci_failed: error
-    - component_id: wasm_binding
-      name: WebAssembly Binding
-      paths:
-        - "crates/wasm/wrappers/nodejs/*.js"
-      statuses:
-        - type: project
-          target: 84% # cannot be any higher due to internals
-          threshold: 0.5%
-          base: auto
-          if_ci_failed: error
     - component_id: plugin_sdk
       name: Dynamic Plugin SDKs
       paths:
@@ -132,7 +121,7 @@ component_management:
           if_ci_failed: error
 
 comment:
-  after_n_builds: 22
+  after_n_builds: 17
   layout: "header, diff, components, files, footer"
   behavior: default
   require_changes: false
@@ -160,6 +149,3 @@ ignore:
   - "**/*.pyi"
   - "python/plugin/src/nemo_relay_plugin/_proto/**"
   - "python/nemo_relay/lib_native*.dylib.dSYM/**"
-  # WebAssembly Rust wrappers are covered through wasm-pack execution and
-  # reported through generated package JavaScript coverage.
-  - "crates/wasm/src/"

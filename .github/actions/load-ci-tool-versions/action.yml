@@ -26,9 +26,6 @@ outputs:
   just_version:
     description: just version
     value: ${{ steps.load.outputs.just_version }}
-  wasm_pack_version:
-    description: wasm-pack version
-    value: ${{ steps.load.outputs.wasm_pack_version }}
   cargo_llvm_cov_version:
     description: cargo-llvm-cov version
     value: ${{ steps.load.outputs.cargo_llvm_cov_version }}
@@ -60,7 +57,6 @@ runs:
           NEMO_RELAY_CI_UV_VERSION
           NEMO_RELAY_CI_PRE_COMMIT_VERSION
           NEMO_RELAY_CI_JUST_VERSION
-          NEMO_RELAY_CI_WASM_PACK_VERSION
           NEMO_RELAY_CI_CARGO_LLVM_COV_VERSION
           NEMO_RELAY_CI_CARGO_NEXTEST_VERSION
           NEMO_RELAY_CI_CARGO_DENY_VERSION
@@ -82,7 +78,6 @@ runs:
           printf 'uv_version=%s\n' "$NEMO_RELAY_CI_UV_VERSION"
           printf 'pre_commit_version=%s\n' "$NEMO_RELAY_CI_PRE_COMMIT_VERSION"
           printf 'just_version=%s\n' "$NEMO_RELAY_CI_JUST_VERSION"
-          printf 'wasm_pack_version=%s\n' "$NEMO_RELAY_CI_WASM_PACK_VERSION"
           printf 'cargo_llvm_cov_version=%s\n' "$NEMO_RELAY_CI_CARGO_LLVM_COV_VERSION"
           printf 'cargo_nextest_version=%s\n' "$NEMO_RELAY_CI_CARGO_NEXTEST_VERSION"
           printf 'cargo_deny_version=%s\n' "$NEMO_RELAY_CI_CARGO_DENY_VERSION"

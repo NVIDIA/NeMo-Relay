@@ -99,8 +99,8 @@ implementation model.
 
 The core runtime is written in Rust and uses JSON-compatible payloads for the
 shared runtime boundary. The primary documented bindings are Rust, Python, and
-Node.js. Python uses a native PyO3 extension, Node.js uses a NAPI binding, Go
-uses the raw C FFI, and WebAssembly uses a `wasm-bindgen` binding.
+Node.js. Python uses a native PyO3 extension, Node.js uses a NAPI binding, and
+Go uses the raw C FFI.
 
 The documentation and examples also cover integration with Agent Trajectory
 Interchange Format (ATIF) trajectory export, OpenTelemetry traces,
@@ -129,9 +129,9 @@ coverage.
 - Use [Rust Quick Start](/getting-started/quick-start/rust) when you want the native
   runtime surface or are building lower-level integrations.
 
-### Are Go, WebAssembly, And FFI Supported?
+### Are Go And FFI Supported?
 
-Go, WebAssembly, and the raw C FFI surface are experimental and source-first.
+Go and the raw C FFI surface are experimental and source-first.
 Use the repository source tree and binding-specific tests when you need those
 surfaces.
 
@@ -139,7 +139,7 @@ surfaces.
 
 Middleware registrations are runtime-local and process-local. A Python callback
 registered as middleware does not automatically execute inside a separate
-Node.js, Rust, Go, or WebAssembly process.
+Node.js, Rust, or Go process.
 
 The runtime semantics are shared across bindings, so the same policy can be
 implemented or packaged consistently in each language. For cross-language
@@ -445,7 +445,7 @@ The primary generated entry points are [Python API](/reference/api/python-librar
 [Node.js API](/reference/api/nodejs-library-reference), and
 [Rust API](/reference/api/rust-library-reference).
 
-Go, WebAssembly, and raw FFI are experimental and source-first; use their source
+Go and raw FFI are experimental and source-first; use their source
 directories and tests when you need exact behavior.
 
 ### What Should I Know About Performance?
@@ -514,9 +514,6 @@ Choose the smallest validation set that covers the touched surface:
 - Python binding changes: `uv run pytest`.
 - Node.js binding changes: `npm test --workspace=nemo-relay-node`.
 - Go binding changes: build the release FFI library first, then run Go tests under `go/nemo_relay`.
-- WebAssembly changes: run `just test-wasm` and the WebAssembly crate tests
-  (`cargo test -p nemo-relay-wasm`) when integration behavior changed. For
-  focused debugging, you can run `wasm-pack test --node crates/wasm` directly.
 - Documentation changes: run `./scripts/build-docs.sh html`.
 
 Refer to [Testing and Documentation](/contribute/testing-and-docs) for the

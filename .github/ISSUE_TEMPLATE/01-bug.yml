@@ -17,7 +17,6 @@ body:
         - Python binding
         - Node.js binding
         - Go binding
-        - WebAssembly binding
         - C FFI
         - Adaptive runtime
         - Middleware or guardrails

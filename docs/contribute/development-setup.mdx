@@ -16,7 +16,7 @@ the published package for your language. Use
 [Installation](/getting-started/installation) for package-manager commands
 covering the CLI, Python, Node.js, Rust, and supported integrations.
 
-Go, WebAssembly, and the raw FFI surface are currently experimental and remain
+Go and the raw FFI surface are currently experimental and remain
 source-first.
 
 ## Source Development
@@ -29,10 +29,9 @@ Install these tools before you start:
 - `just`
 - Go 1.21 or newer
 - Node.js LTS
-- `wasm-pack`
 - `cargo-deny`
 
-If you touch Go, WebAssembly, or the raw FFI surface, build and validate those
+If you touch Go or the raw FFI surface, build and validate those
 bindings from source in the same branch.
 
 Clone the repository and build the workspace:
@@ -54,7 +53,6 @@ cd go/nemo_relay
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 cd ../..
 
-wasm-pack test --node crates/wasm
 ```
 
 ## Branch Naming

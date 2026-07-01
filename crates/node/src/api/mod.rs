@@ -1380,7 +1380,7 @@ pub fn with_scope(
     let scope_stack = current_scope_stack_handle();
     let scope_uuid = scope_handle.inner.uuid;
     // Hand the callback a real `ScopeHandle` instance, matching the Rust,
-    // Python, and WebAssembly bindings, so it can be passed back into `event`,
+    // Python bindings, so it can be passed back into `event`,
     // `toolCallExecute`, and `llmCallExecute`. The instance is materialized on
     // the JS thread because a `napi_wrap`'d handle cannot cross the
     // threadsafe-function boundary as plain JSON.

@@ -25,7 +25,7 @@ surfaces touched by a change.
 - If any Rust code changed, also run `cargo fmt --all`.
 - If any Rust code changed, also run `cargo clippy --workspace --all-targets -- -D warnings`.
 - If `crates/core` or `crates/adaptive` changed, run the full matrix across Rust,
-  Python, Go, Node.js, and WebAssembly.
+  Python, Go, and Node.js.
 - If a language surface changed, always run that language's test target even when
   Rust core did not change.
 - If dynamic plugin behavior changed, use `maintain-dynamic-plugins` and include
@@ -42,15 +42,13 @@ surfaces touched by a change.
 - **Core runtime or shared semantics changed**
   Use `test-rust-core`. This always includes `just test-rust`,
   `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  and the full matrix across Rust, Python, Go, Node.js, and WebAssembly.
+  and the full matrix across Rust, Python, Go, and Node.js.
 - **Python-only wrapper or binding change**
   Use `test-python-binding`.
 - **Go binding change**
   Use `test-go-binding`.
 - **Node.js binding change**
   Use `test-node-binding`.
-- **WebAssembly binding change**
-  Use `test-wasm-binding`.
 - **FFI surface change**
   Use `test-ffi-surface`.
 - **Framework integration change**
@@ -73,7 +71,6 @@ just test-rust
 just test-python
 just test-go
 just test-node
-just test-wasm
 ```
 
 ## Common Targeted Commands
@@ -104,11 +101,6 @@ just build-node
 just test-node
 npm run format --workspace=nemo-relay-node
 
-# WebAssembly
-just build-wasm
-just test-wasm
-npm run precommit:format --workspace=nemo-relay-node -- crates/wasm/wrappers crates/wasm/tests-js crates/wasm/scripts
-
 # Docs site
 just docs
 just docs-linkcheck
@@ -120,7 +112,6 @@ just docs-linkcheck
 - `test-python-binding`
 - `test-go-binding`
 - `test-node-binding`
-- `test-wasm-binding`
 - `test-ffi-surface`
 - `maintain-dynamic-plugins`
 
@@ -148,8 +139,8 @@ Examples from this repo:
 - Matching `Cargo.toml`, `Cargo.lock`, or `deny.toml` triggers `cargo deny check`.
 - Matching `Cargo.lock`, `uv.lock`, or `package-lock.json` triggers
   the attributions generators.
-- Matching Node/WebAssembly public JS/TS surfaces can also trigger the public docstring
-  checks, while matching Node/WebAssembly JS/TS files trigger the prettier wrapper.
+- Matching Node.js public JS/TS surfaces can also trigger the public docstring
+  checks, while matching Node.js JS/TS files trigger the prettier wrapper.
 
 ## Hygiene Checks
 

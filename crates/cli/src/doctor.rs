@@ -769,7 +769,7 @@ fn atof_endpoint_count(config: &Value) -> usize {
 }
 
 fn atof_streaming_supported() -> bool {
-    cfg!(all(feature = "atof-streaming", not(target_arch = "wasm32")))
+    cfg!(feature = "atof-streaming")
 }
 
 async fn observability_atof_endpoint_checks(config: &Value) -> Vec<Check> {

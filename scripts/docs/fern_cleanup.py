@@ -31,7 +31,7 @@ SUPPORT_API_REFERENCE_TEXT = (
     "[Rust Library Reference](/reference/api/rust-library-reference) for generated\n"
     "symbol-level documentation. The Rust reference includes `nemo-relay`,\n"
     "`nemo-relay-adaptive`, `nemo-relay-pii-redaction`, and `nemo-relay-ffi`.\n"
-    "For Go and WebAssembly surfaces, use the source directories, tests, and\n"
+    "For Go and raw FFI surfaces, use the source directories, tests, and\n"
     "task-focused guides when you need exact behavior."
 )
 ASSISTANT_SYMBOL_REFERENCE_TEXT = (
@@ -161,19 +161,19 @@ def _rewrite_omitted_api_mentions(pages_dir: Path) -> int:
                 "The primary generated entry points are [Python API](/reference/api/python),\n"
                 "[Node.js API](/reference/api/nodejs), and\n"
                 "[Rust API](/reference/api/rust).\n\n"
-                "Go, WebAssembly, and raw FFI are experimental and source-first; use their source\n"
+                "Go and raw FFI are experimental and source-first; use their source\n"
                 "directories and tests when you need exact behavior."
             ): SUPPORT_API_REFERENCE_TEXT,
             (
                 "Use the [Python Library Reference](/reference/api/python-library-reference) for\n"
                 "generated symbol-level Python documentation. For Rust, Node.js, Go,\n"
-                "WebAssembly, and raw FFI surfaces, use the source directories, tests, and\n"
+                "and raw FFI surfaces, use the source directories, tests, and\n"
                 "task-focused guides when you need exact behavior."
             ): SUPPORT_API_REFERENCE_TEXT,
             (
                 "Use the [Python Library Reference](/reference/api/python-library-reference) and\n"
                 "[Node.js Library Reference](/reference/api/nodejs-library-reference) for\n"
-                "generated symbol-level documentation. For Rust, Go, WebAssembly, and raw FFI\n"
+                "generated symbol-level documentation. For Rust, Go, and raw FFI\n"
                 "surfaces, use the source directories, tests, and task-focused guides when you\n"
                 "need exact behavior."
             ): SUPPORT_API_REFERENCE_TEXT,

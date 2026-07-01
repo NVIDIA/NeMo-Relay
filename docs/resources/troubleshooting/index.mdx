@@ -16,7 +16,7 @@ failures, duplicate events, or sensitive telemetry, start with the
 
 Confirm that your environment matches [Prerequisites](/getting-started/prerequisites), then rerun the binding-specific setup command from [Installation](/getting-started/installation).
 
-If a command worked previously and now fails, check whether a toolchain update changed the active Rust, Python, Node.js, Go, or WebAssembly version. Recreate generated artifacts after switching versions, especially Python virtual environments, Node.js `node_modules`, Go build caches, and WebAssembly `pkg/` output.
+If a command worked previously and now fails, check whether a toolchain update changed the active Rust, Python, Node.js, or Go version. Recreate generated artifacts after switching versions, especially Python virtual environments, Node.js `node_modules`, and Go build caches.
 
 ## Rust Workspace Fails To Build
 
@@ -61,17 +61,6 @@ CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="../../target/release" go t
 ```
 
 On macOS, use `DYLD_LIBRARY_PATH="../../target/release"` instead of `LD_LIBRARY_PATH` when the runtime loader cannot find the library.
-
-## WebAssembly Tests Or Package Builds Fail
-
-Confirm that `wasm-pack` is installed and matches the minimum version in [Prerequisites](/getting-started/prerequisites), then rerun the WebAssembly build or tests:
-
-```bash
-wasm-pack build crates/wasm
-wasm-pack test --node crates/wasm
-```
-
-If generated files appear stale, remove the WebAssembly package output and rebuild it from the repository root.
 
 ## Scope Stack Is Empty
 

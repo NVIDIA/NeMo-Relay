@@ -981,18 +981,7 @@ build-node:
         npm run build --workspace=nemo-relay-node
     fi
 
-# --set [ci=true|false]
-build-wasm:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    cd "$NEMO_RELAY_REPO_ROOT"
-    if is_true "{{ ci }}"; then
-        npm run build:pkg --workspace=nemo-relay-wasm
-    else
-        NEMO_RELAY_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-relay-wasm
-    fi
-
-build-all: build-rust build-python build-python-plugin build-go build-node build-wasm
+build-all: build-rust build-python build-python-plugin build-go build-node
 
 # remove local build and test artifacts
 clean:
@@ -1010,9 +999,6 @@ clean:
         crates/node/index.js \
         crates/node/junit.xml \
         crates/node/node_modules \
-        crates/wasm/node_modules \
-        crates/wasm/pkg-test/ \
-        crates/wasm/pkg/ \
         integrations/openclaw/*.profraw \
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
@@ -1318,27 +1304,7 @@ test-openclaw:
     npm run pack:check --workspace=nemo-relay-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
-test-wasm:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    output_dir="{{ output_dir }}"
-    coverage_out=""
-    junit_out=""
-    cd "$NEMO_RELAY_REPO_ROOT"
-    wasm-pack test --node crates/wasm
-    npm install --workspace=nemo-relay-wasm --ignore-scripts
-    if is_true "{{ ci }}"; then
-        coverage_out="$(prepare_artifact wasm-js.xml)"
-        junit_out="$(prepare_artifact wasm-junit.xml)"
-        npm run coverage:pkg --workspace=nemo-relay-wasm
-        cp crates/wasm/coverage/cobertura-coverage.xml "$coverage_out"
-        cp crates/wasm/junit.xml "$junit_out"
-    else
-        npm run test:pkg --workspace=nemo-relay-wasm
-    fi
-
-# --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-wasm
+test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -1571,35 +1537,5 @@ package-python-plugin:
     wheels=("$package_dir"/*.whl)
     if ((${#wheels[@]} == 0)); then
         echo "Error: No Python plugin wheels found in $package_dir"
-        exit 1
-    fi
-
-# --set [output_dir=<path>] [ref_name=<name>]
-package-wasm:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    # `prepare_pkg.mjs` rewrites the wasm-pack output into the publishable npm
-    # layout before this target sets the package version and packs the tarball.
-    output_dir="{{ output_dir }}"
-    cd "$NEMO_RELAY_REPO_ROOT"
-    package_dir="$(prepare_package_dir wasm)"
-    wasm-pack build --release crates/wasm
-    node crates/wasm/scripts/prepare_pkg.mjs
-    if [[ -z "{{ ref_name }}" ]]; then
-        sha="$(head_git_sha)"
-        version="$(read_npm_package_version crates/wasm/pkg/package.json)"
-        echo "Non-release build: appending commit hash to version"
-        set_npm_package_version crates/wasm/pkg/package.json "" "${version}-${sha}"
-    else
-        echo "Using explicit version {{ ref_name }}"
-        set_npm_package_version crates/wasm/pkg/package.json "" "{{ ref_name }}"
-    fi
-    pushd crates/wasm/pkg >/dev/null
-    npm pack --pack-destination "$package_dir"
-    popd >/dev/null
-    shopt -s nullglob
-    packages=("$package_dir"/*.tgz)
-    if ((${#packages[@]} == 0)); then
-        echo "Error: No wasm packages found in $package_dir"
         exit 1
     fi
