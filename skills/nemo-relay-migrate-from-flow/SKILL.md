@@ -14,7 +14,7 @@ plus language-specific validation, not a behavior rewrite.
 ## Default Workflow
 
 1. Inspect the working tree and identify touched surfaces: Rust, Python,
-   Node.js, Go, WebAssembly, C FFI, CLI/config, docs, or integration patches.
+   Node.js, Go, WebAssembly, C FFI, CLI/config, docs, or integrations.
 2. Run the bundled helper in dry-run mode before editing:
    `python skills/nemo-relay-migrate-from-flow/scripts/migrate_from_nemo_flow.py <path> --rename-paths`
 3. Review the reported text edits and path renames. If the scope is correct,
@@ -64,8 +64,7 @@ or intentional compatibility names.
 - **C FFI**: update header includes, exported symbol names, status and callback
   type names, macro constants, loader paths, and downstream bindings.
 - **Docs and examples**: update badges, package install commands, repository
-  links, hosted docs URLs, CLI commands, config paths, and integration patch
-  names.
+  links, hosted docs URLs, CLI commands, config paths, and integration names.
 
 ## Automation Helper
 

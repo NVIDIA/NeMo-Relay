@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{AgentCommandConfig, CursorAgentConfig, GatewayConfig};
+use crate::config::{AgentCommandConfig, GatewayConfig};
 use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
@@ -158,7 +158,7 @@ fn inference_failure_has_actionable_message() {
 fn missing_command_without_agent_errors() {
     // Bare `nemo-relay run` (no command, no --agent) errors — we have nothing to spawn and no
     // argv[0] to infer an agent from. With --agent set, we fall back to the agent's default
-    // binary name (e.g., `cursor-agent`), so that branch is exercised in the resolution test
+    // binary name (e.g., `hermes`), so that branch is exercised in the resolution test
     // below rather than here.
     let command = RunCommand {
         agent: None,
@@ -181,10 +181,10 @@ fn missing_command_without_agent_errors() {
 
 #[test]
 fn agent_without_configured_command_falls_back_to_default_binary() {
-    // `--agent cursor` with no `[agents.cursor] command = "..."` override resolves to the
-    // default executable name on $PATH (`cursor-agent` for the Cursor agent).
+    // `--agent hermes` with no `[agents.hermes] command = "..."` override resolves to the
+    // default executable name on $PATH.
     let command = RunCommand {
-        agent: Some(CodingAgent::Cursor),
+        agent: Some(CodingAgent::Hermes),
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
@@ -196,8 +196,8 @@ fn agent_without_configured_command_falls_back_to_default_binary() {
     };
 
     let (agent, argv) = resolve_agent_and_argv(&command, &AgentConfigs::default()).unwrap();
-    assert_eq!(agent, CodingAgent::Cursor);
-    assert_eq!(argv, vec!["cursor-agent"]);
+    assert_eq!(agent, CodingAgent::Hermes);
+    assert_eq!(argv, vec!["hermes"]);
 }
 
 #[test]
@@ -227,7 +227,6 @@ fn agent_with_passthrough_args_appends_to_configured_command() {
 fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
     assert_eq!(default_command_for(CodingAgent::ClaudeCode), "claude");
     assert_eq!(default_command_for(CodingAgent::Codex), "codex");
-    assert_eq!(default_command_for(CodingAgent::Cursor), "cursor-agent");
     assert_eq!(default_command_for(CodingAgent::Hermes), "hermes");
 
     let agents = AgentConfigs {
@@ -527,38 +526,6 @@ fn prepares_claude_dry_inserts_plugin_dir_after_last_agent_executable() {
 }
 
 #[test]
-fn cursor_patching_can_be_disabled() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs {
-            cursor: CursorAgentConfig {
-                command: None,
-                patch_restore_hooks: false,
-            },
-            ..AgentConfigs::default()
-        },
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedRun::new(
-        CodingAgent::Cursor,
-        vec!["cursor-agent".into()],
-        "http://s",
-        &resolved,
-        false,
-    )
-    .unwrap();
-
-    assert!(prepared.cursor_restore.is_none());
-    assert!(!Path::new(".cursor/hooks.json").exists());
-    std::env::set_current_dir(previous).unwrap();
-}
-
-#[test]
 fn prepares_hermes_hook_environment() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
@@ -754,173 +721,12 @@ fn prepares_claude_temp_plugin() {
 }
 
 #[test]
-fn cursor_patch_restore_restores_original_file() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-    std::fs::create_dir_all(".cursor").unwrap();
-    std::fs::write(".cursor/hooks.json", r#"{"hooks":{"sessionStart":[]}}"#).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs {
-            cursor: CursorAgentConfig {
-                command: None,
-                patch_restore_hooks: true,
-            },
-            ..AgentConfigs::default()
-        },
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedRun::new(
-        CodingAgent::Cursor,
-        vec!["cursor-agent".into()],
-        "http://s",
-        &resolved,
-        false,
-    )
-    .unwrap();
-    assert!(
-        std::fs::read_to_string(".cursor/hooks.json")
-            .unwrap()
-            .contains("hook-forward cursor")
-    );
-    let patched: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(".cursor/hooks.json").unwrap()).unwrap();
-    assert_eq!(patched["version"], json!(1));
-    prepared.restore().unwrap();
-    assert_eq!(
-        std::fs::read_to_string(".cursor/hooks.json").unwrap(),
-        r#"{"hooks":{"sessionStart":[]}}"#
-    );
-    std::env::set_current_dir(previous).unwrap();
-}
-
-#[test]
-fn cursor_patch_restore_uses_nearest_project_cursor_dir() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::fs::create_dir_all(temp.path().join(".cursor")).unwrap();
-    std::fs::create_dir_all(temp.path().join("nested")).unwrap();
-    std::fs::write(
-        temp.path().join(".cursor/hooks.json"),
-        r#"{"hooks":{"sessionStart":[]}}"#,
-    )
-    .unwrap();
-    std::env::set_current_dir(temp.path().join("nested")).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs::default(),
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedRun::new(
-        CodingAgent::Cursor,
-        vec!["cursor-agent".into()],
-        "http://s",
-        &resolved,
-        false,
-    )
-    .unwrap();
-
-    assert!(
-        std::fs::read_to_string(temp.path().join(".cursor/hooks.json"))
-            .unwrap()
-            .contains("hook-forward cursor")
-    );
-    let patched: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(temp.path().join(".cursor/hooks.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(patched["version"], json!(1));
-    assert!(!Path::new(".cursor/hooks.json").exists());
-    prepared.restore().unwrap();
-    std::env::set_current_dir(previous).unwrap();
-}
-
-#[test]
-fn cursor_patch_restore_removes_temporary_file() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs::default(),
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedRun::new(
-        CodingAgent::Cursor,
-        vec!["cursor-agent".into()],
-        "http://s",
-        &resolved,
-        false,
-    )
-    .unwrap();
-    assert!(Path::new(".cursor/hooks.json").exists());
-    let patched: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(".cursor/hooks.json").unwrap()).unwrap();
-    assert_eq!(patched["version"], json!(1));
-    prepared.restore().unwrap();
-    assert!(!Path::new(".cursor/hooks.json").exists());
-    std::env::set_current_dir(previous).unwrap();
-}
-
-#[test]
-fn cursor_restore_reports_failed_backup_restore() {
-    let temp = tempfile::tempdir().unwrap();
-    let prepared = PreparedRun {
-        argv: vec![],
-        env: vec![],
-        temp_dirs: vec![],
-        cursor_restore: Some(CursorRestore {
-            path: temp.path().join("hooks.json"),
-            backup_path: Some(temp.path().join("missing-backup.json")),
-            had_original: true,
-        }),
-        hermes_restore: None,
-        notes: vec![],
-    };
-
-    let error = prepared.restore().unwrap_err().to_string();
-
-    assert!(error.contains("failed to restore Cursor hooks"));
-}
-
-#[test]
-fn cursor_restore_reports_failed_temporary_hook_removal() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hooks.json");
-    std::fs::create_dir(&hooks_path).unwrap();
-    let prepared = PreparedRun {
-        argv: vec![],
-        env: vec![],
-        temp_dirs: vec![],
-        cursor_restore: Some(CursorRestore {
-            path: hooks_path,
-            backup_path: None,
-            had_original: false,
-        }),
-        hermes_restore: None,
-        notes: vec![],
-    };
-
-    let error = prepared.restore().unwrap_err().to_string();
-
-    assert!(error.contains("failed to remove temporary Cursor hooks"));
-}
-
-#[test]
 fn hermes_restore_reports_restore_and_temporary_removal_failures() {
     let temp = tempfile::tempdir().unwrap();
     let restore_missing_backup = PreparedRun {
         argv: vec![],
         env: vec![],
         temp_dirs: vec![],
-        cursor_restore: None,
         hermes_restore: Some(HermesRestore {
             path: temp.path().join("config.yaml"),
             backup_path: Some(temp.path().join("missing-backup.yaml")),
@@ -938,7 +744,6 @@ fn hermes_restore_reports_restore_and_temporary_removal_failures() {
         argv: vec![],
         env: vec![],
         temp_dirs: vec![],
-        cursor_restore: None,
         hermes_restore: Some(HermesRestore {
             path: hooks_path,
             backup_path: None,
@@ -952,38 +757,8 @@ fn hermes_restore_reports_restore_and_temporary_removal_failures() {
 }
 
 #[test]
-fn cursor_restore_noops_when_original_was_declared_without_backup() {
-    let prepared = PreparedRun {
-        argv: vec![],
-        env: vec![],
-        temp_dirs: vec![],
-        cursor_restore: Some(CursorRestore {
-            path: PathBuf::from("unused"),
-            backup_path: None,
-            had_original: true,
-        }),
-        hermes_restore: None,
-        notes: vec![],
-    };
-
-    prepared.restore().unwrap();
-}
-
-#[test]
 fn hook_backup_and_write_helpers_cover_missing_existing_and_toml_escaping() {
     let temp = tempfile::tempdir().unwrap();
-    let missing_cursor = temp.path().join("missing-hooks.json");
-    assert_eq!(
-        backup_existing_cursor_hooks(&missing_cursor).unwrap(),
-        (false, None)
-    );
-
-    let cursor_hooks = temp.path().join("hooks.json");
-    std::fs::write(&cursor_hooks, "{}").unwrap();
-    let (had_original, cursor_backup) = backup_existing_cursor_hooks(&cursor_hooks).unwrap();
-    assert!(had_original);
-    assert!(cursor_backup.as_ref().unwrap().exists());
-
     let missing_hermes = temp.path().join("missing-config.yaml");
     assert_eq!(
         backup_existing_hermes_hooks(&missing_hermes).unwrap(),
@@ -1033,32 +808,6 @@ fn exit_code_preserves_normal_and_shell_wrapped_codes() {
         .status()
         .unwrap();
     assert_eq!(exit_code(status), ExitCode::from(44));
-}
-
-#[test]
-fn cursor_dry_run_does_not_write_hooks() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs::default(),
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedRun::new(
-        CodingAgent::Cursor,
-        vec!["cursor-agent".into()],
-        "http://s",
-        &resolved,
-        true,
-    )
-    .unwrap();
-
-    assert!(!Path::new(".cursor/hooks.json").exists());
-    assert!(prepared.notes[0].contains("would temporarily merge"));
-    std::env::set_current_dir(previous).unwrap();
 }
 
 // This e2e test relies on argv[0] being a script literally named after a known agent (so

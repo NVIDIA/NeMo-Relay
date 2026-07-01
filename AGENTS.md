@@ -21,8 +21,8 @@ The shared runtime model is:
 
 ## Repository Structure
 
-The repository layout separates the Rust runtime, language bindings, documentation,
-integration patches, and agent-facing skills.
+The repository layout separates the Rust runtime, language bindings,
+documentation, integrations, and agent-facing skills.
 
 ```text
 crates/
@@ -39,8 +39,6 @@ go/
   nemo_relay/  # Experimental Go CGo binding and tests
 fern/         # Fern documentation site
 scripts/      # Stable wrappers and helper scripts; build/test/docs entry points live in justfile
-third_party/  # Pinned upstream checkouts for sample integration patches
-patches/      # NeMo Relay patch sets applied to third_party checkouts
 skills/       # Published Codex/agent skills for NeMo Relay usage patterns
 ```
 
@@ -201,38 +199,20 @@ truth.
 - Go uses the C FFI and requires the FFI library build before tests; `just test-go` handles the library path setup.
 - WebAssembly includes Rust wasm-bindgen tests plus JS wrapper/package tests; `just test-wasm` runs both paths.
 
-## Third-Party Integrations And Patches
+## Integrations
 
-### Patch-based Integrations
-Sample integrations are maintained as patch sets, not as primary package source. The pinned upstream checkouts are listed in `third_party/sources.lock`, local checkouts live under `third_party/`, and NeMo Relay patches live under `patches/`.
+Integrations use public framework or plugin APIs. The Python integrations live
+under `python/nemo_relay/integrations/`, are documented in
+`docs/supported-integrations/`, and have test suites under
+`python/tests/integrations/`. The OpenClaw plugin lives under
+`integrations/openclaw/`.
 
-Current integration patch sets include:
+Current integrations include:
 
-- Hermes Agent: `third_party/hermes-agent`
-- LangChain: `third_party/langchain`
-- LangChain NVIDIA: `third_party/langchain-nvidia`
-- LangGraph: `third_party/langgraph`
-- OpenClaw: `third_party/openclaw`
-- opencode: `third_party/opencode`
-
-Use the stable root-level wrappers:
-
-```bash
-./scripts/bootstrap-third-party.sh
-./scripts/apply-patches.sh
-./scripts/apply-patches.sh --check
-./scripts/generate-patches.sh
-```
-
-`apply-patches.sh` expects clean third-party checkouts. After editing an integration checkout, run `./scripts/generate-patches.sh` to regenerate patch files and verify they apply to a clean detached checkout.
-
-### Public API-based Integrations
-Some integrations can be implemented using public APIs without patching. The Python integrations live under `python/nemo_relay/integrations/`, are documented in `docs/supported-integrations/`, and have test suites under `python/tests/integrations/`.
-
-Current public API-based integrations include:
 - LangChain: `python/nemo_relay/integrations/langchain`
 - LangGraph: `python/nemo_relay/integrations/langgraph`
 - Deep Agents: `python/nemo_relay/integrations/deepagents`
+- OpenClaw: `integrations/openclaw`
 
 ## Documentation And Contribution Workflow
 

@@ -124,7 +124,6 @@ fn generated_hook_dispatch_covers_all_agents() {
     for agent in [
         CodingAgent::ClaudeCode,
         CodingAgent::Codex,
-        CodingAgent::Cursor,
         CodingAgent::Hermes,
     ] {
         assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
@@ -140,21 +139,6 @@ fn generated_hook_dispatch_covers_all_agents() {
 }
 
 #[test]
-fn cursor_hooks_use_direct_command_entries() {
-    let hooks = cursor_hooks("nemo-relay hook-forward cursor");
-    let before_shell = &hooks["hooks"]["beforeShellExecution"][0];
-
-    assert_eq!(hooks["version"], json!(1));
-    assert_eq!(
-        before_shell["command"],
-        json!("nemo-relay hook-forward cursor")
-    );
-    assert_eq!(before_shell["timeout"], json!(30));
-    assert!(before_shell.get("hooks").is_none());
-    assert!(before_shell.get("matcher").is_none());
-}
-
-#[test]
 fn packaged_hook_configs_are_valid_json() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../integrations/coding-agents");
@@ -163,7 +147,6 @@ fn packaged_hook_configs_are_valid_json() {
         root.join("../../.claude-plugin/marketplace.json"),
         root.join("claude-code/hooks/hooks.json"),
         root.join("codex/hooks/hooks.json"),
-        root.join("cursor/.cursor/hooks.json"),
         root.join("claude-code/.claude-plugin/plugin.json"),
         root.join("codex/.codex-plugin/plugin.json"),
     ] {

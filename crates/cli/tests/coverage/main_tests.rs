@@ -212,7 +212,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
         .to_string();
     assert!(error.contains("plugin install supports codex"));
 
-    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "cursor"]).unwrap();
+    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "hermes"]).unwrap();
     let error = run_command(cli.command.unwrap(), &cli.server)
         .await
         .unwrap_err()

@@ -113,7 +113,7 @@ pre-release or build-metadata variants used during packaging.
 - Assuming `crates/wasm/package.json` is the published npm manifest
 - Forgetting `Cargo.lock`, `ATTRIBUTIONS-Rust.md`, or `ATTRIBUTIONS-Node.md`
   after changing versioned inputs that feed them
-- Doing blind repository-wide search/replace across docs, patches, and
+- Doing blind repository-wide search/replace across docs and
   generated attribution files
 
 ## References

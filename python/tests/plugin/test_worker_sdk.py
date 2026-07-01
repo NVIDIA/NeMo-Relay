@@ -1528,7 +1528,7 @@ async def test_lifecycle_acks(service: _WorkerService):
         AbortContext(),
     )
     assert not cancel.accepted
-    assert "not implemented" in cancel.message
+    assert "not active" in cancel.message
 
     shutdown = await service.Shutdown(
         pb.ShutdownRequest(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, reason="test"),
@@ -1536,6 +1536,215 @@ async def test_lifecycle_acks(service: _WorkerService):
     )
     assert shutdown.accepted
     assert "shutdown accepted" in shutdown.message
+
+
+async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    release = asyncio.Event()
+
+    class CancelPlugin(WorkerPlugin):
+        plugin_id = "tests.cancel"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def tool_execution(tool_name: str, value: Json, next_call: ToolNext) -> Json:
+                del tool_name, value, next_call
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    await release.wait()
+                    raise
+
+            ctx.register_tool_execution_intercept("cancel", tool_execution)
+
+    service = _service(CancelPlugin(), RecordingHostStub())
+    await _register(service)
+    request = _invoke_request(
+        "cancel",
+        pb.TOOL_EXECUTION_INTERCEPT,
+        invocation_id="cancel-unary",
+        tool=pb.ToolInvocation(tool_name="lookup", value=_json_envelope(JSON_SCHEMA, {})),
+    )
+    invoke_task = asyncio.create_task(service.Invoke(request, AbortContext()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    first = await service.CancelInvocation(
+        pb.CancelInvocationRequest(
+            activation_id=ACTIVATION_ID,
+            invocation_id="cancel-unary",
+            auth_token=AUTH_TOKEN,
+            reason="test timeout",
+        ),
+        AbortContext(),
+    )
+    await asyncio.wait_for(cancelled.wait(), timeout=1)
+    second = await service.CancelInvocation(
+        pb.CancelInvocationRequest(
+            activation_id=ACTIVATION_ID,
+            invocation_id="cancel-unary",
+            auth_token=AUTH_TOKEN,
+            reason="repeat",
+        ),
+        AbortContext(),
+    )
+    reused = await asyncio.wait_for(service.Invoke(request, AbortContext()), timeout=1)
+    release.set()
+    response = await asyncio.wait_for(invoke_task, timeout=1)
+
+    assert first.accepted
+    assert not second.accepted
+    assert reused.error.code == "worker.sdk_error"
+    assert "already active" in reused.error.message
+    assert response.error.code == "worker.cancelled"
+    assert "test timeout" in response.error.message
+    assert cancelled.is_set()
+
+
+async def test_cancel_invocation_stops_active_async_stream():
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class CancelStreamPlugin(WorkerPlugin):
+        plugin_id = "tests.cancel_stream"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def llm_stream(model_name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
+                del model_name, request, next_call
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                if False:
+                    yield {}
+
+            ctx.register_llm_stream_execution_intercept("cancel_stream", llm_stream)
+
+    service = _service(CancelStreamPlugin(), RecordingHostStub())
+    await _register(service)
+    request = _invoke_request(
+        "cancel_stream",
+        pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        invocation_id="cancel-stream",
+        llm=_llm_payload(),
+    )
+
+    async def consume() -> list[Any]:
+        return [chunk async for chunk in service.InvokeStream(request, AbortContext())]
+
+    consume_task = asyncio.create_task(consume())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    ack = await service.CancelInvocation(
+        pb.CancelInvocationRequest(
+            activation_id=ACTIVATION_ID,
+            invocation_id="cancel-stream",
+            auth_token=AUTH_TOKEN,
+            reason="stream abandoned",
+        ),
+        AbortContext(),
+    )
+    chunks = await asyncio.wait_for(consume_task, timeout=1)
+
+    assert ack.accepted
+    assert len(chunks) == 1
+    assert chunks[0].error.code == "worker.cancelled"
+    assert "stream abandoned" in chunks[0].error.message
+    assert cancelled.is_set()
+
+
+async def test_cancel_invocation_discards_buffered_chunks_after_stream_callback_finishes():
+    finished = asyncio.Event()
+
+    class BufferedStreamPlugin(WorkerPlugin):
+        plugin_id = "tests.buffered_stream"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def llm_stream(model_name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
+                del model_name, request, next_call
+                for index in range(4):
+                    yield {"index": index}
+                finished.set()
+
+            ctx.register_llm_stream_execution_intercept("buffered_stream", llm_stream)
+
+    service = _service(BufferedStreamPlugin(), RecordingHostStub())
+    await _register(service)
+    request = _invoke_request(
+        "buffered_stream",
+        pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        invocation_id="buffered-stream",
+        llm=_llm_payload(),
+    )
+    stream = service.InvokeStream(request, AbortContext())
+
+    first = await asyncio.wait_for(anext(stream), timeout=1)
+    await asyncio.wait_for(finished.wait(), timeout=1)
+    assert not first.error.code
+    assert "buffered-stream" in service._active_invocations
+
+    ack = await service.CancelInvocation(
+        pb.CancelInvocationRequest(
+            activation_id=ACTIVATION_ID,
+            invocation_id="buffered-stream",
+            auth_token=AUTH_TOKEN,
+            reason="stop buffered stream",
+        ),
+        AbortContext(),
+    )
+
+    async def consume_remaining() -> list[Any]:
+        return [chunk async for chunk in stream]
+
+    remaining = await asyncio.wait_for(consume_remaining(), timeout=1)
+
+    assert ack.accepted
+    assert len(remaining) == 1
+    assert remaining[0].error.code == "worker.cancelled"
+    assert "stop buffered stream" in remaining[0].error.message
+    assert "buffered-stream" not in service._active_invocations
+
+
+async def test_stream_callback_cancellation_without_host_reason_is_terminal_error():
+    class CancelledStreamPlugin(WorkerPlugin):
+        plugin_id = "tests.cancelled_stream"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            async def llm_stream(model_name: str, request: Json, next_call: Any) -> AsyncIterator[Json]:
+                del model_name, request, next_call
+                if False:
+                    yield {}
+                raise asyncio.CancelledError
+
+            ctx.register_llm_stream_execution_intercept("cancelled_stream", llm_stream)
+
+    service = _service(CancelledStreamPlugin(), RecordingHostStub())
+    await _register(service)
+    request = _invoke_request(
+        "cancelled_stream",
+        pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        invocation_id="self-cancelled-stream",
+        llm=_llm_payload(),
+    )
+
+    async def consume() -> list[Any]:
+        return [chunk async for chunk in service.InvokeStream(request, AbortContext())]
+
+    chunks = await asyncio.wait_for(consume(), timeout=1)
+
+    assert len(chunks) == 1
+    assert chunks[0].error.code == "worker.cancelled"
+    assert "stream callback cancelled without a host request" in chunks[0].error.message
 
 
 def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPatch):

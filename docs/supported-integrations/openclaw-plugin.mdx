@@ -17,8 +17,8 @@ This public OpenClaw plugin uses OpenClaw public hooks. It can initialize
 generic NeMo Relay plugin components such as `observability` and `adaptive`, and
 it can run pre-tool conditional guardrails when OpenClaw invokes the before-tool
 hook. Hook-backed mode does not rewrite provider routing or model requests. For
-middleware-backed behavior that changes execution, use the patch-based OpenClaw
-integration from the NeMo Relay repository.
+middleware-backed behavior that changes execution, OpenClaw must expose the
+relevant invocation through a public plugin hook.
 
 Use this guide to install the plugin, enable it in OpenClaw, configure telemetry
 outputs, verify exported traces, and understand current LLM replay fidelity.

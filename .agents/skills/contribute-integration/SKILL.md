@@ -14,30 +14,24 @@ Use `karpathy-guidelines` alongside this skill for implementation or review
 work. Keep changes scoped, surface assumptions, and define focused validation
 before editing.
 
-Use this skill when contributing an integration with an upstream framework such
-as LangChain, LangGraph, or another patched third-party project.
+Use this skill when contributing an integration with a framework or plugin such
+as LangChain, LangGraph, Deep Agents, or OpenClaw through its public APIs.
 
 ## Default Guidance
 
 - Keep NeMo Relay optional
-- Preserve the framework's original behavior when NeMo Relay is absent
+- Use stable, documented framework or plugin APIs
 - Wrap tool and LLM paths at the correct framework boundary
-- Keep the tracked patch artifact minimal and reproducible
+- Preserve the framework's original behavior when NeMo Relay is absent
 
 ## Checklist
 
-- [ ] Integration pattern follows `docs/integrate-frameworks/adding-scopes.md`
-- [ ] Patch applies cleanly via `./scripts/apply-patches.sh --check`
-- [ ] Patch artifact regenerated if the local checkout changed
+- [ ] Integration pattern follows `docs/integrate-into-frameworks/adding-scopes.mdx`
+- [ ] Integration uses public framework or plugin APIs
 - [ ] Relevant integration tests or smoke path pass
 - [ ] Docs updated if activation or usage changed
 
-Use the root `./scripts/*.sh` commands in docs and contributor guidance. Their
-implementations now live under `scripts/third-party/`.
-
 ## References
 
-- `add-integration`
-- `maintain-integration-patches`
-- `docs/integrate-frameworks/about.md`
+- `docs/integrate-into-frameworks/about.mdx`
 - `validate-change`

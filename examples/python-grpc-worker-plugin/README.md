@@ -49,3 +49,9 @@ The worker process is started by Relay through the manifest entrypoint. Enable
 the dynamic plugin in `plugins.toml` instead of launching the process directly;
 Relay supplies the worker socket, host socket, activation ID, plugin ID, and
 activation token environment variables.
+
+Async callbacks are cancelled cooperatively when the host caller times out or
+stops consuming a worker stream. Let `asyncio.CancelledError` propagate and put
+resource cleanup in `finally` blocks. Synchronous or blocking callback code
+cannot be preempted by the SDK; move that work off the event-loop thread and
+define its cancellation behavior explicitly.

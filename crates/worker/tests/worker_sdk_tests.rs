@@ -9,6 +9,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -230,7 +231,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .expect("cancel returns ack")
         .into_inner();
     assert!(!cancel.accepted);
-    assert!(cancel.message.contains("not implemented"));
+    assert!(cancel.message.contains("not active"));
 
     let shutdown = client
         .shutdown(Request::new(ShutdownRequest {
@@ -243,6 +244,192 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .into_inner();
     assert!(!shutdown.accepted);
     assert!(shutdown.message.contains("not implemented"));
+
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
+    let timeout = Duration::from_secs(2);
+    let plugin = Arc::new(CancellationPlugin::default());
+    let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
+    tokio::time::timeout(timeout, register_plugin(&mut client))
+        .await
+        .expect("worker registration should complete");
+
+    let mut unary_client = client.clone();
+    let unary_task = tokio::spawn(async move {
+        unary_client
+            .invoke(Request::new(InvokeRequest {
+                invocation_id: "cancel-unary".into(),
+                ..tool_invoke(
+                    "cancel-unary",
+                    RegistrationSurface::ToolExecutionIntercept,
+                    json!({}),
+                )
+            }))
+            .await
+            .expect("cancelled unary invocation should return a response")
+            .into_inner()
+    });
+    tokio::time::timeout(timeout, plugin.unary_started.notified())
+        .await
+        .expect("unary invocation should start");
+    let unary_ack = tokio::time::timeout(
+        timeout,
+        client.cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-unary".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "test timeout".into(),
+        })),
+    )
+    .await
+    .expect("unary cancellation should complete")
+    .expect("active unary cancellation should return an ack")
+    .into_inner();
+    let unary_response = tokio::time::timeout(timeout, unary_task)
+        .await
+        .expect("unary invocation should finish after cancellation")
+        .expect("unary client task should join");
+    let unary_error = match unary_response.result {
+        Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(error)) => error,
+        other => panic!("expected cancellation error, got {other:?}"),
+    };
+    assert!(unary_ack.accepted);
+    assert_eq!(unary_error.code, "worker.cancelled");
+    assert!(plugin.unary_cancelled.load(Ordering::SeqCst));
+
+    let repeated = tokio::time::timeout(
+        timeout,
+        client.cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-unary".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "repeat".into(),
+        })),
+    )
+    .await
+    .expect("repeated cancellation should complete")
+    .expect("repeated cancellation should return an ack")
+    .into_inner();
+    assert!(!repeated.accepted);
+    assert!(repeated.message.contains("not active"));
+
+    let mut stream = tokio::time::timeout(
+        timeout,
+        client.invoke_stream(Request::new(InvokeRequest {
+            invocation_id: "cancel-stream".into(),
+            ..llm_invoke(
+                "cancel-stream",
+                RegistrationSurface::LlmStreamExecutionIntercept,
+                llm_request(),
+                None,
+                None,
+            )
+        })),
+    )
+    .await
+    .expect("stream invocation setup should complete")
+    .expect("stream invocation should start")
+    .into_inner();
+    tokio::time::timeout(timeout, plugin.stream_started.notified())
+        .await
+        .expect("stream invocation should become active");
+    let stream_ack = tokio::time::timeout(
+        timeout,
+        client.cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-stream".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "stream abandoned".into(),
+        })),
+    )
+    .await
+    .expect("stream cancellation should complete")
+    .expect("active stream cancellation should return an ack")
+    .into_inner();
+    let stream_error = tokio::time::timeout(timeout, async {
+        loop {
+            let chunk = stream
+                .next()
+                .await
+                .expect("cancelled stream should yield a terminal error")
+                .expect("cancelled stream chunk should be protocol data");
+            if let Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error)) = chunk.item
+            {
+                break error;
+            }
+        }
+    })
+    .await
+    .expect("cancelled stream should terminate");
+    assert!(stream_ack.accepted);
+    assert_eq!(stream_error.code, "worker.cancelled");
+    assert!(plugin.stream_cancelled.load(Ordering::SeqCst));
+
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_service_cancels_stream_during_async_setup() {
+    let timeout = Duration::from_secs(2);
+    let plugin = Arc::new(CancellationPlugin::default());
+    let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
+    tokio::time::timeout(timeout, register_plugin(&mut client))
+        .await
+        .expect("worker registration should complete");
+
+    let mut stream_client = client.clone();
+    let stream_task = tokio::spawn(async move {
+        stream_client
+            .invoke_stream(Request::new(InvokeRequest {
+                invocation_id: "cancel-stream-setup".into(),
+                ..llm_invoke(
+                    "cancel-stream-setup",
+                    RegistrationSurface::LlmStreamExecutionIntercept,
+                    llm_request(),
+                    None,
+                    None,
+                )
+            }))
+            .await
+    });
+    tokio::time::timeout(timeout, plugin.stream_setup_started.notified())
+        .await
+        .expect("stream setup should start");
+    let ack = tokio::time::timeout(
+        timeout,
+        client.cancel_invocation(Request::new(CancelInvocationRequest {
+            activation_id: ACTIVATION_ID.into(),
+            invocation_id: "cancel-stream-setup".into(),
+            auth_token: AUTH_TOKEN.into(),
+            reason: "cancel setup".into(),
+        })),
+    )
+    .await
+    .expect("stream setup cancellation should complete")
+    .expect("stream setup cancellation should return an ack")
+    .into_inner();
+    let mut stream = tokio::time::timeout(timeout, stream_task)
+        .await
+        .expect("cancelled stream setup should finish")
+        .expect("stream setup client task should join")
+        .expect("cancelled stream setup should return protocol data")
+        .into_inner();
+    let chunk = tokio::time::timeout(timeout, stream.next())
+        .await
+        .expect("cancelled setup stream should terminate")
+        .expect("cancelled setup stream should yield a terminal error")
+        .expect("cancelled setup stream chunk should be protocol data");
+    let error = match chunk.item {
+        Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(error)) => error,
+        other => panic!("expected stream setup cancellation error, got {other:?}"),
+    };
+
+    assert!(ack.accepted);
+    assert_eq!(error.code, "worker.cancelled");
+    assert!(plugin.stream_setup_cancelled.load(Ordering::SeqCst));
 
     handle.abort();
 }
@@ -1178,6 +1365,101 @@ impl WorkerPlugin for MinimalPlugin {
 
     fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct CancellationPlugin {
+    unary_started: Arc<tokio::sync::Notify>,
+    unary_cancelled: Arc<AtomicBool>,
+    stream_started: Arc<tokio::sync::Notify>,
+    stream_cancelled: Arc<AtomicBool>,
+    stream_setup_started: Arc<tokio::sync::Notify>,
+    stream_setup_cancelled: Arc<AtomicBool>,
+}
+
+struct CancelledOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelledOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+impl WorkerPlugin for CancellationPlugin {
+    fn plugin_id(&self) -> &str {
+        "cancellation"
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        let unary_started = self.unary_started.clone();
+        let unary_cancelled = self.unary_cancelled.clone();
+        ctx.register_tool_execution_intercept("cancel-unary", 0, move |_, _, _| {
+            let unary_started = unary_started.clone();
+            let unary_cancelled = unary_cancelled.clone();
+            async move {
+                let _cancelled = CancelledOnDrop(unary_cancelled);
+                unary_started.notify_one();
+                std::future::pending::<Result<Json>>().await
+            }
+        });
+
+        let stream_started = self.stream_started.clone();
+        let stream_cancelled = self.stream_cancelled.clone();
+        ctx.register_llm_stream_execution_intercept("cancel-stream", 0, move |_, _, _| {
+            let stream_started = stream_started.clone();
+            let stream_cancelled = stream_cancelled.clone();
+            async move {
+                Ok(Box::pin(FillThenPendingStream {
+                    started: stream_started,
+                    cancelled: stream_cancelled,
+                    yielded: 0,
+                }) as JsonStream)
+            }
+        });
+
+        let stream_setup_started = self.stream_setup_started.clone();
+        let stream_setup_cancelled = self.stream_setup_cancelled.clone();
+        ctx.register_llm_stream_execution_intercept("cancel-stream-setup", 0, move |_, _, _| {
+            let stream_setup_started = stream_setup_started.clone();
+            let stream_setup_cancelled = stream_setup_cancelled.clone();
+            async move {
+                let _cancelled = CancelledOnDrop(stream_setup_cancelled);
+                stream_setup_started.notify_one();
+                std::future::pending::<Result<JsonStream>>().await
+            }
+        });
+        Ok(())
+    }
+}
+
+struct FillThenPendingStream {
+    started: Arc<tokio::sync::Notify>,
+    cancelled: Arc<AtomicBool>,
+    yielded: usize,
+}
+
+impl Stream for FillThenPendingStream {
+    type Item = Result<Json>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.yielded < 17 {
+            self.yielded += 1;
+            if self.yielded == 17 {
+                self.started.notify_one();
+            }
+            return Poll::Ready(Some(Ok(json!({ "chunk": self.yielded }))));
+        }
+        std::task::Poll::Pending
+    }
+}
+
+impl Drop for FillThenPendingStream {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::SeqCst);
     }
 }
 

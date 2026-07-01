@@ -4,6 +4,19 @@
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::private_intra_doc_links)]
 
 //! Rust SDK for NeMo Relay out-of-process gRPC worker plugins.
+//!
+//! # Invocation cancellation
+//!
+//! The `grpc-v1` service tracks active unary and streaming callbacks by the
+//! host-provided invocation ID. Relay sends `CancelInvocation` when a managed
+//! caller is cancelled, an invocation times out, or a host stream is abandoned.
+//! The SDK aborts the matching async callback task and reports
+//! `worker.cancelled`; cancellation of an unknown, completed, or already
+//! cancelled ID returns a negative acknowledgment.
+//!
+//! Cancellation is cooperative. Dropping an async callback future releases its
+//! Rust-owned resources, but an accepted acknowledgment does not prove that
+//! arbitrary blocking work started by the callback has stopped.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,6 +26,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
@@ -40,7 +54,7 @@ use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, jso
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, mpsc, watch};
 use tokio_stream::wrappers::TcpListenerStream;
 #[cfg(unix)]
 use tokio_stream::wrappers::UnixListenerStream;
@@ -732,6 +746,8 @@ async fn serve_plugin_arc_with_endpoint_file(
         plugin,
         runtime,
         handlers: Arc::new(Mutex::new(WorkerHandlers::default())),
+        active_invocations: Arc::new(Mutex::new(HashMap::new())),
+        next_invocation_generation: Arc::new(AtomicU64::new(1)),
     };
     serve_worker_service(service, &config.worker_endpoint, endpoint_file.as_deref()).await
 }
@@ -793,10 +809,71 @@ async fn serve_tcp_worker_service(
         .map_err(|err| WorkerSdkError::Transport(err.to_string()))
 }
 
+#[derive(Clone)]
 struct WorkerService {
     plugin: Arc<dyn WorkerPlugin>,
     runtime: PluginRuntime,
     handlers: Arc<Mutex<WorkerHandlers>>,
+    active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
+    next_invocation_generation: Arc<AtomicU64>,
+}
+
+struct ActiveInvocation {
+    generation: u64,
+    abort_handle: tokio::task::AbortHandle,
+    stream_cancel: Option<watch::Sender<bool>>,
+}
+
+struct ActiveInvocationGuard {
+    active_invocations: Arc<Mutex<HashMap<String, ActiveInvocation>>>,
+    invocation_id: String,
+    generation: u64,
+    armed: bool,
+}
+
+impl ActiveInvocationGuard {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ActiveInvocationGuard {
+    fn drop(&mut self) {
+        if self.armed
+            && let Ok(mut active) = self.active_invocations.lock()
+            && active
+                .get(&self.invocation_id)
+                .is_some_and(|entry| entry.generation == self.generation)
+        {
+            active.remove(&self.invocation_id);
+        }
+    }
+}
+
+struct AbortTaskOnDrop {
+    abort_handle: tokio::task::AbortHandle,
+    armed: bool,
+}
+
+impl AbortTaskOnDrop {
+    fn new(abort_handle: tokio::task::AbortHandle) -> Self {
+        Self {
+            abort_handle,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AbortTaskOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.abort_handle.abort();
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -902,7 +979,38 @@ impl PluginWorker for WorkerService {
     ) -> std::result::Result<Response<InvokeResponse>, Status> {
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
-        let response = self.invoke_inner(request).await;
+        let invocation_id = request.invocation_id.clone();
+        let service = self.clone();
+        let task = tokio::spawn(async move { service.invoke_inner(request).await });
+        let abort_handle = task.abort_handle();
+        let generation = match self.track_invocation(&invocation_id, abort_handle.clone(), None) {
+            Ok(generation) => generation,
+            Err(err) => {
+                task.abort();
+                return Err(err);
+            }
+        };
+        let _active_guard = ActiveInvocationGuard {
+            active_invocations: self.active_invocations.clone(),
+            invocation_id,
+            generation,
+            armed: true,
+        };
+        let mut abort_on_drop = AbortTaskOnDrop::new(abort_handle);
+        let response = match task.await {
+            Ok(response) => response,
+            Err(err) if err.is_cancelled() => cancelled_invoke_response(),
+            Err(err) => InvokeResponse {
+                result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(
+                    WorkerError {
+                        code: "worker.error".into(),
+                        message: format!("worker invocation task failed: {err}"),
+                        retryable: false,
+                    },
+                )),
+            },
+        };
+        abort_on_drop.disarm();
         Ok(Response::new(response))
     }
 
@@ -915,6 +1023,7 @@ impl PluginWorker for WorkerService {
     ) -> std::result::Result<Response<Self::InvokeStreamStream>, Status> {
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
+        let invocation_id = request.invocation_id.clone();
         let scope = invocation_scope_context(request.scope.as_ref());
         let surface = RegistrationSurface::try_from(request.surface)
             .map_err(|_| Status::invalid_argument("unknown registration surface"))?;
@@ -938,29 +1047,134 @@ impl PluginWorker for WorkerService {
             runtime: self.runtime.clone(),
             continuation_id: request.continuation_id,
         };
-        let stream = TASK_SCOPE_CONTEXT
-            .scope(scope.clone(), async {
-                let future =
-                    with_thread_scope(&scope, || handler(&payload.model_name, request_value, next));
-                future.await
-            })
-            .await
-            .map_err(|err| Status::internal(err.to_string()))?;
-        let stream = ScopedJsonStream::new(stream, scope);
-        let mapped = stream.map(|item| match item {
-            Ok(value) => Ok(StreamChunk {
-                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
-                    json_envelope("nemo.relay.Json@1", &value)
-                        .map_err(|err| Status::internal(err.to_string()))?,
-                )),
-            }),
-            Err(err) => Ok(StreamChunk {
-                item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
-                    sdk_error_to_worker(err),
-                )),
-            }),
+        let model_name = payload.model_name;
+        let (tx, rx) = mpsc::channel(16);
+        let (stream_cancel_tx, stream_cancel_rx) = watch::channel(false);
+        let open_scope = scope.clone();
+        let open_task = tokio::spawn(async move {
+            TASK_SCOPE_CONTEXT
+                .scope(open_scope.clone(), async {
+                    let future = with_thread_scope(&open_scope, || {
+                        handler(&model_name, request_value, next)
+                    });
+                    future.await
+                })
+                .await
         });
-        Ok(Response::new(Box::pin(mapped)))
+        let open_abort_handle = open_task.abort_handle();
+        let generation = match self.track_invocation(
+            &invocation_id,
+            open_abort_handle.clone(),
+            Some(stream_cancel_tx.clone()),
+        ) {
+            Ok(generation) => generation,
+            Err(err) => {
+                open_task.abort();
+                return Err(err);
+            }
+        };
+        let mut active_guard = ActiveInvocationGuard {
+            active_invocations: self.active_invocations.clone(),
+            invocation_id: invocation_id.clone(),
+            generation,
+            armed: true,
+        };
+        let mut abort_on_drop = AbortTaskOnDrop::new(open_abort_handle);
+        let stream = match open_task.await {
+            Ok(Ok(stream)) => stream,
+            Ok(Err(err)) => {
+                abort_on_drop.disarm();
+                return Err(Status::internal(err.to_string()));
+            }
+            Err(err) if err.is_cancelled() => {
+                abort_on_drop.disarm();
+                let explicitly_cancelled = *stream_cancel_rx.borrow();
+                if explicitly_cancelled {
+                    return Ok(Response::new(cancellation_aware_worker_stream(
+                        rx,
+                        stream_cancel_rx,
+                    )));
+                }
+                return Err(Status::cancelled("worker invocation was cancelled"));
+            }
+            Err(err) => {
+                abort_on_drop.disarm();
+                return Err(Status::internal(format!(
+                    "worker stream invocation task failed: {err}"
+                )));
+            }
+        };
+        abort_on_drop.disarm();
+        let active_invocations = self.active_invocations.clone();
+        let task_invocation_id = invocation_id.clone();
+        let task_tx = tx;
+        let task = tokio::spawn(async move {
+            let _active_guard = ActiveInvocationGuard {
+                active_invocations,
+                invocation_id: task_invocation_id,
+                generation,
+                armed: true,
+            };
+            let mut stream = ScopedJsonStream::new(stream, scope);
+            loop {
+                let item = tokio::select! {
+                    item = stream.next() => item,
+                    _ = task_tx.closed() => return,
+                };
+                let Some(item) = item else {
+                    return;
+                };
+                let chunk = match item {
+                    Ok(value) => StreamChunk {
+                        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Value(
+                            match json_envelope("nemo.relay.Json@1", &value) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    let _ =
+                                        task_tx.send(Err(Status::internal(err.to_string()))).await;
+                                    return;
+                                }
+                            },
+                        )),
+                    },
+                    Err(err) => StreamChunk {
+                        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+                            sdk_error_to_worker(err),
+                        )),
+                    },
+                };
+                if task_tx.send(Ok(chunk)).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let replaced = self.replace_invocation(
+            &invocation_id,
+            generation,
+            ActiveInvocation {
+                generation,
+                abort_handle: task.abort_handle(),
+                stream_cancel: Some(stream_cancel_tx),
+            },
+        );
+        match replaced {
+            Ok(true) => active_guard.disarm(),
+            Ok(false) => {
+                task.abort();
+                return Ok(Response::new(cancellation_aware_worker_stream(
+                    rx,
+                    stream_cancel_rx,
+                )));
+            }
+            Err(err) => {
+                task.abort();
+                return Err(err);
+            }
+        }
+        Ok(Response::new(cancellation_aware_worker_stream(
+            rx,
+            stream_cancel_rx,
+        )))
     }
 
     async fn cancel_invocation(
@@ -969,9 +1183,30 @@ impl PluginWorker for WorkerService {
     ) -> std::result::Result<Response<WorkerAck>, Status> {
         let request = request.into_inner();
         self.authorize(&request.activation_id, &request.auth_token)?;
+        let active = {
+            let mut invocations = self
+                .active_invocations
+                .lock()
+                .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
+            invocations.remove(&request.invocation_id)
+        };
+        let Some(active) = active else {
+            return Ok(Response::new(WorkerAck {
+                accepted: false,
+                message: "invocation is not active".into(),
+            }));
+        };
+        if let Some(cancel) = active.stream_cancel {
+            let _ = cancel.send(true);
+        }
+        active.abort_handle.abort();
         Ok(Response::new(WorkerAck {
-            accepted: false,
-            message: "cancel invocation is not implemented by the Rust worker SDK yet".into(),
+            accepted: true,
+            message: if request.reason.is_empty() {
+                "cancellation accepted".into()
+            } else {
+                format!("cancellation accepted: {}", request.reason)
+            },
         }))
     }
 
@@ -997,6 +1232,67 @@ impl WorkerService {
             return Err(Status::permission_denied("invalid worker token"));
         }
         Ok(())
+    }
+
+    fn track_invocation(
+        &self,
+        invocation_id: &str,
+        abort_handle: tokio::task::AbortHandle,
+        stream_cancel: Option<watch::Sender<bool>>,
+    ) -> std::result::Result<u64, Status> {
+        let generation = self
+            .next_invocation_generation
+            .fetch_add(1, Ordering::Relaxed);
+        self.insert_invocation(
+            invocation_id,
+            ActiveInvocation {
+                generation,
+                abort_handle,
+                stream_cancel,
+            },
+        )?;
+        Ok(generation)
+    }
+
+    fn insert_invocation(
+        &self,
+        invocation_id: &str,
+        invocation: ActiveInvocation,
+    ) -> std::result::Result<(), Status> {
+        if invocation_id.is_empty() {
+            return Err(Status::invalid_argument("invocation_id must not be empty"));
+        }
+        let mut active = self
+            .active_invocations
+            .lock()
+            .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
+        if active.contains_key(invocation_id) {
+            return Err(Status::already_exists(format!(
+                "invocation '{invocation_id}' is already active"
+            )));
+        }
+        active.insert(invocation_id.to_string(), invocation);
+        Ok(())
+    }
+
+    fn replace_invocation(
+        &self,
+        invocation_id: &str,
+        generation: u64,
+        invocation: ActiveInvocation,
+    ) -> std::result::Result<bool, Status> {
+        let mut active = self
+            .active_invocations
+            .lock()
+            .map_err(|err| Status::internal(format!("invocation lock poisoned: {err}")))?;
+        if active
+            .get(invocation_id)
+            .is_none_or(|entry| entry.generation != generation)
+        {
+            return Ok(false);
+        }
+        active.insert(invocation_id.to_string(), invocation);
+        Ok(true)
     }
 
     async fn invoke_inner(&self, request: InvokeRequest) -> InvokeResponse {
@@ -1411,6 +1707,77 @@ fn sdk_error_to_worker(error: WorkerSdkError) -> WorkerError {
         message: error.to_string(),
         retryable: false,
     }
+}
+
+fn cancelled_worker_error() -> WorkerError {
+    WorkerError {
+        code: "worker.cancelled".into(),
+        message: "worker invocation was cancelled".into(),
+        retryable: false,
+    }
+}
+
+fn cancelled_invoke_response() -> InvokeResponse {
+    InvokeResponse {
+        result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Error(
+            cancelled_worker_error(),
+        )),
+    }
+}
+
+fn cancelled_stream_chunk() -> StreamChunk {
+    StreamChunk {
+        item: Some(nemo_relay_worker_proto::v1::stream_chunk::Item::Error(
+            cancelled_worker_error(),
+        )),
+    }
+}
+
+fn cancellation_aware_worker_stream(
+    rx: mpsc::Receiver<std::result::Result<StreamChunk, Status>>,
+    cancel_rx: watch::Receiver<bool>,
+) -> Pin<Box<dyn Stream<Item = std::result::Result<StreamChunk, Status>> + Send>> {
+    #[derive(Clone, Copy)]
+    enum CancellationState {
+        Watching,
+        Closed,
+        Done,
+    }
+
+    Box::pin(futures_util::stream::unfold(
+        (rx, cancel_rx, CancellationState::Watching),
+        |(mut rx, mut cancel_rx, mut state)| async move {
+            if matches!(state, CancellationState::Done) {
+                return None;
+            }
+            loop {
+                if matches!(state, CancellationState::Closed) {
+                    return rx
+                        .recv()
+                        .await
+                        .map(|item| (item, (rx, cancel_rx, CancellationState::Closed)));
+                }
+                tokio::select! {
+                    biased;
+                    changed = cancel_rx.changed() => match changed {
+                        Ok(()) if *cancel_rx.borrow() => {
+                            return Some((
+                                Ok(cancelled_stream_chunk()),
+                                (rx, cancel_rx, CancellationState::Done),
+                            ));
+                        }
+                        Ok(()) => {}
+                        Err(_) => state = CancellationState::Closed,
+                    },
+                    item = rx.recv() => {
+                        return item.map(|item| {
+                            (item, (rx, cancel_rx, CancellationState::Watching))
+                        });
+                    }
+                }
+            }
+        },
+    ))
 }
 
 fn worker_error_to_sdk(error: WorkerError) -> WorkerSdkError {

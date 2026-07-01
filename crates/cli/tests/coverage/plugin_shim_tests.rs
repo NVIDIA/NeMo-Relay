@@ -2030,12 +2030,12 @@ fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
     assert_eq!(codex_report["checks"]["codex_provider_alias"], json!(false));
     assert_eq!(codex_report["checks"]["codex_hooks"], json!(false));
     assert!(
-        doctor_plugin_json(CodingAgent::Cursor, DEFAULT_URL)
+        doctor_plugin_json(CodingAgent::Hermes, DEFAULT_URL)
             .unwrap_err()
             .contains("supports claude and codex")
     );
     assert!(
-        doctor_plugin(CodingAgent::Cursor, DEFAULT_URL)
+        doctor_plugin(CodingAgent::Hermes, DEFAULT_URL)
             .unwrap_err()
             .contains("supports claude and codex")
     );
@@ -2070,7 +2070,7 @@ fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
         .contains("supports claude")
     );
     assert!(
-        post_hook(CodingAgent::Cursor, DEFAULT_URL, b"{}")
+        post_hook(CodingAgent::Hermes, DEFAULT_URL, b"{}")
             .unwrap_err()
             .contains("supports claude and codex")
     );
