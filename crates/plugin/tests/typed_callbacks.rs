@@ -4754,6 +4754,18 @@ fn direct_export_plugin_validates_host_table_and_kind_allocation() {
         NemoRelayStatus::InvalidArg
     );
 
+    let mut incompatible_host = host;
+    incompatible_host.llm_request_intercept_outcome_contract_version =
+        NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION + 1;
+    assert_eq!(
+        unsafe {
+            nemo_relay_plugin::export_plugin(&incompatible_host, &mut plugin, CountingPlugin)
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(plugin.plugin_kind.is_null());
+    assert!(plugin.user_data.is_null());
+
     *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
     assert_eq!(
         unsafe { nemo_relay_plugin::export_plugin(&host, &mut plugin, CountingPlugin) },
@@ -4973,6 +4985,15 @@ fn exported_entry_symbol_validates_args_before_constructor() {
     short_host.struct_size = size_of::<NemoRelayNativeHostApiV1>() - 1;
     assert_eq!(
         unsafe { constructor_counting_entry(&short_host, &mut plugin) },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 0);
+
+    let mut incompatible_host = host;
+    incompatible_host.llm_request_intercept_outcome_contract_version =
+        NEMO_RELAY_NATIVE_LLM_INTERCEPT_OUTCOME_CONTRACT_VERSION + 1;
+    assert_eq!(
+        unsafe { constructor_counting_entry(&incompatible_host, &mut plugin) },
         NemoRelayStatus::InvalidArg
     );
     assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 0);

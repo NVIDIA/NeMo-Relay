@@ -529,6 +529,7 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	)
+	t.Cleanup(func() { _ = DeregisterLlmRequestIntercept("go_llm_req_mod") })
 
 	request := makeRequest()
 	result, err := LlmCallExecute("int_llm", request,
@@ -550,8 +551,6 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 	if output["saw_intercepted"] != true {
 		t.Fatalf("expected saw_intercepted=true, got %v", output)
 	}
-
-	DeregisterLlmRequestIntercept("go_llm_req_mod")
 }
 
 func TestLlmExecutionInterceptReplaces(t *testing.T) {

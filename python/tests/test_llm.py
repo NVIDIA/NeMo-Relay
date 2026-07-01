@@ -12,6 +12,7 @@ from nemo_relay import (
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    PendingMarkSpec,
     ScopeEvent,
     ScopeType,
     guardrails,
@@ -295,16 +296,25 @@ class TestLLMIntercepts:
         assert intercepts.deregister_llm_request("py_llm_req")
 
     def test_request_intercepts_direct(self):
+        pending_mark = PendingMarkSpec("request.direct", data={"source": "python"})
+
         def intercept_fn(name, request, annotated):
             content = request.content
             content["direct"] = True
-            return LLMRequestInterceptOutcome(LLMRequest(request.headers, content), annotated)
+            return LLMRequestInterceptOutcome(
+                LLMRequest(request.headers, content),
+                annotated,
+                [pending_mark],
+            )
 
         intercepts.register_llm_request("py_llm_req_direct", 1, False, intercept_fn)
         transformed = llm.request_intercepts("direct_llm", make_request())
         intercepts.deregister_llm_request("py_llm_req_direct")
 
         assert transformed.request.content["direct"] is True
+        assert len(transformed.pending_marks) == 1
+        assert transformed.pending_marks[0].name == pending_mark.name
+        assert transformed.pending_marks[0].data == pending_mark.data
 
     def test_request_intercept_raises_on_exception(self):
         intercepts.register_llm_request(

@@ -169,9 +169,9 @@ def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmReq
         priority: Execution order for the intercept. Lower values run first.
         break_chain: Whether to stop applying lower-priority request intercepts
             after this intercept runs.
-        fn: Callable invoked as ``fn(name, request, annotated)`` that returns a
-            tuple of ``(request, annotated)`` for the next intercept or the
-            provider callback.
+        fn: Callable invoked as ``fn(name, request, annotated)`` that returns an
+            ``nemo_relay.LLMRequestInterceptOutcome`` for the next intercept or
+            the provider callback.
 
     Returns:
         None: This function returns after the intercept is registered.

@@ -2625,7 +2625,7 @@ pub unsafe fn export_plugin<P: NativePlugin>(
     }
     unsafe { *out = NemoRelayNativePluginV1::default() };
     let host_ref = unsafe { &*host };
-    export_plugin_checked(host_ref, out, plugin)
+    export_plugin_checked(host_ref, out, || plugin)
 }
 
 /// Initializes a native plugin descriptor from a constructor callback.
@@ -2649,6 +2649,18 @@ where
     }
     unsafe { *out = NemoRelayNativePluginV1::default() };
     let host_ref = unsafe { &*host };
+    export_plugin_checked(host_ref, out, constructor)
+}
+
+fn export_plugin_checked<P, F>(
+    host_ref: &NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+    constructor: F,
+) -> NemoRelayStatus
+where
+    P: NativePlugin,
+    F: FnOnce() -> P,
+{
     if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
         return NemoRelayStatus::InvalidArg;
     }
@@ -2661,21 +2673,7 @@ where
         return NemoRelayStatus::InvalidArg;
     }
 
-    export_plugin_checked(host_ref, out, constructor())
-}
-
-fn export_plugin_checked<P: NativePlugin>(
-    host_ref: &NemoRelayNativeHostApiV1,
-    out: *mut NemoRelayNativePluginV1,
-    plugin: P,
-) -> NemoRelayStatus {
-    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
-        return NemoRelayStatus::InvalidArg;
-    }
-    if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {
-        return NemoRelayStatus::InvalidArg;
-    }
-
+    let plugin = constructor();
     let kind = plugin.plugin_kind().to_owned();
     let allows_multiple_components = plugin.allows_multiple_components();
     let Some(kind_handle) = HostString::new(host_ref, &kind) else {
